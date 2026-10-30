@@ -131,7 +131,7 @@ export function BrowserEditor({ value: c, onChange, errors, disabled }: PoolCont
           />
           <SwitchRow label="Only allowed sites" description="Block everything but the list below." checked={c.allowlistMode} onChange={(v) => set('allowlistMode', v)} disabled={disabled} />
           {c.allowlistMode && (
-            <TextArea label="Allowed sites" hint="One per line. Add localhost:<port> for dev servers." value={c.allowedSites.join('\n')} onChange={(e) => set('allowedSites', lines(e.target.value))} rows={3} error={errors.allowedSites} disabled={disabled} />
+            <TextArea label="Allowed sites" hint="One per line. example.com includes its subdomains; .example.com is that host only." value={c.allowedSites.join('\n')} onChange={(e) => set('allowedSites', lines(e.target.value))} rows={3} error={errors.allowedSites} disabled={disabled} />
           )}
           <FieldGroup
             label={

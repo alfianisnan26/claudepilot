@@ -2,10 +2,10 @@ import { NOTIFY_KIND_INFO, NOTIFY_KINDS, NOTIFY_PHASE1_KINDS, type NotifyDestina
 
 /** When each kind fires: what the ⓘ on its row says. A sentence, no more. */
 export const KIND_WHEN: Record<NotifyKind, string> = {
-  approval: 'A session waits for you to allow or deny a tool. Sent after 3 seconds, and only if it is still open.',
+  approval: 'An agent waits for you to allow or deny a tool. Sent after 3 seconds, and only if it is still open.',
   human_request: 'A ticket was assigned to you by an agent, a trigger or the portal.',
-  session_failed: 'A turn or a session failed.',
-  session_done: 'A session finished. Off until you switch it on, or turn on "Notify when done" in one session.',
+  session_failed: 'A turn or an agent failed.',
+  session_done: 'An agent finished. Off until you switch it on, or turn on "Notify when done" in one agent.',
   ci_failed: 'A CI run failed.',
   ci_waiting: 'A deploy waits for your approval on the run page.',
   quota_low: "A Claude's plan window is nearly used, or will run out before it resets.",

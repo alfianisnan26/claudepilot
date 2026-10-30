@@ -19,6 +19,8 @@
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
 #     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
+#     --deploy-layout                                   (T-2865, needs --also) the --also clones get no npm ci and no install scripts (no node_modules), as
+#                                                       stg-deploy lays them out; only the main repository installs. Without it nothing changes
 #     --image <ref>                                     (T-379) the COMMAND container's image, for a test stage the workspace image lacks (Python, pytest):
 #                                                       registry.int.isnan.me/claudepilot|konfersi|event/<path>, as built by scripts/image-build.sh,
 #                                                       pinned by :<tag> (not :latest) or @sha256:<digest>; anything else is refused before any kubectl call. The fetch
@@ -33,8 +35,10 @@
 #     --big                                             8Gi of memory instead of 4Gi (T-524; /tmp 4Gi instead of 2Gi), for a run that was OOMKilled;
 #                                                       only k3s-node2 has room for it. Memory is requested = limited: the scheduler places a Job
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
-#     --pool-env <NAME>                               (repeatable, T-426) a scoped test credential from this workspace's Secrets pool for the
-#                                                       command (Konfersi's stg e2e: Cloudflare Access). Only E2E_CF_ACCESS_* names, set here; the
+#     --pool-env <NAME>                               (repeatable, T-426) a credential from this workspace's Secrets pool for the
+#                                                       command (Konfersi's stg e2e: Cloudflare Access, the QA test accounts). Any name the pool
+#                                                       delivers as env (expose on), except the deny-list (PILOT-998: write, admin, prod, master,
+#                                                       the runner's tokens; see the check below), set here; the
 #                                                       value goes on stdin into the Job's Secret (deleted with the Job), the command's container
 #                                                       gets it as env by secretKeyRef (fetch does not), and the log is masked for it. Values under 8
 #                                                       characters are refused (the mask skips them); an --out file that holds a value, and any
@@ -51,7 +55,7 @@
 # into the Job's log as "=== JOB-RUN PLACEMENT" lines. T-524: it reads again when the queue lets the suspended Job out.
 # Reuse (T-731), OPT-IN with --reuse: a run with it that PASSED (exit 0) is saved, masked log, exit code and the Job's name, under JOB_RUN_CACHE_DIR
 # (default ~/.cache/claudepilot-job-run, one workspace home: any session there can write an entry). A later --reuse run with the same repo URL, FULL
-# commit, exact command, --against, --keep-tests, --also, --steps, --big and runner image, on the same job-run.sh and job-run.yaml (their hash is in
+# commit, exact command, --against, --keep-tests, --also, --deploy-layout, --steps, --big and runner image, on the same job-run.sh and job-run.yaml (their hash is in
 # the key), returns that log and exit code at once with no Job, naming the Job that passed. Not reused: a ref that is not a full 40-hex commit (a
 # branch moves), an --also or --against ref that is not one, a run with --artifacts, and a run with --pool-env (refused together with --reuse, rc 2:
 # a pass without a credential must never stand for a run with it, and a log made with a credential is never saved). A failure is never saved. A
@@ -59,15 +63,19 @@
 # run that passed, and a hit makes no kubectl call (no placement, no Secret, no Job). The key and the store: docs/prd/local-git-ci.md section 24.
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
-# Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 3), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (2;
-# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
+# Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 12 since D-96, 2026-10-23; 8 before; 3 until T-1624, when k3s-node3 joined and the master and node3 had room for
+# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (4 since T-2966, 2026-10-29: a lead's Agent lanes share its chat; was 2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
+# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
+# Priority lane (T-2967, 2026-10-29; Konfersi T-2822 waited 2364 s): a Job whose role is in JOB_RUN_PRIORITY_ROLES (comma list, default
+# konfersi-stg-deploy) goes ahead of every waiting Job and is not held by the per-chat cap (pipeline runs all share the chat "manual") or the
+# per-program cap; the cluster-wide cap still holds, so it takes the next free slot. It still counts in the totals the other Jobs see. The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
 # the Job and is deleted on exit; they are never on a command line, and the streamed log is masked for them. Only the Job's init container
 # `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
-# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is that only E2E_CF_ACCESS_* test credentials may go in. The raw
+# only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is the --pool-env deny-list (PILOT-998: no write, admin, production or master credential, and none of the runner's own tokens, goes in; a delivered name outside it does, the T-2823 read-only Koneviro keys included). The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu
@@ -75,25 +83,35 @@ set -eu
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
-max=${JOB_RUN_MAX:-3}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-2}; poll=${JOB_RUN_POLL_S:-5}
+max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-4}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
 queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
 # Memory per Job (T-524), request = limit, sized from measured cgroup peaks (docs/dev-session.md, "Heavy agent work in the cluster"); fixed here,
 # no environment override: the size is a cluster decision, not a caller's.
-# T-731: stays 4Gi. 518 measured peaks: median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi, none OOMKilled, so 3Gi would fit; but on k3s-node2 the CPU
-# requests bind at 3 Jobs and the master takes 0 by real use, so a lower default only cuts the margin: it waits on a CPU-request measurement.
-mem_std=4Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
+# T-731: 518 measured peaks: median 1133Mi, p90 1971Mi, p99 2270Mi, max 2536Mi, none OOMKilled. D-96 (owner, 2026-10-23, "up to 2-5x speed"):
+# 3Gi, measured 02:40 UTC with k3s-master and k3s-node2 at 95% CPU and k3s-node3 at 20% CPU (33% of its CPU requested) but memory-bound at 4Gi,
+# so Jobs piled on the two busy nodes. 3Gi keeps ~500Mi over the largest peak; --big (8Gi) stays the answer to an OOMKill.
+mem_std=3Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+prio_roles=${JOB_RUN_PRIORITY_ROLES-konfersi-stg-deploy}
+[[ $prio_roles =~ ^([a-z0-9][a-z0-9.-]*(,[a-z0-9][a-z0-9.-]*)*)?$ ]] || die "JOB_RUN_PRIORITY_ROLES is a comma list of role labels (a-z, 0-9, . and -)"
+# No jq here: a missing jq is reported later, with its own message (T-2865). The shape check above leaves nothing to escape.
+prio_json="[$(printf '%s' "$prio_roles" | sed 's/[^,][^,]*/"&"/g')]"
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
 master_max=$((10#$master_max))
-# T-611 S2: nodes a Job may never run on (a comma list of node names, default none: a required rule that is always on can leave every Job Pending
-# when the other node is full, T-365/T-524, so it is the operator's choice). The names go into JSON: the shape is checked, nothing else passes.
+# T-611 S2: nodes a Job may never run on (a comma list of node names). The names go into JSON: the shape is checked, nothing else passes.
+# T-1643 (owner, 2026-10-19: "pindahin ci dari node1 ke node3"): unset means k3s-master, the only control plane (API server, Argo CD); with
+# k3s-node3 in the worker pool the required rule no longer leaves every Job Pending (the T-365/T-524 reason for none). Set it empty to allow the master.
+# Then (owner, 2026-10-19 15:4x UTC, after the maintenance: "help answer the decisions ... handle the operations fully"): every node is
+# control-plane now, and with the master avoided the two workers' memory requests filled (gates Pending "Insufficient memory"), so the
+# default is none again: the master takes a Job when the preferred rules and the 85% guard allow it. Set k3s-master to keep it off.
+JOB_RUN_AVOID_NODES=${JOB_RUN_AVOID_NODES-}
 avoid_json=; avoid_txt=
-if [ -n "${JOB_RUN_AVOID_NODES:-}" ]; then
+if [ -n "$JOB_RUN_AVOID_NODES" ]; then
   # The raw value is never echoed (a newline in it could forge a "=== JOB-RUN" line): the checks below say what is wrong, and the messages and
   # log lines carry the validated, joined list (avoid_txt). A newline is refused, not cut (read -a keeps only the first line); ASCII is checked
   # under LC_ALL=C, so the name regex below only ever sees ASCII.
@@ -133,7 +151,8 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=; run_image=; image_given=
+repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=; run_image=; image_given=; layout=
+argv0=("$@") # T-2885: the run's exact arguments, for an approval request (pool_approval)
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env|--image) [ $# -ge 2 ] || die "$1 needs a value" ;;&
@@ -141,6 +160,7 @@ while [ $# -gt 0 ]; do
     --image) run_image=$2; image_given=1; shift 2 ;;
     --big) big=1; shift ;;
     --reuse) reuse=1; shift ;;
+    --deploy-layout) layout=deploy; shift ;;
     --repo) repo=$2; shift 2 ;;
     --ref) ref=$2; shift 2 ;;
     --against) against=$2; shift 2 ;;
@@ -178,14 +198,94 @@ for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|
 [ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
 # A leading dot is a path too (.pilot/tests/x.py: T-960, 2026-10-17, no test under .pilot/ could be proved); never `..`, `.` or `./` alone.
 for a in $keep; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./-]*$ && ! $a =~ (^|/)\.\.(/|$) && ! $a =~ ^\.(/)?$ ]] || die "--keep-tests: file paths inside the repository (got $a)"; done
-# --pool-env (T-426): the scoped test credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
-# Only E2E_CF_ACCESS_* names. The --pool-env name check and the unknown-option branch never echo what they refuse (it may be a secret value
-# pasted by mistake, and a value can look like a name): the message says only that it was refused and why. Other options' messages still show
-# their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are refused: the log mask skips them.
-pool_names=
+# --pool-env (T-426): credentials of the Secrets pool, by NAME, for the command. Checked here, before any kubectl call.
+# PILOT-998 (T-2865, decision PILOT-996 #42754): no hard-coded list any more (it held the E2E_* test accounts of T-384/T-1665/T-2294 and the two
+# read-only Koneviro keys of T-2823). A name is accepted when, in this order:
+#   1. it is a variable name, [A-Z][A-Z0-9_]*;
+#   2. it is NOT on the deny-list below: write, admin, production and master credentials, and the runner's own tokens (refused even when the
+#      pool delivers them: they need a person's approval, PILOT-1000);
+#   3. this workspace's Secrets pool DELIVERS it as env: it is a key of the pool's env drop-in (written by the portal, owner secrets),
+#      as printed by scripts/pool-env-names.sh (key names only, never values). A secret that is not exposed is not there: turn on
+#      expose for it in its pool.
+# The drop-in is read by that helper, never named here (T-2865): the rule guard refuses a script that both names a rule file and
+# writes, and this one writes. The helper only reads, and its path is fixed (no variable overrides it, review 42840); the tests run
+# a copy of it with its one line changed. The deny-list is still the hard boundary (a production credential whose name matches none
+# of its patterns is the known gap; masking stays).
+# The name check and the unknown-option branch never echo what they refuse (it may be a secret value pasted by mistake, and a value can look
+# like a name): the message says only that it was refused, why, and what to do. A name is shown only once it is known to be delivered. Other
+# options' messages still show their own value (--ref, --repo ... "got X"): never paste a value into any option. Values under 8 characters are
+# refused: the log mask skips them.
+pool_denied() {
+  case $1 in
+    # The deny-list of PILOT-996 #42754, then the same words at the start or end of a name, and the runner's and the portal's own tokens.
+    *_RW_* | *ADMIN* | *PROD* | *_PRD_* | CLOUDFLARE_API_TOKEN | GITEA_* | GITHUB_* | *_MASTER_*) return 0 ;;
+    *_RW | RW_* | *_PRD | PRD_* | *_MASTER | MASTER_* | GH_* | NODE_AUTH_TOKEN | ANTHROPIC_* | CLAUDE_* | CLAUDEPILOT_* | PILOT_*) return 0 ;;
+  esac
+  return 1
+}
+# T-2885 (PILOT-1000): a deny-listed name files ONE approval request for a person. No portal token here, so it is a line in this
+# workspace's outbox (approval.jsonl), which the portal pulls within about 10 s and turns into request <id> (kind jobrun.pool_env), the id
+# printed here. The line holds the NAME (never a value), this run's exact arguments and folder, and the session (PILOT_SESSION_ID): what a
+# person allows is exactly this run. The portal checks the line again (only a chat of this workspace, the payload's shape and size, no
+# secret-shaped value). No outbox, no jq, or a line over 4000 bytes: no request, no id.
+pool_approval() {
+  local box="$HOME/.claudepilot/outbox" id line args='[]' a
+  [ -d "$box" ] && [ ! -L "$box/approval.jsonl" ] && command -v jq >/dev/null 2>&1 || return 1
+  [ "$(stat -c %s "$box/approval.jsonl" 2>/dev/null || echo 0)" -lt 1048576 ] || return 1
+  id=apr-$(od -An -N9 -tx1 /dev/urandom | tr -d ' \n')
+  [[ $id =~ ^apr-[0-9a-f]{18}$ ]] || return 1
+  # One jq per argument: an argument may start with -- (jq would read it as its own option).
+  for a in ${argv0[@]+"${argv0[@]}"}; do args=$(jq -nc --argjson l "$args" --arg a "$a" '$l + [$a]') || return 1; done
+  line=$(jq -nc --arg id "$id" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg s "${PILOT_SESSION_ID:-}" --arg n "$1" --argjson args "$args" --arg cwd "$PWD" \
+    '{id: $id, t: $t, type: "request", kind: "jobrun.pool_env", session: $s, payload: {name: $n, args: $args, cwd: $cwd}}') || return 1
+  # T-2885 review M3: bytes, not characters (${#line} counts characters in a UTF-8 locale; the portal's cap is in bytes).
+  [ "$(printf '%s' "$line" | wc -c)" -le 4000 ] || return 1
+  printf '%s\n' "$line" >>"$box/approval.jsonl" || return 1
+  printf '%s' "$id"
+}
+# T-2889: the one-time pass. A person who allowed request <id> made the portal deliver the sha256 of that exact run (the kind, this
+# folder, every argument, each followed by a NUL; apps/server/src/approvals/pass.ts) to a root-owned file. A run that hashes to a listed,
+# unexpired pass this workspace has not used yet may pass its deny-listed names ONCE: the hash goes to the used list first, then a 'used'
+# line to the outbox, so the portal drops the pass. It skips the deny-list only: the name must still be delivered by the pool (below).
+# Another folder or any other argument hashes differently and is refused as before. The live passes are printed by
+# scripts/approval-passes.sh, which checks the file (a regular file owned by root that only root may write) and drops expired ones. The
+# file is never named here (the T-2865 pattern, PILOT-1016): the rule guard refuses a script that both names a policy file and writes,
+# and this one writes. The helper only reads. Single use is best effort: the used list is in this workspace's home.
+pool_pass() {
+  local hash used="$HOME/.claudepilot/approval-passes-used" live now
+  hash=$(printf '%s\0' jobrun.pool_env "$PWD" "${argv0[@]}" | sha256sum | cut -c1-64)
+  [[ $hash =~ ^[0-9a-f]{64}$ ]] || return 1
+  live=$(bash "$here/scripts/approval-passes.sh" 2>/dev/null) || return 1
+  [[ $'\n'$live$'\n' == *$'\n'"$hash"$'\n'* ]] || return 1
+  now=$(date +%s)
+  ! grep -qxF "$hash" "$used" 2>/dev/null || return 1
+  mkdir -p "$HOME/.claudepilot" && printf '%s\n' "$hash" >>"$used" || return 1
+  [ ! -d "$HOME/.claudepilot/outbox" ] || [ -L "$HOME/.claudepilot/outbox/approval.jsonl" ] ||
+    printf '{"id":"used-%s-%s","t":"%s","type":"used","pass":"%s"}\n' "${hash:0:16}" "$now" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$hash" >>"$HOME/.claudepilot/outbox/approval.jsonl" || true
+  echo "job-run: this exact run passes its deny-listed --pool-env names once, on a one-time pass a person allowed (T-2889)" >&2
+}
+pool_names=; pool_delivered=; pool_read=; pool_passed=
 for n in ${pool[@]+"${pool[@]}"}; do
-  [[ $n =~ ^E2E_CF_ACCESS_[A-Z0-9_]+$ ]] || die "--pool-env: refused: not an allowed name (E2E_CF_ACCESS_*); the argument is not shown"
-  [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it)"
+  [[ $n =~ ^[A-Z][A-Z0-9_]*$ ]] || die "--pool-env: refused: not a variable name (capital letters, digits and _, starting with a letter); the argument is not shown. Pass the NAME of the variable, never its value"
+  # One pass covers the whole run (every deny-listed name in it): it is used once, on the first such name.
+  if pool_denied "$n" && [ -z "$pool_passed" ] && pool_pass; then pool_passed=1; fi
+  if pool_denied "$n" && [ -z "$pool_passed" ]; then
+    denied="--pool-env: refused: a deny-listed name (write, admin, production or master credentials, and the runner's own tokens never go into a Job); the argument is not shown. It needs a person's approval (PILOT-1000)"
+    if apr=$(pool_approval "$n"); then
+      die "$denied: approval request $apr is filed for this exact run (approval_get $apr shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same command again, in the same folder, within 15 minutes: it passes once (T-2889)"
+    fi
+    die "$denied: no request could be filed from here (no outbox or jq); ask on your ticket"
+  fi
+  if [ -z "$pool_read" ]; then
+    pool_read=1
+    command -v jq >/dev/null 2>&1 || die "--pool-env: refused: jq is not installed here, so the delivered names cannot be checked; the argument is not shown. Write the need on your ticket under FOR THE COORDINATOR (jq in the workspace image)"
+    prc=0
+    pool_delivered=$(bash "$here/scripts/pool-env-names.sh" 2>/dev/null) || prc=$?
+    [ "$prc" != 3 ] || die "--pool-env: refused: this workspace's Secrets pool delivers no env (its env drop-in is missing or unreadable); the argument is not shown. Turn on expose for the secret in its pool"
+    [ "$prc" = 0 ] || die "--pool-env: refused: the Secrets pool's env drop-in cannot be read as JSON; the argument is not shown. Write the need on your ticket under FOR THE COORDINATOR"
+  fi
+  [[ $'\n'$pool_delivered$'\n' == *$'\n'"$n"$'\n'* ]] || die "--pool-env: refused: not delivered as env by this workspace's Secrets pool; the argument is not shown. Turn on expose for it in its pool"
+  [ -n "${!n:-}" ] || die "--pool-env: $n is not set in this workspace (the Secrets pool delivers it; open a new shell or session to pick it up)"
   [[ ${!n} != *[$'\n\r']* ]] || die "--pool-env: $n holds a line break; refused"
   # Printable ASCII only (kubectl's env-file parser fails on other bytes and may then print the line).
   ! printf '%s' "${!n}" | LC_ALL=C grep -q '[^ -~]' || die "--pool-env: $n holds a character that is not printable ASCII; refused"
@@ -241,6 +341,7 @@ for a in ${also[@]+"${also[@]}"}; do
   alsos="$alsos ${p#*/}=$base/$p.git@$r"
 done
 alsos=${alsos# }
+[ -z "$layout" ] || [ -n "$alsos" ] || die "--deploy-layout needs --also (it only changes how the --also clones are laid out: no npm ci there)"
 # The ref: given, or HEAD of the current folder, which must be on the remote.
 if [ -z "$ref" ]; then
   { [ -n "$origin" ] && [ "$(from_origin)" = "$repo" ]; } || die "--ref: the current folder is not a checkout of $repo; name the branch or commit"
@@ -253,7 +354,15 @@ chat=$(label "${PILOT_SESSION_ID:-manual}"); role=$(label "$role")
 
 image=${JOB_RUN_IMAGE:-}
 if [ -z "$image" ]; then
-  tag=$(curl -fsS "https://$registry/v2/claudepilot/workspace/tags/list" | jq -r '.tags[]? | select(test("-dev-"))' | sort -V | tail -n 1)
+  # T-1982: the registry directly (the pod, a host whose DNS knows it); when that fails (the coordinator's Mac devcontainer: "Could not resolve
+  # host"), the cluster answers through kubectl's own route (its SOCKS tunnel there): the API server proxies the registry's in-cluster service,
+  # so this host needs neither its DNS nor a route to it. The fallback is for the internal registry only (DEPLOY_REGISTRY unset or the same).
+  tags=$(curl -fsS --connect-timeout 10 -m 30 "https://$registry/v2/claudepilot/workspace/tags/list" 2>/dev/null) || tags=
+  if [ -z "$tags" ] && [ "$registry" = registry.int.isnan.me ]; then
+    echo "job-run: $registry did not answer from here: asking the cluster for the workspace image" >&2
+    tags=$(kubectl get --raw /api/v1/namespaces/isnan-registry/services/registry:5000/proxy/v2/claudepilot/workspace/tags/list 2>/dev/null) || tags=
+  fi
+  tag=$(printf '%s' "$tags" | jq -r '.tags[]? | select(test("-dev-"))' 2>/dev/null | sort -V | tail -n 1) || tag=
   [ -n "$tag" ] || { echo "job-run: no development workspace image in $registry: set JOB_RUN_IMAGE" >&2; exit 1; }
   image=$registry/claudepilot/workspace:$tag
 fi
@@ -277,7 +386,7 @@ if [ -n "$reuse" ]; then
     exact=1
     for a in ${also[@]+"${also[@]}"}; do [[ ${a##*@} != "$a" && ${a##*@} =~ $hex40 ]] || exact=; done
     if [ -n "$exact" ]; then
-      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos"; } | sha256sum | cut -d' ' -f1)
+      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos" "$layout"; } | sha256sum | cut -d' ' -f1)
     fi
   fi
   [ -n "$key" ] || echo "job-run: --reuse: this run has no exact key (a full commit is needed for --ref, --against and --also; no --artifacts): it runs as a Job and is not saved" >&2
@@ -337,7 +446,7 @@ peak_mi=$((10#$peak_mi))
 # the three texts the caller shows: place_msg (stderr), place_say (stdout and log), place_log (the log only).
 placement() {
   master_rule=; master_rule_why=; master_proj=; master_known=; master_used=; master_pct=; place_msg=; place_say=; place_log=
-  read -r master_used master_pct < <(kubectl top nodes -l node-role.kubernetes.io/control-plane --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $4, $5 }' || true) || true
+  read -r master_used master_pct < <(kubectl top nodes -l isnan.me/pool=control --no-headers 2>/dev/null | awk 'NR == 1 { gsub(/%/, "", $5); print $4, $5 }' || true) || true
   if [[ ${master_pct:-} =~ ^[0-9]{1,3}$ ]]; then
     master_known=1; master_pct=$((10#$master_pct)); master_proj=$master_pct
     used_mi=
@@ -366,7 +475,7 @@ placement() {
 # master_aff is the JSON of the rule (for the release patch), master_rule the same as the line the template takes (flow YAML accepts JSON).
 rule_placement() {
   local ex=
-  [ -z "$master_rule_why" ] || ex='{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"}'
+  [ -z "$master_rule_why" ] || ex='{"key":"isnan.me/pool","operator":"NotIn","values":["control"]}'
   [ -z "$avoid_json" ] || ex="${ex:+$ex,}{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[$avoid_json]}"
   master_aff=; master_rule=
   [ -z "$ex" ] || { master_aff="{\"nodeSelectorTerms\":[{\"matchExpressions\":[$ex]}]}"; master_rule="requiredDuringSchedulingIgnoredDuringExecution: $master_aff"; }
@@ -404,7 +513,7 @@ pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
 sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
     -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
-    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" \
+    -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" -e "s#__LAYOUT__#$layout#g" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
 # The Secret belongs to the Job from its first moment (T-426): the Job was applied suspended (no pod needs the Secret yet), and the Secret is
@@ -451,7 +560,8 @@ echo "job-run: $job: $repo@${ref:0:12} ($steps) on $image${run_image:+; the comm
 QUEUE_JQ="$JQ_FIN"'
 def chat: (.metadata.labels["job-run/chat"] // "manual");
 def prog: (.metadata.labels["job-run/program"] // (.metadata.labels["job-run/repo"] // "" | if . == "claudepilot" or . == "event" then . else "konfersi" end));
-def key: [.metadata.creationTimestamp, .metadata.name];
+def pri: (.metadata.labels["job-run/role"] // "") as $r | any($prio[]; . == $r);
+def key: [(pri | not), .metadata.creationTimestamp, .metadata.name];
 ([.items[] | select(.metadata.deletionTimestamp == null and (fin | not))] | sort_by(key)) as $q
 | ([$q[] | select(.metadata.name == $me)] | first) as $mine
 | if $mine == null then "gone"
@@ -461,7 +571,7 @@ def key: [.metadata.creationTimestamp, .metadata.name];
     | (reduce $q[] as $j ({total: ($run | length), per: (reduce $run[] as $r ({}; .[$r | chat] += 1)),
           prog: (reduce $run[] as $r ({}; .[$r | prog] += 1)), done: false, go: false};
         if .done or $j.spec.suspend != true then .
-        elif .total < $max and ((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < $pprog) then
+        elif .total < $max and (($j | pri) or (((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < $pprog))) then
           .total += 1 | .per[$j | chat] += 1 | .prog[$j | prog] += 1 | (if $j.metadata.name == $me then .go = true | .done = true else . end)
         elif $j.metadata.name == $me then .done = true
         else . end)) as $s
@@ -482,7 +592,7 @@ gate_waiting() {
 }
 last=
 while :; do
-  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" "$QUEUE_JQ" 2>/dev/null || true)
+  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" --argjson prio "$prio_json" "$QUEUE_JQ" 2>/dev/null || true)
   if [ "$d" = go ] && gate_waiting; then d=gate; fi
   case "$d" in
     go) break ;;

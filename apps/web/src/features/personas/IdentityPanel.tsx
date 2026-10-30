@@ -81,7 +81,7 @@ export function IdentityPanel({ pool, name }: { pool: PoolSummary; name: string 
             text="Agents may propose changes"
             tip={
               policy.portalAllows
-                ? 'Sessions in workspaces with this persona can propose a new name, an avatar and edits to the instructions. Nothing applies until you approve it.'
+                ? 'Agents in workspaces with this persona can propose a new name, an avatar and edits to the instructions. Nothing applies until you approve it.'
                 : 'Switched off for the whole portal. Turn on “Agents may propose changes” in Settings first.'
             }
           />

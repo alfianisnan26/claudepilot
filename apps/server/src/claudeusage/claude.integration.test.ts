@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { parseRateLimitInfo } from './parse.js';
 import { probeClaude, SAFE_MODE_FLAG, type ProbeIo } from './probe.js';
+import { PRIME_SYSTEM_PROMPT, runPrime } from './prime.js';
 import { localExec, makeFakeClaude, opensslAvailable, startStandIn, type FakeClaude, type StandIn } from './testkit/index.js';
 
 const hasClaude = (() => {
@@ -281,4 +282,42 @@ test('real CLI: the probe runs no hook (--safe-mode), in the Claude’s settings
       h.remove();
     }
   }
+});
+
+test('real CLI, prime (T-1707): one request on the cheapest model with no tools and a one-line system prompt, answered is ok', opts, async () => {
+  const claude = fake({ directory: DIR });
+  standIn.set({ usage: { body }, messages: { text: 'ok' } });
+  const before = standIn.requests.length;
+  const r = await runPrime(ioFor(claude), 'local', 'x', DIR);
+  assert.deepEqual(r, { outcome: 'ok' });
+  const asked = standIn.requests.slice(before).filter((q) => q.method === 'POST' && q.path.startsWith('/v1/messages') && !q.path.includes('count_tokens'));
+  assert.equal(asked.length, 1, 'one model request');
+  assert.match(asked[0]!.model ?? '', /haiku/i, 'the alias resolves to a Haiku model');
+  assert.equal(asked[0]!.tools, 0, 'no tools sent');
+  assert.ok((asked[0]!.systemChars ?? 0) < PRIME_SYSTEM_PROMPT.length + 400, `a short system prompt (${asked[0]!.systemChars} chars)`);
+  assert.ok(!standIn.requests.some((q) => q.method === 'CONNECT-REFUSED'), 'and reached nobody else');
+});
+
+test('real CLI, prime (T-1707): a refusal for the plan limit is limited, with the reset the refusal states', opts, async () => {
+  const claude = fake({ directory: DIR });
+  const reset5h = Math.floor(Date.now() / 1000) + 3600;
+  standIn.set({
+    messages: {
+      status: 429,
+      body: { type: 'error', error: { type: 'rate_limit_error', message: 'Rate limited' } },
+      headers: {
+        'anthropic-ratelimit-unified-status': 'rejected',
+        'anthropic-ratelimit-unified-reset': String(reset5h),
+        'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+        'anthropic-ratelimit-unified-5h-utilization': '1.0',
+        'anthropic-ratelimit-unified-5h-reset': String(reset5h),
+        'retry-after': '3600',
+      },
+    },
+  });
+  const r = await runPrime(ioFor(claude), 'local', 'x', DIR);
+  assert.equal(r.outcome, 'limited');
+  const p = parseRateLimitInfo(r.outcome === 'limited' ? r.info : null)!;
+  assert.deepEqual(p.rejected, ['session']);
+  assert.equal(p.windows.find((w) => w.key === 'session')?.resetsAtMs, reset5h * 1000);
 });

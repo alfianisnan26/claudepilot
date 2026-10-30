@@ -73,11 +73,21 @@ export function placePopover(i: PlaceInput): Placement {
   return { top, left, width, maxHeight: height < i.height ? Math.max(0, room(side)) : null, side };
 }
 
-/** The visible area: the visual viewport where there is one (the keyboard and a zoom shrink it), else the window. */
+/**
+ * The visible box, cut at the page's own content edge (T-1988): `contentWidth` is the root's clientWidth, which leaves out a classic
+ * scrollbar and the gutter `scrollbar-gutter: stable` keeps for it; the window's width counts them, so a popover kept 12 px inside it sat
+ * flush against the scrollbar. An overlay scrollbar (phones, macOS) takes no room and changes nothing.
+ */
+export function clipToContent(view: Box, contentWidth: number): Box {
+  if (!(contentWidth > 0)) return view;
+  return { ...view, width: Math.max(0, Math.min(view.width, contentWidth - view.left)) };
+}
+
+/** The visible area: the visual viewport where there is one (the keyboard and a zoom shrink it), else the window; never the scrollbar. */
 export function visibleBox(): Box {
   const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-  if (vv) return { top: vv.offsetTop, left: vv.offsetLeft, width: vv.width, height: vv.height };
-  return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+  const view = vv ? { top: vv.offsetTop, left: vv.offsetLeft, width: vv.width, height: vv.height } : { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+  return clipToContent(view, document.documentElement.clientWidth);
 }
 
 /** The safe-area insets in pixels, read through the app's own `--safe-*` variables (index.css). */

@@ -8,12 +8,12 @@ import type { Readings } from '../shared/readings';
 
 /** The chip: how many sessions are running, a dot that says whether any waits for you, and the state in words. */
 export function sessionsCompact({ data, failed, stale }: Readings): GlanceCompact {
-  if (!data) return failed ? { value: '-', level: 'unknown', title: 'Sessions: not available', stale: true } : { value: null, level: 'unknown', title: 'Sessions: loading', loading: true };
+  if (!data) return failed ? { value: '-', level: 'unknown', title: 'Agents: not available', stale: true } : { value: null, level: 'unknown', title: 'Agents: loading', loading: true };
   const s = data.sessions;
-  if (!s.ok) return { value: '-', level: 'unknown', title: 'Sessions: could not be read', stale };
+  if (!s.ok) return { value: '-', level: 'unknown', title: 'Agents: could not be read', stale };
   const level: GlanceLevel = s.waiting > 0 ? 'warn' : s.running > 0 ? 'ok' : 'idle';
   const parts = [s.running ? `${s.running} running` : null, s.waiting ? `${s.waiting} waiting for you` : null];
-  const title = `Sessions: ${listWords(parts) || 'none running'}, ${s.open} open`;
+  const title = `Agents: ${listWords(parts) || 'none running'}, ${s.open} open`;
   return { value: chipCount(s.running), level, title, stale };
 }
 

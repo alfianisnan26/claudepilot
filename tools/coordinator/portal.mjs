@@ -3,7 +3,7 @@
 //   NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:3128 node portal.mjs ...
 // One admin token per run, 1 hour, replacing this label's leftovers, revoked at the end even when the call fails (tokenLease.mjs, T-258).
 import { tokenLease } from './tokenLease.mjs';
-const PORTAL = 'https://pilot.ai.isnan.me',
+const PORTAL = process.env.PILOT_URL || 'https://pilot.ai.isnan.me',
   CODE = process.env.PORTAL_SERVER_CODE,
   [cmd, prefix, ...rest] = process.argv.slice(2);
 let cookie = '';
@@ -24,7 +24,10 @@ async function api(m, p, b) {
   const j = await r.json().catch(() => null);
   return { data: j?.data, error: j?.error };
 }
-const s = ((await api('GET', '/api/chat/sessions?limit=100')).data?.items ?? []).find((x) => x.id.startsWith(prefix));
+// A full id is read directly (the list is one page of the newest 100 and misses older sessions); a prefix searches that page.
+const s = /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(prefix)
+  ? (await api('GET', `/api/chat/sessions/${prefix}`)).data
+  : ((await api('GET', '/api/chat/sessions?limit=100')).data?.items ?? []).find((x) => x.id.startsWith(prefix));
 if (!s) {
   console.log('no session', prefix);
   process.exit(1);
@@ -75,6 +78,8 @@ try {
     console.log(
       `${res.status} ${cmd} -> ${s.id.slice(0, 8)} "${s.title}" ${/Denied|Allowed|Interrupted|confirmation|error/i.exec(text)?.[0] ?? ''}`,
     );
+    // PM_DEBUG=1 prints the tool's answer (it is the portal's reply, never a secret).
+    if (process.env.PM_DEBUG) console.log(text.slice(0, 1500));
   }
 } finally {
   await lease.revoke();

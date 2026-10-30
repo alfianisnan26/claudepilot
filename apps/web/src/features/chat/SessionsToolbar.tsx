@@ -1,6 +1,6 @@
 import { cn } from '@isnanme/ui';
 import { LIST_GROUP_BYS, type ListFilter, type ListGroupBy } from '@portal/contracts';
-import { Archive, Boxes, CircleAlert, CircleStop, Layers, ListChecks, LoaderCircle, Moon, Pin, Rows3, Search, X } from 'lucide-react';
+import { Archive, Boxes, CircleAlert, CircleStop, Layers, ListChecks, LoaderCircle, Moon, Network, Pin, Rows3, Search, X } from 'lucide-react';
 import { STATUS_TITLE, visibleChips, type ChipCounts } from './listOrder';
 
 export interface ViewState {
@@ -46,6 +46,8 @@ export function SessionsToolbar({
   selecting,
   onSelect,
   programs = [],
+  tree = false,
+  onTree,
 }: {
   view: ViewState;
   counts: ChipCounts;
@@ -54,13 +56,17 @@ export function SessionsToolbar({
   onChange: (next: Partial<ViewState>) => void;
   selecting: boolean;
   onSelect: () => void;
+  /** T-1710: the Tree view is on (the leads and their workers as a tree); the chips, grouping and Select are for the list and hide. */
+  tree?: boolean;
+  /** Turns the Tree view on or off; without it there is no toggle. */
+  onTree?: (on: boolean) => void;
 }) {
   const active = (id: ListFilter | 'archived') => (id === 'archived' ? view.archived : !view.archived && view.filter === id);
   return (
     <div className="mb-4 flex flex-col gap-2.5">
       <div className="flex gap-2">
         <label className="relative min-w-0 flex-1">
-          <span className="sr-only">Search sessions</span>
+          <span className="sr-only">Search agents</span>
           <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
           <input
             type="search"
@@ -83,7 +89,25 @@ export function SessionsToolbar({
             </button>
           )}
         </label>
+        {/* T-1710: List or Tree, icon only like Group by, lit while the tree shows. */}
+        {onTree && (
+          <button
+            type="button"
+            aria-pressed={tree}
+            aria-label="Tree"
+            title="Tree"
+            data-tree-toggle=""
+            onClick={() => onTree(!tree)}
+            className={cn(
+              'press flex size-11 shrink-0 items-center justify-center rounded-full border focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:outline-hidden',
+              tree ? 'border-primary bg-primary text-primary-ink' : 'border-line bg-surface text-muted hover:text-ink',
+            )}
+          >
+            <Network className="size-[18px]" aria-hidden="true" />
+          </button>
+        )}
         {/* Icon only (the text diet): the native picker opens from it, it is named "Group by", and it lights up while a grouping is on. */}
+        {!tree && (
         <label
           title={`Group by: ${GROUP_LABEL[view.groupBy]}`}
           className={cn(
@@ -105,7 +129,8 @@ export function SessionsToolbar({
             ))}
           </select>
         </label>
-        {(programs.length > 0 || view.program) && (
+        )}
+        {!tree && (programs.length > 0 || view.program) && (
           // The program filter (T-259 slice 3): icon only like Group by, the native picker, lit while a program is chosen.
           <label
             title={`Program: ${view.program ?? 'All'}`}
@@ -135,6 +160,7 @@ export function SessionsToolbar({
       </div>
       {/* relative: the chips' and Select's sr-only labels (position absolute) take this scroller as their containing block, so a chip
           past the edge scrolls with the row instead of widening the page (a 434 px layout on a 390 px phone, T-288). */}
+      {!tree && (
       <div className="relative -mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
         {visibleChips(counts, view.archived ? 'archived' : view.filter).map((id) => {
           const c = CHIP[id];
@@ -171,6 +197,7 @@ export function SessionsToolbar({
           </button>
         )}
       </div>
+      )}
     </div>
   );
 }

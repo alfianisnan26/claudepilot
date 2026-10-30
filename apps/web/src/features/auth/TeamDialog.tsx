@@ -6,7 +6,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 import { CAP_LABEL, endText } from '@/features/chat/ShareSessionDialog';
 
-const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
 
 /**
  * One team (owner, 2026-10-17: "team based multiaccount"): its people and what is shared with it. An admin or one of the team's owners adds
@@ -124,7 +124,7 @@ export function TeamDialog({ teamId, manage, meId, open, onClose, onChanged }: {
                 <li key={s.id} className="flex min-h-11 flex-col justify-center px-3 py-1.5">
                   <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
                     <Users className="size-4 shrink-0 text-muted" aria-hidden="true" />
-                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed session'}</span>
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{s.sessionTitle ?? 'A removed agent'}</span>
                   </span>
                   <span className="flex flex-wrap items-center gap-1 pt-0.5">
                     {s.caps.map((c) => (

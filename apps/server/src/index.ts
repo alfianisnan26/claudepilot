@@ -40,8 +40,12 @@ import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/inde
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
 import { Lab } from './lab/index.js';
 import { registerLabTools } from './lab/portalTools.js';
+import { registerMetricsTools } from './lab/metricsTools.js';
+import { METRICS_MEMO_MS } from './lab/metricsService.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
+import { approvalAttentionSource, createApprovals, registerApprovalTools } from './approvals/index.js';
+import { APPROVAL_CHANNEL, fileRefusalRequests, markUsedPasses } from './approvals/outbox.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
@@ -51,6 +55,8 @@ import { registerPersonaTools } from './personas/portalTools.js';
 import { readSessionBlob } from './personas/sessionBlobs.js';
 import { readWorkspaceFile } from './personas/workspaceFiles.js';
 import { registerSettings } from './settings/index.js';
+import { registerSettingsTools } from './settings/portalTools.js';
+import { registerChatManagerTools } from './chat/managerTools.js';
 import { GUARD_CHANNEL, recordGuardRefusals } from './settings/ruleGuardAudit.js';
 import { BrowserModule } from './browser/index.js';
 import { PortalMcpModule } from './portalmcp/module.js';
@@ -58,8 +64,10 @@ import { registerBuiltInPortalTools } from './portalmcp/tools/index.js';
 import { internalUrlResolver } from './portalmcp/internalUrl.js';
 import { OrphanSweep } from './tickets/orphans.js';
 import { Tickets } from './tickets/service.js';
+import { mergeRecordersOf } from './flow/programs.js';
+import { flowProgramsRaw } from './flow/settings.js';
 import { CiService } from './ci/service.js';
-import { upstreamHostsFrom } from './ci/settings.js';
+import { runnerLostMinFrom, upstreamHostsFrom } from './ci/settings.js';
 import { WorkspacesCiHost } from './ci/host.js';
 import { registerCiTools } from './ci/portalTools.js';
 import { valueRedactors } from './ci/values.js';
@@ -83,7 +91,7 @@ import { Store } from './store/store.js';
 import { DockerRuntime } from './workspaces/docker.js';
 import { attachShell, cookie } from './workspaces/shell.js';
 import { ChatController } from './chat/controller.js';
-import { BYPASS_SETTING } from './chat/bypass.js';
+import { AUTONOMOUS_AUTO_SETTING, BYPASS_SETTING } from './chat/bypass.js';
 import { LEAD_RULES_SETTING } from './chat/leadRules.js';
 import { AUTO_TRUST_SETTING } from './chat/trust.js';
 import { AGENT_CHILDREN_SETTING, AGENT_DEPTH_SETTING, AGENT_MESSAGES_SETTING, AGENT_SPAWNS_SETTING } from './chat/agents.js';
@@ -102,6 +110,9 @@ import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
 import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
+import { loop } from './platform/loops.js';
+import { managerAccess } from './manager/access.js';
+import { MANAGER_BRIEF } from './manager/service.js';
 
 // A background task that rejects (a module reading a table a frozen database doesn't have, a probe, a scan) must not
 // take the portal down with every open terminal: log it and carry on. Synchronous throws still stop the process.
@@ -150,7 +161,7 @@ const dailyBackup = () =>
     (e: unknown) => console.error(`[store] daily backup failed: ${(e as Error).message}`),
   );
 dailyBackup();
-const backupTimer = setInterval(dailyBackup, 60 * 60 * 1000);
+const backupTimer = setInterval(loop('store.backup', 60 * 60 * 1000, 'Daily database backup (checked hourly)').wrap(dailyBackup), 60 * 60 * 1000);
 backupTimer.unref();
 
 const portal = new Portal(config.serverCode, config.session.ttlMs);
@@ -267,6 +278,7 @@ poolService.reconciler = reconciler;
 settingsModule.reconciler = reconciler;
 // Bypass in chat (chat PRD FR20): the interim policy switch, and what is true of a workspace for the confirmation.
 chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS_SETTING);
+chatController.autonomousAuto = () => settingsModule.settings.get<boolean>(AUTONOMOUS_AUTO_SETTING); // PILOT-996, D-103
 // T-561: crew leads launch with the lead rules (a hook in their --settings) while the policy is on; it applies at each lead's next start.
 chatController.leadRulesOn = () => settingsModule.settings.get<boolean>(LEAD_RULES_SETTING);
 chatController.autoTrustRules = () => settingsModule.settings.get<boolean>(AUTO_TRUST_SETTING);
@@ -410,6 +422,30 @@ const workspaceMemory = new WorkspaceMemory({
 });
 attention.register(memoryAttentionSource(workspaceMemory));
 chatController.memory = workspaceMemory;
+// Approvals (docs/prd/approvals.md, PILOT-1000): an agent asks, a person allows on a Needs you card, the portal runs it (Bypass through
+// the chat's own gated path, a protected pool's secret through the pools service) and tells the asking session.
+// T-2889: Allow on a refused call issues a one-time pass, delivered as the policy owner's root-owned passes file; a new or used pass
+// delivers that workspace again.
+const approvals = createApprovals(store, {
+  chat: chatController,
+  pools: poolService,
+  delivery: { passesChanged: (ws) => void reconciler.request(ws, 'approval pass', { changed: true }).catch(() => undefined) },
+  changed: () => attention.changed(),
+});
+settingsModule.agentEnv.passSource = (ws) => approvals.livePasses(ws);
+attention.register(approvalAttentionSource(approvals));
+registerApprovalTools(approvals);
+// T-2885: job-run's deny-listed names and the rule guard's refusals file a request through the outbox (approval.jsonl), in the workspaces
+// the guard landed in (job-run runs in the same ones).
+outbox.subscribe(
+  APPROVAL_CHANNEL,
+  (workspaceId, events) => {
+    const log = (what: string, e: unknown) => console.error(`[approvals] ${what}: ${(e as Error).message}`);
+    fileRefusalRequests(approvals, store, workspaceId, events, log);
+    markUsedPasses(approvals, workspaceId, events, log); // T-2889
+  },
+  () => settingsModule.agentEnv.guardedWorkspaces((id) => workspaces.resolve(id) !== null),
+);
 const ATTENTION_TOPICS = new Set<LiveTopic>(['pools', 'tickets', 'ci']);
 const notify = (...topics: LiveTopic[]) =>
   topics.forEach((t) => {
@@ -444,7 +480,15 @@ const portalMcp = new PortalMcpModule(store, {
     url: agentUrls,
     known: agentUrls.known,
   },
+  // T-968 S1: the General Manager's token, alive while its session is (the runtime that starts it lands in a later slice).
+  managerAlive: (id) => {
+    const s = chatController.get(id);
+    return !!s && s.state !== 'ended' && !s.archivedAt;
+  },
+  managerSignedIn: (userId) => portal.signedIn(userId),
 });
+// Q3 (general-manager PRD, #11136): any sign-out of the person, on any device, stops their manager; it gets a new token at the next sign-in.
+portal.onSignedOut = (userId) => void portalMcp.managers.revokeUser(userId, 'signed out');
 // With "Pool MCP only" on, Claude Code admits only listed servers, and the portal's own endpoint (which an agent's session reaches
 // through --mcp-config) is one of them: its exact URL for each workspace that opted in. Compile again when that changes.
 settingsModule.lockdown.addMatcherSource((workspaceId) => portalMcp.agentMatchers(workspaceId));
@@ -452,9 +496,11 @@ portalMcp.onAgentAddress = (workspaceId) =>
   void reconciler.request(workspaceId, 'the portal MCP address for agents changed').catch(() => undefined);
 // A token never outlives its session, whatever else is wired: ended, archived and deleted sessions lose theirs here too.
 chatController.onEvent((id, msg) => {
-  if (msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt))
-    portalMcp.agents.revokeSession(id, `session ${msg.session.state}`);
-  else if (msg.type === 'removed') portalMcp.agents.revokeSession(id, 'session deleted');
+  const reason =
+    msg.type === 'session' && (msg.session.state === 'ended' || msg.session.archivedAt) ? `session ${msg.session.state}` : msg.type === 'removed' ? 'session deleted' : null;
+  if (!reason) return;
+  portalMcp.agents.revokeSession(id, reason);
+  portalMcp.managers.revokeSession(id, reason);
 });
 registerBuiltInPortalTools({
   store,
@@ -466,6 +512,7 @@ registerBuiltInPortalTools({
   poolService,
   reconciler,
   mcp: mcpSets,
+  approvals,
 });
 portalMcp.start();
 // What each session's Claude Code process is launched with (I8 and the Secrets & env redactor): its token for the portal's tools, the
@@ -475,6 +522,15 @@ portalMcp.agents.workspaceRefs = workspaces.identities;
 // T-436: a session's token is bound at mint to the vaults that name its workspace; a change of a vault's list rebinds the live tokens.
 wireVaultBinding(portalMcp.agents, knowledge);
 chatController.agentAccess = portalMcp.agents;
+// T-968: the General Manager's process gets the person's manager token (it acts as them) and its brief; the URL is the portal as its
+// workspace reaches it, the same as an agent's.
+// Only while the person is signed in somewhere (a sign-out revokes it, Q3; a later wake must not mint it again: review 2026-10-18).
+chatController.managerAccess = managerAccess({
+  signedIn: (userId) => portal.signedIn(userId),
+  url: agentUrls,
+  tokens: portalMcp.managers,
+  brief: () => MANAGER_BRIEF,
+});
 // Self-heal (owner, 2026-10-17): a live session calling with a replaced or expired token gets a restart at its turn's end (the same
 // conversation, MCP reconnected), so its new process starts with a good token and nobody has to run /mcp by hand.
 portalMcp.agents.onStaleToken = (sessionId, reason) => {
@@ -507,6 +563,11 @@ const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   orphanAfterMin: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.orphanAfterMin),
   agentOpenPerWorkspace: () => settingsModule.settings.get<number>(TICKET_SETTING_KEYS.agentOpenPerWorkspace),
   agentAssignUserTags: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.agentAssignUserTags),
+  leadPeerGroups: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups),
+  // T-2881: a ticket filed without a bucket goes where its tags say, read each call.
+  bucketRoutes: () => settingsModule.settings.get<string>(TICKET_SETTING_KEYS.bucketRoutes),
+  // T-2014 (FR36e), D-99: who may record ticket_merge_status: every lead of the flow programs' groups (and their workers), read each call.
+  mergeGates: () => mergeRecordersOf(flowProgramsRaw(settingsModule.settings), settingsModule.settings.get<string>(TICKET_SETTING_KEYS.leadPeerGroups)),
 });
 tickets.onChange = () => notify('tickets');
 // A bump reaches into a session: the platform audit (created further down) records who, which ticket, which session and how (FR30).
@@ -516,9 +577,16 @@ tickets.start();
 const orphanSweep = new OrphanSweep(tickets);
 orphanSweep.start();
 chatController.ticketExists = (id) => tickets.exists(id);
+// T-1098: a session links the stable id, whichever form (T-12 or KONF-3) the caller gave.
+chatController.ticketResolve = (id) => tickets.resolve(id);
+chatController.ticketKeyOf = (id) => tickets.keyOf(id);
 // T-546: the crew digest's window is a setting, and each worker's line points to its latest ticket comment.
 chatController.crewSettings = (key) => settingsModule.settings.get(key);
 chatController.crewTicketOf = (sessionId) => tickets.latestCommentOf(sessionId);
+// T-1613: the crew wake tells an idle lead of the verdicts recorded on the tickets it holds (its window is `chat.crew.wakeMin`).
+chatController.crewVerdictsOf = (sessionId, sinceMs) => tickets.verdictsHeldBy(sessionId, sinceMs);
+// T-1616: and of the tickets it holds that are in review with a pass as their latest verdict (ready to close or merge).
+chatController.crewReadyOf = (sessionId) => tickets.readyToCloseHeldBy(sessionId);
 // T-270: a continuation takes its predecessors' tickets in the transaction that creates it.
 chatController.continueTickets = (to, from) => tickets.continueFrom(to, from);
 // T-136: recover in place reads its cap and pause from the settings; past the cap, ONE watchdog ticket says so (facts, no transcript).
@@ -536,7 +604,8 @@ chatController.onRecoverCapped = (i) => {
     },
   );
 };
-registerTicketTools(tickets);
+// T-1105: a token's default workspace is used only while the workspace is there (resolve answers null for a removed one).
+registerTicketTools(tickets, undefined, { workspaceExists: (id) => workspaces.resolve(id) !== null });
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);
 // Chat content: the agent hands a file to the person as an artifact card (artifact_publish).
@@ -570,6 +639,8 @@ const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   secretValue: (id, name) => deliveredSecretValue(poolService, id, name),
   // T-486 S2: the upstream host allow-list setting, read at each use.
   upstreamHosts: upstreamHostsFrom(settingsModule.settings),
+  // T-1637: how long a runner may not answer before its runs end as runner_lost, read at each look.
+  runnerLostMin: runnerLostMinFrom(settingsModule.settings),
   // Deployment approvals and environment protection changes (FR41) go to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
 });
@@ -595,6 +666,9 @@ const claudeUsage = createClaudeUsage({
   chat: chatController,
   pooled: (id) => !!pools.stateFor(id),
   notify: () => notify('claudeusage'),
+  settings: settingsModule.settings,
+  // T-1707: each prime of a Claude reading 0 % with no reset time goes to the platform audit, created further down.
+  audit: (e) => platform.audit.record(e),
 });
 claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
@@ -639,9 +713,12 @@ chatController.sendGate = (info) => usageSpend.gate(info);
 registerUsageSpendTools(usageSpend);
 // The efficiency lab (T-287, claude-usage PRD §28): per-slice counts from every accepted stream line, experiments, outcomes from the
 // tickets' timelines, the read routes and Portal MCP tools (lab/authz.ts), and retention of the request rows (14 days, once a day).
-const lab = new Lab({ store, log: (m) => console.warn(m), paceSource: async () => (await claudeUsage.report()).claudes });
+// T-2360: plus the pilot metrics (flow times, the two scores, findings) with a snapshot every 10 minutes (kept 30 days); `settings` holds
+// the metrics programs and their targets.
+const lab = new Lab({ store, log: (m) => console.warn(m), paceSource: async () => (await claudeUsage.report()).claudes, settings: settingsModule.settings, metricsMemoMs: METRICS_MEMO_MS });
 chatController.onStreamLine = (sessionId, raw) => lab.line(sessionId, raw);
 registerLabTools(lab);
+registerMetricsTools(lab);
 lab.start();
 // Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
 // and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.
@@ -666,6 +743,9 @@ for (const source of [tickets, ci]) {
 chatController.onEvent((_id, msg) => changesGlance(msg) && attention.changed());
 attention.start();
 registerAttentionTools(attention);
+// T-968 S2a: the General Manager's reads (general-manager PRD §9.1), each declared in its module's authz.ts.
+registerSettingsTools(settingsModule.settings);
+registerChatManagerTools({ db: () => store.db, chat: chatController, caps: () => chatController.agentCaps?.() ?? null });
 // GitHub Codespaces POC: GitHub connections (token or device flow with a client ID only; the token is a sealed secret) and the codespace
 // lifecycle through GitHub's REST API (docs/prd/codespaces-poc.md).
 const codespaces = createCodespaces({ store, pools: poolService, values: secretsKind.values, dataDir: config.paths.data });
@@ -723,6 +803,7 @@ const app = createApp(portal, workspaces, store, accounts, pools, reconciler, he
   repos,
   glance,
   attention,
+  approvals,
   codespaces,
   platform,
   claudeVersions,
@@ -787,6 +868,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const)
     server.close();
     refRewrite.abort();
     clearInterval(backupTimer);
+    lab.close();
     claudeVersions.stop();
     reconciler.stop();
     browser.stop();

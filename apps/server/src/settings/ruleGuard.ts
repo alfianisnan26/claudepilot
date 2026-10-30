@@ -50,9 +50,24 @@ const CHECKER_BASE = /^check-allowlist(\.[A-Za-z0-9]+)?$/;
 const ANY_RULE_BASE = /^(settings(\.local)?\.json|\.mcp\.json|\.claude\.json|check-allowlist(\.[A-Za-z0-9]+)?)$/;
 // A rule file named in text: the literal paths, a config folder's settings, or the variable that names one.
 const MENTION = /\.mcp\.json|\.claude\.json|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|\.claude\/+(\.\/+)*settings(\.local)?\.json|claudes\/[^\s\/'"]+\/+settings(\.local)?\.json|CLAUDE_CONFIG_DIR/;
-// Words that could be part of a rule file's name, for values the hook cannot see (a variable, a pipe).
-const FRAGMENT_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// Words that could be part of a rule file's name, for shell values the hook cannot see (a variable, a pipe): loose on
+// purpose, since A=claude; B=settings; echo x > ~/.$A/$B.json shows no more than these words.
+const DYNAMIC_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// Rule-file path fragments, for the text of code that writes a file: shown first in the message, as the clearest word.
+const FRAGMENT_WORDS = /\.claude\/|\.claude\.json|settings(\.local)?\.json|\.mcp\.json|managed-settings|check-allowlist|\/etc\/+claude-code|\/etc\/+claudepilot|CLAUDE_CONFIG_DIR/i;
+// The bare words for the text of code that writes a file: the original loose set, with no exemption (T-1092). A word cut
+// from a longer string ('zclaudez'[1:-1], 'claudepilot'[:6], 'claudes/'[:6]) shows nothing more, so every exemption tried
+// was a write path to a rule file. A refusal tells the agent to use the Edit or Write tool for a notes file instead.
+const INLINE_WORDS = /claude|settings|\.mcp|mcp\.json|allowlist/i;
+// The narrow net of bare words for code that writes (T-1092 review): a word glued to a path, glob or quote edge
+// ('x.claude'.slice(1), '.claude*/settings*.json', 'CLAUDE_' + 'CONFIG_DIR'). Inside INLINE_WORDS today; kept because
+// it only refuses more, and it gives a clearer word in the message.
+const BARE_NET = /claude(?:[\/*?\[\]'"\x60]|\.(?=[\w*?\[]))|settings(?:[\/*?\[\]'"\x60_]|\.(?=[\w*?\[]))|allowlist|CLAUDE_['"\x60+]/i;
+// Code that lists a folder: with a quoted two-letter start of a rule file's name ('.c', '.m') it can find one.
+const LISTING = /glob|readdir|listdir|scandir|iterdir|os\.walk|opendir|Dir\.(children|entries|each|glob)/i;
 const RULE_NAMES = ['.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.claude.json', 'check-allowlist.mjs'];
+// Protected paths, matched as quoted pieces only when the piece carries a slash or underscore ('/etc/' + 'claudepilot/...').
+const RULE_PATHS = ['/etc/claude-code/managed-settings.json', '/etc/claudepilot/bin/policy-rule-guard.cjs', 'CLAUDE_CONFIG_DIR/settings.json'];
 // Path patterns compared segment by segment with a glob (the last one is the .claude folder itself).
 const CANDIDATES = [['.mcp.json'], ['.claude.json'], ['.claude', 'settings.json'], ['.claude', 'settings.local.json'], ['check-allowlist.mjs'], ['.claude']];
 
@@ -258,25 +273,59 @@ function couldMatch(pattern, baseDir, dotglob) {
   return false;
 }
 
-/** Whether a quoted string in code is a piece (3+ characters) of a rule file's name: '.cla' + 'ude/settings.json'. */
-function hasFragmentString(code) {
-  const re = /(['"\x60])((?:\\.|(?!\1)[^\\\n]){3,200})\1/g;
-  let m;
-  while ((m = re.exec(code))) {
-    const s = m[2];
-    if (FRAGMENT_WORDS.test(s)) return true;
-    for (const name of RULE_NAMES) if (name.includes(s)) return true;
+/** The quoted strings in code, short ones included so that a '.' does not throw the pairing of the quotes after it. */
+function quotedStrings(code) {
+  const out = [];
+  // Both pairings: from length 0 (the right one) and the original 3+ one, so nothing the guard found before is lost.
+  for (const re of [/(['"\x60])((?:\\.|(?!\1)[^\\\n]){0,200})\1/g, /(['"\x60])((?:\\.|(?!\1)[^\\\n]){3,200})\1/g]) {
+    let m;
+    while ((m = re.exec(code)) && out.length < 4000) out.push(m[2]);
   }
-  return false;
+  return out;
+}
+
+/** The rule file a quoted string in code is a piece (3+ characters) of ('.cla' + 'ude/settings.json'), or null. A fixed name, never the code's text. */
+function fragmentString(code) {
+  for (const s of quotedStrings(code)) {
+    if (s.length < 3) continue;
+    const w = FRAGMENT_WORDS.exec(s);
+    if (w) return w[0].toLowerCase();
+    for (const name of RULE_NAMES) if (name.includes(s)) return 'a piece of ' + name;
+  }
+  return null;
+}
+
+/** The narrow net (T-1092 review): a bare word at a path, glob or quote edge, a glob that could match a rule file, a piece of a protected path, a folder listing with a two-letter start. */
+function bareNet(code) {
+  const w = BARE_NET.exec(code);
+  if (w) return w[0].toLowerCase();
+  const strings = quotedStrings(code);
+  for (const s of strings) {
+    if (/[*?[]/.test(s) && /[A-Za-z]/.test(s) && couldMatch(s, null, true)) return 'a pattern that could match a rule file';
+    if (s.length >= 3 && /[\/_]/.test(s)) for (const p of RULE_PATHS) if (p.includes(s)) return 'a piece of ' + p;
+  }
+  if (LISTING.test(code) && strings.some((s) => s.length === 2 && ['.claude', '.mcp.json', 'settings', 'check-allowlist'].some((n) => n.startsWith(s)))) return 'a folder listing that looks for a rule file';
+  return null;
 }
 
 // Code that writes a file or runs a command (which could).
 const WRITE_API = /writeFile|appendFile|createWriteStream|copyFile|\bcp(Sync)?\(|rename|unlink|\brm(Sync)?\(|rmdir|symlink|\blink(Sync)?\(|truncate|chmod|open(Sync)?\([^)]*['"][wax+]|['"](w|a|x|wb|ab|w\+|a\+|r\+)['"]|\.write(_text|_bytes)?\(|shutil\.|os\.(replace|remove)|\bFile\.(write|open)|IO\.write|child_process|exec(Sync|File)?\(|spawn|system\(|subprocess|popen|Deno\.write|Bun\.write|print\s*>|printf[^;\n]*>|>\s*['"]?[\w.~\/$]|\btee\b|sed\s+-i|\bmv\s|\bcp\s/i;
 const OBFUSCATION = /fromCharCode|atob\(|base64|b64decode|\\x[0-9a-f]{2}|\\u00[0-9a-f]{2}|\bchr\(|unhexlify|codecs\.|rot13|reverse\(\)|\[::-1\]|String\.raw|decodeURIComponent|unescape\(|\bpack\(/i;
 
-function inlineSuspicious(code) {
-  if (!WRITE_API.test(code)) return false;
-  return MENTION.test(code) || FRAGMENT_WORDS.test(code) || hasFragmentString(code) || OBFUSCATION.test(code);
+/**
+ * Why code that writes a file is refused, or null: 'mention' when it names a rule file, else the heuristic's own message
+ * (T-1092: a fragment or a decoding call is not a named rule file, and the message must not say it is). The word shown is
+ * one of the guard's fixed fragments, never the code's text.
+ */
+function inlineReason(code) {
+  if (!WRITE_API.test(code)) return null;
+  if (MENTION.test(code)) return 'mention';
+  const w = FRAGMENT_WORDS.exec(code) || INLINE_WORDS.exec(code);
+  const word = w ? w[0].toLowerCase() : fragmentString(code) || bareNet(code);
+  if (word) return 'the command writes a file and its text names something like a rule file: ' + word + '. To edit a notes or status file, use the Edit or Write tool, not inline code';
+  const d = OBFUSCATION.exec(code);
+  if (d) return 'the command writes a file and its text decodes or hides a name: ' + d[0].toLowerCase();
+  return null;
 }
 
 /** A script file run directly: comments dropped, refused when its code names a rule file and writes. */
@@ -392,7 +441,30 @@ function assignsGit(src, j) {
  * Splits a command line into words (quotes removed; NUL where a value is not known: a variable, $(...), backticks),
  * operators and redirections. Command substitutions and heredoc bodies are collected for their own checks.
  */
+// PILOT-998: $HOME, plain or in braces, is the one variable a git -C path may use: the guard reads it as its own HOME (the session's,
+// passed by the wrapper). Only while no text the guard lexes in this tool call names HOME any other way (HOME=..., export HOME,
+// read HOME, a default form in braces): then the shell's HOME may differ and the word stays a value the guard cannot see.
+let HOME_TOUCHED = false;
+function isHomeVar(src, j) {
+  if (src.startsWith('$HOME', j) && !/[A-Za-z0-9_]/.test(src[j + 5] || '')) return true;
+  return src.startsWith('$' + '{HOME}', j);
+}
+// Also refused for resolution: any command or process substitution, arithmetic ((, let, [[ -eq) and an assigning expansion (:= in
+// braces), since bash arithmetic on a value assigns (a value HOME=x). The words are checked after lexing (homeMayMove).
+function noteHome(src) {
+  const rest = src.split('$' + '{HOME}').join('').replace(/\$HOME(?![A-Za-z0-9_])/g, '');
+  if (/(^|[^A-Za-z0-9_])HOME(?![A-Za-z0-9_])/.test(rest)) HOME_TOUCHED = true;
+  if (/\$\(|<\(|>\(|\x60|\(\(|\[\[|:=|\$\{[^}]*=/.test(src)) HOME_TOUCHED = true;
+}
+/** A git -C word with $HOME in it, read as the guard's HOME when nothing in the tool call can move it; any other word as it is. */
+function homeWord(d) {
+  if (!d || !d.dyn || !d.home || d.subst || HOME_TOUCHED) return d;
+  if ((d.text.match(/\u0000/g) || []).length !== d.home) return d;
+  return Object.assign({}, d, { text: d.text.split('\u0000').join(HOME), dyn: false });
+}
+
 function lex(src) {
+  noteHome(src);
   const tokens = [];
   const subs = [];
   const bodies = [];
@@ -492,6 +564,7 @@ function lex(src) {
         }
         if (src[j] === '$' && VAR_START.test(src[j + 1] || '')) {
           if (assignsGit(src, j)) gitAssign = true;
+          if (isHomeVar(src, j)) w.home = (w.home || 0) + 1;
           w.dyn = true;
           w.text += '\u0000';
           j = skipVar(src, j);
@@ -529,6 +602,7 @@ function lex(src) {
     if (c === '$' && VAR_START.test(src[i + 1] || '')) {
       if (assignsGit(src, i)) gitAssign = true;
       const w = word();
+      if (isHomeVar(src, i)) w.home = (w.home || 0) + 1;
       w.dyn = true;
       w.text += '\u0000';
       i = skipVar(src, i);
@@ -620,7 +694,17 @@ function lex(src) {
   }
   end();
   readBodies();
+  if (subs.length || tokens.some(homeMayMove)) HOME_TOUCHED = true;
   return { tokens: tokens, subs: subs, bodies: bodies, bad: bad, gitAssign: gitAssign };
+}
+
+// A word after quote removal that could set HOME in this shell: an assignment word (any name, a variable one too), a builtin that
+// sets or reads into a variable or runs text in this shell, or HOME spelled out (HO''ME).
+const HOME_SETTERS = new Set(['source', '.', 'eval', 'declare', 'typeset', 'local', 'export', 'readonly', 'read', 'readarray', 'mapfile', 'printf', 'let', 'unset', 'getopts']);
+function homeMayMove(w) {
+  if (w.t !== 'w') return false;
+  const t = w.text;
+  return HOME_SETTERS.has(t) || /^[A-Za-z_\u0000][A-Za-z0-9_\u0000]*(\[[^\]]*\])?\+?=/.test(t) || /(^|[^A-Za-z0-9_])HOME(?![A-Za-z0-9_])/.test(t);
 }
 
 /** Simple commands: words and redirections between operators; whether stdin comes from a pipe. */
@@ -702,7 +786,7 @@ function analyzeBash(command, cwd) {
   const flat = all.join(' ');
   st.mentions = MENTION.test(flat) || all.some((s) => typeof s === 'string' && s.length < 400 && MENTION.test(s));
   // A piece of a rule file's name: one of its words, or a word with a dot, slash or dash inside a name ('.cla', 'ude/s').
-  st.fragments = st.mentions || FRAGMENT_WORDS.test(flat) || all.some((s) => s.length >= 3 && s.length <= 60 && /[.\/-]/.test(s) && !/\s/.test(s) && RULE_NAMES.some((nm) => nm.includes(s)));
+  st.fragments = st.mentions || DYNAMIC_WORDS.test(flat) || all.some((s) => s.length >= 3 && s.length <= 60 && /[.\/-]/.test(s) && !/\s/.test(s) && RULE_NAMES.some((nm) => nm.includes(s)));
   st.decoder = DECODER.test(flat);
   st.dotglob = /dotglob|GLOBIGNORE|globdots|GLOB_DOTS/.test(flat);
   const found = analyze(command, st, cwd, 0);
@@ -713,8 +797,9 @@ function analyzeBash(command, cwd) {
   return null;
 }
 
-function hit(form, p) {
-  return { form: form, path: p };
+// todo (PILOT-998): what the agent can do instead, printed after the reason; never in the audit row (its form stays the grouping key).
+function hit(form, p, todo) {
+  return todo ? { form: form, path: p, todo: todo } : { form: form, path: p };
 }
 
 /**
@@ -1366,6 +1451,8 @@ function analyze(command, st, cwd, depth) {
         (st.gitC || (st.gitC = [])).push(st.cmdN);
         const step = gitCStep(u.chdir, restore ? restore.base : base);
         if (step.hit) return step.hit;
+        // A tool checkout is read only through git -C, where gitToolPolicy reads the subcommand.
+        if (step.tool) return hit('env -C or sudo -D into a tool checkout', '', 'use git -C <tool root> with ' + GIT_TOOL_FORMS);
       }
       const r = git(args, st, base, stdinText, stdinFile, c.piped);
       if (r) return r;
@@ -1574,18 +1661,26 @@ function gitConfigHit(kv, unseen, st) {
 const GITC_DEFAULT_ROOT = '/home/node/work/agentic-worktrees';
 const GITC_ROOTS_FILE = process.env.CLAUDEPILOT_GUARD_GITC_ROOTS_FILE || '/etc/claudepilot/git-c-roots';
 
+// PILOT-998: a line "tool <absolute path>" names a read-only tool checkout (the main ClaudePilot folder whose scripts every lane runs).
+// git -C there is allowed for reads and fast-forwards only (gitToolPolicy). An older guard ignores these lines (not absolute).
 function gitCRoots() {
   const extra = [];
+  const tools = [];
   try {
     for (const line of fs.readFileSync(GITC_ROOTS_FILE, 'utf8').split('\n')) {
       const t = line.trim();
-      if (t && !t.startsWith('#') && path.isAbsolute(t)) extra.push(path.resolve(t));
+      const m = /^tool\s+(\S+)$/.exec(t);
+      if (m && path.isAbsolute(m[1])) tools.push(path.resolve(m[1]));
+      else if (t && !t.startsWith('#') && path.isAbsolute(t)) extra.push(path.resolve(t));
     }
   } catch (e) {
     // no file: only the default root
   }
-  return { extra: extra, active: extra.length > 0 || isDir(GITC_DEFAULT_ROOT) };
+  return { extra: extra, tools: tools, active: extra.length > 0 || isDir(GITC_DEFAULT_ROOT) };
 }
+
+const GIT_TOOL_FORMS = 'fetch, pull --ff-only, merge --ff-only, log, show, status, rev-parse, diff and branch --contains';
+const GITC_LANE_TODO = 'run git -C on your own worktree (below a lane root: git worktree add there), or on a tool checkout use only ' + GIT_TOOL_FORMS;
 
 /**
  * A GIT_* variable that moves a folder, adds config or runs a program (GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR, GIT_CONFIG_COUNT,
@@ -1612,28 +1707,105 @@ function gitEnvNameHit(w) {
 }
 
 /** The folder a git -C path word names: { hit } when it is refused, else { base } (its real path), or { base: next } when the guard is off here. */
-function gitCStep(d, b) {
+function gitCStep(d0, b) {
   const roots = gitCRoots();
+  const d = homeWord(d0);
   // Not a lane workspace (no lane folder, no configured root): there is no lane allow rule to guard, and the folder is tracked as before.
   if (!roots.active) return { base: !d || d.dyn ? null : b === null ? null : path.resolve(b, expandHome(d.text)) };
-  if (!d) return { hit: hit('git -C without a folder', '') };
-  if (d.dyn) return { hit: hit('git -C of a value the guard cannot see (a variable or a command substitution)', '') };
-  if (d.glob) return { hit: hit('git -C of a pattern', '') };
+  if (!d) return { hit: hit('git -C without a folder', '', 'name the folder after -C') };
+  if (d.dyn) {
+    const why = d.home && HOME_TOUCHED ? ' ($HOME, in a command that could change HOME)' : ' (a variable other than $HOME, or a command substitution)';
+    return { hit: hit('git -C of a value the guard cannot see' + why, '', 'write the folder out as a path ($HOME and ~ are read; other variables are not), in a command that does not set HOME') };
+  }
+  if (d.glob) return { hit: hit('git -C of a pattern', '', 'write the folder out, without * ? [ or {') };
+  if (HOME_TOUCHED && /^~(\/|$)/.test(d.text)) return { hit: hit('git -C of ~ in a command that could change HOME', '', 'write the folder out as an absolute path') };
   const t = expandHome(d.text);
-  if (!t || /[\u0000-\u001f$]/.test(t)) return { hit: hit('git -C of a path the guard cannot read', '') };
-  if (b === null && !path.isAbsolute(t)) return { hit: hit('git -C of a folder relative to a folder the guard does not know', '') };
+  if (!t || /[\u0000-\u001f$]/.test(t)) return { hit: hit('git -C of a path the guard cannot read', '', 'write the folder out as a plain path (no $ or control characters)') };
+  if (b === null && !path.isAbsolute(t)) return { hit: hit('git -C of a folder relative to a folder the guard does not know', '', 'use an absolute path') };
   let real;
   try {
     real = fs.realpathSync(path.resolve(b === null ? '/' : b, t));
   } catch (e) {
-    return { hit: hit('git -C of a folder that does not exist', '') };
+    return { hit: hit('git -C of a folder that does not exist', '', 'check the path; create your worktree first (git worktree add)') };
   }
   const under = [GITC_DEFAULT_ROOT].concat(roots.extra).some((r) => {
     const rr = realish(r);
     return real.startsWith(rr === '/' ? rr : rr + '/');
   });
-  if (!under) return { hit: hit('git -C outside the lane worktrees', '') };
-  return { base: real };
+  if (under) return { base: real };
+  // A tool checkout (PILOT-998): the folder itself or below it; the subcommand is read by gitToolPolicy.
+  const tool = roots.tools.map(realish).find((rr) => rr !== '/' && (real === rr || real.startsWith(rr + '/')));
+  if (tool) return { base: real, tool: true, toolRoot: tool };
+  return { hit: hit('git -C outside the lane worktrees', '', GITC_LANE_TODO) };
+}
+
+/**
+ * PILOT-998: a git -C line on a tool checkout (a "tool <path>" line of the roots file): only reads and fast-forwards, every word
+ * visible. Refused: every other subcommand (push, reset, checkout, commit, ...), a plain or non-ff pull or merge, a refspec that
+ * writes a local branch, and a file written by --output. Each refusal says what to do.
+ */
+const GIT_TOOL_SUBS = new Set(['fetch', 'pull', 'merge', 'log', 'show', 'status', 'rev-parse', 'diff', 'branch']);
+const GIT_TOOL_FF_FLAGS = /^(--ff-only|-q|--quiet|-v|--verbose|--progress|--no-progress|--stat|-n|--no-stat|--no-edit|--prune|-p|--tags|--no-tags|--all|--no-recurse-submodules)$/;
+const GIT_TOOL_BRANCH_FLAGS = /^(--contains(=.+)?|--no-contains(=.+)?|-a|--all|-r|--remotes|-l|--list|-v|--verbose|--format=.+|--sort=.+|--color(=.+)?|--no-color|--column(=.+)?|--no-column|--merged(=.+)?|--no-merged(=.+)?|--points-at(=.+)?|-i|--ignore-case|--omit-empty)$/;
+const GIT_TOOL_BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._\/-]*$/;
+/** The branch a tool checkout has checked out, from its own .git/HEAD; '' when detached, a linked worktree or unreadable (fail closed). */
+function gitToolHead(root) {
+  try {
+    const m = /^ref: refs\/heads\/(\S+)\s*$/.exec(fs.readFileSync(path.join(root, '.git', 'HEAD'), 'utf8'));
+    return m && GIT_TOOL_BRANCH_RE.test(m[1]) ? m[1] : '';
+  } catch (e) {
+    return '';
+  }
+}
+function gitToolPolicy(sub, rest, root) {
+  const forms = 'on a tool checkout only ' + GIT_TOOL_FORMS + ' are allowed; do any other work in your own worktree';
+  const no = (what, todo) => hit('git ' + (sub || '(no subcommand)') + ' ' + what + ' (a tool checkout)', '', todo || forms);
+  if (!GIT_TOOL_SUBS.has(sub)) return no('(not a read or a fast-forward)');
+  const argv = gitArgv(sub, rest);
+  for (const w of argv) {
+    if (w.dyn) return no('with a value the guard cannot see', 'write every word out (no variables or command substitutions)');
+    // @{u} and @{upstream} are literal words to the shell (a brace without a comma or .. does not expand).
+    if (w.glob && sub !== 'log' && sub !== 'show' && sub !== 'diff' && w.text !== '@{u}' && w.text !== '@{upstream}') return no('with a pattern', 'write the names out, without * ? [ or {');
+  }
+  const dd = argv.findIndex((w) => w.text === '--');
+  const before = dd < 0 ? argv : argv.slice(0, dd);
+  const flags = before.filter((w) => w.text.startsWith('-')).map((w) => w.text);
+  const pos = before.filter((w) => !w.text.startsWith('-')).map((w) => w.text);
+  // Review 43544: git reads the words after -- as the remote and refs too, so a -- would hide them from the checks below.
+  if (dd >= 0 && (sub === 'fetch' || sub === 'pull' || sub === 'merge')) return no('with -- (the words after it are refs the guard would not check)', 'drop the --: git -C <tool root> ' + sub + (sub === 'fetch' ? ' origin [<branch>]' : ' --ff-only'));
+  if (sub === 'fetch' || sub === 'pull') {
+    if (flags.some((f) => f === '-u' || gitLong(f, '--update-head-ok', 4) || gitLong(f, '--refmap', 5))) return no('with -u, --update-head-ok or --refmap', 'fetch by remote and branch name only');
+    if (flags.some((f) => gitLong(f, '--set-upstream', 6))) return no('with --set-upstream (it writes the checkout’s config)', 'drop --set-upstream');
+    if (pos.some((p) => p.startsWith('+') || p.indexOf(':') >= 0)) return no('of a refspec that writes a local branch (src:dst or +)', 'name only the remote and the branch: git -C <tool root> ' + sub + (sub === 'pull' ? ' --ff-only' : '') + ' origin <branch>');
+  }
+  if (sub === 'fetch') {
+    // Only flags that move nothing local (--stdin would read refspecs the guard never sees, --depth would make the checkout shallow).
+    const other = flags.find((f) => !GIT_TOOL_FF_FLAGS.test(f) && f !== '--dry-run');
+    if (other) return no('with ' + other + ' (only quiet, verbose, prune, tags and --dry-run flags)', 'use git -C <tool root> fetch origin [<branch>]');
+    // Review 43381 B1: origin, and at most one branch (a fetch without a refspec writes only FETCH_HEAD and origin/*).
+    if (pos.length > 2 || (pos.length && pos[0] !== 'origin') || (pos.length === 2 && !GIT_TOOL_BRANCH_RE.test(pos[1]))) return no('of ' + pos.join(' ') + ' (only origin and one branch)', 'use git -C <tool root> fetch origin [<branch>]');
+  }
+  if (sub === 'pull' || sub === 'merge') {
+    if (!flags.includes('--ff-only')) return no('without --ff-only (it could make a merge commit)', 'add --ff-only: git -C <tool root> ' + sub + ' --ff-only');
+    const other = flags.find((f) => !GIT_TOOL_FF_FLAGS.test(f));
+    if (other) return no('with ' + other + ' (only --ff-only and quiet, verbose, stat, prune and tags flags)', 'use ' + sub + ' --ff-only without ' + other);
+    // Review 43381 B1: a tool checkout is only brought to its own upstream, never moved to a ref a lane chose (its door scripts
+    // and its .claude/settings.json would then be unreviewed code). pull: no ref, or origin <the checked-out branch>; merge:
+    // @{u} or origin/<the checked-out branch>.
+    const up = sub === 'pull' ? 'git -C <tool root> pull --ff-only' : 'git -C <tool root> merge --ff-only @{u}';
+    if (sub === 'pull' && pos.length === 0) return null;
+    const head = gitToolHead(root);
+    if (!head) return no('of a named ref while the checked-out branch cannot be read (detached or unreadable HEAD)', 'use ' + up);
+    const ok = sub === 'pull' ? pos.length === 2 && pos[0] === 'origin' && pos[1] === head : pos.length === 1 && (pos[0] === '@{u}' || pos[0] === '@{upstream}' || pos[0] === 'origin/' + head);
+    if (!ok) return no('of ' + (pos.join(' ') || 'no ref') + ' (only the checked-out branch’s upstream, origin/' + head + ')', 'use ' + up);
+  }
+  if (sub === 'branch') {
+    if (!flags.some((f) => /^--contains(=|$)/.test(f))) return no('without --contains (it could create, move or delete a branch)', 'use git -C <tool root> branch --contains <commit>');
+    const other = flags.find((f) => !GIT_TOOL_BRANCH_FLAGS.test(f));
+    if (other) return no('with ' + other, 'use branch --contains <commit> with list flags only (-a, -r, -v, --format)');
+  }
+  if ((sub === 'log' || sub === 'show' || sub === 'diff') && flags.some((f) => /^--output(=|$)/.test(f))) return no('--output (it writes a file)', 'drop --output and redirect into a file of your own worktree');
+  return null;
 }
 
 // Options git takes before the subcommand that move nothing: the only ones a lane workspace may use there (S2). Every other one is
@@ -1642,13 +1814,150 @@ function gitCStep(d, b) {
 const GITC_GLOBAL_OK = /^(--no-pager|-P|--paginate|-p|--no-optional-locks|--no-lazy-fetch|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-advice|--no-replace-objects|--version)$/;
 // Config keys that move the work tree or run a program, refused for git config in a lane workspace.
 const GITC_CONFIG_KEYS = /^(core\.(worktree|bare|hookspath|fsmonitor|sshcommand|gitproxy|askpass|editor|pager)|alias\.|include\.|includeif\.|credential\.|filter\.|diff\.[^=]*\.(command|textconv)|sequence\.editor|gpg\.[a-z.]*program)/i;
+// Config keys that decide where a push goes (T-974 FIX), refused when set in a lane workspace. A remote's name may hold dots.
+const GITC_PUSH_KEYS = /^(remote\..*\.(push|url|pushurl)|push\.|url\..*\.(push)?insteadof|branch\..*\.pushremote)/i;
 // Programs that change links, folders or files in the same command line as a git -C (the path is read before they run).
 const GITC_SWAPPERS = new Set(['ln', 'mv', 'cp', 'rm', 'rmdir', 'mkdir', 'tar', 'unzip', 'install', 'rsync', 'bsdtar', 'cpio', '7z', '7za', 'unlink', 'truncate', 'mkfifo']);
+
+/* ---------- git by subcommand and flags (T-974) ---------- */
+
+// The lane allow rules are text (git -C <lane>/* commit*), and a text deny cannot tell a SUBCOMMAND from words in a -m value (a message
+// that says "restore" or "clean" was refused). So after the options before the subcommand, a git -C line is read as an argv: the
+// subcommand, its flags and its words, with the values of -m, -F and --message left out, and refused by subcommand and flags.
+const GIT_PROTECTED = ['stg', 'main', 'uat'];
+// Subcommands read by the policy; for every other one the earlier rules (rule files named, paths) are all that apply.
+const GIT_POLICED = new Set(['reset', 'clean', 'restore', 'checkout', 'switch', 'rebase', 'branch', 'push', 'commit', 'worktree', 'fetch', 'ls-remote', 'clone', 'pull', 'remote']);
+// git remote subcommands that change where a fetch or push goes (the same effect as the remote.*.url keys): refused. -v, show and get-url read.
+const GIT_REMOTE_WRITES = new Set(['add', 'set-url', 'rename', 'remove', 'rm', 'set-branches', 'set-head']);
+// Where a pattern or a variable could hide a protected branch or a flag.
+const GIT_NO_GLOB = new Set(['reset', 'restore', 'checkout', 'switch', 'branch', 'push', 'worktree']);
+// Short flags that take a value (the rest of the cluster, else the next word) for the subcommands that carry a message.
+const GIT_VALUE_LETTERS = { commit: 'mFCct', tag: 'mFu', merge: 'mF', stash: 'm', notes: 'mF' };
+// Short flags whose value can only be glued on (commit -uno is -u no, not -n -o).
+const GIT_GLUED_LETTERS = { commit: 'uS' };
+const GIT_MESSAGE_SUBS = new Set(['commit', 'tag', 'merge', 'stash', 'notes']);
+
+/** Whether a long option is spelled in full or as an unambiguous start of it (git accepts --no-ver for --no-verify). */
+function gitLong(text, full, min) {
+  const eq = text.indexOf('=');
+  const name = eq < 0 ? text : text.slice(0, eq);
+  return name.length >= min && full.startsWith(name);
+}
+
+/** A branch name as git reads it: refs/heads/x, heads/x and x are one branch; a leading + is a forced refspec. */
+function gitProtected(text) {
+  const t = text.replace(/^\+/, '').replace(/^(refs\/)?heads\//, '');
+  return GIT_PROTECTED.includes(t);
+}
+
+/** The words of a git line without the values of -m, -F and --message; short flag clusters split into one flag each. */
+function gitArgv(sub, rest) {
+  const letters = GIT_VALUE_LETTERS[sub] || '';
+  const glued = GIT_GLUED_LETTERS[sub] || '';
+  const out = [];
+  let paths = false;
+  for (let i = 0; i < rest.length; i++) {
+    const w = rest[i];
+    const t = w.text;
+    if (paths) {
+      out.push(w);
+      continue;
+    }
+    if (t === '--') {
+      paths = true;
+      out.push(w);
+      continue;
+    }
+    if (t.startsWith('--')) {
+      if (GIT_MESSAGE_SUBS.has(sub) && (gitLong(t, '--message', 4) || gitLong(t, '--file', 4))) {
+        if (t.indexOf('=') < 0) i++;
+        continue;
+      }
+      out.push(w);
+      continue;
+    }
+    if (t.length > 1 && t[0] === '-') {
+      for (let j = 1; j < t.length; j++) {
+        const ch = t[j];
+        if (letters.includes(ch)) {
+          if (j === t.length - 1) i++;
+          break;
+        }
+        if (glued.includes(ch)) break;
+        out.push(Object.assign({}, w, { text: '-' + ch }));
+      }
+      continue;
+    }
+    out.push(w);
+  }
+  return out;
+}
+
+/** The refusal of a git subcommand or flag in a git -C line of a lane workspace (T-974), or null. */
+function gitPolicy(sub, rest) {
+  if (!GIT_POLICED.has(sub)) return null;
+  const argv = gitArgv(sub, rest);
+  const no = (what, todo) =>
+    hit('git ' + sub + ' ' + what + ' (a lane workspace)', '', todo || 'this git form is refused in a lane workspace (T-974); use a form that keeps history and protected branches, or write the need on your ticket under FOR THE COORDINATOR');
+  // Fail closed: a value the guard cannot see could be a flag or a protected branch.
+  for (const w of argv) {
+    if (w.dyn) return no('with a value the guard cannot see (a variable or a command substitution)', 'write every word out (no variables or command substitutions)');
+    if (w.glob && GIT_NO_GLOB.has(sub)) return no('with a pattern');
+  }
+  const dd = argv.findIndex((w) => w.text === '--');
+  const before = dd < 0 ? argv : argv.slice(0, dd);
+  const flags = before.filter((w) => w.text.startsWith('-')).map((w) => w.text);
+  const pos = before.filter((w) => !w.text.startsWith('-')).map((w) => w.text);
+  const has = (...names) => flags.some((f) => names.includes(f));
+  const long = (full, min) => flags.some((f) => gitLong(f, full, min));
+  // A program git runs from an option: fetch, pull, ls-remote, push and clone take one.
+  if (long('--upload-pack', 5) || long('--receive-pack', 5) || long('--exec', 5)) return no('with --upload-pack, --receive-pack or --exec');
+  if (sub === 'reset') return long('--hard', 4) ? no('--hard') : null;
+  if (sub === 'clean') return no('(it deletes untracked files)');
+  if (sub === 'restore') return has('--staged', '-S') && !has('--worktree', '-W') ? null : no('of the work tree');
+  if (sub === 'rebase') return no('(it rewrites history)');
+  if (sub === 'checkout' || sub === 'switch') {
+    if (pos.some(gitProtected)) return no('of a protected branch (stg, main, uat)');
+    if (has('-f', '--force') || long('--force', 4) || long('--discard-changes', 4)) return no('--force (it discards changes)');
+    if (sub === 'checkout') {
+      if (dd >= 0) return no('of paths (it restores the work tree)');
+      if (pos.some((p) => p === '.' || p === ':/')) return no('of the whole work tree');
+      const creates = has('-b', '-B', '--orphan') || long('--orphan', 4);
+      if (!creates && pos.length >= 2) return no('of paths from a commit (it restores the work tree)');
+    }
+    return null;
+  }
+  if (sub === 'branch') {
+    if (has('-D', '-d') || long('--delete', 4)) return no('--delete');
+    if ((has('-f', '-m', '-M', '-c', '-C') || long('--force', 4) || long('--move', 4) || long('--copy', 4)) && pos.some(gitProtected)) return no('of a protected branch (stg, main, uat)');
+    return null;
+  }
+  if (sub === 'push') {
+    if (has('-f') || long('--force', 5) || long('--force-with-lease', 5) || long('--force-if-includes', 5)) return no('--force');
+    if (has('-d') || long('--delete', 5) || long('--mirror', 5) || long('--prune', 5) || long('--all', 5) || long('--branches', 5)) return no('with --delete, --mirror, --prune or --all');
+    for (const p of pos) {
+      if (/[*?[]/.test(p)) return no('with a pattern');
+      if (p.startsWith('+')) return no('of a forced refspec (+)');
+      if (p.startsWith(':')) return no('of a deletion refspec (:branch)');
+      const dst = p.slice(p.lastIndexOf(':') + 1);
+      if (gitProtected(p) || gitProtected(dst)) return no('to a protected branch (stg, main, uat)');
+    }
+    return null;
+  }
+  if (sub === 'remote') return GIT_REMOTE_WRITES.has(pos[0]) ? no(pos[0] + ' (it changes where a push goes)') : null;
+  if (sub === 'commit') return has('-n') || long('--no-verify', 6) ? no('--no-verify') : null;
+  if (sub === 'worktree') return pos[0] === 'remove' ? no('remove') : null;
+  if (sub === 'clone') return has('-u', '-c') || long('--config', 5) || long('--template', 5) ? no('with --config, --template or -u') : null;
+  return null;
+}
 
 function git(args, st, base, stdinText, stdinFile, piped) {
   let k = 0;
   let b = base;
   const lane = gitCRoots().active;
+  let viaC = false;
+  let tool = false;
+  let toolRoot = '';
   const mark = (list) => (st[list] || (st[list] = [])).push(st.cmdN);
   for (; k < args.length; k++) {
     const t = args[k].text;
@@ -1656,14 +1965,18 @@ function git(args, st, base, stdinText, stdinFile, piped) {
       // A lane workspace: the folders before the subcommand are -C, --git-dir and --work-tree (each read as the shell does and
       // kept below a lane root) and the options on the list above. The lane allow's * would let any of them through.
       if (t === '-C') {
+        viaC = true;
         mark('gitC');
         const step = gitCStep(args[++k], b);
         if (step.hit) return step.hit;
         b = step.base;
+        tool = !!step.tool; // the last -C decides, as in git
+        toolRoot = step.toolRoot || '';
         continue;
       }
       const dir = /^--(git-dir|work-tree)(?:=([\s\S]*))?$/.exec(t);
       if (dir && !args[k].glob) {
+        viaC = true;
         mark('gitC');
         const v = dir[2] !== undefined ? Object.assign({}, args[k], { text: dir[2] }) : args[++k];
         // Git keeps the value as a string and applies every -C first, so a relative value is read against the folder after the
@@ -1671,6 +1984,7 @@ function git(args, st, base, stdinText, stdinFile, piped) {
         if (v && !v.dyn && !path.isAbsolute(expandHome(v.text))) return hit('a relative --git-dir or --work-tree in a lane workspace (git reads it after the last -C)', '');
         const step = gitCStep(v, b);
         if (step.hit) return step.hit;
+        if (step.tool) return hit('--git-dir or --work-tree of a tool checkout', '', 'use git -C <tool root> with ' + GIT_TOOL_FORMS);
         continue;
       }
       if (GITC_GLOBAL_OK.test(t) && !args[k].dyn) continue;
@@ -1712,12 +2026,25 @@ function git(args, st, base, stdinText, stdinFile, piped) {
   const sub = args[k] ? args[k].text : '';
   const rest = args.slice(k + 1);
   if (lane && (sub === 'worktree' || sub === 'config')) mark('swap');
+  // T-974: a git -C line (the form the lane allow matches by text) is refused by subcommand and flags.
+  if (lane && viaC) {
+    const pr = gitPolicy(sub, rest);
+    if (pr) return pr;
+    if (tool) {
+      const tr = gitToolPolicy(sub, rest, toolRoot);
+      if (tr) return tr;
+    }
+  }
   // A lane workspace: git config of a key that moves the work tree or runs a program (core.worktree, core.hooksPath, alias.x, include.path).
   if (lane && sub === 'config') {
     const ops = nonOptions(rest);
     // Another file than the repository's own (--file, -f, --global, --system, --blob): a write or a read outside the lane.
     if (rest.some((w) => /^(--file|--global|--system|--blob|-f)/.test(w.text))) return hit('git config of another file than the repository’s own, in a lane workspace', '');
     if (ops.some((w) => GITC_CONFIG_KEYS.test(w.text)) || (ops.length >= 2 && ops[0].dyn)) return hit('git config of a key that moves the work tree or runs a program, in a lane workspace', '');
+    // T-974 FIX: a key that redirects a push (remote.<n>.push, .url, .pushurl, push.*, url.<base>.insteadOf, branch.<n>.pushRemote) turns a later
+    // plain git push into a push to a protected branch: refused when SET (a read, git config --get remote.origin.url, stays allowed).
+    const setting = ops.length >= 2 || rest.some((w) => /^--(add|replace-all)$/.test(w.text));
+    if (setting && ops.some((w) => GITC_PUSH_KEYS.test(w.text))) return hit('git config of a key that redirects a push (remote.*.push, remote.*.url, push.*, url.*.insteadOf, branch.*.pushRemote), in a lane workspace', '');
   }
   // git config alias.x '!rm .mcp.json' (then git x): a key that runs something, set while a rule file is named.
   if (sub === 'config') {
@@ -1861,7 +2188,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
   if (checker ? MENTION.test(command.split(script.text).join(' ')) : st.mentions) return hit(name + ' in a command that names a rule file', name);
   if (code !== null) {
     if (MENTION.test(code)) return hit(name + ' with a rule file named', name);
-    if (inlineSuspicious(code)) return hit(name + ' code that could write a rule file', name);
+    const why = inlineReason(code);
+    if (why) return hit(why === 'mention' ? name + ' code that could write a rule file' : why, name);
     return null;
   }
   if (script && !fromStdin) {
@@ -1872,7 +2200,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
   if (name === 'claude') return null;
   // The program comes from stdin: a heredoc, a file, or a pipe.
   if (stdinText) {
-    if (st.mentions || inlineSuspicious(stdinText)) return hit(name + ' reading code from stdin while a rule file is named', name);
+    const why = st.mentions ? 'mention' : inlineReason(stdinText);
+    if (why) return hit(why === 'mention' ? name + ' reading code from stdin while a rule file is named' : why, name);
     return null;
   }
   if (stdinFile && !stdinFile.target.dyn) {
@@ -1880,7 +2209,8 @@ function interpreter(name, args, st, base, command, stdinText, stdinFile, piped)
     return null;
   }
   if (piped || fromStdin) {
-    if (st.mentions || inlineSuspicious(command) || st.decoder) return hit(name + ' reading code from stdin while a rule file is named', name);
+    const why = st.mentions ? 'mention' : inlineReason(command) || (st.decoder ? name + ' reading decoded code from a pipe' : null);
+    if (why) return hit(why === 'mention' ? name + ' reading code from stdin while a rule file is named' : why, name);
   }
   return null;
 }
@@ -1997,9 +2327,141 @@ function audit(input, tool, form, p) {
   }
 }
 
-function refuse(input, tool, form, p) {
+// T-2885 (PILOT-1000): a refused call files ONE approval request for a person. The hook has no portal token, so it is a line in the
+// outbox (approval.jsonl) that the portal pulls within about 10 s and turns into request <id> (kind guard.refusal). The line holds the
+// tool, its exact input, the folder and the form, unclipped, so what a person allows is exactly this call; a call too large for one line
+// files nothing. The portal checks the line again (a chat of this workspace, the payload's shape and size, no secret-shaped value).
+// Returns the id, 'large', or '' (nothing filed).
+const LINE_MAX = 4000;
+// T-2885 review M2: what a file tool would write never leaves this hook. Each content field becomes 'sha256:<hex>' of it (approvals/pass.ts
+// digestInput, held equal by a test); the request shows the path and the digest, and the pass hashes this same form, so it still binds
+// the exact content.
+const CONTENT_FIELDS = { Write: ['content'], Edit: ['old_string', 'new_string'], NotebookEdit: ['new_source'], MultiEdit: [] };
+function digestFields(o, fields) {
+  const out = Object.assign({}, o);
+  fields.forEach(function (k) {
+    // always, even for a value that looks like a digest: a call that writes the literal 'sha256:<hex>' must not match a pass for the content
+    if (typeof out[k] === 'string') out[k] = 'sha256:' + require('crypto').createHash('sha256').update(out[k]).digest('hex');
+  });
+  return out;
+}
+function digestInput(tool, ti) {
+  const fields = Object.prototype.hasOwnProperty.call(CONTENT_FIELDS, tool) ? CONTENT_FIELDS[tool] : null;
+  if (!fields) return ti;
+  const out = digestFields(ti, fields);
+  if (tool === 'MultiEdit' && Array.isArray(out.edits)) {
+    out.edits = out.edits.map(function (e) { return e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e, ['old_string', 'new_string']) : e; });
+  }
+  return out;
+}
+function ask(input, tool, form) {
+  try {
+    if (!input || typeof input !== 'object' || !tool) return '';
+    const session = typeof input.session_id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(input.session_id) ? input.session_id : '';
+    const ti = input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
+    const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+    if (!session || !ti || !/^[A-Za-z0-9_.:-]{1,100}$/.test(tool) || cwd.length > 300) return '';
+    const dir = path.join(HOME, '.claudepilot', 'outbox');
+    if (!fs.statSync(dir).isDirectory()) return '';
+    const file = path.join(dir, 'approval.jsonl');
+    let size = 0;
+    try {
+      const st = fs.lstatSync(file);
+      if (!st.isFile()) return '';
+      size = st.size;
+    } catch (e) {
+      size = 0;
+    }
+    if (size >= OUTBOX_CAP) return '';
+    const id = 'apr-' + require('crypto').randomBytes(9).toString('hex');
+    const line = JSON.stringify({
+      id: id,
+      t: new Date().toISOString(),
+      type: 'request',
+      kind: 'guard.refusal',
+      claudeSession: session,
+      payload: { tool: tool, input: digestInput(tool, ti), cwd: cwd, form: String(form || '').slice(0, 80) },
+    });
+    if (Buffer.byteLength(line) > LINE_MAX) return 'large';
+    fs.appendFileSync(file, line + '\n', { mode: 384 });
+    return id;
+  } catch (e) {
+    return '';
+  }
+}
+
+// T-2889: the one-time pass. A person who allowed request <id> made the portal deliver the sha256 of that exact call (the kind, the tool,
+// the canonical JSON of its input, the folder; approvals/pass.ts) to a root-owned file. A call that hashes to a listed, unexpired pass
+// that this workspace has not used yet goes through ONCE: the hash goes to the used list first, then a 'used' line to the outbox, so the
+// portal drops the pass. Any other call (another input, folder or tool) hashes differently and is refused as before. The file must be a
+// regular file owned by root that only root may write; the agent cannot make one. The path and owner are fixed: the wrapper runs this
+// under env -i, so the two overrides below are only reachable by a test that runs the script itself.
+const PASSES_FILE = process.env.CLAUDEPILOT_GUARD_PASSES_FILE || '/etc/claudepilot/approval-passes';
+const PASSES_UID = process.env.CLAUDEPILOT_GUARD_PASSES_FILE && /^[0-9]+$/.test(process.env.CLAUDEPILOT_GUARD_PASSES_UID || '') ? Number(process.env.CLAUDEPILOT_GUARD_PASSES_UID) : 0;
+const PASSES_USED = path.join(HOME, '.claudepilot', 'approval-passes-used');
+function canon(v) {
+  if (Array.isArray(v)) return '[' + v.map(function (x) { return canon(x === undefined ? null : x); }).join(',') + ']';
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).filter(function (k) { return v[k] !== undefined; }).sort().map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+  }
+  const s = JSON.stringify(v);
+  return s === undefined ? 'null' : s;
+}
+function passOfCall(input, tool) {
+  const ti = input && input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
+  if (!ti || !tool) return '';
+  const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+  const parts = ['guard.refusal', tool, canon(digestInput(tool, ti)), cwd];
+  return require('crypto').createHash('sha256').update(parts.map(function (x) { return x + '\0'; }).join('')).digest('hex');
+}
+function usePass(input, tool) {
+  try {
+    const st = fs.lstatSync(PASSES_FILE);
+    if (!st.isFile() || st.uid !== PASSES_UID || (st.mode & 18) !== 0) return false;
+    const pass = passOfCall(input, tool);
+    if (!pass) return false;
+    const now = Date.now() / 1000;
+    const live = fs.readFileSync(PASSES_FILE, 'utf8').split('\n').some(function (l) {
+      const m = /^([0-9a-f]{64}) ([0-9]{1,12})$/.exec(l.trim());
+      return !!m && m[1] === pass && Number(m[2]) > now;
+    });
+    if (!live) return false;
+    let used = '';
+    try {
+      used = fs.readFileSync(PASSES_USED, 'utf8');
+    } catch (e) {
+      used = '';
+    }
+    if (used.split('\n').indexOf(pass) >= 0) return false;
+    fs.mkdirSync(path.dirname(PASSES_USED), { recursive: true, mode: 448 });
+    fs.appendFileSync(PASSES_USED, pass + '\n', { mode: 384 });
+    try {
+      const file = path.join(HOME, '.claudepilot', 'outbox', 'approval.jsonl');
+      const line = JSON.stringify({ id: 'used-' + pass.slice(0, 16) + '-' + Date.now(), t: new Date().toISOString(), type: 'used', pass: pass });
+      fs.appendFileSync(file, line + '\n', { mode: 384 });
+    } catch (e) {
+      // the used list holds it; the portal drops the pass when it expires
+    }
+    process.stderr.write('claudepilot: this exact call runs once on a one-time pass a person allowed (T-2889).\n');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function refuse(input, tool, form, p, todo) {
+  if (usePass(input, tool)) process.exit(0);
   audit(input, tool, form, p);
-  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. Propose the change as text on a ticket; the coordinator lands it.\n');
+  const next = todo ? 'What to do: ' + todo + '.' : 'Propose the change as text on a ticket; the coordinator lands it.';
+  const id = ask(input, tool, form);
+  const filed = id === 'large'
+    ? ' This call is too large to file as an approval request.'
+    : id
+      ? ' Or a person allows this exact call: approval request ' + id + ' is filed (approval_get ' + id + ' shows it within a minute; if it never shows, the portal refused the request). When it is allowed, run this same call again (same input, same folder) within 15 minutes; it goes through once.' +
+        // T-2889 review m3: the card shows the path and a sha256 of what would be written, never the content.
+        (Object.prototype.hasOwnProperty.call(CONTENT_FIELDS, tool) ? ' The card shows the path and a digest, not the content: put the content on your ticket so the person can read what they allow.' : '')
+      : '';
+  process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + filed + '\n');
   process.exit(2);
 }
 
@@ -2015,6 +2477,9 @@ function verdictOf(input) {
   const tool = typeof input.tool_name === 'string' ? input.tool_name : '';
   const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
   const cwd = typeof input.cwd === 'string' && path.isAbsolute(input.cwd) ? input.cwd : process.cwd();
+  // PILOT-998: HOME_TOUCHED belongs to ONE tool call (every lex of it, bash -c bodies included); a decision starts clean. Today each
+  // decision is its own process, so this only matters if the guard ever decides more than one call per process.
+  HOME_TOUCHED = false;
   try {
     return check(tool, ti, cwd);
   } catch (e) {
@@ -2037,7 +2502,7 @@ function main() {
     if (done) return;
     done = true;
     if (!verdict) process.exit(0);
-    refuse(input, tool, verdict.form, verdict.path);
+    refuse(input, tool, verdict.form, verdict.path, verdict.todo);
   };
   let worker;
   try {
@@ -2073,8 +2538,32 @@ export const GITC_ROOTS: readonly string[] = [
   '/home/node/work/konfersi-universe.worktrees',
 ];
 
-/** The file's content: one root a line. Throws for a root that is not absolute, has `..` or is not a worktrees folder. */
-export function gitCRootsContent(roots: readonly string[]): string {
+/**
+ * The read-only tool checkouts (PILOT-998), the one list: lanes run their scripts by these absolute paths and may keep them current
+ * with `git -C <root>` fetch, pull --ff-only, merge --ff-only, log, show, status, rev-parse, diff and branch --contains, nothing else.
+ */
+export const GITC_TOOL_ROOTS: readonly string[] = ['/home/node/work/claudepilot'];
+
+/**
+ * The file's content: one lane root a line, then one `tool <path>` line per tool checkout. Throws for a lane root that is not
+ * absolute, has `..` or is not a worktrees folder, and for a tool root that is not absolute, has `..`, is a worktrees folder or
+ * holds a lane root (a tool root is never wider than its one checkout).
+ */
+export function gitCRootsContent(roots: readonly string[], tools: readonly string[] = GITC_TOOL_ROOTS): string {
+  for (const t of tools) {
+    const ok =
+      t.startsWith('/') &&
+      t.split('/').filter(Boolean).length >= 3 &&
+      !t.split('/').includes('..') &&
+      !/[\s\u0000-\u001f]/.test(t) &&
+      !t.endsWith('/') &&
+      !/(^|\/)(agentic-worktrees|[^/]+\.worktrees)$/.test(t) &&
+      !roots.some((r) => r === t || r.startsWith(`${t}/`));
+    if (!ok)
+      throw new Error(
+        `git -C tool root "${t}" must be one absolute checkout folder (at least three levels deep, no "..", not a worktrees folder, holding no lane root)`,
+      );
+  }
   for (const r of roots) {
     const ok =
       r.startsWith('/') &&
@@ -2087,7 +2576,8 @@ export function gitCRootsContent(roots: readonly string[]): string {
         `git -C root "${r}" must be an absolute path without "..", ending in .worktrees or agentic-worktrees (never a main checkout)`,
       );
   }
-  return `# claudepilot: lane roots for the git -C check of policy-rule-guard (T-860, T-924). Root-owned; written by the portal.\n${roots.join('\n')}\n`;
+  const toolLines = tools.map((t) => `tool ${t}\n`).join('');
+  return `# claudepilot: lane roots for the git -C check of policy-rule-guard (T-860, T-924). Root-owned; written by the portal.\n${roots.join('\n')}\n${toolLines}`;
 }
 
 /** The guard's files: root-owned, outside every workspace folder (policy owner: `/etc/claudepilot/bin/policy-*` and the roots file). */

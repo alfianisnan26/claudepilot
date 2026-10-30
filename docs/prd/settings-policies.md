@@ -418,7 +418,7 @@ at every launch, resume and wake (Chat sessions §10.2):
 | Session budget            | `--max-budget-usd <remaining>`, because Claude Code doesn't count totals restored by `--resume` ✅                                                                                    | The portal stops the session at its own total (FR12)                                                                                                  |
 | Turn limits               | `--max-turns <per-prompt cap>`: it limits each prompt, not the session                                                                                                                | The portal counts turns per session and stops at the cap                                                                                              |
 | Model, effort, ultracode  | `--model`, `--effort`, only when the user picked them                                                                                                                                 | `set_model`, `apply_flag_settings {effortLevel, ultracode}`, each checked against policy. Clamps are silent, so chat shows `get_settings.applied` ✅. |
-| Scheduled tools           | `--disallowedTools CronCreate,CronDelete,ScheduleWakeup` unless allowed                                                                                                               | —                                                                                                                                                     |
+| Scheduled tools           | `--disallowedTools CronCreate CronDelete CronList ScheduleWakeup RemoteTrigger`, always (T-1863)                                                                                      | —                                                                                                                                                     |
 | Prompts nobody can answer | `--permission-prompt-tool stdio`; persona test prompts deny every request                                                                                                             | Chat approval dock                                                                                                                                    |
 
 Costs are client-side estimates at list price (contracted rates with `modelPricing`), and spend can
@@ -1009,7 +1009,17 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   Interpreters (`node`, `python`, `perl`, `ruby`, `awk`, `claude`, ...) are refused when their words name a rule file,
   when the command names one anywhere (data on stdin), when they read code from stdin while one is named, and when inline
   code writes a file and carries a piece of a rule file's name (`'.cla' + 'ude'`), a decoding call (base64, char codes,
-  hex escapes) or the words claude, settings, mcp or allowlist. Running the allow-list checker itself is a read.
+  hex escapes), or the words claude, settings, mcp or allowlist anywhere in it (a word padded and cut out again,
+  `'zclaudez'[1:-1]`, shows nothing more), with no exemption. **T-1092 was resolved by guidance, not by loosening**: a
+  lead's python heredoc writing its status note was refused because the note's data said `claudepilot-job-x`; every
+  exemption tried (rule-file paths only, words glued to an edge, `claudepilot` and `claudes/`) was a write path to a rule
+  file in review (`'claudepilot'[:6]` + `'.json'` writes `~/.claude.json`). So the refusal stays, and its message says
+  what to do: "To edit a notes or status file, use the Edit or Write tool, not inline code" (those tools are checked by
+  path only, so a note's text never matters there). Also refused, for code that writes: a quoted glob that could match a rule
+  file (`glob.glob('*/settings.*')`), a quoted piece of a protected path with a slash in it (`'/etc/' + 'claudepilot/...'`),
+  `'CLAUDE_' + ...`, and a folder listing (`readdirSync`, `glob`, `listdir`) with a two-letter start (`startsWith('.c')`).
+  These refusals have their own message ("the command writes a file and its text names something like a rule file:
+  <word>"), not "a rule file is named". Running the allow-list checker itself is a read.
 - The forms that hide a name, where the text shows them: quotes and escapes (`.cl""aude`, `$'\x2eclaude'`), `./` and `..`
   in the path, globs and braces that could match (`.claude/set*`, `.c*/settings.json`, `{settings,x}.json`, and `*.json`
   after `shopt -s dotglob`), a variable or command substitution as the target when the command carries a piece of a rule
@@ -1032,6 +1042,24 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   Every `-C` of a command is checked (`git -C a -C b`), in a pipe, after `cd x &&`, in `bash -c`. The refusal's audit line carries the
   form and no path (`path` is empty), never the command. The check is on only in a workspace that has the lane folder or a roots file;
   elsewhere (no lane allow rule to guard) `git -C` is tracked as before, so it does not refuse a lead's `git -C` in its own repository.
+  **Tool checkouts (PILOT-998, decision PILOT-996 #42754).** The roots file also carries `tool <abs>` lines, one per main checkout
+  whose scripts lanes run (`GITC_TOOL_ROOTS` in `settings/ruleGuard.ts`, today `/home/node/work/claudepilot`; each must be absolute, at
+  least three folders deep, not a worktrees folder and holding no lane root, or the delivery throws). `git -C <tool root or below>` is
+  allowed for reads and fast-forwards only: `fetch`, `pull --ff-only`, `merge --ff-only`, `log`, `show`, `status`, `rev-parse`, `diff`
+  and `branch --contains`. These only bring the checkout to its own upstream (review 43381 B1): `pull --ff-only` takes no ref or
+  `origin <the checked-out branch>`, `merge --ff-only` takes only `@{u}` or `origin/<the checked-out branch>` (read from the
+  checkout's `.git/HEAD`; detached or unreadable refuses a named ref), and `fetch` takes `origin` and at most one branch, with quiet,
+  verbose, prune, tags and `--dry-run` flags only (`--stdin`, `--depth`, `--set-upstream` are refused). A `--` is refused on all three
+  (review 43544: git reads the words after it as the remote and refs too). A lane can never move the
+  checkout, its door scripts or its `.claude/settings.json`, to a ref of its choice. Still refused there, each with its reason and what to do: any other subcommand (reset, checkout, push,
+  commit...), a plain or non-ff `pull`/`merge`, a forced or refspec `fetch` (`+`, `:`, `-u`, `--refmap`), `log/show/diff --output`,
+  `--git-dir`/`--work-tree` or `env -C`/`sudo -D` into a tool root, and writes to rule files (the rule-file checks run first). `$HOME`,
+  `${HOME}`, `~` and quoted paths are resolved, but only when nothing in the call can change HOME (no assignment, `export`, `read`,
+  `source`, `eval`..., no substitution); otherwise the variable form is refused as before. Every refusal of the guard now ends with
+  "What to do: ...". Hooks (review 42840, accepted): `fetch` runs `reference-transaction` and `pull`/`merge --ff-only` run
+  `post-merge` from the tool checkout's `.git/hooks`. That folder is the common git dir of every lane worktree, whose already allowed
+  `git commit`/`merge` run the same hooks as the same user, so the tool-root allow adds no new program; setting `core.hooksPath` or
+  `core.fsmonitor` (by `git config`, `-c` or `--config-env`) stays refused. A write to that hooks folder is the boundary to watch.
   **S2: the allow's `*` takes everything after the folder**, so in a lane workspace the rest of the command is read too:
   `--git-dir` and `--work-tree` (both `=` and two-word forms) are read like `-C` and must stay below a lane root; before the subcommand
   only `--no-pager`, `-P`, `-p`, `--paginate`, `--no-optional-locks`, `--no-lazy-fetch`, the pathspec switches, `--no-advice`,
@@ -1062,6 +1090,34 @@ create`), and any command that is not a known reader (`cat`, `grep`, `jq`, `git 
   a `.git` file planted in a lane folder that points at the main repository; repository hooks; `cd M && git commit` (the cwd moves, not
   `-C`: a sibling rule); writes from inside the lane folder to other places (`worktree add /abs`, `archive -o`, `checkout-index --prefix`,
   `push M`), reads outside it, and `git -C <other-lane>` (a lane may reach a sibling lane: the ticket allows everything under the root).
+  **By subcommand and flags (T-974).** A text deny such as `git -C * restore*` cannot tell a subcommand from the words of a `-m`
+  message (a message that said "restore" or "clean" was refused), and `HEAD~1`, `grep -o` and `.env.example` matched other text
+  denies. So in a lane workspace a `git -C` (or `--git-dir`, `--work-tree`) line is read as an argv by the same lexer: the subcommand,
+  its flags and its words, quotes respected, short flag clusters split (`-an`, `-fD`), long options taken in full or as an unambiguous
+  start (`--no-ver`), and **the values of `-m`, `-F` and `--message` (commit, tag, merge, stash, notes) are never matched**. Refused:
+  `reset --hard`; `clean`; `restore` of the work tree (`--staged` alone passes); `checkout` or `switch` of `stg`, `main` or `uat`
+  (also `refs/heads/x`, `-b`, `-B`, `-c`, `-C`) and `--force`; `checkout` of paths (`--`, `.`, a commit and a path); `rebase`;
+  `branch -d`, `-D`, `--delete` and a forced move of a protected branch; `push` to `stg`, `main` or `uat`, `--force`, `-f`,
+  `--force-with-lease`, a `+refspec`, a `:branch` deletion, `--delete`, `--mirror`, `--prune`, `--all`; `commit -n` and `--no-verify`;
+  `--upload-pack`, `--receive-pack` and `--exec` on any of them; `clone -u`, `--config`, `--template`; `worktree remove`; and a
+  global `-c` (already refused before the subcommand). **Fail closed:** a value the guard cannot see (a variable, a command
+  substitution, backticks) in any word that is not a message value, a pattern in a destructive subcommand, an unclosed quote or a
+  trailing backslash next to `git` is refused. `;`, `&&` and `|` split the line into commands and each git command is read on its own.
+  A message from a substitution (`-m "$(cat <<EOF ...)"`) passes. **Config that redirects a push (T-974 FIX, blind review PWG
+  10575):** `git -C <lane> config` that SETS `remote.<name>.push`, `remote.<name>.url`, `remote.<name>.pushurl`, `push.*`,
+  `url.<base>.insteadOf` (and `pushInsteadOf`) or `branch.<name>.pushRemote` is refused, because it would turn a later bare
+  `git push` into a push to a protected branch; reading them (`config --get remote.origin.url`) passes. `alias.*` was and stays
+  refused (set or read), as are `core.*` keys that run a program, `include.*`, `credential.*` and `filter.*`.
+  **What is not read.** A plain `git <sub>` with no `-C` is left to the allow and deny rules (a prefix deny still works there); the
+  guard reads only lines with `-C`, `--git-dir` or `--work-tree`. Also not read, `pull --rebase`, a bare `git push` (the branch it
+  pushes is the current one) and every subcommand off this list: `merge`, `cherry-pick`, `revert`, `stash`, `tag`, `add`, `rm`, `mv`, `am`, `apply`, `reflog`, `gc`, `notes`. The policed ones are `reset`, `clean`,
+  `restore`, `checkout`, `switch`, `rebase`, `branch`, `push`, `commit`, `worktree`, `fetch`, `ls-remote`, `clone`, `pull` and,
+  from the blind re-check (10774), `remote`: `remote add`, `set-url`, `rename`, `remove`, `rm`, `set-branches` and `set-head` are refused (they
+  move where a push or fetch goes, like the `remote.*.url` keys), while `remote`, `remote -v`, `remote show` and `remote get-url` pass. The
+  tests also keep a mixed-case `-c Remote.origin.pushurl=…` row, so a later relaxation of the refusal of `-c` is caught.
+  **`commit --amend` is allowed**: a commit that was pushed can only be replaced by a force push, and a force push is refused.
+  Tests: `ruleGuard.test.ts` "T-974" (every refused form and the harmless shapes). The programs' text denies for these forms
+  become removable after a blind PASS (D-60); that is the coordinator's step.
   Tests: `settings/ruleGuard.test.ts` (T-860), which build a scratch lane root and give it to the guard by `CLAUDEPILOT_GUARD_GITC_ROOTS_FILE`
   (read only by the Node half, which the wrapper starts with an emptied environment, so a session cannot set it). Not yet observed in a
   running Claude Code in a lane pod; the coordinator's deny lines (T-860 stopgap) stay as the first layer.

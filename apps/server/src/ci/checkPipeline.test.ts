@@ -72,7 +72,7 @@ test('in the workspace (the fallback, no PILOT_RUNNER) the gate goes to the clus
   const f = fixture({ 'a.ts': 'export const a = 3;\n', 'docs/x.md': 'x\n' });
   const r = f.run({});
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build`));
+  assert.match(r.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build,web-tests`));
   assert.doesNotMatch(r.stdout, /GATE HERE/);
 });
 
@@ -92,4 +92,19 @@ test('with no base commit (a manual run) the gate always runs', () => {
   const r = f.run({ PILOT_BASE_SHA: '' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /GATE JOB/);
+});
+
+test('T-1609: in the workspace, a gate Job already in the cluster for this commit means no second Job; another commit\'s Job does not count', () => {
+  const f = fixture({ 'a.ts': 'export const a = 5;\n' });
+  const bin = join(f.root, '.fakebin');
+  const withJobs = (names: string) => {
+    tool(join(bin, 'kubectl'), `printf '%s\\n' ${names}`);
+    return f.run({ PATH: `${bin}:${process.env.PATH}` });
+  };
+  const same = withJobs(`job.batch/claudepilot-gate-${f.head.slice(0, 7)}-a1b2 job.batch/claudepilot-job-0f`);
+  assert.equal(same.status, 0, same.stderr);
+  assert.match(same.stdout, /already in the cluster/);
+  assert.doesNotMatch(same.stdout, /GATE JOB/);
+  const other = withJobs('job.batch/claudepilot-gate-0000000-a1b2');
+  assert.match(other.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build,web-tests`));
 });

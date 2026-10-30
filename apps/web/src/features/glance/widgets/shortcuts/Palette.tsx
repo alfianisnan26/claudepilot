@@ -12,9 +12,10 @@ import { actionItems, pageItems, sessionItems, ticketItems, workspaceItems } fro
 import { closePalette } from './paletteStore';
 import { searchPalette, ticketByNumber, type PaletteItem, type PaletteKind } from './search';
 import { usePaletteData } from './usePaletteData';
+import { isTicket } from '@/features/tickets/labels';
 
 /** What the trailing word of a row says. Actions and pages are what they look like; the things you search for are named. */
-const KIND_WORD: Partial<Record<PaletteKind, string>> = { session: 'Session', workspace: 'Workspace', ticket: 'Ticket' };
+const KIND_WORD: Partial<Record<PaletteKind, string>> = { session: 'Agent', workspace: 'Workspace', ticket: 'Ticket' };
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
@@ -35,7 +36,13 @@ export default function Palette() {
   const list = useRef<HTMLUListElement>(null);
 
   const q = query.trim();
-  const byNumber = useMemo(() => ticketByNumber(q), [q]);
+  // T-1098: the ticket a reference names, titled by its summary once the search has it (until then the bare reference).
+  const byNumber = useMemo(() => {
+    const ref = ticketByNumber(q);
+    if (!ref) return null;
+    const hit = data.tickets?.forQuery === q ? data.tickets.items.find((t) => isTicket(t, ref.title)) : undefined;
+    return hit ? { ...ticketItems([hit])[0]!, id: ref.id } : ref;
+  }, [q, data.tickets]);
   const items = useMemo<PaletteItem[]>(
     () => [
       ...actionItems(here),
@@ -43,7 +50,8 @@ export default function Palette() {
       ...sessionItems(data.sessions ?? []),
       ...workspaceItems(data.workspaces ?? []),
       ...(byNumber ? [byNumber] : []),
-      ...(data.tickets && data.tickets.forQuery === q ? ticketItems(data.tickets.items) : []),
+      // The referenced ticket shows once, as the row above.
+      ...(data.tickets && data.tickets.forQuery === q ? ticketItems(data.tickets.items.filter((t) => !isTicket(t, ticketByNumber(q)?.title))) : []),
     ],
     [here, data.sessions, data.workspaces, data.tickets, byNumber, q],
   );
@@ -122,7 +130,8 @@ export default function Palette() {
         transition={{ duration: 0.15, ease }}
       >
         <div className="absolute inset-0 bg-black/35" onClick={closePalette} aria-hidden="true" />
-        <div className="relative flex h-full items-start justify-center p-3 sm:pt-24">
+        {/* Below the status bar and the notch, above the home indicator (the screen edges, index.css), on a phone installed edge to edge (T-1859). */}
+        <div className="relative flex h-full items-start justify-center px-3 pt-[var(--bar-top)] pb-[max(var(--bar-gap),var(--safe-bottom))] sm:pt-24">
           <motion.div
             ref={panel}
             role="dialog"

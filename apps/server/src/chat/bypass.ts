@@ -42,6 +42,26 @@ defineSetting({
   protective: false,
 });
 
+/**
+ * PILOT-996 (owner, 2026-10-28; D-103): a session with no person behind it (a worker, a trigger's, a ticket's, Portal MCP's) may run in
+ * Auto, and starts in it when nothing else is asked (T-2997, D-104: a worker too, unless its parent is in Bypass now; Auto may be asked
+ * for a worker whatever its parent's mode). Off, Auto stays for a person's own sessions and for workers of an Auto or Bypass parent.
+ * Turning it on is an agent permission, so it asks for a confirmation (`protective: false`).
+ */
+export const AUTONOMOUS_AUTO_SETTING = 'sessions.autonomousAuto';
+
+defineSetting({
+  key: AUTONOMOUS_AUTO_SETTING,
+  type: 'boolean',
+  default: true,
+  scope: 'global',
+  group: 'sessions',
+  order: 11,
+  label: 'Auto for agents',
+  help: 'Lets sessions no person started (workers, triggers, tickets, Portal MCP) run in Auto, where Claude Code’s classifier approves routine actions and blocks risky ones. New sessions without a person start in Auto, and so do workers (unless their parent is in Bypass); a worker may be given Auto whatever its parent’s mode, any other mode never wider than its parent. Off: Auto only for your own sessions and the workers of an Auto or Bypass parent.',
+  protective: false,
+});
+
 /** What is true of a workspace, for the confirmation: only what the portal knows is claimed. */
 export interface BypassFacts {
   workspaceId: string;
@@ -64,6 +84,8 @@ export interface BypassState {
   facts: BypassFacts;
   /** The signed-in session passed the re-check of the server code lately, so entering needs no new code. */
   reauthed: boolean;
+  /** PILOT-996: this session may switch to Auto now (its origin, its parent's mode, `sessions.autonomousAuto`). */
+  autoAllowed: boolean;
 }
 
 /** Why a Bypass request was refused, for the audit trail and the error code. */

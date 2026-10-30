@@ -121,7 +121,7 @@ after(async () => {
   await new Promise((r) => appServer.close(r));
 });
 
-const hostFor = (name: string, port: number) => `app-${name}-${port}.${SUFFIX}:${portalPort}`;
+const hostFor = (name: string, port: number) => `${port}-${name}.${SUFFIX}:${portalPort}`;
 
 /** One request to the portal server, Host as given. */
 function send(
@@ -337,10 +337,9 @@ test('a bad host, a bad or denied port, or a foreign slug is 404; another suffix
   const { host, cookie } = await signIn();
   const before = dials.length;
   for (const h of [
-    `app-ws-1-80.${SUFFIX}`, // below 1024
-    `app-ws-1-99999.${SUFFIX}`,
-    `app-x.${SUFFIX}`,
-    `app-ws-1.${SUFFIX}`,
+    `80-ws-1.${SUFFIX}`, // below 1024
+    `99999-ws-1.${SUFFIX}`,
+    `${appPort}-x_y.${SUFFIX}`,
     hostFor('other', appPort), // another workspace: the cookie is not its
     hostFor('ws-1', appPort === 65535 ? 65534 : appPort + 1), // another port of the same workspace
     hostFor('ws-1', portalPort), // the portal's own port is never an app
@@ -352,7 +351,8 @@ test('a bad host, a bad or denied port, or a foreign slug is 404; another suffix
   assert.equal((await send('GET', '/echo', { host })).status, 404, 'no cookie');
   assert.equal((await send('GET', '/echo', { host, cookie: '__pilot_app=forged' })).status, 404, 'a made-up cookie');
   assert.equal(dials.length, before, 'nothing was dialed');
-  assert.equal((await send('GET', '/echo', { host: `app-ws-1-${appPort}.evil.test`, cookie })).body, 'portal');
+  assert.equal((await send('GET', '/echo', { host: `${appPort}-ws-1.evil.test`, cookie })).body, 'portal');
+  assert.equal((await send('GET', '/echo', { host: `app-ws-1-${appPort}.${SUFFIX}`, cookie })).body, 'portal', 'the old form is no app host');
   assert.equal((await send('GET', '/', { host: `pilot.${SUFFIX}` })).body, 'portal');
   assert.equal(await wsStatus({ host: `pilot.${SUFFIX}` }), 418, 'the portal’s own sockets still get their upgrades');
 });
@@ -440,7 +440,7 @@ test('two workspaces with one name on different targets: CONFLICT, and no code i
       { port: appPort },
       { actor, actorString: 'x', userId: null, sessionToken: SESSION, portalOrigin: `http://pilot.${SUFFIX}` },
     ),
-    (e: Error & { code?: string }) => e.code === 'CONFLICT' && /same name/.test(e.message),
+    (e: Error & { code?: string }) => e.code === 'CONFLICT' && /also called twin/.test(e.message),
   );
   assert.equal(grants.size.codes, 0);
 });

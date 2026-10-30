@@ -238,7 +238,16 @@ export interface CiServiceOptions {
   upstreamHosts?: readonly string[] | (() => readonly string[] | undefined);
   /** T-486 S2: the least time between two webhook-kicked syncs of one remote (default UPSTREAM_HOOK_GAP_MS); tests pass a short one. */
   hookGapMs?: number;
+  /**
+   * T-1637: a run executing on a runner that has not answered for this many minutes ends failed as `runner_lost` (re-run in the
+   * repository's workspace when its `runs-on` has `fallback: workspace`). Read at each look (the `ci.runnerLostMin` setting); 0: never.
+   * Default RUNNER_LOST_MIN.
+   */
+  runnerLostMin?: number | (() => number);
 }
+
+/** T-1637: the default of `ci.runnerLostMin`, in minutes. */
+export const RUNNER_LOST_MIN = 10;
 
 /** T-486 S2: webhook kicks of one remote closer than this coalesce into one sync. */
 export const UPSTREAM_HOOK_GAP_MS = 10_000;
@@ -276,13 +285,20 @@ export class CiService {
   readonly #reporter: ReleaseReporter;
   readonly #cs: CiStore;
   readonly #opts: Required<
-    Omit<CiServiceOptions, 'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>
+    Omit<
+      CiServiceOptions,
+      'redactFor' | 'streamFor' | 'tickets' | 'sessions' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts' | 'runnerLostMin'
+    >
   > &
-    Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts'>;
+    Pick<CiServiceOptions, 'redactFor' | 'streamFor' | 'secrets' | 'secretValue' | 'audit' | 'upstreamHosts' | 'runnerLostMin'>;
   /** Runs a runner is being handed right now (T-557), so two workspaces' dispatches can not both fill its last slot. */
   readonly #handing = new Map<string, number>();
   /** Runs whose hand-off is in flight (T-557): handed off beside the poll, never twice at once. */
   readonly #handingRuns = new Set<string>();
+  /** T-1637: since when (ms, on `now`) each workspace has not answered a poll; gone once one is answered. In memory: a restart starts over. */
+  readonly #unreachable = new Map<string, number>();
+  /** T-1637: runs ended in the portal while their host did not answer, per host: the cancel goes to it once it answers again. */
+  readonly #recall = new Map<string, Set<string>>();
   /** Upstream sync: when each remote last tried (ms), and the sync in flight per remote (one at a time). */
   readonly #upstreamAt = new Map<string, number>();
   readonly #syncing = new Map<string, Promise<SyncReply>>();
@@ -342,6 +358,7 @@ export class CiService {
       lookup: opts.lookup ?? defaultLookup,
       upstreamHosts: opts.upstreamHosts,
       hookGapMs: opts.hookGapMs ?? UPSTREAM_HOOK_GAP_MS,
+      runnerLostMin: opts.runnerLostMin,
     };
   }
 
@@ -424,6 +441,8 @@ export class CiService {
           console.error(`[ci] ${workspaceId}: ${message}`);
         }
       })
+      .then(() => this.#runnerLost(workspaceId))
+      .catch((e: unknown) => console.error(`[ci] ${workspaceId}: the lost-runner check failed: ${(e as Error).message}`))
       .finally(() => this.#polling.delete(workspaceId));
     this.#polling.set(workspaceId, p);
     return p;
@@ -432,19 +451,36 @@ export class CiService {
   /* ---------- Following a workspace ---------- */
 
   async #poll(workspaceId: string): Promise<void> {
-    const state = await this.host.state(workspaceId);
+    // T-1637: not running, or no answer to the poll: the workspace is unreachable from now (the lost-runner check counts from here).
+    let state: Awaited<ReturnType<CiHost['state']>>;
+    try {
+      state = await this.host.state(workspaceId);
+    } catch (e) {
+      this.#unreached(workspaceId);
+      throw e;
+    }
     // Stopped: events wait on the volume and are read after the next start. Gone: its runs stay as history.
-    if (state !== 'running') return;
-    await this.host.install(workspaceId);
-    // Upstream sync (FR8a), detached: a slow or stalled upstream never holds this poll (following runs, starting queued ones, approvals).
-    // A sync that moved a branch kicks the next poll, which reads the events it wrote.
-    this.#upstreams(workspaceId);
-    const following = this.#cs.runningRuns(workspaceId);
-    const acks = this.#acks.get(workspaceId) ?? [];
-    const args = ['poll'];
-    if (acks.length) args.push('--ack', acks.join(','));
-    if (following.length) args.push('--runs', following.map((r) => r.id).join(','));
-    const reply = await this.host.cp(workspaceId, args, { timeoutMs: 20_000 });
+    if (state !== 'running') return this.#unreached(workspaceId);
+    let following: RunRow[];
+    let acks: string[];
+    let reply: CiReply;
+    try {
+      await this.host.install(workspaceId);
+      // Upstream sync (FR8a), detached: a slow or stalled upstream never holds this poll (following runs, starting queued ones, approvals).
+      // A sync that moved a branch kicks the next poll, which reads the events it wrote.
+      this.#upstreams(workspaceId);
+      following = this.#cs.runningRuns(workspaceId);
+      acks = this.#acks.get(workspaceId) ?? [];
+      const args = ['poll'];
+      if (acks.length) args.push('--ack', acks.join(','));
+      if (following.length) args.push('--runs', following.map((r) => r.id).join(','));
+      reply = await this.host.cp(workspaceId, args, { timeoutMs: 20_000 });
+    } catch (e) {
+      this.#unreached(workspaceId);
+      throw e;
+    }
+    this.#unreachable.delete(workspaceId);
+    await this.#recallRuns(workspaceId);
     if (!reply.ok) throw new Error(`poll: ${reply.message ?? reply.error}`);
     this.#acks.set(
       workspaceId,
@@ -465,6 +501,73 @@ export class CiService {
     for (const row of following) await this.#follow(row, polled[row.id]);
     await this.#dispatch(workspaceId);
     await this.#maintenance(workspaceId);
+  }
+
+  /* ---------- Unreachable hosts and lost runners (T-1637) ---------- */
+
+  #unreached(workspaceId: string): void {
+    if (!this.#unreachable.has(workspaceId)) this.#unreachable.set(workspaceId, this.#opts.now().getTime());
+  }
+
+  /** `ci.runnerLostMin` as it is now: a whole number of minutes, 0 (or anything not a positive number): never. */
+  #lostMin(): number {
+    const v = this.#opts.runnerLostMin;
+    const n = typeof v === 'function' ? v() : (v ?? RUNNER_LOST_MIN);
+    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  /** Whether a workspace has not answered for `ci.runnerLostMin` minutes or more. */
+  #isLost(workspaceId: string): boolean {
+    const since = this.#unreachable.get(workspaceId);
+    const min = this.#lostMin();
+    return since !== undefined && min > 0 && this.#opts.now().getTime() - since >= min * 60_000;
+  }
+
+  /**
+   * After each look at a workspace: when it is a runner that has not answered for `ci.runnerLostMin` minutes, every run executing on it
+   * ends failed as `runner_lost`, and one whose `runs-on` has `fallback: workspace` runs again (the re-run skips the lost runner, so it
+   * starts in the repository's workspace). A run executing in its own workspace (no runner) is never ended here: it is followed as before.
+   */
+  async #runnerLost(workspaceId: string): Promise<void> {
+    if (!this.#isLost(workspaceId)) return;
+    const min = this.#lostMin();
+    for (const row of this.#cs.runningRuns(workspaceId)) {
+      if (!row.runner_workspace_id || row.runner_workspace_id !== workspaceId) continue;
+      const note: CiDiagnostic = {
+        file: '',
+        line: 0,
+        column: 0,
+        path: 'runs-on',
+        severity: 'error',
+        code: 'runner_lost',
+        message: `The runner ${workspaceId} did not answer for ${min} minutes or more.`,
+      };
+      this.#cs.updateRun(row.id, { diagnostics: JSON.stringify([...json<CiDiagnostic[]>(row.diagnostics, []), note]) });
+      this.#remember(workspaceId, row.id);
+      console.error(`[ci] ${row.id}: the runner ${workspaceId} did not answer for ${min} minutes: failed as runner_lost`);
+      await this.#lost(row, json<CiRunStateFile | null>(row.state, null));
+      if (row.plan && (JSON.parse(row.plan) as Plan).runsOnFallback === 'workspace') {
+        const again = await this.rerun(row.id, row.actor).catch((e: unknown) => {
+          console.error(`[ci] ${row.id}: no re-run on the fallback: ${(e as Error).message}`);
+          return null;
+        });
+        if (again) console.log(`[ci] ${row.id}: re-run as ${again.id} on the fallback (the runner was lost)`);
+      }
+    }
+  }
+
+  /** A run ended in the portal while its host did not answer: the host is told to cancel it once it answers again. */
+  #remember(workspaceId: string, runId: string): void {
+    const set = this.#recall.get(workspaceId) ?? new Set<string>();
+    set.add(runId);
+    this.#recall.set(workspaceId, set);
+  }
+
+  async #recallRuns(workspaceId: string): Promise<void> {
+    const ids = this.#recall.get(workspaceId);
+    if (!ids) return;
+    this.#recall.delete(workspaceId);
+    for (const id of ids) await this.host.cp(workspaceId, ['cancel', id], { timeoutMs: 20_000 }).catch(() => undefined);
   }
 
   /** Keeps each remote's hook state current, and repairs a hook that is missing or out of date. */
@@ -1030,7 +1133,7 @@ export class CiService {
     }
     const ready: { id: string; load: number }[] = [];
     for (const r of fits) {
-      if (r.drained) continue;
+      if (r.drained || this.#isLost(r.workspace_id)) continue;
       const state = await this.host.state(r.workspace_id).catch(() => 'gone' as const);
       if (state !== 'running') continue;
       const load = this.#cs.runningRuns(r.workspace_id).length + (this.#handing.get(r.workspace_id) ?? 0);
@@ -1332,6 +1435,10 @@ export class CiService {
 
   async #follow(row: RunRow, polled: Polled | undefined): Promise<void> {
     if (!polled) return;
+    // Read again (T-1637): the run may have ended in the portal while this poll was out (cancelled while its host did not answer, or
+    // lost). What the host reports late never reopens it or changes how it ended.
+    const live = this.#cs.run(row.id);
+    if (!live || live.status !== 'running') return;
     const s = polled.state;
     if (!s) {
       // No state file: the workspace was reset, or the start never took.
@@ -1469,6 +1576,16 @@ export class CiService {
 
   /** The supervisor is gone with the run still open (the workspace stopped, or it was killed): the run failed and can be run again. */
   async #lost(row: RunRow, last: CiRunStateFile | null): Promise<void> {
+    await this.#complete(row, this.#ended(row, last, 'failed', 'runner_lost'));
+  }
+
+  /** The run's last state with every open job and step closed: a running one `running` (failed or cancelled), the rest cancelled. */
+  #ended(
+    row: RunRow,
+    last: CiRunStateFile | null,
+    running: 'failed' | 'cancelled',
+    reason: 'runner_lost' | 'cancelled' | 'superseded',
+  ): CiRunStateFile {
     // With no state file the jobs come from the plan, all still waiting.
     const s: CiRunStateFile = last ?? {
       v: 1,
@@ -1481,20 +1598,22 @@ export class CiService {
       jobs: this.get(row.id).detail,
     };
     for (const j of s.jobs) {
-      if (j.status === 'running') ((j.status = 'failed'), (j.reason = 'runner_lost'));
-      else if (j.status === 'pending' || j.status === 'waiting') ((j.status = 'cancelled'), (j.reason = 'runner_lost'));
+      if (j.status === 'running') ((j.status = running), (j.reason = reason));
+      else if (j.status === 'pending' || j.status === 'waiting') ((j.status = 'cancelled'), (j.reason = reason));
       for (const st of j.steps) {
-        if (st.status === 'running') ((st.status = 'failed'), (st.reason = 'runner_lost'));
-        else if (st.status === 'pending') ((st.status = 'cancelled'), (st.reason = 'runner_lost'));
+        if (st.status === 'running') ((st.status = running), (st.reason = reason));
+        else if (st.status === 'pending') ((st.status = 'cancelled'), (st.reason = reason));
       }
     }
-    s.status = 'failed';
-    s.reason = 'runner_lost';
+    s.status = running;
+    s.reason = reason;
     s.finishedAt = new Date().toISOString();
-    await this.#complete(row, s);
+    return s;
   }
 
   async #complete(row: RunRow, s: CiRunStateFile): Promise<void> {
+    // Ended in the portal meanwhile (T-1637): a late report never changes how it ended.
+    if (this.#cs.run(row.id)?.status !== 'running') return;
     const finished = s.finishedAt ?? new Date().toISOString();
     const started = Date.parse(row.started_at ?? row.created_at);
     this.#cs.updateRun(row.id, {
@@ -1647,12 +1766,53 @@ export class CiService {
       return;
     }
     if (row.status !== 'running') throw new AppError('CONFLICT', 'That run is already over.');
-    const reply = await this.host.cp(execOf(row), ['cancel', row.id]).catch((e: unknown) => {
-      throw new AppError('SERVICE_UNAVAILABLE', (e as Error).message, { expose: true });
-    });
+    let reply: CiReply;
+    try {
+      reply = await this.host.cp(execOf(row), ['cancel', row.id], { timeoutMs: 20_000 });
+    } catch (e) {
+      // T-1637: the host does not answer (a runner that went away): the run is cancelled here, and the host hears it when it answers again.
+      return this.#cancelHere(row, reason, who, (e as Error).message);
+    }
     if (!reply.ok) throw fromReply(reply);
     this.#cs.updateRun(row.id, { ...who, ...(reason === 'superseded' ? { reason: 'superseded' as const } : {}) });
     this.kick(execOf(row));
+  }
+
+  /** A running run cancelled in the portal because its host did not answer: ended as cancelled, its deployments settled like a queued one. */
+  #cancelHere(
+    row: RunRow,
+    reason: 'cancelled' | 'superseded',
+    who: { cancelled_by: string; cancelled_by_label: string | null; cancel_note: string | null },
+    why: string,
+  ): void {
+    const live = this.#cs.run(row.id);
+    if (!live || live.status !== 'running') throw new AppError('CONFLICT', 'That run is already over.');
+    const s = this.#ended(live, json<CiRunStateFile | null>(live.state, null), 'cancelled', reason);
+    const note: CiDiagnostic = {
+      file: '',
+      line: 0,
+      column: 0,
+      path: '',
+      severity: 'warning',
+      code: 'runner-unreachable',
+      message: 'runner unreachable: cancelled in the portal',
+    };
+    const finished = s.finishedAt!;
+    this.#cs.updateRun(live.id, {
+      status: 'cancelled',
+      reason,
+      state: JSON.stringify(s),
+      finished_at: finished,
+      duration_ms: Math.max(0, Date.parse(finished) - Date.parse(live.started_at ?? live.created_at)),
+      diagnostics: JSON.stringify([...json<CiDiagnostic[]>(live.diagnostics, []), note]),
+      ...who,
+    });
+    this.#remember(execOf(live), live.id);
+    console.log(`[ci] ${live.id} cancelled in the portal: ${execOf(live)} did not answer (${why})`);
+    this.#deployChats?.forget(live.id);
+    this.#settleDeployments(live.id, null);
+    this.#changed();
+    this.#moved(live.id, 'running');
   }
 
   async rerun(id: string, actor = 'ui'): Promise<CiRun> {
@@ -2062,6 +2222,11 @@ export class CiService {
     };
   }
 
+  /** T-1098: a run filter's ticket in either form (`KONF-3`) as the stable id runs store; unknown: as given (no match). */
+  #ticketRef(t: string | undefined): string | undefined {
+    return t ? (this.#tickets?.resolve?.(t) ?? t) : undefined;
+  }
+
   list(f: CiRunFilter = {}): CiRunList {
     const { rows, total, active } = this.#cs.listRuns({
       workspace: f.workspace,
@@ -2069,7 +2234,7 @@ export class CiService {
       pipeline: f.pipeline,
       branch: f.branch,
       statuses: f.status,
-      ticket: f.ticket,
+      ticket: this.#ticketRef(f.ticket),
       session: f.session,
       limit: f.limit,
     });
@@ -2092,7 +2257,7 @@ export class CiService {
         pipeline: f.pipeline,
         branch: f.branch,
         statuses: f.status,
-        ticket: f.ticket,
+        ticket: this.#ticketRef(f.ticket),
         session: f.session,
       },
       { scope, cursor: args.cursor, limit: args.limit, keep: args.keep },

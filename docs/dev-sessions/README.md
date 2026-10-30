@@ -73,7 +73,7 @@ then push: after every slice, and at least every 8 commits or every 2 hours (not
 `scripts/gate-job.sh <commit>` (`scripts/gate.sh` run as a Job) on the exact commit before any deploy (the deploy pipeline's `gate` input stays true; `gate=false` only with a green full gate
 on that very commit), and once every two hours on integration's head in the background. A red full gate on integration is fixed first, before
 any new slice is merged: integration stays shippable. **Heavy work leaves the pod (T-37, D-61 from T-413):** a full gate, a typecheck and a web build
-always run as a Job in the cluster: `scripts/gate-job.sh <commit> [typecheck,web-build,server-suite]` (the commit on GitHub; push an
+always run as a Job in the cluster: `scripts/gate-job.sh <commit> [typecheck,web-build,web-tests,server-suite]` (the commit on GitHub; push an
 unpushed merge to `wip/orchestrator-local-backup` first); the deploy pipeline's gate does too. Sub-agents run their package's typecheck and
 their test files the same way, through `scripts/job-run.sh --ref <full commit of a pushed branch>` (never in the pod), and never a build or a gate.
 Then the sub-agent on that branch brings it up to date: rebase ONLY commits that were never pushed; once a branch is pushed, merge `origin/integration` into it instead (`git merge origin/integration`), because a rebased pushed branch could only be pushed back with a force push, which is denied. Remove `/tmp/gate-<sha>*` afterwards.

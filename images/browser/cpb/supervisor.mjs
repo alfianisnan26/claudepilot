@@ -10,6 +10,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { vncObfuscate } from './des.mjs';
 import { CDP_PORT, chromeArgs, limitedRelay, loadConfig, log, PROTOCOL, SUPERVISOR_PORT } from './lib.mjs';
+import { clearStaleXLock } from './procs.mjs';
 
 const cfg = loadConfig();
 const RUN = process.env.CPB_RUN || '/run/cpb';
@@ -41,12 +42,13 @@ const S = {
 /* ---------- Child processes ---------- */
 
 /** Runs `cmd` for as long as `wanted()`, restarting with backoff. Returns { stop, child }. */
-function supervise(name, cmd, args, { env = {}, wanted = () => true, onUp } = {}) {
+function supervise(name, cmd, args, { env = {}, wanted = () => true, onUp, prepare } = {}) {
   let child = null;
   let failures = 0;
   let stopped = false;
   const start = () => {
     if (stopped || !wanted()) return;
+    prepare?.();
     const startedAt = Date.now();
     const c = spawn(cmd, args, { env: { PATH: '/usr/local/bin:/usr/bin:/bin', ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     child = c;
@@ -130,7 +132,15 @@ async function startDisplay() {
       // The clipboard goes through `xclip`, never through VNC (§12.2).
       '-AcceptCutText=0', '-SendCutText=0', '-SetPrimary=0', '-SendPrimary=0',
     ],
-    { env: { HOME: x11.HOME } },
+    {
+      env: { HOME: x11.HOME },
+      // `/tmp` outlives a container restart on Kubernetes: a display that died with its container left `/tmp/.X99-lock`, and Xvnc
+      // refuses a display whose lock is there. Removed only when no live X server owns it (T-1660).
+      prepare: () => {
+        const lock = clearStaleXLock(DISPLAY);
+        if (lock === 'removed' || lock === 'stuck') log(`display ${DISPLAY}: stale lock ${lock}`);
+      },
+    },
   );
   const socket = `/tmp/.X11-unix/X${DISPLAY.slice(1)}`;
   for (let i = 0; i < 100 && !(fs.existsSync(socket) && fs.existsSync(`${RUN}/vnc.sock`)); i++) await sleep(100);

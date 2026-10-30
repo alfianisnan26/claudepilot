@@ -17,6 +17,8 @@ export interface CiCheck {
 
 export interface CiTicketsPort {
   exists(id: string): boolean;
+  /** T-1098: the stable id (`T-12`) of a ticket named either way (`KONF-3`), null when none. Optional for fakes. */
+  resolve?(id: string): string | null;
   /** The existing tickets a branch name and a commit message name, by the branch and then the trailers. */
   find(refs: { branch?: string; message?: string }): string[];
   /** Attaches or updates the pipeline's check on the ticket. False when there is no such ticket. */
@@ -49,6 +51,10 @@ export class TicketsAdapter implements CiTicketsPort {
 
   exists(id: string): boolean {
     return this.tickets.exists(id);
+  }
+
+  resolve(id: string): string | null {
+    return this.tickets.resolve(id);
   }
 
   find(refs: { branch?: string; message?: string }): string[] {

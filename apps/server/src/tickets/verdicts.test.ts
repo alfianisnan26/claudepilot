@@ -235,6 +235,57 @@ test('QA N5 (T-325 S1c): a lineage ancestor of a lead holder (the session it con
   }
 });
 
+test('T-1603: a continued lead leads the workers its predecessor started: its QA worker verifies; a continued implementer still does not', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'leadOld', workspaceId: WS, agent: null });
+    const t = h.tickets.create(UI, { summary: 'built under the ended lead', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'leadOld' }, status: 'in_progress' });
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'leadOld', ticketId: t.id });
+    s.sessions.get('leadOld')!.state = 'ended';
+    s.add({ id: 'lead', workspaceId: WS, agent: null, continuedFrom: 'leadOld' });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' } });
+    s.add({ id: 'qaNew', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    const v = h.tickets.recordVerdict(agent(WS, 'qaNew'), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    assert.equal(v.actor, 'session:qaNew', 'the continuation leads its predecessor’s implementer');
+    s.add({ id: 'implQa', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'implQa'), t.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN');
+
+    // A session started on the ticket, continued: its continuation holds it and its QA child is still refused (it is the author's line).
+    s.add({ id: 'workerOld', workspaceId: WS, agent: 'implementer', state: 'ended', ticketId: t.id }); // never held it: started on it
+    s.add({ id: 'worker', workspaceId: WS, agent: 'implementer', continuedFrom: 'workerOld' });
+    s.add({ id: 'helper', workspaceId: WS, agent: 'implementer', parentId: 'workerOld', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'worker' } });
+    s.add({ id: 'workerQa', workspaceId: WS, agent: 'qa-verifier', parentId: 'worker' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'workerQa'), t.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+  } finally {
+    h.done();
+  }
+});
+
+test('T-1603 review: a holder continuing a session nobody can look up does not lead; a continued implementer’s QA child is refused', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'lead', workspaceId: WS, agent: null, continuedFrom: 'ghost' });
+    const t = h.tickets.create(UI, { summary: 'line with a missing session', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' }, status: 'in_progress' });
+    s.add({ id: 'impl', workspaceId: WS, agent: 'implementer', parentId: 'ghost', ticketId: t.id });
+    s.add({ id: 'qa', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    const rec = (who: string) => h.tickets.recordVerdict(agent(WS, who), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    assert.throws(() => rec('qa'), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message), 'fail closed on the ghost');
+
+    s.sessions.get('impl')!.state = 'ended';
+    s.add({ id: 'impl2', workspaceId: WS, agent: 'implementer', continuedFrom: 'impl' });
+    s.add({ id: 'impl2Qa', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl2' });
+    assert.throws(() => rec('impl2Qa'), (e: any) => e.code === 'FORBIDDEN', 'the continued implementer’s child');
+    assert.equal(h.tickets.verdicts(UI, t.id).length, 0);
+  } finally {
+    h.done();
+  }
+});
+
 test('QA M7 (T-325 S1b): a QA-named session started with this ticket_id is an author', async () => {
   const r = await rig();
   try {
@@ -259,6 +310,44 @@ test('another workspace’s agent gets the same not found as for a missing ticke
   }
 });
 
+test('FR36c (T-1608): an agent putting a ticket on a QA or review session goes through, with one Portal note on the timeline; a person, an implementer: no note', async () => {
+  const r = await rig();
+  try {
+    const lead = agent(WS, 'lead');
+    const notes = (id: string) => r.tickets.get(UI, id).events.filter((e) => e.kind === 'comment' && e.data?.verdictLane);
+    const warned = (id: string, who: string) => {
+      const n = notes(id).filter((e) => e.data?.verdictLane === who);
+      assert.equal(n.length, 1, `one note for ${who} on ${id}`);
+      assert.equal(n[0]!.actor, 'system');
+      assert.match(n[0]!.body!, new RegExp(`^${who} is a QA/review session: holding this ticket makes it an author of its work, so it can never record a verdict on it\\. If you meant it to verify, keep the ticket and brief the lane by ticket id\\.$`));
+    };
+    // The lead hands the ticket on (FR9d) to its QA lane, then to its review lane: both stick (a QA lane may hold QA work).
+    assert.deepEqual(r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'qa1' } }).assignee, { kind: 'session', sessionId: 'qa1' });
+    warned(r.id, 'qa1');
+    assert.deepEqual(r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'rev1' } }).assignee, { kind: 'session', sessionId: 'rev1' });
+    warned(r.id, 'rev1');
+    const made = r.tickets.create(lead, { summary: 'QA plan', assignee: { kind: 'session', sessionId: 'qa1' } });
+    warned(made.id, 'qa1');
+    assert.equal(r.tickets.holderWarning(made)?.startsWith('qa1 is a QA/review session'), true);
+    // A QA session claiming QA work for itself: claimed, and noted.
+    const open = r.tickets.create(UI, { summary: 'perf suite', workspaceId: WS });
+    assert.deepEqual(r.tickets.claimNext(agent(WS, 'qa1'), { id: open.id })!.assignee, { kind: 'session', sessionId: 'qa1' });
+    warned(open.id, 'qa1');
+    // The consequence is real: the lane that held the ticket can no longer record its verdict.
+    assert.throws(() => record(r, 'qa1', 'qa', 'pass', A), (e: any) => e.code === 'FORBIDDEN' && /author/.test(e.message));
+    // An implementer holder: no note, no warning. A person putting a ticket on a QA session: no note (the portal is the owner).
+    r.sessions.add({ id: 'impl2', workspaceId: WS, agent: 'implementer', parentId: 'lead' });
+    const toImpl = r.tickets.update(lead, r.id, { assignee: { kind: 'session', sessionId: 'impl2' } });
+    assert.equal(r.tickets.holderWarning(toImpl), null);
+    const byPerson = r.tickets.create(UI, { summary: 'by a person', workspaceId: WS });
+    r.tickets.update(UI, byPerson.id, { assignee: { kind: 'session', sessionId: 'rev1' } });
+    assert.equal(notes(byPerson.id).length, 0);
+    assert.equal(notes(r.id).length, 2, 'the implementer hand-off added none');
+  } finally {
+    r.done();
+  }
+});
+
 test('the stale-PASS guard on the stored rows: a PASS on the old head does not make the moved head pass', async () => {
   const r = await rig();
   try {
@@ -273,6 +362,52 @@ test('the stale-PASS guard on the stored rows: a PASS on the old head does not m
   }
 });
 
+test('verdictsHeldBy (T-1613): the verdicts since a time on the open tickets a session holds, oldest first; none for another session or a closed ticket', async () => {
+  const r = await rig();
+  try {
+    const before = Date.now() - 1000;
+    record(r, 'qa1', 'qa', 'pass', A);
+    record(r, 'rev1', 'review', 'fail', A);
+    const held = r.tickets.verdictsHeldBy('impl', before);
+    assert.deepEqual(held.map((v) => [v.ticket, v.role, v.verdict]), [[r.id, 'qa', 'pass'], [r.id, 'review', 'fail']]);
+    assert.ok(held[0]!.id < held[1]!.id, 'oldest first, by row id');
+    assert.deepEqual(r.tickets.verdictsHeldBy('lead', before), [], 'the lead does not hold it');
+    assert.deepEqual(r.tickets.verdictsHeldBy('impl', Date.now() + 60_000), [], 'nothing after a later time');
+    r.tickets.close(UI, r.id, { summary: 'done' });
+    assert.deepEqual(r.tickets.verdictsHeldBy('impl', before), [], 'a closed ticket is not news');
+  } finally {
+    r.done();
+  }
+});
+
+test('readyToCloseHeldBy (T-1616): held, in review, and the latest verdict a pass; a later fail, another holder or another status is not listed', async () => {
+  const r = await rig();
+  try {
+    record(r, 'qa1', 'qa', 'pass', A);
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl'), [], 'in progress, not in review');
+    r.tickets.update(UI, r.id, { status: 'in_review' });
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl'), [{ ticket: r.id, role: 'qa' }], 'held, in review, passed');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('lead'), [], 'held by someone else');
+
+    // A second ticket, held by the lead, in review: a QA pass then a review fail. The latest verdict decides.
+    const t2 = r.tickets.create(UI, { summary: 'second', workspaceId: WS });
+    r.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'impl' }, status: 'in_review' });
+    const rec2 = (who: string, role: string, verdict: string) =>
+      r.tickets.recordVerdict(agent(WS, who), t2.id, { role, verdict, commit: A });
+    rec2('qa1', 'qa', 'fail');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl').map((x) => x.ticket), [r.id], 'a fail is not listed');
+    rec2('qa1', 'qa', 'pass');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl').map((x) => x.ticket), [r.id, t2.id], 'a pass after it is');
+    rec2('rev1', 'review', 'fail');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl').map((x) => x.ticket), [r.id], 'a later fail of another role takes it off');
+    r.tickets.update(UI, r.id, { assignee: { kind: 'session', sessionId: 'lead' } });
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('impl'), [], 'handed to another holder');
+    assert.deepEqual(r.tickets.readyToCloseHeldBy('lead'), [{ ticket: r.id, role: 'qa' }]);
+  } finally {
+    r.done();
+  }
+});
+
 test('migration 785: a ticket_verdicts table, a unique version, and the table itself refuses a short sha', async () => {
   assert.equal(MIGRATIONS.filter((m) => m.version === 785).length, 1);
   assert.equal(new Set(MIGRATIONS.map((m) => m.version)).size, MIGRATIONS.length, 'versions are unique');
@@ -281,6 +416,229 @@ test('migration 785: a ticket_verdicts table, a unique version, and the table it
     const db = r.store.db!;
     assert.throws(() => db.prepare("INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at) VALUES (1, 'qa', 'pass', 'abc', 'ui', 'x', 'now')").run());
     assert.throws(() => db.prepare("INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at) VALUES (1, 'lead', 'pass', ?, 'ui', 'x', 'now')").run(A));
+  } finally {
+    r.done();
+  }
+});
+
+test('T-1652: a lead that handed the ticket to its own worker leads the work: its QA verifies; QA under the builder still does not', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    s.add({ id: 'orch', workspaceId: WS, agent: null });
+    s.add({ id: 'lead', workspaceId: WS, agent: null, parentId: 'orch' });
+    const t = h.tickets.create(UI, { summary: 'lead hands to its worker', workspaceId: WS });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'orch' }, status: 'in_progress' });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' } });
+    s.add({ id: 'fe2', workspaceId: WS, agent: 'implementer', parentId: 'lead', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'fe2' } });
+    const rec = (who: string) => h.tickets.recordVerdict(agent(WS, who), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    const refused = (who: string, why: RegExp, msg: string) => assert.throws(() => rec(who), (e: any) => e.code === 'FORBIDDEN' && why.test(e.message), msg);
+
+    s.add({ id: 'qaLead', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    assert.equal(rec('qaLead').actor, 'session:qaLead', 'the past-holder lead’s QA child');
+    s.add({ id: 'qaOrch', workspaceId: WS, agent: 'qa-verifier', parentId: 'orch' });
+    assert.equal(rec('qaOrch').actor, 'session:qaOrch', 'a past holder further up the parent chain leads too');
+
+    s.add({ id: 'qaFe', workspaceId: WS, agent: 'qa-verifier', parentId: 'fe2' });
+    refused('qaFe', /descends from/, 'QA under the builder');
+    s.add({ id: 'qaDeep', workspaceId: WS, agent: 'qa-verifier', parentId: 'qaFe' });
+    refused('qaDeep', /descends from/, 'QA under the builder, two levels down');
+    refused('fe2', /./, 'the builder itself (not a QA agent either)');
+    refused('lead', /./, 'the lead itself is no verifier');
+    s.sessions.get('fe2')!.agent = 'qa-verifier';
+    refused('fe2', /author of this ticket/, 'a builder named as QA is a self-verdict');
+    s.sessions.get('fe2')!.agent = 'implementer';
+    assert.equal(h.tickets.verdicts(UI, t.id).length, 2);
+  } finally {
+    h.done();
+  }
+});
+
+test('T-1652: a past holder started on the ticket is still an author: its QA child, and its continuation’s, are refused', async () => {
+  const h = await ticketsHarness();
+  try {
+    const s = h.sessions;
+    const t = h.tickets.create(UI, { summary: 'coding lead hands over', workspaceId: WS });
+    // The lead was started on the ticket and coded, then handed it to a worker of its own.
+    s.add({ id: 'lead', workspaceId: WS, agent: 'implementer', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'lead' }, status: 'in_progress' });
+    s.add({ id: 'w', workspaceId: WS, agent: 'implementer', parentId: 'lead', ticketId: t.id });
+    h.tickets.update(UI, t.id, { assignee: { kind: 'session', sessionId: 'w' } });
+    const rec = (who: string) => h.tickets.recordVerdict(agent(WS, who), t.id, { role: 'qa', verdict: 'pass', commit: A });
+    s.add({ id: 'qaLead', workspaceId: WS, agent: 'qa-verifier', parentId: 'lead' });
+    assert.throws(() => rec('qaLead'), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message), 'the coding lead’s QA');
+
+    // A past holder whose predecessor was started on the ticket: the line is the author's, refused.
+    const t2 = h.tickets.create(UI, { summary: 'continued coder hands over', workspaceId: WS });
+    s.add({ id: 'coderOld', workspaceId: WS, agent: 'implementer', state: 'ended', ticketId: t2.id });
+    s.add({ id: 'coder', workspaceId: WS, agent: null, continuedFrom: 'coderOld' });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'coder' }, status: 'in_progress' });
+    s.add({ id: 'w2', workspaceId: WS, agent: 'implementer', parentId: 'coder', ticketId: t2.id });
+    h.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'w2' } });
+    s.add({ id: 'qaCoder', workspaceId: WS, agent: 'qa-verifier', parentId: 'coder' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'qaCoder'), t2.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+
+    // A past holder that is not an ancestor of the holder (a sibling it was handed to) is no lead: its QA is refused.
+    const t3 = h.tickets.create(UI, { summary: 'sideways hand-off', workspaceId: WS });
+    s.add({ id: 'peer', workspaceId: WS, agent: null });
+    h.tickets.update(UI, t3.id, { assignee: { kind: 'session', sessionId: 'peer' }, status: 'in_progress' });
+    s.add({ id: 'other', workspaceId: WS, agent: null });
+    s.add({ id: 'w3', workspaceId: WS, agent: 'implementer', parentId: 'other', ticketId: t3.id });
+    h.tickets.update(UI, t3.id, { assignee: { kind: 'session', sessionId: 'w3' } });
+    s.add({ id: 'qaPeer', workspaceId: WS, agent: 'qa-verifier', parentId: 'peer' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'qaPeer'), t3.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN' && /descends from/.test(e.message));
+
+    // A gap in the parent chain (a session nobody can look up) fails closed.
+    const t4 = h.tickets.create(UI, { summary: 'ghost between', workspaceId: WS });
+    s.add({ id: 'top', workspaceId: WS, agent: null });
+    h.tickets.update(UI, t4.id, { assignee: { kind: 'session', sessionId: 'top' }, status: 'in_progress' });
+    s.add({ id: 'w4', workspaceId: WS, agent: 'implementer', parentId: 'ghost', ticketId: t4.id });
+    h.tickets.update(UI, t4.id, { assignee: { kind: 'session', sessionId: 'w4' } });
+    s.add({ id: 'qaTop', workspaceId: WS, agent: 'qa-verifier', parentId: 'top' });
+    assert.throws(() => h.tickets.recordVerdict(agent(WS, 'qaTop'), t4.id, { role: 'qa', verdict: 'pass', commit: A }), (e: any) => e.code === 'FORBIDDEN');
+    for (const id of [t.id, t2.id, t3.id, t4.id]) assert.equal(h.tickets.verdicts(UI, id).length, 0);
+  } finally {
+    h.done();
+  }
+});
+
+/* ---------- FR36d (T-1987, D-93): a QA batch, a verdict per ticket ---------- */
+
+test('recordVerdicts (T-1987): every refusal rule applies per item; the rest are recorded; one audit row per ticket, with the batch', async () => {
+  const r = await rig();
+  try {
+    const s = r.sessions;
+    // A second ticket of the batch, held by another implementer of the crew.
+    s.add({ id: 'impl2', workspaceId: WS, agent: 'implementer', parentId: 'lead' });
+    const t2 = r.tickets.create(UI, { summary: 'second', workspaceId: WS });
+    r.tickets.update(UI, t2.id, { assignee: { kind: 'session', sessionId: 'impl2' }, status: 'in_review' });
+    // A third ticket, held by qa1 itself (it is its author), and a fourth in another workspace (unseen).
+    const t3 = r.tickets.create(UI, { summary: 'qa1 holds it', workspaceId: WS });
+    r.tickets.update(UI, t3.id, { assignee: { kind: 'session', sessionId: 'qa1' } });
+    const t4 = r.tickets.create(UI, { summary: 'elsewhere', workspaceId: 'docker/other' });
+    const evidence = { jobId: 'job-run-7f3a', branch: 'qa/batch-2026-10-21-1', note: 'suite and build once on the batch head' };
+    const res = r.tickets.recordVerdicts(agent(WS, 'qa1'), [
+      { id: r.id, role: 'qa', verdict: 'pass', commit: A },
+      { id: t2.id, role: 'qa', verdict: 'fail', commit: B },
+      { id: t3.id, role: 'qa', verdict: 'pass', commit: A },
+      { id: t4.id, role: 'qa', verdict: 'pass', commit: A },
+      { id: 'T-9999', role: 'qa', verdict: 'pass', commit: A },
+      { id: r.id, role: 'review', verdict: 'pass', commit: A },
+      { id: t2.id, role: 'qa', verdict: 'pass', commit: 'abc1234' },
+    ], evidence);
+    assert.deepEqual(res.map((x) => (x.ok ? 'ok' : x.error.code)), ['ok', 'ok', 'FORBIDDEN', 'NOT_FOUND', 'NOT_FOUND', 'FORBIDDEN', 'VALIDATION_FAILED']);
+    const err = (i: number) => (res[i]!.ok ? null : (res[i] as { error: { message: string } }).error.message);
+    assert.match(err(2)!, /author of this ticket/);
+    assert.equal(err(3), err(4), 'an unseen ticket reads exactly as a missing one');
+    assert.match(err(5)!, /not the role/);
+    // The rows carry the batch; the timeline entry names it; the verdict on the head counts as any verdict does.
+    const v1 = r.tickets.verdicts(UI, r.id);
+    assert.equal(v1.length, 1);
+    assert.deepEqual(v1[0]!.batch, evidence);
+    assert.equal(r.tickets.verdictStatus(UI, r.id, A).pass, true);
+    assert.equal(r.tickets.verdictStatus(UI, t2.id, B).pass, false);
+    const entry = r.tickets.get(UI, t2.id).events.find((e) => e.kind === 'comment' && e.data?.verdictId)!;
+    assert.equal(entry.body, `QA FAIL recorded on commit ${B.slice(0, 12)} in a batch.`, 'a short sha, no branch: the chips carry it');
+    assert.equal(entry.data!.commit, B, 'the full sha stays in the data');
+    assert.deepEqual(entry.data!.batch, evidence);
+    assert.equal(r.tickets.verdicts(UI, t3.id).length + r.tickets.verdicts(UI, t4.id).length, 0, 'nothing on a refused item');
+    // One audit row per ticket recorded, each with the batch; one refusal row per item that reached the rule.
+    const rows = r.audits.filter((a) => a.kind === 'ticket.verdict');
+    assert.deepEqual(rows.map((a) => a.subject), [`ticket:${r.id}`, `ticket:${t2.id}`]);
+    for (const a of rows) assert.deepEqual(a.detail!.batch, evidence);
+    assert.equal(r.audits.filter((a) => a.kind === 'ticket.verdict_refused').length, 3, 'author, wrong role and the short sha');
+  } finally {
+    r.done();
+  }
+});
+
+test('recordVerdicts (T-1987): the lead, a non-verifier, a token and an author’s QA child are refused per item exactly as alone (T-1652 too)', async () => {
+  const r = await rig();
+  try {
+    const one = (caller: Parameters<typeof r.tickets.recordVerdict>[0]) => {
+      const alone = (() => {
+        try {
+          r.tickets.recordVerdict(caller, r.id, { role: 'qa', verdict: 'pass', commit: A });
+          return 'ok';
+        } catch (e: any) {
+          return `${e.code}: ${e.message}`;
+        }
+      })();
+      const batched = r.tickets.recordVerdicts(caller, [{ id: r.id, role: 'qa', verdict: 'pass', commit: A }], { branch: 'qa/batch-x-1' })[0]!;
+      assert.equal(batched.ok ? 'ok' : `${batched.error.code}: ${batched.error.message}`, alone);
+      return alone;
+    };
+    assert.match(one(agent(WS, 'lead')), /^FORBIDDEN/);
+    assert.match(one(agent(WS, 'impl')), /^FORBIDDEN/);
+    assert.match(one(token('t1', 'admin')), /^FORBIDDEN: Only a QA or review session/);
+    r.sessions.add({ id: 'qaKid', workspaceId: WS, agent: 'qa-verifier', parentId: 'impl' });
+    assert.match(one(agent(WS, 'qaKid')), /descends from an author/);
+    assert.match(one(agent('docker/other', 'qaX')), /^NOT_FOUND/);
+    assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
+  } finally {
+    r.done();
+  }
+});
+
+test('recordVerdicts (T-1987): the evidence is checked once (a secret or a bad name refuses the whole call, nothing written); 1 to 20 items', async () => {
+  const r = await rig();
+  try {
+    const qa = agent(WS, 'qa1');
+    const item = { id: r.id, role: 'qa', verdict: 'pass', commit: A };
+    const secretish = ['gh', 'p_', 'x'.repeat(36)].join('');
+    assert.throws(() => r.tickets.recordVerdicts(qa, [item], { note: `token ${secretish}` }), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.throws(() => r.tickets.recordVerdicts(qa, [item], { branch: 'qa/batch 1; rm -rf' }), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.throws(() => r.tickets.recordVerdicts(qa, [], {}), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.throws(() => r.tickets.recordVerdicts(qa, Array.from({ length: 21 }, () => item), {}), (e: any) => e.code === 'VALIDATION_FAILED');
+    assert.equal(r.tickets.verdicts(UI, r.id).length, 0);
+    // No evidence at all is still a batch verdict (marked), and a verdict recorded alone has none.
+    r.tickets.recordVerdicts(qa, [item], undefined);
+    record(r, 'qa1', 'qa', 'pass', B);
+    assert.deepEqual(r.tickets.verdicts(UI, r.id).map((v) => v.batch), [{ jobId: null, branch: null, note: null }, null]);
+  } finally {
+    r.done();
+  }
+});
+
+test('liveBatchOf (T-1987): a comment after the newest verdict naming a batch branch; a later verdict ends it', async () => {
+  const r = await rig();
+  try {
+    assert.equal(r.tickets.liveBatchOf(r.id), null);
+    r.tickets.comment(UI, r.id, 'Looking at it.');
+    assert.equal(r.tickets.liveBatchOf(r.id), null);
+    r.tickets.comment(UI, r.id, 'Taken into origin/qa/batch-2026-10-21-2 with T-5 and T-6.');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'qa/batch-2026-10-21-2');
+    r.tickets.recordVerdicts(agent(WS, 'qa1'), [{ id: r.id, role: 'qa', verdict: 'fail', commit: A }], { branch: 'qa/batch-2026-10-21-2' });
+    assert.equal(r.tickets.liveBatchOf(r.id), null, 'the batch gave its verdict');
+    r.tickets.comment(UI, r.id, 'Back in batch/2026-10-21-3 after the fix.');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'batch/2026-10-21-3');
+    assert.equal(r.tickets.liveBatchOf('T-9999'), null);
+    // QA on T-1987: a path or a name that only looks like one is no batch (the watchdog would skip the ticket for 180 min).
+    r.tickets.recordVerdict(UI, r.id, { role: 'qa', verdict: 'fail', commit: A });
+    for (const text of ['Changed apps/server/src/batch/foo.ts.', 'See batch/2026-10-21-3.ts', 'subbatch/2026-10-21-1 and xqa/batch-20261021-1', 'qa/batch-tomorrow', 'batch/20261021']) {
+      r.tickets.comment(UI, r.id, text);
+      assert.equal(r.tickets.liveBatchOf(r.id), null, text);
+    }
+    r.tickets.comment(UI, r.id, 'Now in qa/batch-20261021-4.');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'qa/batch-20261021-4', 'the compact date, at the end of a sentence');
+    r.tickets.comment(UI, r.id, 'Pushed wip/qa-batch-20261021-general-1-6cd049f (six tickets).');
+    assert.equal(r.tickets.liveBatchOf(r.id)?.branch, 'wip/qa-batch-20261021-general-1-6cd049f', 'the wip/ form leads can push');
+    r.tickets.recordVerdict(UI, r.id, { role: 'qa', verdict: 'fail', commit: A });
+    r.tickets.comment(UI, r.id, 'wip/qa-batch-tomorrow and wip/qa-batch-20261021');
+    assert.equal(r.tickets.liveBatchOf(r.id), null, 'a wip/ name needs a date and a unit or number');
+  } finally {
+    r.done();
+  }
+});
+
+test('migration 795 (T-1987): a batch column on ticket_verdicts that holds JSON only', async () => {
+  assert.equal(MIGRATIONS.filter((m) => m.version === 795).length, 1);
+  const r = await rig();
+  try {
+    const db = r.store.db!;
+    assert.throws(() => db.prepare("INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at, batch) VALUES (1, 'qa', 'pass', ?, 'ui', 'x', 'now', 'not json')").run(A));
+    db.prepare("INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at, batch) VALUES (1, 'qa', 'pass', ?, 'ui', 'x', 'now', NULL)").run(A);
   } finally {
     r.done();
   }

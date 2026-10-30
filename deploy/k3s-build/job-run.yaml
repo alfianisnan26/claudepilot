@@ -8,7 +8,7 @@
 # Credentials (T-401): only the init container `fetch` has the Secret. It clones (git's helper reads the token from its environment) and runs
 # `npm ci --ignore-scripts` (the npm token), so no code of the repository or of a dependency runs while a credential is there; its HOME
 # (git config, the user .npmrc) is a volume the `run` container does not mount; it checks that no credential value is in /tmp and writes
-# its log and exit code there. The `run` container has no git or npm secret, only the --pool-env values (T-426: E2E_CF_ACCESS_* test credentials, as env; they are moved out of the environment at once and back in only for the command, so npm rebuild and the lifecycle scripts do not inherit them, but /proc/1/environ still holds them): it prints that log, runs the install scripts npm ci left out
+# its log and exit code there. The `run` container has no git or npm secret, only the --pool-env values (T-426; which names may come is scripts/job-run.sh's check alone, PILOT-998: delivered by the workspace's Secrets pool and not on its deny-list; as env; they are moved out of the environment at once and back in only for the command, so npm rebuild and the lifecycle scripts do not inherit them, but /proc/1/environ still holds them): it prints that log, runs the install scripts npm ci left out
 # (`npm rebuild` and the package's own lifecycle scripts), then the command. --against is fetched by `fetch` too (and, when its lockfile
 # differs, its packages go into npm's cache, so `run` installs them offline).
 apiVersion: batch/v1
@@ -48,11 +48,11 @@ spec:
         # have room). Under the line, or when the metrics fail, the marker is empty and only the preferred rules apply (a metrics failure never
         # blocks every Job).
         # T-524: the script reads again when the queue lets the (suspended) Job out and patches the same required rule in if the master filled meanwhile.
+        # T-1643 (owner, 2026-10-19: "bantu distribusi worker node nya di node 1, 2, dan 3"): every node is control-plane now, so the
+        # preference for the worker pool is gone (it piled Jobs on k3s-node2, whose CPU the workspace's agents already fill) and the spread
+        # below shares the Jobs out across the three nodes. The marker (the master's memory guard) stays.
         nodeAffinity:
           __MASTER_REQUIRED__
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -65,6 +65,12 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 namespaces: [isnan-claudepilot-workspaces]
                 labelSelector: {matchLabels: {claudepilot.managed: "true"}}
+      # T-1643: at most one more lane Job on a node than on the least used one, when the scheduler can (never blocks a Job).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app: claudepilot-job-run}}
       initContainers:
         # T-401: the only container with the Secret. No repository or dependency code runs here (npm ci --ignore-scripts, no command).
         - name: fetch
@@ -73,6 +79,7 @@ spec:
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
             - {name: JR_REF, value: "__REF__"}
             - {name: JR_ALSO, value: "__ALSO__"}
+            - {name: JR_LAYOUT, value: "__LAYOUT__"}
             - {name: JR_STEPS, value: "__STEPS__"}
             - {name: JR_AGAINST, value: "__AGAINST__"}
             - {name: NODE_AUTH_TOKEN, valueFrom: {secretKeyRef: {name: __NAME__, key: node-auth-token, optional: true}}}
@@ -165,8 +172,11 @@ spec:
                 [ ! -f "$1/.npmrc.t401" ] || mv "$1/.npmrc.t401" "$1/.npmrc"
                 return $r
               }
+              # The folders that install: each --also clone and the repository; with --deploy-layout (T-2865) the repository alone, as
+              # stg-deploy lays them out (a sibling without node_modules). The run part below uses the same list.
+              installs() { [ "${JR_LAYOUT:-}" = deploy ] || for a in $JR_ALSO; do echo "${a%%=*}"; done; echo "$main"; }
               if [ "$JR_STEPS" = npm-ci ]; then
-                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do npmci "$root/w/$d" "$d"; done
+                for d in $(installs); do npmci "$root/w/$d" "$d"; done
                 # Another lockfile on the other ref: its packages into npm's cache now, so the run container installs them offline.
                 if git -C "$root/w/$main" rev-parse -q --verify refs/job-run/against >/dev/null \
                   && ! git -C "$root/w/$main" diff --quiet HEAD refs/job-run/against -- package-lock.json; then
@@ -200,8 +210,8 @@ spec:
             requests: {cpu: 500m, memory: __MEMORY__}
             limits: {cpu: "4", memory: __MEMORY__}
       containers:
-        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name (E2E_CF_ACCESS_* only, the
-        # command's own scoped test credentials) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
+        # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name scripts/job-run.sh accepted (PILOT-998: delivered by the
+        # Secrets pool and not on its deny-list) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
         - name: run
           image: __RUN_IMAGE__
           env:
@@ -209,6 +219,7 @@ spec:
             - {name: JR_REPO_URL, value: "__REPO_URL__"}
             - {name: JR_REF, value: "__REF__"}
             - {name: JR_ALSO, value: "__ALSO__"}
+            - {name: JR_LAYOUT, value: "__LAYOUT__"}
             - {name: JR_STEPS, value: "__STEPS__"}
             - {name: JR_ARTIFACTS, value: "__ARTIFACTS__"}
             - {name: JR_ARTIFACT_MAX, value: "__ARTMAX__"}
@@ -231,7 +242,9 @@ spec:
               # leave the environment, so npm rebuild and the commit's lifecycle scripts do not inherit them; pool_on exports them for the
               # command alone. Known limit: this shell's own start-up environment (/proc/1/environ) still holds them: not hidden from code that reads it.
               declare -A jr_pool=()
-              for v in $(compgen -e); do case $v in JR_POOL_E2E_CF_ACCESS_*) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
+              # Every JR_POOL_<name> (T-2865): the manifest holds only names scripts/job-run.sh accepted (delivered by the Secrets pool, not on
+              # its deny-list, PILOT-998), so the name policy lives there alone.
+              for v in $(compgen -e); do case $v in JR_POOL_[A-Z]*) jr_pool[${v#JR_POOL_}]=${!v}; unset "$v" ;; esac; done
               pool_on() { local k; for k in "${!jr_pool[@]}"; do export "$k=${jr_pool[$k]}"; done; }
               pool_off() { local k; for k in "${!jr_pool[@]}"; do unset "$k"; done; }
               cat "$root/fetch.log" 2>/dev/null
@@ -248,8 +261,10 @@ spec:
                 (cd "$1" && npm rebuild --no-audit --no-fund --loglevel=error && for s in $(lifecycle); do npm run --ignore-scripts --loglevel=error "$s" || exit; done) && return 0
                 rc=$?; say "install scripts failed in $2 (rc=$rc)"; say "EXIT $rc"; exit "$rc"
               }
+              # The same folders as fetch's npm ci (--deploy-layout: the repository alone, T-2865).
+              installs() { [ "${JR_LAYOUT:-}" = deploy ] || for a in $JR_ALSO; do echo "${a%%=*}"; done; echo "$main"; }
               if [ "$JR_STEPS" = npm-ci ]; then
-                for d in $(for a in $JR_ALSO; do echo "${a%%=*}"; done) "$main"; do installscripts "$root/w/$d" "$d"; done
+                for d in $(installs); do installscripts "$root/w/$d" "$d"; done
               fi
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"

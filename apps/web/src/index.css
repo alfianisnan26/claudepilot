@@ -60,9 +60,19 @@
  * fade alone, opaque. The element's height is var(--session-header-bottom) + 2.75rem.
  */
 @utility session-fade {
-  background-image: linear-gradient(to bottom, var(--color-bg) 0, var(--color-bg) calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+  background-image: linear-gradient(
+    to bottom,
+    var(--color-bg) 0,
+    var(--color-bg) calc(var(--session-header-bottom) + 0.75rem),
+    transparent 100%
+  );
   @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    background-image: linear-gradient(to bottom, color-mix(in oklab, var(--color-bg) 85%, transparent) 0, color-mix(in oklab, var(--color-bg) 85%, transparent) calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--color-bg) 85%, transparent) 0,
+      color-mix(in oklab, var(--color-bg) 85%, transparent) calc(var(--session-header-bottom) + 0.75rem),
+      transparent 100%
+    );
     -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
     -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(var(--session-header-bottom) + 0.75rem), transparent 100%);
@@ -143,7 +153,14 @@ body::before {
 /* Text that's still happening ("Running ls…"): a soft light sweeps across it. Still with reduced motion. */
 @utility shimmer {
   color: transparent;
-  background-image: linear-gradient(90deg, var(--color-muted) 0%, var(--color-muted) 38%, var(--color-ink) 50%, var(--color-muted) 62%, var(--color-muted) 100%);
+  background-image: linear-gradient(
+    90deg,
+    var(--color-muted) 0%,
+    var(--color-muted) 38%,
+    var(--color-ink) 50%,
+    var(--color-muted) 62%,
+    var(--color-muted) 100%
+  );
   background-size: 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -170,14 +187,46 @@ body::before {
  */
 :root {
   --chart-1: #08794f;
+  --chart-2: #6250d6;
+  --chart-3: #eb6834;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --chart-1: #26a876;
+    --chart-2: #9085e9;
+    --chart-3: #d95926;
   }
 }
 :root[data-theme='dark'] {
   --chart-1: #26a876;
+  --chart-2: #9085e9;
+  --chart-3: #d95926;
+}
+/*
+ * T-2360: slots 2 and 3 for a chart of up to three series, in this order (green, violet, orange). Run through the dataviz validator
+ * (--pairs all): light and dark pass the lightness band, chroma floor, the normal-vision floor (worst pair 27.6 light / 24.7 dark)
+ * and 3:1 against the surface; CVD worst pair is 7.1 in light (green and orange), in the 6 to 8 band, which is legal only with a second
+ * channel: a line chart always has the legend and a label at each line's end.
+ */
+
+/*
+ * The Timeline's Done state (T-1988): its own violet, apart from In progress (the accent green) in hue and in lightness. Light #4c1d95
+ * and dark #7c3aed hold 3:1 against the surface, about 2:1 against the accent and 4.5:1 for the white letter on the bar
+ * (timeline/doneToken.test.ts checks the numbers against the tokens).
+ */
+@theme {
+  --color-done: var(--done);
+}
+:root {
+  --done: #4c1d95;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --done: #7c3aed;
+  }
+}
+:root[data-theme='dark'] {
+  --done: #7c3aed;
 }
 
 /*
@@ -217,6 +266,13 @@ body {
   overscroll-behavior-y: none;
 }
 
+/* The page's width does not depend on whether it scrolls (T-1851): with a classic scrollbar (a desktop set to always show them) a page
+   that scrolls and one that does not, such as Home's Dashboard and Manager, would put every right-aligned control 15 px apart, and a
+   scroll lock would shift the page. Overlay scrollbars (phones, macOS by default) take no room, so this changes nothing there. */
+html {
+  scrollbar-gutter: stable;
+}
+
 /* The page never scrolls sideways (A2): whatever sticks out of a row or a card is clipped at the app's edge, not panned to. On the
    root, not html or body: an overflow there would stop body's `overflow: hidden` (the scroll lock) from reaching the viewport. `clip`
    makes no scroll container, so sticky and the pinned full-screen pages are untouched. */
@@ -229,11 +285,16 @@ body {
  * (the kit in node_modules is read-only, so the floor is set here, once, for every page that uses them). Below the `medium` breakpoint
  * (compact, 600 px) each is at least 44 px (spacing step 11) tall and wide; from `medium` up the kit's own sizes stay.
  * targetFloor.test.ts keeps the breakpoint equal to --breakpoint-medium.
+ * T-1859 adds two more kit parts: a Dialog's (or sheet's) Close in its header, 40 px, and a text input, which in the kit's TextField is
+ * 42 px inside its 44 px bordered box (a tap on the border missed it); at 44 px the transparent input covers the border, the box is
+ * unchanged. tools/qa/touch-dialogs.mjs measures every target in New ticket, a Bump sheet and the session info at 390 px.
  */
 @media (width < 37.5rem) {
   [role='radiogroup'] > [role='radio'],
   button[aria-haspopup='menu'],
-  [role='menu'] > [role='menuitem'] {
+  [role='menu'] > [role='menuitem'],
+  [role='dialog'] > header > button:last-child,
+  input:is(:not([type]), [type='text'], [type='search'], [type='email'], [type='url'], [type='tel'], [type='password'], [type='number']) {
     min-height: calc(var(--spacing) * 11);
     min-width: calc(var(--spacing) * 11);
   }
@@ -253,7 +314,11 @@ body {
   &::-webkit-slider-runnable-track {
     height: 6px;
     border-radius: 999px;
-    background: linear-gradient(to right, var(--color-ink) var(--fill, 0%), color-mix(in oklab, var(--color-ink) 12%, transparent) var(--fill, 0%));
+    background: linear-gradient(
+      to right,
+      var(--color-ink) var(--fill, 0%),
+      color-mix(in oklab, var(--color-ink) 12%, transparent) var(--fill, 0%)
+    );
   }
   &::-webkit-slider-thumb {
     -webkit-appearance: none;
@@ -292,7 +357,9 @@ body {
     outline: none;
   }
   &:focus-visible::-webkit-slider-thumb {
-    box-shadow: 0 0 0 4px var(--ring), 0 3px 10px rgb(0 0 0 / 0.35);
+    box-shadow:
+      0 0 0 4px var(--ring),
+      0 3px 10px rgb(0 0 0 / 0.35);
   }
 }
 

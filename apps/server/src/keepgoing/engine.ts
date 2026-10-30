@@ -63,6 +63,13 @@ export interface KeepGoingChatPort {
    * Claude, title and ticket. Never bypass-capable (FR20: only a person's own opt-in). Its process starts in the background.
    */
   continueChat(ended: ChatSession): Promise<ChatSession>;
+  /** PILOT-996 (D-103): when the chat was last in Bypass (now while it is, else its last `bypass.left`), or null. */
+  bypassSeenAt?(id: string): string | null;
+  /**
+   * PILOT-996: put a capable chat seen in Bypass within 24 hours back in it, through the controller's gated keep path (the policy, the
+   * window), allowing its open tool cards but AskUserQuestion and ExitPlanMode. True when the chat is in Bypass after.
+   */
+  restoreBypass?(id: string): Promise<boolean>;
 }
 
 /** Opening and commenting tickets as the portal itself (tickets' `system` caller). */
@@ -237,6 +244,7 @@ export class KeepGoingEngine {
       wakes24h: this.#d.store.count(s.id, 'woke', since24),
       lastNudgeAt: this.#d.store.lastAt(s.id, 'nudged'),
       standing,
+      ...(!ended && s.bypassCapable && this.#d.chat.restoreBypass ? { bypassSeenAt: this.#bypassSeenAt(s.id) } : {}),
       ...(ended
         ? {
             restarts24h: this.#d.store.restarts(this.#lineage(s), since24),
@@ -252,6 +260,14 @@ export class KeepGoingEngine {
     if (held && decision.act !== 'stand_down') return decision;
     await this.#act(s, ownerId, p, decision);
     return decision;
+  }
+
+  #bypassSeenAt(id: string): string | null {
+    try {
+      return this.#d.chat.bypassSeenAt?.(id) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   #ticketClosed(id: string): boolean {
@@ -290,6 +306,18 @@ export class KeepGoingEngine {
         } catch (e) {
           this.#failed(s, ownerId, `${kind} could not be answered`, e);
         }
+        return this.#changed(s.id);
+      }
+      case 'rebypass': {
+        // PILOT-996 (D-103): one try while the report does not stand; refused, or not back in Bypass, it is reported as before.
+        let back = false;
+        try {
+          back = (await this.#d.chat.restoreBypass?.(s.id)) === true;
+        } catch (e) {
+          this.#failed(s, ownerId, 'Bypass could not be put back', e);
+        }
+        if (back) this.#trail(s.id, ownerId, 'rebypassed', null, 'Out of Bypass, in it within 24 hours: put back in Bypass; its open tool cards allowed.');
+        else await this.#report(s, ownerId, 'bypass', iso(now));
         return this.#changed(s.id);
       }
       case 'wake': {
@@ -406,8 +434,12 @@ export class KeepGoingEngine {
 
   #failed(s: ChatSession, ownerId: string, what: string, e: unknown): void {
     const code = (e as { code?: unknown })?.code;
-    this.#d.store.patchState(s.id, { backoffUntil: iso(this.#d.clock.now() + C.backoffMin * MIN) });
-    this.#trail(s.id, ownerId, 'failed', null, `${what} (${typeof code === 'string' ? code : 'error'}): tried again in ${C.backoffMin} min.`);
+    // Escalating: a busy moment passes in minutes, a lasting fault is not hammered (2, 4, 8, then 15 min while failures keep coming).
+    const now = this.#d.clock.now();
+    const before = this.#d.store.count(s.id, 'failed', iso(now - 30 * MIN));
+    const wait = Math.min(C.backoffMin, C.backoffFirstMin * 2 ** before);
+    this.#d.store.patchState(s.id, { backoffUntil: iso(now + wait * MIN) });
+    this.#trail(s.id, ownerId, 'failed', null, `${what} (${typeof code === 'string' ? code : 'error'}): tried again in ${wait} min.`);
   }
 
   /** The report: one ticket per chat and cause (a comment while its ticket is open), one notification, one trail row. Never throws. */
@@ -492,7 +524,7 @@ export class KeepGoingEngine {
       '',
       `Open the chat: ${notifyPath.session(s.id)}`,
       '',
-      'Keep going never answers a tool approval and never turns Bypass on: a person decides. This ticket is not repeated while the cause stands.',
+      'Keep going never answers a tool approval itself. It puts Bypass back only on a bypass-capable chat that was in Bypass within 24 hours, through the portal’s gated path (PILOT-996); past that, or refused, a person decides. This ticket is not repeated while the cause stands.',
     ];
     return lines.join('\n');
   }

@@ -36,6 +36,8 @@ import {
 import { ROOM_PCT } from '../claudeusage/recommend.js';
 
 const MIN = 60_000;
+/** T-1835: what one chat already live on a destination costs it in the order, in points of what is left (two Claudes ~15 points apart are even at one chat). */
+export const LOAD_PCT = 15;
 
 /** U1a's ranking, injected (the engine passes `recommendMove` from claudeusage/recommend.ts; its signature is kept as is). */
 export type RecommendFn = (claudes: ClaudeUsage[], opts: { workspaceId: string; from?: string | null; nowMs: number; allow?: (claudeId: string) => boolean }) => MoveRecommendation;
@@ -266,7 +268,16 @@ export interface DecideInput {
   listed?: (claudeId: string, family: string) => boolean | null;
   /** When the chat's newest stored event happened (T-781, the hard move); null or absent when not known. */
   lastEventAtMs?: number | null | (() => number | null);
+  /** T-2398: whether the owner left a Claude out of auto move (`AutoClaudeConfig.excluded`); absent: none is. Read through `leftOut`. */
+  excluded?: (claudeId: string) => boolean;
 }
+
+/**
+ * T-2398, THE exclusion rule: a Claude left out of auto move is never a destination (every candidate goes through `candidates`' `pass`,
+ * whatever the source's destinations list says, forced or spread), and a chat on one is never moved off it by itself (`decide` caps
+ * `auto` to `ask` there: a card at most, which a person answers). A person's own move onto it or off it is not this module's.
+ */
+export const leftOut = (input: Pick<DecideInput, 'excluded'>, claudeId: string): boolean => input.excluded?.(claudeId) === true;
 
 export interface DecideChoice {
   reason: AutoReason;
@@ -307,6 +318,7 @@ export function candidates(
   let full = false;
   const pass = (c: MoveCandidate): boolean => {
     const unknown = isUnknown(c);
+    if (leftOut(input, c.claudeId)) return false; // T-2398: left out of auto move, even when the allowlist names it
     if (!ok.has(c.claudeId) || !input.allow(c.claudeId)) return false;
     if (allow.size && !allow.has(c.claudeId)) return false;
     const u = usage.get(c.claudeId);
@@ -349,10 +361,13 @@ export function candidates(
     const reason: MoveCandidate['reason'] = left < ROOM_PCT ? 'tight' : c.reason === 'over_pace' ? 'over_pace' : 'room';
     return { ...c, reason, leftPct: measuredFigure(left) };
   };
-  // The ranking's shape kept (room first, then Claudes without plan limits, then tight), each part by what it leaves the chat, ties in
-  // the ranking's own order (stable sort).
-  const byLeft = (a: MoveCandidate, b: MoveCandidate) =>
-    (b.leftPct.value ?? -1) - (a.leftPct.value ?? -1) || (forced ? input.load(a.claudeId) - input.load(b.claudeId) : 0);
+  // The ranking's shape kept (room first, then Claudes without plan limits, then tight), each part by what it leaves the chat less what
+  // is already running there, ties to the fewest chats, then in the ranking's own order (stable sort).
+  // T-1835: load is weighed, not only a tiebreak: five exhausted chats moved to the one Claude with the most room within a minute
+  // (2026-10-20 03:03), because each saw the same order. Every chat live there (a move just made counts: `input.load`) costs it
+  // LOAD_PCT points, so a burst spreads over the Claudes with room while one with far more room still wins.
+  const score = (c: MoveCandidate) => (c.leftPct.value ?? -1) - LOAD_PCT * input.load(c.claudeId);
+  const byLeft = (a: MoveCandidate, b: MoveCandidate) => score(b) - score(a) || input.load(a.claudeId) - input.load(b.claudeId);
   // T-255: a Claude whose usage is unknown for this chat (no reading, no reset time, stale) is taken out of the measured ranking and
   // listed after every measured candidate, with why on its `leftPct`: it is chosen only when no measured one qualifies.
   const unknowns: MoveCandidate[] = [];
@@ -399,6 +414,8 @@ export function decide(input: DecideInput): Decision {
   const { session, settings, nowMs, counters } = input;
   // 1. The mode.
   if (input.mode === 'off') return { act: 'none', code: 'mode_off', reading: null };
+  // T-2398: a chat on a Claude left out of auto move is never moved off it by itself: `auto` is `ask` there (a card at most).
+  const mode: AutoMode = input.mode === 'auto' && leftOut(input, session.claudeId) ? 'ask' : input.mode;
   // 2. A pool, or a Claude with no plan reading.
   if (input.pooled) return { act: 'none', code: 'pooled', reading: null };
   const source = input.claudes.find((c) => c.claudeId === session.claudeId);
@@ -427,7 +444,7 @@ export function decide(input: DecideInput): Decision {
   // or one whose automatic moves failed twice today, only ever gets a card: rank it as `ask` would.
   const bypass = session.mode === 'bypassPermissions' && !settings.allowBypass;
   const failedToday = counters.failures24h >= 2;
-  const autoish = input.mode === 'auto' && !bypass && !failedToday;
+  const autoish = mode === 'auto' && !bypass && !failedToday;
   const family = modelFamily(session.model);
   const usage = new Map(input.claudes.map((c) => [c.claudeId, c]));
   // T-255: a Claude with unknown usage is taken only by a chat that can do nothing where it is (exhausted): one that is merely low waits
@@ -519,7 +536,7 @@ export function decide(input: DecideInput): Decision {
     period,
   };
   // 8. `ask`: the card.
-  if (input.mode === 'ask') return { act: 'suggest', why: null, reading, ...choice };
+  if (mode === 'ask') return { act: 'suggest', why: null, reading, ...choice };
   // 9. `auto`: not Bypass unless allowed (a model change in place leaves Bypass as it is: allowed); not after two failures today; only at a
   // quiet boundary, else wait (up to 30 minutes), then a card.
   if (bypass && !inPlace) return { act: 'suggest', why: 'bypass', reading, ...choice };

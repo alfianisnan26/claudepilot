@@ -63,7 +63,7 @@ export function Timeline({ repoId, version }: { repoId: string; version: string 
       <div className="flex items-center gap-1">
         <h3 className="text-[13px] font-semibold text-muted">Timeline</h3>
         <InfoTip label="About the timeline">
-          Commits: new commits and branch moves a scan noticed. Audit: what a person, a session, a ticket or a token asked the portal to do here. Kept 90 days.
+          Commits: new commits and branch moves a scan noticed. Audit: what a person, an agent, a ticket or a token asked the portal to do here. Kept 90 days.
         </InfoTip>
         <div className="ml-auto w-52">
           <Segmented<EventFilter> label="Show" value={filter} options={EVENT_FILTERS} onChange={setFilter} />
@@ -104,12 +104,12 @@ function EventRow({ e }: { e: RepoEvent }) {
   const session = e.sessionId;
   const sessionLink = session && (
     <Link to={`/admin/sessions/${encodeURIComponent(session)}`} className={LINK}>
-      Session
+      Agent
     </Link>
   );
   // Who did it: a session or a ticket is a link to it; a change a session was in the repo for is "Workspace" with that session beside it.
   const who = e.actor.startsWith('session:') ? (
-    sessionLink || 'Session'
+    sessionLink || 'Agent'
   ) : ticket ? (
     <Link to={`/admin/tickets/${encodeURIComponent(ticket)}`} className={LINK}>
       {actorLabel(e.actor)}

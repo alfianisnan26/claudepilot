@@ -185,7 +185,7 @@ export function McpConfiguration({ workspace, assignments }: { workspace: Worksp
       <ConfirmDialog
         open={!!signingOut}
         title={`Sign out of ${signingOut?.name ?? ''}?`}
-        description="Sessions in this workspace lose access to it until you sign in again."
+        description="Agents in this workspace lose access to it until you sign in again."
         confirmLabel="Sign out"
         loading={signOutBusy}
         onConfirm={() => void signOut()}

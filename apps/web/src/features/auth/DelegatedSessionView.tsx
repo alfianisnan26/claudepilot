@@ -65,7 +65,7 @@ export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () =>
   if (gone)
     return (
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-muted">This session is no longer shared with you.</p>
+        <p className="text-sm text-muted">This agent is no longer shared with you.</p>
         <Button variant="ghost" onClick={onBack}>
           Back
         </Button>
@@ -126,7 +126,7 @@ export function DelegatedSessionView({ id, onBack }: { id: string; onBack: () =>
       )}
       {can('send') && (
         <form onSubmit={send} className="flex items-end gap-2">
-          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} placeholder="Message" className="min-h-11 flex-1 resize-none rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent" />
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} placeholder="Message" className="min-h-11 flex-1 resize-none rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent" />
           <button type="submit" disabled={busy || !text.trim()} aria-label="Send" className="press inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-accent text-white disabled:opacity-50">
             <Send className="size-[18px]" />
           </button>

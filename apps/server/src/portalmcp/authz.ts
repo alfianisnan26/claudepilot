@@ -16,6 +16,14 @@ export const PORTAL_MCP_POLICIES: RoutePolicies = {
   [`PUT ${API}/settings`]: { kind: 'platform', area: 'settings', verb: 'manage', reauth: true },
   [`POST ${API}/tokens`]: { kind: 'self', reauth: true, audit: 'pmcp.token.create' },
   [`POST ${API}/tokens/revoke-label`]: { kind: 'self', audit: 'pmcp.token.revoke' },
+  [`PATCH ${API}/tokens/:id`]: {
+    kind: 'objects',
+    checks: [
+      { type: 'personal', verb: 'manage', from: 'path', param: 'id' },
+      { type: 'workspace', verb: 'operate', from: 'body', param: 'defaultWorkspaceId', optional: true },
+    ],
+    audit: 'pmcp.token.update',
+  },
   [`DELETE ${API}/tokens/:id`]: { kind: 'objects', checks: [{ type: 'personal', verb: 'manage', from: 'path', param: 'id' }], audit: 'pmcp.token.revoke' },
   [`POST ${API}/revoke-all`]: { kind: 'self' },
   [`GET ${API}/agents`]: { kind: 'signed-in', filter: 'workspace' },

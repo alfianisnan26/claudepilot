@@ -124,8 +124,8 @@ test('any other ending starts a new chat at once (no recover); a refused start i
   assert.match(r.tickets.made[0]!.description, /a new chat could not be started \(CHAT_INELIGIBLE\)/);
   assert.equal(r.engine.view('s1')!.standing!.includes('down'), true);
   r.chat.failCreate = null;
-  for (let i = 0; i < 14; i++) await r.after(1);
-  assert.equal(r.chat.started.length, 0, 'backs off 15 minutes');
+  await r.after(1);
+  assert.equal(r.chat.started.length, 0, 'backs off 2 minutes (a first failure)');
   await r.after(1);
   assert.equal(r.chat.started.length, 1);
   assert.equal(r.tickets.comments.length, 1, 'its open ticket says where it went on');

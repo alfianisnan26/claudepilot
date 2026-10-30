@@ -24,7 +24,7 @@ export function SessionsFull({ close }: GlanceFullProps) {
   const rows = useSteadyRows(data?.sessions.items ?? NONE, keyOf, engaged, true);
   if (!data) return failed ? <GlanceFailed reload={reload} denied={denied} /> : <GlanceSkeleton />;
   const s = data.sessions;
-  if (!s.ok) return <GlanceFailed reload={reload} message="Could not read sessions." />;
+  if (!s.ok) return <GlanceFailed reload={reload} message="Could not read agents." />;
   const listedOpen = s.items.filter((x) => x.state !== 'ended').length;
   const more = s.open - listedOpen;
   return (
@@ -38,11 +38,11 @@ export function SessionsFull({ close }: GlanceFullProps) {
             </Link>
           }
         >
-          No sessions.
+          No agents.
         </GlanceLine>
       ) : (
         <div {...bind}>
-          <GlanceList label="Sessions">
+          <GlanceList label="Agents">
             {rows.map(({ row: x, gone }) => {
               const line = sessionSubline(x);
               return (

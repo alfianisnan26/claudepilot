@@ -3,7 +3,7 @@
 
 import type { CrewFigure, CrewPace, CrewSummary, CrewSummaryWindow } from '@portal/contracts';
 import { formatCost } from '@/lib/usage/format';
-import { basisLabel, fmtFigure, fmtPerHour, reasonText, UNAVAILABLE, type BasisLabel, type TileState } from './scorecardModel';
+import { barOf, basisLabel, fmtFigure, fmtPerHour, reasonText, UNAVAILABLE, type BasisLabel, type Section, type TileState } from './scorecardModel';
 
 /** Pace is "effective" between these (docs: under 0.9 quota is left unused at reset, over 1.1 it runs out early). */
 export const PACE_LOW = 0.9;
@@ -123,24 +123,54 @@ export function summaryTiles(s: CrewSummary): SummaryTile[] {
   return [pace, usage, resolved, perCost, cpc];
 }
 
-export interface SummaryList {
-  title: string;
-  rows: string[];
+/**
+ * T-1852: the line shown under a tile's value, or null. The reason of an unavailable figure, what "Per cost" means and which way the
+ * backlog goes are already in the tip; "on pace" is what an ok Pace means. What stays: a number of its own (dollars per hour, won't do) and
+ * a Pace that warns (runs out early, unused at reset).
+ */
+export function shownSub(t: SummaryTile): string | null {
+  if (t.state === 'unavailable') return null;
+  if (t.key === 'perCost' || t.key === 'createdPerClosed') return null;
+  if (t.key === 'pace') return t.state === 'warn' ? t.sub : null;
+  return t.sub;
 }
 
-/** The expanded view: each Claude's own pace, resolved and created per closed per program. */
-export function summaryLists(s: CrewSummary): SummaryList[] {
+const ratioState = (f: CrewFigure): TileState | null => (f.basis === 'unavailable' || f.value === null ? 'unavailable' : f.value < PACE_LOW || f.value > PACE_HIGH ? 'warn' : null);
+
+/** The expanded view as compact rows: the weekly and each Claude's own pace (a bar of used with a tick at even), resolved and created per closed per program. */
+export function summarySections(s: CrewSummary): Section[] {
   const c = s.current;
+  const maxResolved = Math.max(0, ...c.resolvedByProgram.map((r) => r.count));
   return [
     {
-      title: 'Pace by Claude',
-      rows: s.pace.claudes.map((k) => `${k.label}: ${fmtRatio(k.ratio)} (${Math.round(k.usedPct)} % used, ${Math.round(k.evenPct)} % even)`),
+      title: 'Pace',
+      rows: [
+        { key: 'week', label: 'Week', value: fmtRatio(s.pace.weekly), sub: s.pace.weekly.basis === 'unavailable' ? reasonText(s.pace.weekly.reason) : null, state: ratioState(s.pace.weekly), bar: null },
+        ...s.pace.claudes.map((k) => ({
+          key: k.claude,
+          label: k.label,
+          value: fmtRatio(k.ratio),
+          sub: `${Math.round(k.usedPct)} % used · ${Math.round(k.evenPct)} % even`,
+          state: ratioState(k.ratio),
+          bar: barOf(k.usedPct, 100),
+          mark: barOf(k.evenPct, 100),
+        })),
+      ],
     },
-    { title: 'Weekly pace', rows: s.pace.weekly.basis === 'unavailable' ? [`unavailable: ${reasonText(s.pace.weekly.reason)}`] : [fmtRatio(s.pace.weekly)] },
-    { title: 'Resolved by program', rows: c.resolvedByProgram.map((r) => `${r.title || r.program}: ${r.count}`) },
     {
-      title: 'Created : closed by program',
-      rows: c.createdPerClosedByProgram.map((r) => `${r.title || r.program}: ${r.created} created, ${r.closed} closed${r.ratio.basis === 'unavailable' ? ' (unavailable)' : `, ${fmtTwo(r.ratio.value ?? 0)}`}`),
+      title: 'Resolved',
+      rows: c.resolvedByProgram.map((r) => ({ key: r.program, label: r.title || r.program, value: String(r.count), sub: null, state: null, bar: barOf(r.count, maxResolved) })),
+    },
+    {
+      title: 'Created : closed',
+      rows: c.createdPerClosedByProgram.map((r) => ({
+        key: r.program,
+        label: r.title || r.program,
+        value: r.ratio.basis === 'unavailable' || r.ratio.value === null ? UNAVAILABLE : fmtTwo(r.ratio.value),
+        sub: `${r.created} created · ${r.closed} closed`,
+        state: r.ratio.basis === 'unavailable' ? 'unavailable' : null,
+        bar: null,
+      })),
     },
   ];
 }

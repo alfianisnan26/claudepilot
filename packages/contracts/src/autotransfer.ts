@@ -134,6 +134,11 @@ export interface AutoClaudeConfig {
    * recommendation. Not empty: ONLY these are eligible (an allowlist), tried in this order among those that can take the chat now.
    */
   destinations: string[];
+  /**
+   * T-2398: left out of auto move. It stays signed in and usable by hand, but auto move never picks it as a destination (whatever another
+   * Claude's destinations say) and never moves its own chats off it. A person may still move a chat onto it or off it.
+   */
+  excluded: boolean;
 }
 
 /**
@@ -151,6 +156,8 @@ export interface AutoUserPrefs {
 export interface UpdateAutoClaudeRequest {
   thresholdPct?: number | null;
   destinations?: string[];
+  /** T-2398: leave this Claude out of auto move (see `AutoClaudeConfig.excluded`). */
+  excluded?: boolean;
 }
 
 /** Why a move did not happen, or is not possible for a chat now. Fixed codes; the page has one short line for each. */

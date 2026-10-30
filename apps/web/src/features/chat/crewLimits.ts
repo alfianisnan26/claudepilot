@@ -4,7 +4,7 @@
 // tested (crewLimits.test.ts).
 import { CHAT_MAX_WORKERS_MAX, type ChatSession, type SettingsView } from '@portal/contracts';
 
-/** The shared setting that caps every session's workers at once (Settings › Sessions, "Workers per session"). */
+/** The shared setting that caps every session's workers at once (Settings › Running agents, "Workers per agent"). */
 export const WORKERS_SETTING = 'sessions.maxChildren';
 
 /** The global cap from the settings list, or null when it is not there or not a whole number in range (the stepper then shows the number only). */

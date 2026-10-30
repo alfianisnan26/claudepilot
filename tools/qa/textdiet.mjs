@@ -183,7 +183,7 @@ async function main() {
         'new-session',
         '/admin/sessions',
         async () => {
-          await click(phone ? 'New' : 'New session', { exact: phone });
+          await click(phone ? 'New' : 'New agent', { exact: phone });
         },
         { ready: `document.body.innerText.includes('QA')`, wait: 3000 },
       );
@@ -201,7 +201,7 @@ async function main() {
           'session-menu',
           page,
           async () => {
-            await click('Session actions');
+            await click('Agent actions');
           },
           { wait: 3500 },
         );
@@ -209,7 +209,7 @@ async function main() {
           'session-rename',
           page,
           async () => {
-            await click('Session actions');
+            await click('Agent actions');
             await pause(400);
             await click('Rename', { selector: '[role=menuitem]' });
           },
@@ -219,7 +219,7 @@ async function main() {
           'session-delete',
           page,
           async () => {
-            await click('Session actions');
+            await click('Agent actions');
             await pause(400);
             await click('Delete', { selector: '[role=menuitem]' });
           },
@@ -229,7 +229,7 @@ async function main() {
           'session-move',
           page,
           async () => {
-            await click('Session actions');
+            await click('Agent actions');
             await pause(400);
             await click('Move to another Claude', { selector: '[role=menuitem]' });
             await pause(1500);
@@ -256,7 +256,7 @@ async function main() {
           'session-usage',
           page,
           async () => {
-            await click('Session actions');
+            await click('Agent actions');
             await pause(400);
             await click('Usage', { selector: '[role=menuitem]' });
           },
@@ -267,7 +267,7 @@ async function main() {
           page,
           async () => {
             if (phone) {
-              await click('Session actions');
+              await click('Agent actions');
               await pause(400);
               await click('Files and changes', { selector: '[role=menuitem]' });
             } else await click('Files', { exact: true });

@@ -76,12 +76,13 @@ export function registerResourcesAndPrompts(server: McpServer, run: RunTool, has
       new ResourceTemplate('pilot://tickets/{id}', {
         list: async (sdk) => {
           const r = await run('ticket_list', { limit: 50 }, sdk);
-          const items = ((r.structuredContent as { tickets?: { id: string; type: string; priority: string; status: string }[] } | undefined)?.tickets ?? []).filter((t) => typeof t.id === 'string');
-          // Only ids and fixed words: a ticket's own words are untrusted and stay out of a resource's name.
-          return { resources: items.map((t) => ({ uri: `pilot://tickets/${t.id}`, name: t.id, title: t.id, description: `${t.priority} ${t.type}, ${t.status}.`, mimeType: JSON_MIME })) };
+          const items = ((r.structuredContent as { tickets?: { id: string; key?: string; type: string; priority: string; status: string }[] } | undefined)?.tickets ?? []).filter((t) => typeof t.id === 'string');
+          // Only ids and fixed words: a ticket's own words are untrusted and stay out of a resource's name. T-1098: titled by its bucket key
+          // (KONF-3); the uri keeps the stable id, and pilot://tickets/KONF-3 reads the same ticket.
+          return { resources: items.map((t) => ({ uri: `pilot://tickets/${t.id}`, name: t.id, title: t.key ?? t.id, description: `${t.key && t.key !== t.id ? `${t.key}, ` : ''}${t.priority} ${t.type}, ${t.status}.`, mimeType: JSON_MIME })) };
         },
       }),
-      { title: 'Ticket', description: 'One ticket with its timeline and checks. Its text is labelled untrusted.', mimeType: JSON_MIME },
+      { title: 'Ticket', description: 'One ticket with its timeline and checks, by its stable id (T-12) or its bucket key (KONF-3). Its text is labelled untrusted.', mimeType: JSON_MIME },
       async (uri, vars, sdk) => asResource(uri, await run('ticket_get', { id: one(vars.id), full: true }, sdk)),
     );
 

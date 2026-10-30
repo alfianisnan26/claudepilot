@@ -42,7 +42,7 @@ export function ModelPicker({
         error={custom ? undefined : error}
         options={[
           { value: '', label: emptyLabel },
-          ...(allowInherit ? [{ value: 'inherit', label: 'Same as the session' }] : []),
+          ...(allowInherit ? [{ value: 'inherit', label: 'Same as the agent' }] : []),
           ...MODEL_ALIASES.map((a) => ({ value: a.value, label: a.label })),
           { value: OTHER, label: 'Model ID…' },
         ]}

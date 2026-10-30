@@ -8,7 +8,7 @@ import { HEADER_SECRET_KEY, SECRET_ENTRY_NAME, type BrowserHeaderRule } from '@p
  */
 
 export const MAX_HEADERS = 10;
-/** The extension's folder in the container (images/browser/cpb/headers-ext.mjs `EXT_DIR`): the policy allows the id derived from it. */
+/** The extension's folder in the container (images/browser/cpb/headers-ext.mjs `EXT_DIR`); its id is derived from it. */
 export const EXT_DIR = '/dev/shm/cpb-ext';
 /** Where the browser container finds its headers, root-only (Docker: a file in the container; Kubernetes: a Secret volume). */
 export const HEADERS_DIR = '/etc/cpb-secrets';
@@ -36,15 +36,24 @@ function parseHost(pattern: string): { wildcard: boolean; host: string; port: st
 
 export const validHeaderHost = (pattern: string): boolean => parseHost(pattern) !== null;
 
-/** An `allowedSites` entry as a host, ignoring a scheme and path. */
-function siteOf(entry: string): { wildcard: boolean; host: string; port: string | null } | null {
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * An `allowedSites` entry as Chrome's URLAllowlist reads it (policy.ts `chromeUrlPattern`), ignoring a scheme and path: `subdomains` when
+ * the entry also allows every subdomain (a plain host or `*.domain`), not for `.host` (that host only) or an IPv4 address (T-1716).
+ */
+function siteOf(entry: string): { subdomains: boolean; host: string; port: string | null } | null {
   const bare = entry.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/.*$/, '');
-  return parseHost(bare.startsWith('.') ? `*${bare}` : bare);
+  const exact = bare.startsWith('.');
+  const p = parseHost(exact ? bare.slice(1) : bare);
+  if (!p || (exact && p.wildcard)) return null;
+  return { subdomains: !exact && !IPV4.test(p.host), host: p.host, port: p.port };
 }
 
 /**
- * Whether `allowedSites` covers a header's host: an entry for the same host (an entry without a port covers every port), or a `*.domain`
- * entry for a host or a `*.sub.domain` pattern under it. A header never goes to a host the pool doesn't already allow.
+ * Whether `allowedSites` covers a header's host, with Chrome's matching: `example.com` and `*.example.com` cover `example.com`, any
+ * host under it and a `*.sub.example.com` pattern; `.example.com` covers `example.com` only. An entry without a port covers every port.
+ * A header never goes to a host the pool doesn't already allow.
  */
 export function coveredBy(hostPattern: string, allowedSites: string[]): boolean {
   const h = parseHost(hostPattern);
@@ -52,8 +61,8 @@ export function coveredBy(hostPattern: string, allowedSites: string[]): boolean 
   return allowedSites.some((entry) => {
     const s = siteOf(entry);
     if (!s || (s.port && s.port !== h.port)) return false;
-    if (!s.wildcard) return !h.wildcard && s.host === h.host;
-    return h.host.endsWith(`.${s.host}`) || (h.wildcard && h.host === s.host);
+    if (!s.subdomains) return !h.wildcard && s.host === h.host;
+    return h.host === s.host || h.host.endsWith(`.${s.host}`);
   });
 }
 

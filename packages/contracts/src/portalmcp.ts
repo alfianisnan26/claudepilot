@@ -56,6 +56,13 @@ export const PORTAL_TOKEN_PREFIX = 'cpat_';
  */
 export const PORTAL_AGENT_TOKEN_PREFIX = 'cpst_';
 
+/**
+ * The General Manager's token (T-968 S1, general-manager PRD §4): minted for the person's one `kind = 'manager'` session, only in
+ * that process's environment, hashed at rest, at most 7 days. It acts as the person (their `can()`, resolved at use time), never
+ * authenticates a web route, and is revoked on disable, remove and any sign-out of the person, on any device.
+ */
+export const PORTAL_MANAGER_TOKEN_PREFIX = 'cpmt_';
+
 export const PORTAL_TOKEN_LABEL_MAX = 60;
 
 /** An admin's token as the UI lists it. The secret itself is shown once, at creation. */
@@ -71,6 +78,22 @@ export interface PortalToken {
   lastUsedIp: string | null;
   revokedAt: string | null;
   revokedReason: string | null;
+  /**
+   * T-1105: where `ticket_create` puts a ticket when the call names no `workspace_id` (`<target>/<name>`), or null for the shared queue.
+   * Only an operate or admin token has one, set by a person with manage on the token (`PATCH` `PORTAL_MCP_API.token(id)`), never by a tool.
+   */
+  defaultWorkspaceId: string | null;
+  /**
+   * T-1974: the first-party client this token was issued to by a device flow (`vscode`), or null (absent from an older server) for a token
+   * made in Access -> MCP. A client token opens only its own API (`/api/vscode`); `/mcp` refuses it like an unknown token.
+   */
+  client?: 'vscode' | null;
+}
+
+/** `PATCH /api/portal-mcp/tokens/:id`: a person changes a live operate or admin token. The workspace must be one they and the token may operate. */
+export interface UpdatePortalTokenRequest {
+  /** `<target>/<name>`, or null to clear it. */
+  defaultWorkspaceId: string | null;
 }
 
 export interface CreatePortalTokenRequest {
@@ -211,7 +234,7 @@ export const PORTAL_MCP_API = {
   settings: '/api/portal-mcp/settings',
   /** POST `CreatePortalTokenRequest`: `CreatedPortalToken`. */
   tokens: '/api/portal-mcp/tokens',
-  /** DELETE: revoke one token. */
+  /** DELETE: revoke one token. PATCH `UpdatePortalTokenRequest`: `PortalToken` (its default workspace). */
   token: (id: string) => `/api/portal-mcp/tokens/${encodeURIComponent(id)}`,
   /** POST `RevokePortalTokenLabelRequest`: `RevokePortalTokenLabelResult`. */
   revokeLabel: '/api/portal-mcp/tokens/revoke-label',
@@ -224,3 +247,101 @@ export const PORTAL_MCP_API = {
   /** PUT `SetAgentAccessRequest` (`<target>/<name>`): turn agent access on or off for a workspace. */
   agent: (workspaceId: string) => `/api/portal-mcp/agents/${workspaceId}`,
 } as const;
+
+/* ---------- Write-only arguments (T-2866) ---------- */
+
+/** What a write-only argument is shown as wherever a call is kept: the audit row, the chat transcript, an approval card. */
+export const WRITE_ONLY_MASK = '[write-only]';
+
+/**
+ * The arguments of a Portal MCP tool that carry a value the portal stores and never gives back (a secret's value): masked in the audit row,
+ * in the chat transcript's tool row and on an approval card, and left out of the "looks like a secret" refusal (that is what they are for).
+ */
+export const PORTAL_WRITE_ONLY_ARGS: Readonly<Record<string, readonly string[]>> = {
+  pool_secret_set: ['value'],
+};
+
+/** The write-only arguments of a tool, by its portal name (`pool_secret_set`) or as Claude Code names it (`mcp__pilot__pool_secret_set`). */
+export function writeOnlyArgsOf(toolName: string | null | undefined): readonly string[] {
+  if (!toolName) return [];
+  const bare = toolName.startsWith('mcp__') ? toolName.slice(toolName.lastIndexOf('__') + 2) : toolName;
+  return Object.hasOwn(PORTAL_WRITE_ONLY_ARGS, bare) ? PORTAL_WRITE_ONLY_ARGS[bare]! : [];
+}
+
+/** A tool's bare portal name: `mcp__pilot__pool_create` → `pool_create`. */
+const bareToolName = (toolName: string): string => (toolName.startsWith('mcp__') ? toolName.slice(toolName.lastIndexOf('__') + 2) : toolName);
+
+/**
+ * A copy of a call's arguments with only its declared write-only ones ({@link PORTAL_WRITE_ONLY_ARGS}) masked. This is what the
+ * "looks like a secret" refusal reads: a declared write-only argument is where a secret is meant to go, anything else is still checked.
+ */
+export function maskDeclaredWriteOnlyArgs<T>(toolName: string | null | undefined, args: T): T {
+  const fields = writeOnlyArgsOf(toolName);
+  if (!fields.length || !args || typeof args !== 'object' || Array.isArray(args)) return args;
+  const out: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+  for (const f of fields) if (f in out) out[f] = WRITE_ONLY_MASK;
+  return out as T;
+}
+
+/** The pool tools whose `content` can carry a value a caller should never have sent (T-2866): it is masked wherever the call is kept. */
+const POOL_CONTENT_TOOLS = new Set(['pool_create', 'pool_update']);
+
+/** Keys inside a pool's `content` that can carry a value (a secret's, a variable's, an MCP set's secret slot): masked at any depth. */
+const VALUE_KEYS = new Set(['value', 'values', 'newvalue', 'new_value', 'secret', 'secrets', 'key_value', 'keys', 'password', 'token', 'credential', 'credentials']);
+
+const maskValueKeys = (v: unknown, depth: number): unknown => {
+  if (depth > 12) return WRITE_ONLY_MASK;
+  if (Array.isArray(v)) return v.map((x) => maskValueKeys(x, depth + 1));
+  if (!v || typeof v !== 'object') return v;
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = VALUE_KEYS.has(k.toLowerCase()) ? WRITE_ONLY_MASK : maskValueKeys(x, depth + 1);
+  return out;
+};
+
+/**
+ * A secrets pool's `content` as it may be kept: names only. `names` stays when it is a list of strings, each entry keeps its `kind` and
+ * `name` (strings) and boolean options; every other field, at any level, is masked. A secrets pool over MCP is created with names only,
+ * so nothing a person needs is lost, and a value sent by mistake is never kept.
+ */
+const namesOnly = (content: unknown): unknown => {
+  if (!content || typeof content !== 'object' || Array.isArray(content)) return WRITE_ONLY_MASK;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(content as Record<string, unknown>)) {
+    if (k === 'names' && Array.isArray(v) && v.every((n) => typeof n === 'string')) out[k] = v;
+    else if (k === 'entries' && Array.isArray(v))
+      out[k] = v.map((e) => {
+        if (!e || typeof e !== 'object' || Array.isArray(e)) return WRITE_ONLY_MASK;
+        const kept: Record<string, unknown> = {};
+        for (const [ek, ev] of Object.entries(e as Record<string, unknown>)) {
+          if ((ek === 'kind' || ek === 'name') && typeof ev === 'string') kept[ek] = ev;
+          else if (ek === 'options' && ev && typeof ev === 'object' && !Array.isArray(ev) && Object.values(ev).every((o) => typeof o === 'boolean')) kept[ek] = ev;
+          else kept[ek] = WRITE_ONLY_MASK;
+        }
+        return kept;
+      });
+    else out[k] = WRITE_ONLY_MASK;
+  }
+  return out;
+};
+
+/**
+ * A copy of a call's arguments as it may be kept anywhere (the audit row, the chat transcript's tool row, an approval card): its declared
+ * write-only arguments masked, and `content` of the pool tools too (T-2866): `pool_update`'s whole (it has no `type`, so it may be a
+ * secrets pool's); `pool_create`'s for a secrets pool (`type` "secrets", in any case) keeps names only, for any other type its
+ * value-bearing fields are masked. Anything that is not an object comes back as it is.
+ */
+export function maskWriteOnlyArgs<T>(toolName: string | null | undefined, args: T): T {
+  const declared = maskDeclaredWriteOnlyArgs(toolName, args);
+  if (!toolName || !POOL_CONTENT_TOOLS.has(bareToolName(toolName))) return declared;
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return declared;
+  const out: Record<string, unknown> = { ...(declared as Record<string, unknown>) };
+  if (!('content' in out)) return out as T;
+  // pool_update names its pool by id only: nothing here says it is not a secrets pool, so its content is never kept, under any key.
+  if (bareToolName(toolName) === 'pool_update') {
+    out.content = WRITE_ONLY_MASK;
+    return out as T;
+  }
+  const secrets = typeof out.type === 'string' && out.type.trim().toLowerCase() === 'secrets';
+  out.content = secrets ? namesOnly(out.content) : maskValueKeys(out.content, 0);
+  return out as T;
+}

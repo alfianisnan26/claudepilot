@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { placePopover } from './popover';
+import { clipToContent, placePopover } from './popover';
 
 const view = { top: 0, left: 0, width: 390, height: 844 };
 const safe = { top: 47, right: 0, bottom: 34, left: 0 };
@@ -34,4 +34,16 @@ test('under the header, below the control; too tall for either side, the roomier
   const tall = placePopover({ anchor: { top: 400, bottom: 444, left: 100, right: 144 }, width: 256, height: 2000, view, safe });
   assert.ok(tall.maxHeight !== null && tall.maxHeight > 0);
   assert.ok(tall.top >= 47 + 12 && tall.top + tall.maxHeight! <= 844 - 34 - 12 + 0.5);
+});
+
+test('T-1988: the visible box stops at the page content edge, so a popover keeps its margin from a classic scrollbar', () => {
+  const view = { top: 0, left: 0, width: 1280, height: 800 };
+  // A 15 px scrollbar (or the stable gutter): the root is 1265 px wide inside it.
+  const cut = clipToContent(view, 1265);
+  assert.equal(cut.width, 1265);
+  const p = placePopover({ anchor: { top: 300, bottom: 344, left: 1240, right: 1260 }, width: 340, height: 200, view: cut, safe: { top: 0, right: 0, bottom: 0, left: 0 } });
+  assert.equal(p.left + p.width, 1265 - 12, 'its right edge is 12 px inside the content, not on the scrollbar');
+  assert.deepEqual(clipToContent(view, 1280), view, 'an overlay scrollbar takes no room');
+  assert.deepEqual(clipToContent(view, 0), view, 'no reading, no change');
+  assert.equal(clipToContent({ top: 0, left: 100, width: 300, height: 500 }, 390).width, 290, 'a pinch-zoomed view moved right is cut at the same edge');
 });

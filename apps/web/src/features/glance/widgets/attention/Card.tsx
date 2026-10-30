@@ -7,7 +7,7 @@ import { useNow } from '../shared/useNow';
 import { needsYou, type NeedKind } from './needs';
 
 const ICON: Record<NeedKind, typeof Ticket> = { approval: CircleAlert, deploy: Rocket, interrupted: MessagesSquare, ci: Workflow, ticket: Ticket };
-const KIND_WORD: Record<NeedKind, string> = { approval: 'Approval', deploy: 'Deploy to approve', interrupted: 'Interrupted session', ci: 'Failed CI run', ticket: 'Ticket for you' };
+const KIND_WORD: Record<NeedKind, string> = { approval: 'Approval', deploy: 'Deploy to approve', interrupted: 'Interrupted agent', ci: 'Failed CI run', ticket: 'Ticket for you' };
 
 /**
  * Home's "Needs you": every approval, held deploy, interrupted session, failed CI run and ticket waiting on a person, most blocking first,

@@ -3443,6 +3443,33 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 793,
+    name: 'chat sessions: the General Manager kind, its owner, one per person, and its cpmt_ tokens (T-968 S1)',
+    up(db) {
+      // T-968 S1 (general-manager PRD §2, §4). Every existing row is a workspace session owned by the founding user (multi-user adoption
+      // rule 4, as the other owner_id columns). The partial unique index holds "one manager per person" in the database, not only in code.
+      // cpmt_ tokens: hashed like cpst_, bound to the person (user_id) and the manager session, at most 7 days.
+      db.exec(`
+        ALTER TABLE chat_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'workspace' CHECK (kind IN ('workspace', 'manager'));
+        ALTER TABLE chat_sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';
+        CREATE UNIQUE INDEX chat_sessions_one_manager ON chat_sessions (owner_id) WHERE kind = 'manager' AND state != 'ended';
+        CREATE TABLE pmcp_manager_tokens (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          user_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          last_used_at TEXT,
+          revoked_at TEXT,
+          revoked_reason TEXT
+        ) STRICT;
+        CREATE INDEX pmcp_manager_tokens_user ON pmcp_manager_tokens (user_id) WHERE revoked_at IS NULL;
+        CREATE INDEX pmcp_manager_tokens_session ON pmcp_manager_tokens (session_id) WHERE revoked_at IS NULL;
+      `);
+    },
+  },
+  {
     version: 400,
     name: 'identity: email accounts and the login throttle (T-118 MU1-min)',
     up(db) {
@@ -3604,6 +3631,237 @@ export const MIGRATIONS: Migration[] = [
           PRIMARY KEY (provider_id, subject)
         ) STRICT;
         CREATE INDEX sso_identities_user ON sso_identities (user_id);
+      `);
+    },
+  },
+  {
+    version: 46,
+    name: 'portal mcp: an access token may have a default workspace for the tickets it makes',
+    up(db) {
+      // T-1105: an external client's tickets (Hermes) landed in the shared queue, where a workspace's leads can't hand them out. A person
+      // with manage on the token sets it (never an agent tool); ticket_create without workspace_id takes it while the token may operate it.
+      db.exec(`ALTER TABLE pmcp_tokens ADD COLUMN default_workspace_id TEXT`);
+    },
+  },
+  {
+    version: 47,
+    name: 'tickets: buckets (projects) with their own id prefix and number counter (T-1098)',
+    up(db) {
+      // T-1098 (owner, 2026-10-18): per-project tickets. A bucket's key is its ids' prefix (KONF-12); every ticket is in exactly one. The ticket's
+      // `number` stays its primary key and `T-<number>` a permanent alias, so nothing that names T-n (URLs, trailers, sessions, the timeline) moves.
+      db.exec(`
+        CREATE TABLE ticket_buckets (
+          key TEXT PRIMARY KEY CHECK (length(key) BETWEEN 2 AND 6 AND key NOT GLOB '*[^A-Z]*'),
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          default_workspace_id TEXT,
+          -- JSON array of tags every new ticket in it gets.
+          default_tags TEXT NOT NULL DEFAULT '[]',
+          vault_id TEXT,
+          -- The number its next ticket takes; the trigger below hands it out inside the insert's own transaction.
+          next_number INTEGER NOT NULL DEFAULT 1 CHECK (next_number >= 1),
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        ALTER TABLE tickets ADD COLUMN bucket_key TEXT NOT NULL DEFAULT 'PILOT';
+        ALTER TABLE tickets ADD COLUMN bucket_number INTEGER;
+      `);
+      const at = new Date().toISOString();
+      const seed = db.prepare('INSERT INTO ticket_buckets (key, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+      seed.run('KONF', 'Konfersi', 'Konfersi work (was tagged konfersi-migration).', at, at);
+      seed.run('CP', 'ClaudePilot', 'The portal itself (was tagged claudepilot).', at, at);
+      seed.run('TB', 'Tradingbot', 'The paper-trading lab (was tagged tradingbot).', at, at);
+      seed.run('PILOT', 'Pilot', 'Everything else.', at, at);
+      // Existing tickets by tag, first match wins in this order; the rest stay in PILOT (the column default).
+      for (const [tag, key] of [['konfersi-migration', 'KONF'], ['claudepilot', 'CP'], ['tradingbot', 'TB']] as const)
+        db.prepare(
+          `UPDATE tickets SET bucket_key = ? WHERE bucket_key = 'PILOT' AND number IN (SELECT ticket_number FROM ticket_tags WHERE tag = ?)`,
+        ).run(key, tag);
+      // Their numbers in creation order, per bucket; each counter continues after the last.
+      db.exec(`
+        UPDATE tickets SET bucket_number = (
+          SELECT r.n FROM (SELECT number, ROW_NUMBER() OVER (PARTITION BY bucket_key ORDER BY created_at, number) AS n FROM tickets) r
+          WHERE r.number = tickets.number
+        );
+        UPDATE ticket_buckets SET next_number = 1 + COALESCE((SELECT max(bucket_number) FROM tickets WHERE bucket_key = ticket_buckets.key), 0);
+        CREATE UNIQUE INDEX tickets_bucket_number ON tickets (bucket_key, bucket_number);
+        CREATE INDEX tickets_bucket_status ON tickets (bucket_key, status);
+
+        -- Every new ticket takes the next number of its bucket, whoever inserts it (the service, a test, an import), in the same transaction:
+        -- two creates can never get one number. A bucket that does not exist gives no number (the service refuses it before).
+        CREATE TRIGGER tickets_bucket_number AFTER INSERT ON tickets WHEN NEW.bucket_number IS NULL
+        BEGIN
+          UPDATE ticket_buckets SET next_number = next_number + 1 WHERE key = NEW.bucket_key;
+          UPDATE tickets SET bucket_number = (SELECT next_number - 1 FROM ticket_buckets WHERE key = NEW.bucket_key)
+            WHERE number = NEW.number AND EXISTS (SELECT 1 FROM ticket_buckets WHERE key = NEW.bucket_key);
+        END;
+      `);
+    },
+  },
+  {
+    version: 48,
+    name: 'tickets: a ticket moves between buckets and its old keys stay aliases (T-1967)',
+    up(db) {
+      // T-1967 (owner, 2026-10-21: "PILOT and CLAUDEPILOT should be consolidated"): a moved ticket takes its new bucket's next number; every key
+      // it had keeps naming it here, so nothing that wrote KONF-12 breaks. A key is never handed out twice: a bucket's counter only grows, and a
+      // bucket made again under a merged key starts after its aliases (the service). Rows go with their ticket.
+      db.exec(`
+        CREATE TABLE ticket_key_aliases (
+          bucket_key TEXT NOT NULL,
+          bucket_number INTEGER NOT NULL,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          moved_at TEXT NOT NULL,
+          PRIMARY KEY (bucket_key, bucket_number)
+        ) STRICT;
+        CREATE INDEX ticket_key_aliases_ticket ON ticket_key_aliases (ticket_number);
+
+        -- A merged bucket's counter, kept when the bucket goes: a bucket made again under its key counts on after every number it ever handed
+        -- out, a deleted ticket's included (QA of T-1967: the aliases alone missed those).
+        CREATE TABLE ticket_buckets_retired (
+          key TEXT PRIMARY KEY,
+          next_number INTEGER NOT NULL CHECK (next_number >= 1),
+          retired_at TEXT NOT NULL
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 49,
+    name: 'portal mcp: a token made for a first-party client (the VS Code extension) is marked as such (T-1974)',
+    up(db) {
+      // T-1974 security review R1: a token the VS Code device flow issues opens /api/vscode only, and /mcp refuses it. `purpose` can't take a
+      // new value without rebuilding the table (its CHECK), so the marker is a column of its own: NULL for every token made before and for
+      // Access -> MCP tokens; 'vscode' for the extension's. `client_instance` is the extension installation that signed in: a new sign-in
+      // replaces only that installation's token, never another client's with the same name.
+      db.exec(`
+        ALTER TABLE pmcp_tokens ADD COLUMN client TEXT CHECK (client IS NULL OR client IN ('vscode'));
+        ALTER TABLE pmcp_tokens ADD COLUMN client_instance TEXT;
+        CREATE INDEX pmcp_tokens_client ON pmcp_tokens (client, client_instance) WHERE client IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 794,
+    name: 'tickets: an index on events by ticket and time, for the timeline (T-119)',
+    up(db) {
+      // T-119: the tickets block 40-49 is full (49 is T-1974's), so this takes 794, after the ticket ones at
+      // 785-787 (788 is T-975's). The timeline reads the events of a page of tickets in one query, per ticket in time order; (ticket_number, id)
+      // was the only one.
+      db.exec(`CREATE INDEX IF NOT EXISTS ticket_events_ticket_at ON ticket_events (ticket_number, at)`);
+    },
+  },
+  {
+    version: 795,
+    name: 'tickets: a verdict recorded in a QA batch keeps the batch evidence (T-1987, D-93)',
+    up(db) {
+      // T-1987 (tickets PRD FR36d): `ticket_verdict_batch` records one verdict per ticket of a QA batch; the shared evidence (job id, batch
+      // branch, note) is kept with each row as JSON `{ jobId, branch, note }`. NULL for a verdict recorded alone and for every row before.
+      db.exec(`ALTER TABLE ticket_verdicts ADD COLUMN batch TEXT CHECK (batch IS NULL OR json_valid(batch));`);
+    },
+  },
+  {
+    version: 796,
+    name: 'tickets: the merge gate records a ticket PR, its head and its merge state (T-2014)',
+    up(db) {
+      // T-2014 (tickets PRD FR36e): `ticket_merge_status` writes what the merge gate knows of a ticket's pull request per repo; the flow
+      // watchdog judges the QA PASS on `pr_head` and skips what is merged. Rows are never edited: the newest row of a repo is its state.
+      // `pr` and `pr_head` are null only for `no_pr`. Overflow of the tickets block (40-49 full; 785-787, 794 and 795 used, 788 is T-975's).
+      db.exec(`
+        CREATE TABLE ticket_merge_status (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          repo TEXT NOT NULL CHECK (length(repo) BETWEEN 1 AND 120),
+          pr INTEGER CHECK (pr IS NULL OR pr > 0),
+          pr_head TEXT CHECK (pr_head IS NULL OR length(pr_head) = 40),
+          state TEXT NOT NULL CHECK (state IN ('ready', 'merged', 'conflict', 'waiting', 'no_pr', 'failed')),
+          reason TEXT,
+          actor TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          at TEXT NOT NULL,
+          CHECK (state = 'no_pr' OR (pr IS NOT NULL AND pr_head IS NOT NULL))
+        ) STRICT;
+        CREATE INDEX ticket_merge_status_ticket ON ticket_merge_status (ticket_number, repo, id);
+      `);
+    },
+  },
+  {
+    version: 856,
+    name: 'efficiency lab: metric snapshots per program, and closed tickets by close time (T-2360)',
+    up(db) {
+      // T-2360 (docs/prd/claude-usage.md §28.15): every 10 minutes the lab writes one row per metrics program with the values its trend
+      // reads (scores, counts, stage medians; numbers only, never ticket text). Kept 30 days (lab/metricsSnapshots.ts). Trend reads go by
+      // (program, at_ms); retention by at_ms. `tickets_closed_at` bounds the flow loader to the window and the one before it.
+      // Additive only (D-92): new objects with IF NOT EXISTS. Next free number of the lab block (850-855 used).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lab_metric_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          at_ms INTEGER NOT NULL,
+          program TEXT NOT NULL CHECK (length(program) BETWEEN 1 AND 60),
+          metrics TEXT NOT NULL CHECK (json_valid(metrics))
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS lab_metric_snapshots_program_at ON lab_metric_snapshots (program, at_ms);
+        CREATE INDEX IF NOT EXISTS lab_metric_snapshots_at ON lab_metric_snapshots (at_ms);
+        CREATE INDEX IF NOT EXISTS tickets_closed_at ON tickets (closed_at);
+      `);
+    },
+  },
+  {
+    version: 880,
+    name: 'chat tasks: an index by session and status, for the running ones (T-2368)',
+    up(db) {
+      // T-2368: the session list counts each session's running tasks and the glance lists them; with only the primary key every count read
+      // all of a session's history (6,000+ rows for a long-lived lead). The chat block (16-19) is full; 856 is T-2360's, so this takes 880.
+      db.exec(`CREATE INDEX IF NOT EXISTS chat_tasks_session_status ON chat_tasks (session_id, status)`);
+    },
+  },
+  {
+    version: 881,
+    name: 'autotransfer: a Claude can be left out of auto move (T-2398)',
+    up(db) {
+      // T-2398: a Claude left out of auto move is never chosen as a destination and its own chats are never moved off it by themselves; it
+      // stays signed in and usable by hand. Additive (a column with a default); the next free number after 880.
+      db.exec(`ALTER TABLE autotransfer_claudes ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0`);
+    },
+  },
+  {
+    version: 882,
+    name: 'tickets by last change, for the crew facts read (T-2360)',
+    up(db) {
+      // T-2360 (review): with `tickets_updated_at` the crew facts' ticket read (scorecardData.ts CREW_TICKETS_SQL) is a union of index reads,
+      // not a scan of every ticket. Its own migration, not 856: a database that already ran 856 gets it too. Additive (D-92); the next free
+      // number after 881.
+      db.exec(`CREATE INDEX IF NOT EXISTS tickets_updated_at ON tickets (updated_at)`);
+    },
+  },
+  {
+    version: 883,
+    name: 'approvals: a request a person allows or denies, and the portal runs (PILOT-1000, T-2867)',
+    up(db) {
+      // T-2867 (docs/prd/approvals.md): the T2 tier of PILOT-996. `payload` is the exact JSON the portal runs on Allow; nothing updates it
+      // (approvals/service.ts writes only status, decided_by, decided_at and result, once, from pending). No secret value is ever stored here
+      // (a kind names a secret). No area block fits; the next free number after 882 (checked on integration and the open S1-S3 branches).
+      // Additive only (D-92): new objects with IF NOT EXISTS.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS approvals (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 60),
+          payload TEXT NOT NULL CHECK (json_valid(payload)),
+          requester_session TEXT,
+          workspace TEXT,
+          tier TEXT NOT NULL DEFAULT 'T2',
+          reason TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'allowed', 'denied', 'expired')),
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          decided_by TEXT,
+          decided_at TEXT,
+          result TEXT CHECK (result IS NULL OR json_valid(result))
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS approvals_status_created ON approvals (status, created_at);
+        CREATE INDEX IF NOT EXISTS approvals_requester ON approvals (requester_session, created_at);
       `);
     },
   },

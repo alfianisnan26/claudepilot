@@ -116,7 +116,7 @@ Anything that needs the real CLI to behave as a plan in a test uses the testkit 
 ### Probing
 
 - **FR10** Interval: 10 minutes for a Claude whose workspace runs; 2 minutes while a page asks for the snapshot (it counts as watching for 2 minutes); one hour for a Claude found signed out or without plan limits. Settings: `PORTAL_CLAUDE_USAGE_INTERVAL_S` (600), `PORTAL_CLAUDE_USAGE_FAST_S` (120); `PORTAL_CLAUDE_USAGE_PROBES=off` turns probing off; `PORTAL_CLAUDE_USAGE_ONLY=cu-,ws-` probes only workspaces whose name starts with one of those (for a portal that shares its container runtime with others).
-- **FR11** One probe at a time per workspace, at most two in the portal. A failed or unknown probe doubles that Claude's wait up to one hour; a good one resets it.
+- **FR11** One probe at a time per workspace, at most two in the portal. A failed or unknown probe doubles that Claude's wait up to one hour; a good one resets it. A Claude whose stored reading has a window (or a limit report) that reset since its last probe is due at once, whatever the interval or the backoff, once per reset (T-1835: it reads `period_reset`, unknown, until then).
 - **FR12** Check now: one Claude, refused with a cooldown of 30 seconds (the CLI also answers from its own copy under 60 seconds old, ✅). Refused for a pool Claude and for a stopped workspace.
 - **FR13** A probe has a hard limit of 25 seconds inside the workspace (`timeout`) and 30 seconds in the portal, and is killed by that, never left running.
 - **FR14** Start-up and every background pass are wrapped in try/catch and skipped unless the store is writable and `deliveryAllowed`. A missing table or a failed exec is logged once and never stops the portal.
@@ -203,6 +203,10 @@ The chat reader turns it into a refusal of that window with the stated reset (`c
 ### 10.4 Unavailable is a state, never 0 % (T-255)
 
 `ClaudeUsage.unavailable` (and `UsageSummaryClaude.unavailable`) says why a plan Claude's usage is not known (`usageUnavailable` in contracts): `signed_out`, `no_usage_endpoint` (Claude Code's usage call failed or the sign-in has no scope for it), `no_reading`, `no_window`, `no_number`, `no_reset_time` (the session window has no reset time: 0 % so is not a reading), `period_reset`. Such a Claude is `unknown`, not `ok`; its row says "Unavailable: no reset time" with the detail in an ⓘ, and a window at 0 % with no reset time shows a dash. Auto move never prefers it to a measured Claude ([auto transfer](auto-transfer.md) FR10d).
+
+### 10.5 The prime heals `no_reset_time` (T-1707)
+
+When a background probe of a signed-in Claude reads `no_reset_time`, the workspace runs and no live session is on that Claude, the portal sends one tiny request as that Claude in the workspace (`claudeusage/prime.ts`: `claude -p` started like the probe, `--model haiku`, `--tools ""`, `--safe-mode`, `--no-session-persistence`, a one-line system prompt, the user line "ok", `timeout 40`, `--max-budget-usd 0.02`; its output is dropped except Claude Code's limit refusal) and probes again at once: the window is open, so the reading gets a number and a reset time. A refusal for a plan limit becomes the Claude's limit report (§10.3, `sessionId` null) until the reset it states, the next 5-hour boundary (`guessed`) when it states none. At most one prime per Claude per `claude.usage.primeMin` minutes (Settings, Usage; default 30, 0 is off; in memory, so a restart allows one more), except that a period which ended since the last prime (a session reset its readings carried, or a limit report's end) lifts that wait: still one prime per period (T-1835); Check now never primes. Each prime is one platform audit row `claude.usage.prime` (claude id, workspace, `ok`, `limited` with `until`, or `failed` with why); none is written to a chat or a ticket.
 
 ## 11. Probe mechanics and limits
 
@@ -756,7 +760,7 @@ All eight in every pair cannot pass at these floors (no order of eight can), so 
 
 **Claudes.** Under a window's bar: the paler stretch is where the window is estimated to stand at its reset, a thin wall at the end of the bar means it is estimated to run out first (dimmer while the estimate is low confidence), and the tick is where an even spend would be. A Claude estimated to run out before it resets gets one line ("Session runs out ~06:56 · resets 07:26", "may run out" while low confidence) with the numbers behind it. The open row lists each window's speed in points an hour, the percent at the reset, when it runs out ("after reset" when it will not), and how far ahead of an even spend it is, all estimates behind one "est."; the snooze menu mutes only the pace warnings. The tab's count includes a confident run-out that is not snoozed. Export: the plan readings of the last 7 days.
 
-**Attribution** (§22): by session as a tree (a child is indented, the total includes it and the row says `own` beside it), workspace, ticket or persona; each row has its dollars (est.) and its share of the window's dollars. What was never recorded is "Not recorded" with its reason, never 0, and "n % recorded" shows beside the list when the coverage is under 100 %. A deleted session is marked; its requests stay.
+**Attribution** (§22): by session as a tree (a child is indented, the total includes it and the row says `own` beside it), workspace, ticket or persona; each row has its dollars (est.) and its share of the window's dollars. What was never recorded is "Not recorded" with its reason, never 0, and "n % recorded" shows beside the list when the coverage is under 100 %. A deleted session is marked; its requests stay. The list shows the top 10 rows by cost, then **Load more** (10 at a time, with how many are left); "Others" (the roots past the server's limit) shows once every row before it does, "No ticket" and "Not recorded" always at the end. By session, the agents a lead started fold under it, folded by default with a count ("3 agents"); a later row of a continued chat says "continued"; a row is never listed twice (T-377, T-955; `foldRows`, `pageItems` in `apps/web/src/features/usage/spend/attribution.ts`).
 
 **Budgets** (§23): one card per budget, the neediest first: name (or scope and period), percent, a bar in the level's colour, "$1 of $1.04 · resets in 18 h". A budget that pauses says "New messages are paused." with the portal's own sentence behind the ⓘ, the one a refused message carries. New and Edit are one dialog (scope, period, dollars, tokens, pause, name) with the portal's field errors; the row menu edits, snoozes (not for a budget that pauses), turns off and deletes after a confirm.
 
@@ -801,7 +805,7 @@ In a real browser at 390, 844 x 390, 768, 1024, 1280 and 1920 px, light and dark
 | UU8 | A name cut to an ellipsis shows its full text in a native `title` (not on touch or for a keyboard) and in the accessible name; the shared clamp-with-popover component of QA standard A9 is not used yet (it was not there to use). |
 | UU9 | The Usage page is its own chunk, loaded on first use (App.tsx: `lazy` and a skeleton).                                                                                                                                              |
 
-## 28. Efficiency lab (T-287, slices 1 to 3 built: the data layer; outcomes, the read API, the MCP tools and the Lab tab; result tokens and stratum keys)
+## 28. Efficiency lab (T-287, slices 1 to 3 built: the data layer; outcomes, the read API, the MCP tools and the Lab tab; result tokens and stratum keys; §28.14 and §28.15 are the crew scorecard and the pilot metrics, T-450 and T-2360)
 
 Why: the first evaluation of the agents' economy (docs/dev-sessions/overhaul/token-economy-design.md) was computed by hand from the session
 tapes with `docs/dev-sessions/overhaul/evidence/slice_metrics.py`. The lab keeps the same numbers inside the portal as the stream is read,
@@ -937,6 +941,13 @@ table from 1,024 px (p90 under the median); "unavailable" is shown as a muted st
 figure. Experiments below: each arm's n, accepted slices, cost per accepted slice and its interval. Checked at 390 px (touch, light and
 dark) and 1,280 px (light and dark) on a seeded scratch portal: no horizontal scroll, 9 rows, 2 experiments; the Day and Week control is
 the shared `Segmented` at 40 px high (as on the Spikes tab).
+
+Text diet (T-1852): the period is said once, above its rows (a band on a phone, a row of the table on a desktop), not on every row; a
+phone row shows four key figures (Slices, Cost, First pass, Per accepted, with the 90 % interval under the last) and a 44 px chevron
+opens the other five; the desktop table has nine figure columns, the interval under Per accepted instead of a column of its own. "median /
+p90" moved from the card into the Sources tip beside the Day / Week control. An experiment's arms are a small table (n, acc, $ / acc with
+the interval under it); the columns are explained in the Experiments tip. Empty states read "No slices" and "None". Pure helpers
+`splitFigures` and `groupByPeriod` (`features/lab/model.ts`), tests in `model.test.ts`.
 
 ### 28.12 Result tokens, effort, idle gaps and stratum keys (slice 3, migration 853)
 
@@ -1129,6 +1140,18 @@ tables the portal already keeps; nothing new is stored.
   phone, 44 px controls, light and dark. S3: on a phone the Details button is a chevron only (labelled "Show details" / "Hide details"); the
   Sources InfoTip sits beside the window picker it explains; when targets warn and none breaches, the Breaches tile reads "2 warn" (the
   warn count) instead of "0" beside WARN. Check: `tools/qa/crew-scorecard.mjs`; tests `scorecardModel.test.ts`.
+- **Text diet (T-1852).** The owner found Lab and Crew too wordy. Every number (program and summary) is one stat tile (`features/lab/parts.tsx`
+  `Stat`): the value large in its state's colour, the label small with its InfoTip, "was" with a trend arrow only in Compare. The line of
+  state and basis words under each number is gone: an estimate shows "est.", a warn or breach shows an icon (shape and colour differ, the
+  word for screen readers), MEASURED needs no mark; the basis stays in the tip and on the element (`data-basis`), the source and the
+  reason when unavailable stay in the tip. The summary's line under a value keeps only a number of its own (dollars per hour, won't do)
+  and a Pace that warns (`shownSub`); "on pace", "per resolved, est." and the backlog direction were the label or the tip again. D-65
+  rows show the value and a state icon (two columns from 640 px); the QA opus counts (T-490, same source as the D-65 QA opus row) are
+  in that row's tip, the workspace in a tip beside the program title, the worker count as an icon and a number. Details and the
+  summary's expanded view are compact rows (label, value on the right, a muted line, a thin static bar where there is something to
+  scale by: done per type, CI passed of runs, lead and workers of the cost, resolved per program, each Claude's used pace with a tick at
+  even), titled Done, In review, CI, Deploys, Targets, Cost and Pace, Resolved, Created : closed (`detailSections`, `summarySections`).
+  Tests: `scorecardModel.test.ts`, `summaryModel.test.ts`, `render.test.ts` (markup without a browser).
 - **Attribution export (T-450 S2 fix).** Usage → Attribution's CSV followed `by` and `range` but not the Done filter, so a done-only view
   exported every ticket; the download now carries `done=1` like the rows (`attributionUrl`, test `attributionUrl.test.ts`).
 - **Known limits.** A done ticket's life cost looks back at most 30 days; waits-for is derived for the current window only; context per
@@ -1147,3 +1170,92 @@ tables the portal already keeps; nothing new is stored.
   7 d 706.9 to 92.0 ms, 100 sessions 24 h 3399.7 to 44.2 ms, 100 sessions 7 d 3543.7 to 478.9 ms (the answers are identical); insert cost per
   10k events 49.5 ms without and 67.3 ms with the index (1.36 times, the whole 1M: 5.09 s and 6.91 s); process RSS 207 MiB. The migration
   runs in the startup transaction: scale 0.41 s per million events (this Job's disk) to the real count before a deploy.
+
+### 28.15 Pilot metrics (T-2360 slices 1 to 3: the server and the wire types, migration 856; the Portal MCP tools; the Usage → Metrics view)
+
+How fast tickets move through each stage, how much of the crew is working, and how well tickets flow, per PROGRAM and per WINDOW (24h, 7d,
+each with the window before it), with a trend from snapshots and plain-language findings. The server reads them once (`Lab.metrics`); the
+REST routes, the five Portal MCP tools and the web view are three readers of the same wire types (`packages/contracts/src/metrics.ts`,
+`METRICS_API`), in the bullets below in that order.
+
+- **Stages of a done ticket** (`lab/flowMetrics.ts` `ticketFlow`, pure): start = created to the first move into in_progress; report =
+  created to the first comment by an agent session (`session:*`); implement = the first in_progress to the first verdict after it (QA or
+  review verdict in the comment's data, or a `Self-test: ... on <sha> pass|fail N` line: read as the flow watchdog reads it
+  (`flow/engine.ts` `selfTestText`: `*` and backticks dropped, trimmed, so `**Self-test:** \`job\` on ...` counts), only a line that then
+  starts with `Self-test:`; one quoted inside a line, after `> `, in a list, indented as code or inside a ``` or ~~~ code fence is not a
+  verdict, `selfTestLineOf`), with no verdict to the first merge
+  (`ticket_merge_status` `merged`); test = the first verdict to the last PASSING verdict at or before the last merge (no merge: the close),
+  rounds = the verdicts in it, rework = the failing ones; deliver = the last merge to the close; resolve = created to the close; work = the
+  first in_progress to the close. Nothing after the close counts. **A ticket that lacks a stage's timestamps is left out of that stage and
+  counted in its `excluded`, never 0**; a span below 0 is left out the same way. **Won't-do is counted apart** (count and the median of its
+  life), in no stage.
+- **Aggregates.** n, the median and p90 by nearest rank (the scorecard's `percentile`), over the tickets closed in the window, for the whole
+  program and grouped by program, lead, type or priority. The lead is the ticket's first `area-*` tag, else `lead:<lineage root>` of the
+  session that held it (assignee, or who moved it into in_progress), else `unrecorded`. The drill-down returns the per-ticket rows (at most
+  200, newest close first, `total` says how many).
+- **Programs** (`lab.metricsPrograms`, group Usage, owner only): `id=Label|tags|closures-per-hour/resolve-hours/review-hours` split by `;`.
+  Default: `all` (every ticket, targets 4/24/2), `claudepilot` (tags `claudepilot`, `program-claudepilot`), `konfersi` (`konfersi`,
+  `konfersi-migration`, `program-konfersi`), `memor-id` (`commits`). Decision: the live tickets mostly carry the plain program tag, so the
+  setting maps tags; a `program-*` tag and a `flow.programs` tag that no entry covers are added by themselves. Targets default 2/24/2.
+  **At most 12 programs come from `program-*` tags** (each costs a snapshot row every 10 min), and only a tag with a ticket updated in the
+  last 30 days (a dormant tag adds no program): ranked by those recent tickets, then by all their tickets, then by name; the setting's and
+  the flow programs always count.
+  **memor.id has no tickets in the portal and the portal keeps no commit history**, so its program is shown `unavailable` (`no_source`),
+  never 0.
+- **Scores** (0-100, every component with value, weight, applied weight, basis and source; an input the portal does not have is
+  `unavailable` with a reason and its weight is shared by the rest, the basis line says which). The pilot-health skill was not available to
+  this build, so the ticket's weights are the spec, and the basis text says so. **Efficiency**: worker utilisation 40 (live workers
+  working), leads active 25 (crews with open work whose lead or a worker is working; no live crew: unavailable), leads not exhausted 20 (a
+  live lead's Claude with no plan window at 100 %, from claudeusage; no quota reading: unavailable), no long idle 15 (live workers not idle
+  over 30 min). **Effectiveness**: closures 35 (done per hour over 6 h against the target), review flow 20 (the oldest ticket in review
+  against the target), not blocked 15, done vs won't-do 10 (24 h), no stall 10 (in progress with no change for `flow.stallHours`), flow
+  time 10 (the median created-to-done of 24 h against the target). The ticket's 40/25 for closures and review flow each gave 5 to flow
+  time. The crew headline (T-600) and cost (T-450) of the crews holding the program's tickets come from `buildHeadline` and `programScore`
+  (never a copy): total, lead, workers, lead share and dollars per done ticket.
+- **Snapshots** (migration 856, additive: `lab_metric_snapshots (at_ms, program, metrics JSON)` with indexes on `(program, at_ms)` and
+  `at_ms`, and `tickets_closed_at` so the window read is bounded). Every 10 minutes (an unref'd timer, stopped on shutdown) one row per
+  ticket program: both scores, done and won't-do of 24 h, open work, blocked, in review and each stage's median. **At most 32 programs
+  per snapshot** (`MAX_SNAPSHOT_PROGRAMS`: `all`, then the setting's, the tag and the flow programs in that order; a cut is logged), so
+  the table grows by at most 32 rows every 10 minutes whatever the setting and the tags hold. Kept 30 days (the lab's
+  daily retention). The trend reads them (at most 200 points: the last snapshot of each equal slice); `previous` on a score is the
+  snapshot nearest to one window ago.
+- **Findings** (`insights`, pure): the slowest stage, the biggest regression against the window before (+25 % over at least 3 tickets on
+  both sides), idle capacity, the blocked share (20 % and up), the review wait over the target, outliers (3x the median resolve), each with
+  its ticket ids; act first, then warn, then info. No data is said, never invented.
+- **Read** (`view` on the platform area `usage`, declared in `lab/authz.ts`; a denial and a program that is not there are the same 404; an
+  agent actor gets the 404 too, the Portal MCP slice decides its reach): `GET /api/lab/metrics/programs`, `/overview?program=&window=24h|7d`,
+  `/flow?program=&window=&groupBy=program|lead|type|priority`, `/trend?program=&metric=&window=24h|7d|30d`,
+  `/tickets?program=&window=&stage=&groupBy=&group=`, `/insights?program=&window=`. A bad parameter is a 422. **A failed read of the
+  closed tickets is unavailable (`no_source`), never 0**: `flow.total` is null with `unavailable`, `tickets.total` null with `unavailable`,
+  the overview's `flow` null with `flowUnavailable`, the effectiveness parts that read them `no_source`, the cost per done ticket
+  `no_source`, the findings say so, and the snapshot stores null for done, won't-do and the stage medians (a gap in the trend); the server
+  log gets the error's name only. `closed_at` is compared as `toISOString()` text: its writers, `close()` and `update()` to done or won't-do
+  in `tickets/service.ts`, store that form, and a reopen clears it (a test pins all three).
+- **Portal MCP (slice 3, `lab/metricsTools.ts`, read only, declared in `lab/authz.ts`).** `metrics_overview`, `metrics_flow_times`,
+  `metrics_trend`, `metrics_insights` and `metrics_tickets` (the drill-down, paged with `cursor`, 25 rows a page, at most 100) read
+  `Lab.metrics`, never a copy (table in [Portal MCP](portal-mcp.md)). Reach, decided here: the ticket names the leads and the operator as
+  readers, so the tools are `agent` scope with the reach in the handler: an agent's token only for a LEAD session (a top-level chat, no
+  parent session) whose recorded owner (`chat_sessions.owner_id`: a manager chat's owner, the founding user for any other chat today) may
+  view `usage`, and then only its own crew's tickets (the lineage root, as crew_scorecard), with no paces, no score a window ago and no
+  trend; a worker or an unknown session gets the same `NOT_FOUND`; an admin's or the manager's token only with `view` on `usage`.
+  Short by default, hours with two decimals, every figure the portal lacks `unavailable:<reason>`, never 0 (a failed closed-ticket read
+  makes the overview's `flow`, flow_times' `total` and metrics_tickets' `total` `unavailable:no_source`, no rows, no cursor); counts, durations, ticket ids
+  and program ids only (no ticket text, no session title); every result kept under the MCP size limit.
+- **Web view (slice 2b, `apps/web/src/features/lab/Metrics*.tsx`, `metricsModel.ts`, `metricsParts.tsx`).** Usage → Metrics: a program picker
+  (`all` first; a segmented control up to four, else a select) and a 24h / 7d picker. Cards: the two scores as gauges with the change since
+  the window before and the counts under them, scores over time (one line each, from the snapshots), closed per hour or day, the lead-time
+  spread, flow time per stage (median bar, p90 whisker; a tap lists the tickets behind it as links in a sheet), per lead, each Claude's
+  pace and the findings. Every chart has a Table toggle with the same numbers. A program with no source (memor.id) is one card with its
+  reason. A figure the portal lacks is "unavailable" with its reason, never 0: that includes `flow`, `flow.total` and `tickets.total` null
+  (the closed tickets could not be read), which each card says in words instead of an empty chart or "No ticket". A gap in the trend is a
+  dashed hairline over the plot and a break in the line, never a dot at 0. Each trend point scores the 24 hours before it (the snapshot's
+  window), so in the 7d view the tiles (7 days) and the end of the line differ; the card's InfoTip says so. The Glance widget `metrics`
+  (hidden by default) shows both scores, resolved and the median. Tests: `metricsModel.test.ts`, `metricsRender.test.ts`,
+  `components/charts.test.ts`, the Glance `model.test.ts`; `tools/qa/metrics-scorecard.mjs` drives it on a scratch portal at 390 and 1280 px,
+  light and dark.
+- **Not built.** The per-model cost and review pass rate, and the "escalated to Opus" count; a Home card for the Glance widget by default
+  (it is hidden until a person adds it); metrics for memor.id (the portal has no tickets or commit history for it).
+- Source: `lab/flowMetrics.ts` (pure), `lab/flowMetricsData.ts` (the loader), `lab/metricsSnapshots.ts`, `lab/metricsSettings.ts`,
+  `lab/metricsService.ts` (`Lab.metrics`), `lab/routes.ts`; tests `lab/flowMetrics.test.ts` (golden stages with the left-out cases and
+  won't-do, grouping with median and p90, the setting, both scores and their weights, findings) and `lab/metricsRoutes.test.ts` (the loader
+  on a seeded sqlite, migration 856, snapshot write, retention and trend, the routes: owner 200, another user and an agent 404, 422).

@@ -45,7 +45,7 @@ import { usageReport } from './usage.js';
 import { ChatStore, EVENT_TEXT_MAX, sessionCwd } from './store.js';
 import { conversationBudget, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS, TRANSFER_WRITE_SCRIPT, transferConversation, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
-import { APPLIED, controls, EMPTY_SCAN, fail, FakeExec, FakeWorkspaces, firstTurn, freshStore, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, vanish, type Control, type Live } from './testkit.js';
+import { APPLIED, controls, EMPTY_SCAN, fail, FakeExec, FakeWorkspaces, firstTurn, freshStore, init, line, liveSession, ok, QUICK_GONE, sleep, until, USAGE_API_KEY, vanish, type Control, type Live } from './testkit.js';
 
 
 /* ========================= protocol (pure) ========================= */
@@ -1202,7 +1202,7 @@ test('durability: start() reattaches a running process from its stored offset, a
   const ws = new FakeWorkspaces();
   ws.status.set('A', true);
   ws.status.set('B', false);
-  const controller = new ChatController(store, ws as unknown as Workspaces);
+  const controller = new ChatController(store, ws as unknown as Workspaces, QUICK_GONE);
   const got: [string, ChatServerMessage][] = [];
   controller.onEvent((id, m) => got.push([id, m]));
   try {

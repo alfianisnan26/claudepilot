@@ -1,36 +1,86 @@
 import { AppError } from '@isnanme/core';
-import type { PoolDetail, PoolSummary } from '@portal/contracts';
+import {
+  isProtectedPool,
+  PROTECTED_POOL_REASON,
+  SECRET_LIMITS,
+  secretExposeDefault,
+  unexposedEnvSecrets,
+  type PoolDetail,
+  type PoolSummary,
+  type SecretEntryInput,
+  type SecretEntryView,
+} from '@portal/contracts';
 import { z } from 'zod';
+import { actorOfPrincipal } from '../../authz/seam.js';
+import { declarePoolToolPolicies, secretWriteAccess } from '../../pools/authz.js';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, registerPortalTool, uiOnly, type PortalToolContext } from '../registry.js';
 import { assertCanChange, labelProse, resolveWorkspace, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
+/**
+ * Whether pools of a type may be written over MCP: `true` (create, update, delete), `false` (never), or `'write-only'` (T-2866, secrets):
+ * created with names only by `pool_create`, a value set by `pool_secret_set`, and no value ever read back.
+ */
+type McpWrites = boolean | 'write-only';
+
 /** What each pool type is for. A type this table doesn't know still lists, with a generic line. */
-const TYPE_INFO: Record<string, { description: string; holds_secrets: boolean; mcp_writes: boolean }> = {
-  secrets: { description: 'Environment variables and secret files delivered into workspaces. Secret values are entered in the portal and never pass through MCP.', holds_secrets: true, mcp_writes: false },
+const TYPE_INFO: Record<string, { description: string; holds_secrets: boolean; mcp_writes: McpWrites }> = {
+  secrets: {
+    description:
+      'Environment variables and secret files delivered into workspaces. Write-only over MCP: pool_create takes names only, pool_secret_set sets one value, and no value is ever returned.',
+    holds_secrets: true,
+    mcp_writes: 'write-only',
+  },
   skillset: { description: 'Reviewed Claude Code skills, delivered as a plugin. A set may use approved skill versions only.', holds_secrets: false, mcp_writes: true },
   mcpset: { description: 'Sets of reviewed MCP servers from the catalog, delivered as a plugin. A set may use approved catalog versions only; secrets are referenced by name.', holds_secrets: false, mcp_writes: true },
 };
 
-const info = (type: string) => TYPE_INFO[type] ?? { description: 'A pool type of this portal.', holds_secrets: false, mcp_writes: false };
+const info = (type: string): { description: string; holds_secrets: boolean; mcp_writes: McpWrites } =>
+  TYPE_INFO[type] ?? { description: 'A pool type of this portal.', holds_secrets: false, mcp_writes: false };
+
+/** T-2823: the warning for secrets with an environment-style name that are delivered as files only. */
+const exposeWarnings = (type: string, content: unknown): string[] => {
+  if (type !== 'secrets') return [];
+  const names = unexposedEnvSecrets(content);
+  return names.length ? [`Not exposed as variables, so commands can’t read them from the environment: ${names.join(', ')}. Set expose with pool_secret_set or in the portal.`] : [];
+};
+
+/** A secrets set's content as MCP shows it: names, options and fingerprints only (no hint: it holds the value's last characters). */
+const secretsContentShown = (content: unknown): unknown => {
+  const entries = (content as { entries?: unknown } | null)?.entries;
+  if (!Array.isArray(entries)) return content;
+  return {
+    ...(content as object),
+    entries: (entries as SecretEntryView[]).map((e) => {
+      if (e.kind !== 'secret' || !e.secret) return e;
+      const { hint: _hint, ...rest } = e.secret;
+      return { ...e, secret: rest };
+    }),
+  };
+};
 
 /** The portal service for pools, a tool author's view: one set of tools for every multi-assignment type (PRD §13.2). */
 export function registerPoolTools(deps: PortalToolDeps): void {
   const { store, workspaces, poolService } = deps;
+  declarePoolToolPolicies();
 
-  const brief = (p: PoolSummary) => ({
-    id: p.id,
-    type: p.type,
-    name: p.name,
-    description: labelProse(p.description, 'imported'),
-    revision: p.revision,
-    latest_revision: p.latestRevision,
-    status: p.status,
-    rollout_paused: p.rolloutPaused ? { at: p.rolloutPaused.at, reason: labelProse(p.rolloutPaused.reason, 'agent') } : null,
-    used_by_workspaces: p.workspaces,
-    updated_at: p.updatedAt,
-  });
+  const brief = (p: PoolSummary) => {
+    const warnings = exposeWarnings(p.type, p.content);
+    return {
+      id: p.id,
+      type: p.type,
+      name: p.name,
+      description: labelProse(p.description, 'imported'),
+      revision: p.revision,
+      latest_revision: p.latestRevision,
+      status: p.status,
+      rollout_paused: p.rolloutPaused ? { at: p.rolloutPaused.at, reason: labelProse(p.rolloutPaused.reason, 'agent') } : null,
+      used_by_workspaces: p.workspaces,
+      updated_at: p.updatedAt,
+      ...(warnings.length ? { warnings } : {}),
+    };
+  };
 
   const needPool = (id: string): { id: string; type: string; summary: PoolDetail } => {
     const byId = poolService.typeOf(id);
@@ -76,7 +126,7 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     name: 'pool_get',
     title: 'Get a pool',
     description:
-      'One pool: its current content (secret values are never included), the last revisions, and the workspaces that use it. Imported text in the content (descriptions, tool lists) is labelled untrusted.',
+      'One pool: its current content (for secrets: names, options and fingerprints only, never a value), the last revisions, and the workspaces that use it. Imported text in the content (descriptions, tool lists) is labelled untrusted.',
     scope: 'read',
     input: z.object({ id: z.string().max(100).describe('The pool id, or its exact name.') }),
     handler(_ctx, args) {
@@ -84,7 +134,7 @@ export function registerPoolTools(deps: PortalToolDeps): void {
       return {
         summary: `${p.name} (${p.type}) is at revision ${p.revision}, used by ${p.workspaces} workspaces.`,
         pool: brief(p),
-        content: labelProse(p.content, 'imported'),
+        content: labelProse(p.type === 'secrets' ? secretsContentShown(p.content) : p.content, 'imported'),
         revisions: p.revisions.slice(0, 10).map((r) => ({ revision: r.revision, status: r.status, note: labelProse(r.note, 'agent'), created_at: r.createdAt, current: r.current })),
         assigned_to: p.assignedTo.map((a) => ({ workspace_id: a.workspaceId, pinned_revision: a.pinnedRevision, revision: a.revision, delivered_revision: a.deliveredRevision })),
         ui: uiLink(`/admin/pools?tab=${p.type}`),
@@ -92,16 +142,46 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     },
   });
 
-  /** Pools of this type may be created and changed over MCP; secrets pools never (values must not pass through chat). */
+  /** Pools of this type may be created, changed and deleted over MCP with any content; secrets pools never (values must not be read back). */
   const writable = (type: string) => {
-    if (!info(type).mcp_writes) throw uiOnly(`${type} pools can’t be created or changed over MCP: their values would pass through this conversation.`, `Pools → ${type}`);
+    if (info(type).mcp_writes !== true)
+      throw uiOnly(
+        type === 'secrets'
+          ? 'secrets pools are write-only over MCP: create one with names only (pool_create), set a value with pool_secret_set; change or delete it in the portal.'
+          : `${type} pools can’t be created or changed over MCP: their values would pass through this conversation.`,
+        `Pools → ${type}`,
+      );
+  };
+
+  /**
+   * pool_create for secrets (T-2866): names only, as `{ names: [...] }` or `{ entries: [{ name, kind: 'secret', options? }] }`. A value,
+   * a variable, or anything else is refused: a value goes in with pool_secret_set alone.
+   */
+  const namesOnlySecrets = (content: Record<string, unknown>): { entries: SecretEntryInput[] } => {
+    const bad = () =>
+      new AppError('VALIDATION_FAILED', 'A secrets pool is created with names only: { "names": ["API_KEY"] } or { "entries": [{ "kind": "secret", "name": "API_KEY" }] }. Set each value with pool_secret_set.');
+    const keys = Object.keys(content);
+    if (keys.length !== 1 || (keys[0] !== 'names' && keys[0] !== 'entries')) throw bad();
+    const raw = content[keys[0]];
+    if (!Array.isArray(raw) || raw.length > SECRET_LIMITS.entries) throw bad();
+    return {
+      entries: raw.map((r) => {
+        if (typeof r === 'string') return { kind: 'secret', name: r, options: { expose: secretExposeDefault(r) } };
+        if (!r || typeof r !== 'object') throw bad();
+        const { kind, name, options, ...rest } = r as { kind?: unknown; name?: unknown; options?: unknown };
+        if (kind !== 'secret' || typeof name !== 'string' || Object.keys(rest).length > 0) throw bad();
+        if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) throw bad();
+        const o = (options ?? {}) as Record<string, unknown>;
+        return { kind: 'secret', name, options: { ...o, expose: typeof o.expose === 'boolean' ? o.expose : secretExposeDefault(name) } };
+      }),
+    };
   };
 
   registerPortalTool({
     name: 'pool_create',
     title: 'Create a pool',
     description:
-      'Creates a skillset or MCP set from content that references approved versions only. A set that needs review is saved as waiting_review and is not delivered until a person approves it in the portal. Secrets pools can’t be created here.',
+      'Creates a skillset or MCP set from content that references approved versions only. A set that needs review is saved as waiting_review and is not delivered until a person approves it in the portal. A secrets pool is created with names only ({ "names": [...] }); set each value with pool_secret_set.',
     scope: 'admin',
     input: z.object({
       type: z.string().max(20),
@@ -113,10 +193,92 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     handler(ctx, args) {
       assertCanChange(store, 'pool');
       if (!poolService.types().includes(args.type as never)) throw new AppError('NOT_FOUND', `No pool type “${args.type}”.`);
-      writable(args.type);
-      const p = poolService.create(args.type, { name: args.name, description: args.description, content: args.content, note: args.note ?? `via MCP (${ctx.actor})` });
+      const secrets = args.type === 'secrets';
+      if (secrets) {
+        if (isProtectedPool({ name: args.name, description: args.description })) throw new PortalToolError('PROTECTED', PROTECTED_POOL_REASON);
+      } else writable(args.type);
+      const content = secrets ? namesOnlySecrets(args.content) : args.content;
+      const p = poolService.create(args.type, { name: args.name, description: args.description, content, note: args.note ?? `via MCP (${ctx.actor})` });
       ctx.affected(`pool:${p.id}`);
-      return { summary: `Created ${p.name}: revision ${p.latestRevision} is ${p.status}.`, pool: brief(p), secrets_missing: [] };
+      const missing = secrets ? (content as { entries: SecretEntryInput[] }).entries.map((e) => e.name) : [];
+      return { summary: `Created ${p.name}: revision ${p.latestRevision} is ${p.status}.`, pool: brief(p), secrets_missing: missing };
+    },
+  });
+
+  /**
+   * The secrets pool `pool_secret_set` writes to, or the one not-found answer (T-2866). By id or exact name among secrets pools only; for
+   * an agent only among the pools its own workspace gets, BEFORE an ambiguous name is reported, so a call never learns of a pool elsewhere.
+   */
+  const secretsPoolFor = (ctx: PortalToolContext, ref: string): PoolDetail => {
+    const notFound = () => new AppError('NOT_FOUND', `No pool “${ref}”. List them with pool_list.`);
+    if (!poolService.types().includes('secrets')) throw notFound();
+    const actor = actorOfPrincipal(ctx.principal);
+    const reachable = poolService
+      .list('secrets')
+      .filter((p) => p.id === ref || p.name === ref)
+      .map((p) => poolService.get(p.id))
+      .filter((p) => secretWriteAccess(actor, { id: p.id, workspaces: p.assignedTo.map((a) => a.workspaceId) }) !== 'not_found');
+    const byId = reachable.filter((p) => p.id === ref);
+    const found = byId.length ? byId : reachable;
+    if (found.length === 0) throw notFound();
+    if (found.length > 1) throw new PortalToolError('AMBIGUOUS', `${found.length} secrets pools are named “${ref}”. Use the id.`, { matches: found.map((m) => ({ id: m.id, type: m.type })) });
+    const p = found[0]!;
+    if (secretWriteAccess(actor, { id: p.id, workspaces: p.assignedTo.map((a) => a.workspaceId) }) === 'shared')
+      throw new PortalToolError('SHARED_POOL', `${p.name} is used by other workspaces too: a value set here would change theirs. Change it in the portal.`);
+    return p;
+  };
+
+  registerPortalTool({
+    name: 'pool_secret_set',
+    title: 'Set a secret',
+    description:
+      'Sets one secret’s value in a secrets pool, as a new revision. Write-only: the value is never returned, logged or shown (pool_get gives the name and a fingerprint). expose (make it an environment variable too) defaults to true for names like API_KEY. An agent may set secrets only in a pool its own workspace alone uses; a protected pool (prd, or marked [protected]) is refused.',
+    scope: 'agent',
+    rate: { perMinute: 10, perHour: 60 },
+    maxArgsBytes: SECRET_LIMITS.secretBytes + 16 * 1024,
+    input: z.object({
+      pool: z.string().min(1).max(100).describe('The secrets pool id, or its exact name.'),
+      name: z.string().min(1).max(64).describe('The secret’s name, e.g. API_KEY. A new name adds an entry.'),
+      value: z.string().min(1).max(SECRET_LIMITS.secretBytes).describe('The value. Write-only: never returned or shown.'),
+      expose: z.boolean().optional().describe('Also an environment variable. Default: true for an environment-style name (API_KEY).'),
+      note: z.string().max(300).optional().describe('Why, for the revision history.'),
+    }),
+    handler(ctx, args) {
+      const p = secretsPoolFor(ctx, args.pool);
+      if (isProtectedPool(p))
+        throw new PortalToolError(
+          'PROTECTED',
+          `${PROTECTED_POOL_REASON}. Ask a person: approval_request with kind pool.secret_set and payload {pool: "${p.id}", name, expose (optional), baseRevision: ${p.latestRevision}}; never put the value in it (the person types it on Allow).`,
+        );
+      assertCanChange(store, 'pool');
+      const entries = ((p.content as { entries?: SecretEntryView[] } | null)?.entries ?? []).map((e): SecretEntryInput =>
+        e.kind === 'variable' ? { id: e.id, kind: 'variable', name: e.name, value: e.value, confirmed: e.confirmed } : { id: e.id, kind: 'secret', name: e.name, options: e.options ?? {} },
+      );
+      const at = entries.findIndex((e) => e.name === args.name);
+      if (at >= 0 && entries[at]!.kind !== 'secret') throw new PortalToolError('CONFLICT', `${args.name} is a plain variable in ${p.name}, not a secret. Change it in the portal.`);
+      // An existing secret keeps its expose unless the call names one; the name's default is for a new entry only (T-2866 review).
+      const found = at >= 0 ? entries[at]! : undefined;
+      const existing = found?.kind === 'secret' ? found.options : undefined;
+      // A stored secret's options omit a false expose, so an existing secret is exposed exactly when expose is true (as this tool reports it).
+      const expose = args.expose ?? (found ? existing?.expose === true : secretExposeDefault(args.name));
+      const target: SecretEntryInput = at >= 0 ? { ...entries[at]!, options: { ...entries[at]!.options, expose }, newValue: args.value } : { kind: 'secret', name: args.name, options: { expose }, newValue: args.value };
+      if (at >= 0) entries[at] = target;
+      else entries.push(target);
+      const updated = poolService.update(p.id, { content: { entries }, note: args.note ?? `${args.name} set via MCP (${ctx.actor})`, baseRevision: p.latestRevision });
+      ctx.affected(`pool:${p.id}`);
+      const entry = ((updated.content as { entries?: SecretEntryView[] } | null)?.entries ?? []).find((e) => e.name === args.name);
+      const warnings = exposeWarnings('secrets', updated.content);
+      return {
+        summary: `${args.name} set in ${updated.name}: revision ${updated.latestRevision} is ${updated.status}.`,
+        pool: { id: updated.id, name: updated.name },
+        name: args.name,
+        revision: updated.latestRevision,
+        status: updated.status,
+        expose: entry?.options?.expose === true,
+        fingerprint: entry?.secret?.fingerprint ?? null,
+        version: entry?.secret?.version ?? null,
+        ...(warnings.length ? { warnings } : {}),
+      };
     },
   });
 

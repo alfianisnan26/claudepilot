@@ -2,7 +2,7 @@
 // `parseLine` turns one line of `claude -p --output-format stream-json` into what the controller must
 // do; the builders turn an action into one JSON line to write into the session's stdin FIFO.
 
-import { REQUEST_FULL_MAX, type ChatEvent, type ChatToolInputValue, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
+import { maskWriteOnlyArgs, REQUEST_FULL_MAX, type ChatEvent, type ChatToolInputValue, type ChatInputState, type ChatModelOption, type ChatRequest, type ChatSessionState, type ChatTask } from '@portal/contracts';
 import { PEER_QUEUED_MESSAGE, TASK_STOPPED_LINE, textDigest } from './integrity.js';
 import { redact } from './redact.js';
 import { limitInfoOf, parseLimitMessage } from '../claudeusage/limitMessage.js';
@@ -114,6 +114,11 @@ export interface ParsedLine {
   inputs?: { uuid: string; state: ChatInputState }[];
   /** Sub-agent and background task changes. */
   tasks?: TaskPatch[];
+  /**
+   * T-3017: `background_tasks_changed` is Claude Code's whole set of background tasks still running (it is sent whenever that set
+   * changes, an empty one included): the ids in it. A background task not in it has ended, whether or not its own end line came.
+   */
+  taskSet?: string[];
   /** `Task`/`Agent` tool calls and their descriptions, to label sub-agent lines. */
   agents?: { toolUseId: string; description: string }[];
   /**
@@ -311,14 +316,16 @@ function parseSystem(obj: Record<string, unknown>): ParsedLine {
       return task ? { stored: [], tasks: [task] } : { stored: [] };
     }
     case 'background_tasks_changed': {
+      if (!Array.isArray(obj.tasks)) return { stored: [] }; // no set at all says nothing about what ended
       const tasks: TaskPatch[] = [];
-      for (const raw of Array.isArray(obj.tasks) ? obj.tasks : []) {
+      for (const raw of obj.tasks) {
         const t = asObj(raw);
         const taskId = asStr(t?.task_id);
         if (!t || !taskId) continue;
         tasks.push(taskFields(t, { taskId, background: true }));
       }
-      return tasks.length ? { stored: [], tasks } : { stored: [] };
+      // Only the main thread's set is the session's whole set.
+      return { stored: [], ...(tasks.length ? { tasks } : {}), ...(main ? { taskSet: tasks.map((t) => t.taskId) } : {}) };
     }
     default:
       return { stored: [] };
@@ -1014,6 +1021,8 @@ function inputAsJson(input: unknown): string | null {
  * The file tools' contents are not part of it (the Diff panel shows what changed).
  */
 export function requestFull(toolName: string | null, input: unknown): { text: string; cut: boolean } | null {
+  // T-2866: a write-only argument (a secret's value for pool_secret_set) is never shown, whatever its shape.
+  input = maskWriteOnlyArgs(toolName, input);
   const o = asObj(input);
   let text: string | null;
   switch (toolName) {
@@ -1145,7 +1154,8 @@ export function mapInputStrings<T extends ChatToolInputValue>(v: T, fn: (s: stri
  * left out. Null when there is nothing to keep.
  */
 export function toolInput(toolName: string | null, input: unknown): { input: { [key: string]: ChatToolInputValue }; cut: boolean } | null {
-  const o = asObj(input);
+  // T-2866: a write-only argument (a secret's value for pool_secret_set) never reaches the transcript, whatever its shape.
+  const o = asObj(maskWriteOnlyArgs(toolName, input));
   if (!o || !toolName) return null;
   const fields = INPUT_FIELDS[toolName] ?? (toolName.startsWith('mcp__') ? Object.keys(o) : null);
   if (!fields) return null;

@@ -105,7 +105,8 @@ export function attachChat(server: Server, controller: ChatController, authorize
           // A folded session's old id means the chat that took it in.
           const id = controller.resolve(msg.session);
           subscribed.add(id);
-          // Backlog first (stored events after the tab's last seq), then live updates flow via `off`.
+          // Backlog first (stored events after the tab's last seq), then live updates flow via `off`. T-2589: bounded by the store's
+          // HISTORY_MAX_EVENTS; a tab further behind gets the newest of them (a gap before the first), the older ones stay in the paged read.
           const items = controller.history(id, msg.afterSeq ?? 0);
           if (items.length) send({ type: 'events', session: id, items });
           const session = controller.get(id);

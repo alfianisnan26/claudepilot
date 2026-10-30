@@ -54,7 +54,7 @@ export function EditDialog({ destination, onClose }: { destination: NotifyDestin
           label={
             <span className="inline-flex items-center gap-1.5">
               Also shared with me
-              <InfoTip label="About also shared with me">Also hear of sessions other people shared with you. Off: only what you own.</InfoTip>
+              <InfoTip label="About also shared with me">Also hear of agents other people shared with you. Off: only what you own.</InfoTip>
             </span>
           }
           checked={shared}

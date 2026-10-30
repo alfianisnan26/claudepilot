@@ -71,5 +71,23 @@ export const CHAT_RECOVER_TOOL_POLICIES = {
   session_request_clear: { kind: 'agent', reach: 'workspace', audit: 'session.request_clear' },
 } satisfies ToolPolicies;
 
+/** What a session the caller may not view and one that does not exist both answer. */
+export const NO_SESSION = 'No such session.';
+
+/**
+ * T-968 S2a (general-manager PRD §9.1), read only. `approvals_list` keeps only the sessions the caller may view (the handler filters each
+ * row through can(); a `session_id` it names is checked here first). `crew_limits_get` needs `view` on the lead it names. Both refuse with
+ * the same NOT_FOUND as a missing session.
+ */
+export const CHAT_MANAGER_TOOL_POLICIES = {
+  approvals_list: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', optional: true, notFound: NO_SESSION }], filter: 'session' },
+  crew_limits_get: { kind: 'objects', checks: [{ type: 'session', verb: 'view', arg: 'session_id', notFound: NO_SESSION }] },
+  manager_message: { kind: 'objects', checks: [{ type: 'session', verb: 'operate', arg: 'session_id', notFound: NO_SESSION }] },
+} satisfies ToolPolicies;
+
+export function declareChatManagerPolicies(): void {
+  declareToolPolicies('chat', CHAT_MANAGER_TOOL_POLICIES);
+}
+
 /** The key the socket is declared under: the contract's path, so a test can pin them together. */
 export const CHAT_SOCKET_POLICY_KEY = `ALL ${CHAT_SOCKET_PATH}`;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -256,6 +256,45 @@ test('send rejects malformed input and a wrong byte count without appending to t
   assert.ok(!existsSync(join(sessions, 's1', 'in.d', 'b2.jsonl')), 'the rejected stage was removed');
 
   await run(['stop', 's1'], { env });
+});
+
+test('status says gone only on evidence, and a reading that fails says nothing (T-1650)', async () => {
+  const { sessions, env } = mkEnv();
+  const pidFile = (id: string, text: string) => {
+    mkdirSync(join(sessions, id), { recursive: true });
+    writeFileSync(join(sessions, id, 'parent.pid'), text);
+    return join(sessions, id, 'parent.pid');
+  };
+  // A helper that cannot run (a fork or exec refused under memory pressure): the live process still reads live, never gone.
+  const broken = mkdtempSync(join(tmpdir(), 'cp-broken-'));
+  dirs.push(broken);
+  for (const tool of ['cat', 'head', 'tr']) {
+    writeFileSync(join(broken, tool), '#!/bin/sh\nexit 126\n');
+    chmodSync(join(broken, tool), 0o755);
+  }
+  pidFile('live', `${process.pid}\n`);
+  const noHelpers = { ...env, PATH: `${broken}:${env.PATH ?? ''}` };
+  assert.deepEqual(await run(['status', 'live'], { env: noHelpers }), { code: 0, stdout: `live ${process.pid}\n`, stderr: '' });
+
+  // Evidence of gone: no session folder, an empty pid file, a pid no process has.
+  assert.equal((await run(['status', 'never'], { env })).stdout, 'gone\n');
+  pidFile('empty', '');
+  assert.equal((await run(['status', 'empty'], { env })).stdout, 'gone\n');
+  const child = spawn(process.execPath, ['-e', '']);
+  await new Promise((r) => child.on('close', r));
+  pidFile('dead', `${child.pid}\n`);
+  assert.equal((await run(['status', 'dead'], { env })).stdout, 'gone\n');
+
+  // No evidence: a pid file that is not a number, or one that cannot be read, answers nothing (exit 4).
+  pidFile('garbage', 'abc\n');
+  assert.deepEqual(await run(['status', 'garbage'], { env }), { code: 4, stdout: '', stderr: '' });
+  if (process.getuid?.() !== 0) {
+    chmodSync(pidFile('unreadable', `${process.pid}\n`), 0o000);
+    assert.deepEqual(await run(['status', 'unreadable'], { env }), { code: 4, stdout: '', stderr: '' });
+    // A process kill -0 may not signal (another user's) but /proc still shows is not gone either.
+    pidFile('other', '1\n');
+    if (existsSync('/proc/1') && statSync('/proc/1').uid !== process.getuid?.()) assert.deepEqual(await run(['status', 'other'], { env }), { code: 4, stdout: '', stderr: '' });
+  }
 });
 
 test('bad ids, unknown commands, a non-absolute cwd, and a missing session are rejected', async () => {

@@ -1,0 +1,165 @@
+// The flow watchdog's settings (T-1966, docs/prd/flow-watchdog.md), group "Flow". Owner only: the settings route needs `settings` `manage`
+// and no agent tool writes them, so a lead cannot change who it is told about nor turn the watchdog off for itself.
+
+import { FLOW_DEFAULT_PROGRAMS as DEFAULT_PROGRAMS, FLOW_SETTING_KEYS as K, TICKET_SETTING_KEYS } from '@portal/contracts';
+import { defineSetting, defineSettingGroup } from '../settings/registry.js';
+import { parseLeadPeerGroups, parsePrograms } from './programs.js';
+
+export interface FlowSettingsReader {
+  get(key: string): unknown;
+}
+
+defineSettingGroup('flow', 'Flow', 49);
+
+defineSetting({
+  key: K.enabled,
+  type: 'boolean',
+  default: true,
+  scope: 'global',
+  group: 'flow',
+  order: 10,
+  label: 'Flow watchdog',
+  help: 'On: every 5 minutes the portal looks at each program below and messages the lead that can move a stuck ticket: a QA PASS not merged, a PR in conflict or missing, a ticket in review nobody verifies, an idle lead with open work, a lead whose builders sit idle while its unit has work. It tells you only when nothing was done for hours after it nudged. It never answers an approval and never turns Bypass on. Off: nothing is looked at.',
+});
+
+defineSetting({
+  key: K.programs,
+  type: 'string',
+  default: DEFAULT_PROGRAMS,
+  max: 1000,
+  scope: 'global',
+  group: 'flow',
+  order: 20,
+  label: 'Programs',
+  validate: (v, get) => programsProblem(v, get(TICKET_SETTING_KEYS.leadPeerGroups)),
+  help: 'One program per ";": name|tag|group|merge gate|on. tag: the tickets it watches. group: which group of Peer leads (Tickets settings) runs it, 1 for the first; empty: the first group whose leads hold its tickets. merge gate: the lead id told about QA PASS tickets; empty: the first lead of the group. Add |off to stop one program.',
+});
+
+defineSetting({
+  key: K.paused,
+  type: 'string',
+  default: '',
+  max: 400,
+  scope: 'global',
+  group: 'flow',
+  order: 25,
+  label: 'Paused',
+  help: 'Programs on hold, by name, comma separated; * holds them all. A held program is still counted on the card, but no lead is told and you are not notified. Pausing Keep going for all chats (or for a program of the same name) holds it too. Empty: none held.',
+});
+
+const minutes = (key: string, order: number, label: string, def: number, help: string) =>
+  defineSetting({ key, type: 'number', default: def, min: 5, max: 1440, integer: true, scope: 'global', group: 'flow', order, label, help });
+
+minutes(K.mergeAfterMin, 30, 'Merge after', 20, 'Minutes a ticket may wait in review with a QA PASS on its head before the merge-gate lead is told. A PR recorded in conflict or missing is told to its unit lead at once.');
+minutes(K.qaAfterMin, 40, 'QA after', 60, 'Minutes a ticket may wait in review with no verdict and nobody working on it before a peer lead is asked to verify it.');
+minutes(K.idleAfterMin, 50, 'Idle lead', 30, 'Minutes a lead may be idle while its unit holds open work and it runs fewer workers than its cap before it is told its next tickets.');
+minutes(K.laneIdleMin, 55, 'Idle lane', 10, 'Minutes a builder worker of a lead (implementer, builder, lane-backend, lane-frontend, lane-fullstack) may sit idle while its unit has a conflict, a missing PR or open tickets before the lead is told which lanes are free and what to give them.');
+minutes(K.repeatMin, 60, 'Repeat', 30, 'Each lead hears about each condition at most once in this many minutes.');
+
+defineSetting({
+  key: K.stallHours,
+  type: 'number',
+  default: 3,
+  min: 1,
+  max: 48,
+  integer: true,
+  scope: 'global',
+  group: 'flow',
+  order: 70,
+  label: 'Stall window',
+  help: 'Hours without a ticket done, while tickets wait in review, that count as a stall.',
+});
+
+defineSetting({
+  key: K.notifyAfterHours,
+  type: 'number',
+  default: 3,
+  min: 1,
+  max: 48,
+  integer: true,
+  scope: 'global',
+  group: 'flow',
+  order: 80,
+  label: 'Tell me after',
+  help: 'Hours a stall must last after the first nudge before you get one notification (once per stall).',
+});
+
+export interface FlowThresholds {
+  mergeAfterMs: number;
+  qaAfterMs: number;
+  idleAfterMs: number;
+  laneIdleMs: number;
+  repeatMs: number;
+  stallMs: number;
+  notifyAfterMs: number;
+}
+
+const MIN = 60_000;
+
+function read(r: FlowSettingsReader | null, key: string, def: number, lo: number, hi: number): number {
+  try {
+    const v = r?.get(key);
+    return typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def;
+  } catch {
+    return def;
+  }
+}
+
+/** The thresholds in milliseconds; an unreadable or odd value reads as its default (clamped to the setting's range). */
+export function flowThresholds(r: FlowSettingsReader | null): FlowThresholds {
+  return {
+    mergeAfterMs: read(r, K.mergeAfterMin, 20, 5, 1440) * MIN,
+    qaAfterMs: read(r, K.qaAfterMin, 60, 5, 1440) * MIN,
+    idleAfterMs: read(r, K.idleAfterMin, 30, 5, 1440) * MIN,
+    laneIdleMs: read(r, K.laneIdleMin, 10, 5, 1440) * MIN,
+    repeatMs: read(r, K.repeatMin, 30, 5, 1440) * MIN,
+    stallMs: read(r, K.stallHours, 3, 1, 48) * 60 * MIN,
+    notifyAfterMs: read(r, K.notifyAfterHours, 3, 1, 48) * 60 * MIN,
+  };
+}
+
+/** The kill switch (an unreadable store reads as on, the default). */
+export function flowOn(r: FlowSettingsReader | null): boolean {
+  try {
+    const v = r?.get(K.enabled);
+    return typeof v === 'boolean' ? v : true;
+  } catch {
+    return true;
+  }
+}
+
+/** The programs the Flow pause holds; `*` stands for all. */
+export function flowPaused(r: FlowSettingsReader | null): Set<string> {
+  try {
+    const v = r?.get(K.paused);
+    return new Set(typeof v === 'string' ? v.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function flowProgramsRaw(r: FlowSettingsReader | null): string {
+  try {
+    const v = r?.get(K.programs);
+    return typeof v === 'string' ? v : DEFAULT_PROGRAMS;
+  } catch {
+    return DEFAULT_PROGRAMS;
+  }
+}
+
+/**
+ * Why `flow.programs` is refused on save, or null: every program must read (none is dropped silently), and a merge gate must be a lead of
+ * the program's group (the numbered one, or, with the group left empty, any group of `tickets.leadPeerGroups`).
+ */
+export function programsProblem(raw: string, groupsRaw: unknown): string | null {
+  const parts = raw.split(';').map((x) => x.trim()).filter(Boolean);
+  const programs = parsePrograms(raw);
+  if (programs.length !== parts.length) return 'Each program is name|tag|group|merge gate|on (lowercase name and tag, group a number, gate a session id).';
+  const groups = parseLeadPeerGroups(groupsRaw);
+  for (const p of programs) {
+    if (!p.mergeGate) continue;
+    const pool = p.group !== null ? (groups[p.group - 1] ?? []) : groups.flat();
+    if (!pool.includes(p.mergeGate)) return `The merge gate of ${p.name} is not a lead of its group (Tickets, Peer leads).`;
+  }
+  return null;
+}

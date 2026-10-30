@@ -3,7 +3,7 @@
 // path whose content changed, came or went, attributed to the owner that may write it) and the plugin version folders. Nothing secret: owner
 // names only, never a path, a value or a pool's name.
 
-import { mayWrite, OWNERSHIP } from './ownership.js';
+import { APPROVAL_PASSES_PATH, mayWrite, OWNERSHIP } from './ownership.js';
 import { MANIFEST_PATH, type Manifest, type ManifestPlugin, type Owner } from './types.js';
 
 const OWNERS = Object.keys(OWNERSHIP) as Owner[];
@@ -32,7 +32,8 @@ export function changedAreas(before: Manifest | null | undefined, after: Manifes
   const newFiles = after.files;
   let unexplained = false;
   for (const path of new Set([...Object.keys(oldFiles), ...Object.keys(newFiles)])) {
-    if (path === MANIFEST_PATH || oldFiles[path] === newFiles[path]) continue;
+    // T-2889: the passes file is read per call by job-run and the guard; a new pass must not offer (or force) a restart of every session.
+    if (path === MANIFEST_PATH || path === APPROVAL_PASSES_PATH || oldFiles[path] === newFiles[path]) continue;
     const owner = ownerOf(path);
     if (owner) found.add(owner);
     else unexplained = true;

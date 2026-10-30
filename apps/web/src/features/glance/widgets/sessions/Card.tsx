@@ -21,7 +21,7 @@ export function SessionsCard() {
   const now = useNow();
   if (!data) return failed ? <GlanceFailed reload={reload} denied={denied} /> : <GlanceSkeleton />;
   const s = data.sessions;
-  if (!s.ok) return <GlanceFailed reload={reload} message="Could not read sessions." />;
+  if (!s.ok) return <GlanceFailed reload={reload} message="Could not read agents." />;
   return (
     <>
       {stale && <StaleNote reload={reload} />}
@@ -38,10 +38,10 @@ export function SessionsCard() {
             </Link>
           }
         >
-          No sessions.
+          No agents.
         </GlanceLine>
       ) : (
-        <CardList label="Latest sessions">
+        <CardList label="Latest agents">
           {s.recent.map((x) => {
             const state = `${SESSION_WORD[x.state]}${x.agents ? ` · ${plural(x.agents, 'agent')}` : ''}`;
             const where = [x.claudeName, workspaceLabel(x.workspaceId), x.branch].filter(Boolean).join(' · ');
@@ -70,7 +70,7 @@ export function SessionsCard() {
           })}
         </CardList>
       )}
-      <CardFoot to="/admin/sessions">All sessions</CardFoot>
+      <CardFoot to="/admin/sessions">All agents</CardFoot>
     </>
   );
 }

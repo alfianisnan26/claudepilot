@@ -76,7 +76,7 @@ export function rowActions(row: ListRow, on: RowActions): MenuItem[] {
     s.archivedAt
       ? { label: 'Unarchive', icon: <ArchiveRestore className="size-4" />, onSelect: () => on.unarchive(s) }
       : { label: 'Archive', icon: <Archive className="size-4" />, onSelect: () => on.archive(s) },
-    ...(s.state === 'ended' ? [] : [{ label: 'End session', icon: <CircleStop className="size-4" />, onSelect: () => on.end(s), danger: true }]),
+    ...(s.state === 'ended' ? [] : [{ label: 'End agent', icon: <CircleStop className="size-4" />, onSelect: () => on.end(s), danger: true }]),
     { label: 'Select', icon: <Check className="size-4" />, onSelect: () => on.select(s) },
     { label: 'Delete…', icon: <Trash2 className="size-4" />, onSelect: () => on.remove(s), danger: true },
   ];
@@ -156,8 +156,8 @@ const BYPASS_DOT = (
  * The icon is the state's ring (amber needs you, accent working, a line otherwise) around the session's kind (a role, asleep, removed, a
  * chat), or the persona's avatar when the rows on screen have more than one persona; Bypass is a red shield dot on its corner (a tip says
  * it; the word too from 640 px). Line one: the title, the pin, the role (an icon on a phone, hidden when the title already starts with it),
- * the crew count, the time. Line two (muted, one line, rowMeta.LINE_TWO_ORDER): the state, the quota bar and percent, the cost, the model
- * (its id and effort in the tip), the workspace only when the card's rows span several, the Claude's name, the branch and ticket; what does
+ * the crew count, the time. Line two (muted, one line, rowMeta.LINE_TWO_ORDER): the state, the ticket key, the quota bar and percent, the cost,
+ * the model (its id and effort in the tip), the workspace only when the card's rows span several, the Claude's name, the branch; what does
  * not fit is dropped whole, never cut mid-value. Line three: only what it waits on
  * (amber). The folder lives on the session page. Selecting turns the row into a checkbox. Grouped by
  * Claude, a chat that moved is also listed, lighter, under the Claudes it ran on earlier: the same chat. A removed workspace is stated
@@ -446,7 +446,7 @@ export function SessionRow({
                 </span>
               ) : (
                 <InfoTip label="Bypass" icon={BYPASS_DOT}>
-                  Bypass: this session runs every tool without asking you first.
+                  Bypass: this agent runs every tool without asking you first.
                 </InfoTip>
               )}
             </span>
@@ -529,7 +529,7 @@ export function SessionRow({
           <button
             type="button"
             aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} the ${row.children.length} ${row.children.length === 1 ? 'session' : 'sessions'} ${title} started`}
+            aria-label={`${open ? 'Hide' : 'Show'} the ${row.children.length} ${row.children.length === 1 ? 'agent' : 'agents'} ${title} started`}
             onClick={() => onCollapse(s.id)}
             className="press -my-1 flex size-11 shrink-0 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink sm:my-0 sm:size-9"
           >

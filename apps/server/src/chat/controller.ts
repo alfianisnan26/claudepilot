@@ -44,6 +44,7 @@ import {
   isPortalActor,
   REAUTH_REQUIRED,
   requestReview,
+  workerMode,
   WORKTREE_DIRTY,
   type ChatConfigChange,
   type ChatControl,
@@ -56,6 +57,7 @@ import {
   type ChatKeepGoing,
   type ChatLimitsResult,
   type ChatModelOption,
+  type ChatPermissionMode,
   type ChatRequest,
   type ChatServerMessage,
   type ChatSegment,
@@ -124,7 +126,7 @@ import {
   MessageRate,
   pickSpawnClaude,
   spawnProblem,
-  SUBAGENT_TOOLS,
+  launchDisallowedTools,
   WORKER_REPORTS,
   workerLimits,
   type AgentCaps,
@@ -146,7 +148,11 @@ import {
   ChatStore,
   claudeSessionOf,
   EVENT_TEXT_MAX,
+  HISTORY_MAX_EVENTS,
   sessionCwd,
+  TRANSFER_KINDS,
+  TRANSFER_TAIL_CHARS,
+  TRANSFER_TAIL_EVENTS,
   type ChatSessionPatch,
   type ChatSessionRow,
   type InputState,
@@ -192,7 +198,7 @@ import {
   type PeerCause,
   type TaskStop,
 } from './integrity.js';
-import { crewReplyUrgent, crewWindowMs } from './crewReport.js';
+import { crewReplyUrgent, crewWakeMs, crewWindowMs, wakeMinutes } from './crewReport.js';
 import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type RecoverBy } from './recover.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
@@ -249,6 +255,18 @@ const MODEL_NOTE_MS = 60_000;
 /** How long a dropped `tail` waits before re-following, and how many immediate failures end the reader. */
 const RETAIL_MS = 1_000;
 const MAX_IMMEDIATE_RETRIES = 5;
+/**
+ * T-1711: the longest wait between re-follows of a process the host says is running. Its follower may keep dropping (an exec path that
+ * closes streams): a few drops with `live` readings no longer mark it gone, the reader backs off to this instead.
+ */
+const RETAIL_LIVE_MAX_MS = 30_000;
+/**
+ * T-1711 review: the ceiling on that. `live` only means the pid answers `kill -0` (an unreaped parent or a reused pid does too), so drops
+ * that keep coming with no line read, this many in a row or for this long, end in the unconfirmed "Lost touch" after all (process kept,
+ * a lead's Bypass paused for its resume), with a note.
+ */
+const LIVE_DROPS_MAX = 20;
+const LIVE_DROPS_MS = 10 * 60_000;
 /** A `tail` that ran at least this long counts as healthy (it hit its 600 s limit), so retries reset. */
 const HEALTHY_TAIL_MS = 5_000;
 /** `cp-session tail`'s exit when the cursor is past the segment's end (it prints the size; T-265): the cursor heals to the size. */
@@ -265,6 +283,16 @@ const SLOT_WAIT_MS = 15 * 60_000;
 const SLOT_POLL_MS = 1000;
 /** How often live sessions' processes are checked. */
 const LIVENESS_MS = 60_000;
+/**
+ * T-1650: a `gone` reading is taken again this long later before a process is marked gone. On 2026-10-19 one round read every one of 13
+ * live processes of a workspace as gone and Interrupted them all (their processes ran on): one reading is not evidence.
+ */
+const GONE_CONFIRM_MS = 10_000;
+/**
+ * T-1650: when every live session of a workspace reads gone at once, the workspace (its host, its exec path) is suspect, not the processes:
+ * nothing is marked until that has lasted this long (a real end of them all, a pod restart say, still is, a few rounds later).
+ */
+const WORKSPACE_GONE_MS = 3 * 60_000;
 /** How long a workspace's secret values are kept in memory before they are read again. */
 const VALUES_CACHE_MS = 10_000;
 /** A worktree made for a start that never came through (waiting on folder trust) is swept after this long, if nothing is in it. */
@@ -285,7 +313,25 @@ export const HANDOFF_REQUEST = [
   'No secrets or credentials. At most 900 words.',
 ].join('\n\n');
 
-/** Modes a chat session may switch to; Bypass is never one of them, and Auto only for a person's own session ({@link autoModeAllowed}). */
+/** PILOT-996: tool cards a Bypass kept or re-entered never allows by itself: the model's question to a person, and leaving plan mode. */
+const BYPASS_KEEP_ASKS: ReadonlySet<string> = new Set(['AskUserQuestion', 'ExitPlanMode']);
+/**
+ * PILOT-997: the `bypass.left` reasons that are a LOSS (nobody chose it): only these may Keep going undo within 24 hours. Not here, so
+ * never undone: `mode` (a person's or a token's own switch), `policy`, the gate refusals (`not_capable`, `not_lead`, `not_confirmed`,
+ * `parent_not_bypass`), `downgrade`, `ended`, and Keep going's own failed try.
+ */
+const BYPASS_LOST: ReadonlySet<string> = new Set(['sleep', 'stopped', 'lost_touch', 'restart', 'restart_unfinished', 'move_failed', 'restart_failed', 'wake_failed', 'lost_failed', 'recover_failed']);
+/** PILOT-996: why Auto was refused, and what to do about it (it replaced "Auto is only for sessions a person started here…"). */
+export const AUTO_REFUSED = {
+  parent:
+    'Auto is off for this worker: a worker is never wider than its parent, its parent is not in Auto or Bypass, and “Auto for agents” is off in Settings › Sessions. Put the parent in Auto, or turn that setting on.',
+  origin:
+    'Auto is off for this session: no person started it here and “Auto for agents” is off in Settings › Sessions. Turn that setting on, or start the session yourself.',
+} as const;
+/** PILOT-996: Keep going re-enters Bypass for a lead seen in it this recently (the pilot-health rule). */
+export const KEEPGOING_BYPASS_WINDOW_MS = 24 * 60 * 60_000;
+
+/** Modes a chat session may switch to; Bypass is never one of them, and Auto only where {@link autoModeAllowed} says so. */
 const MODES = new Set<string>(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']);
 /** The UI's names for the modes, used in the transcript's system rows. */
 const MODE_LABELS: Record<string, string> = {
@@ -323,8 +369,12 @@ interface Reader {
   ready: boolean;
   /** True once the reader is deliberately stopped (end, integrity, sleep, a new process); never reused. */
   stopped: boolean;
-  /** Consecutive immediate `tail` exits; reset when a follow makes progress or runs its full term. */
+  /** Consecutive immediate `tail` exits the host could not account for; reset when a follow makes progress, runs its full term, or the host says the process runs. */
   retries: number;
+  /** T-1711: consecutive immediate `tail` exits while the host said the process runs: they slow the re-follow down (back-off), up to a ceiling. */
+  liveDrops?: number;
+  /** T-1711 review: when the first of those drops came (cleared with them). */
+  liveSince?: number;
   tailStart: number;
   timer?: NodeJS.Timeout;
   /** Waiting for its target's tunnel to come back (targets-connect PRD §12.5): no retries counted, nothing marked gone. */
@@ -377,6 +427,8 @@ interface Restore {
   effort: string | null;
   ultracode: boolean;
   mode: string;
+  /** PILOT-996: the first launch of a session no person started, put in Auto (audited `mode.auto`, how `start`). */
+  start?: true;
   /**
    * A move (T-109): the model is applied and VERIFIED, falling down the catalogue's chain when the destination refuses it or runs another
    * one; `from` is the model the chat had before the move.
@@ -413,6 +465,12 @@ export interface ChatCreateOptions {
    * test or another session is never bypass-capable.
    */
   bypassOptIn?: boolean;
+  /**
+   * PILOT-996 (D-103): a worker of a parent that is in Bypass now (only with `parentId`): it is made bypass-capable so it can keep its
+   * parent's mode through `inheritBypass` (the policy must allow it; the parent must be capable and in Bypass at this insert). Anything
+   * else ignores it: never a person's opt-in, never wider than the parent.
+   */
+  inheritBypass?: boolean;
   /** T-294: how a worker's Claude and settings were chosen, for the `agent.spawned` audit row. */
   spawn?: {
     claude: string;
@@ -434,6 +492,26 @@ export interface ChatCreateOptions {
    * the worker is being made gets no worker. Refused, it is a NOT_FOUND with exactly this message (the caller's one answer for a parent).
    */
   liveParent?: string;
+  /**
+   * T-968: the person's General Manager. Set ONLY by the manager service (manager/service.ts); no route or MCP tool passes it. Its row is
+   * `kind = 'manager'` with its owner, it is never bypass-capable, and its launch has the pilot MCP alone (manager token) and no built-in tools.
+   */
+  manager?: { ownerId: string };
+}
+
+/**
+ * T-968 (review 2026-10-18, blocker 1): the General Manager's own runtime. Only a manager session may start there, so no other session's
+ * process shares the place where its pilot token lives (a process environment is readable by the same user).
+ */
+export const MANAGER_RUNTIME_ID = 'kubernetes/general-manager';
+
+/** T-968: what grants a General Manager's process its portal tools (the person's manager token); index.ts wires it to Portal MCP. */
+export interface ChatManagerAccess {
+  mint(req: { workspaceId: string; sessionId: string; ownerId: string }): Promise<ChatAgentGrant | null>;
+  /** As ChatAgentAccess.settle, for the manager's token. */
+  settle?(sessionId: string, tokenId: string, started: boolean): void;
+  /** The persona it starts with (its brief), appended to Claude Code's system prompt. */
+  brief(): string;
 }
 
 export interface ChatSendOptions {
@@ -454,6 +532,12 @@ export interface ChatSendOptions {
 type SlotFull = { scope: 'workspace' | 'total'; limit: number; running: number };
 /** T-417: one start or wake waiting for a slot, and the cap it last found full. */
 type SlotTurn = { workspaceId: string; full: SlotFull };
+/** T-1613: one verdict recorded on a ticket a lead holds: the verdict's row id (what the wake has told is kept by it), the ticket, role and verdict. */
+export type CrewVerdict = { id: number; ticket: string; role: string; verdict: string };
+/** T-1616: a ticket a lead holds that is in review and whose latest verdict is a pass: the ticket and that verdict's role. */
+export type CrewReady = { ticket: string; role: string };
+/** T-1616: at most this many tickets are listed as ready to close or merge in one wake. */
+const WAKE_READY_LINES = 15;
 
 /**
  * What a session's Claude Code process gets for portal tools (I8): the environment that holds its per-session token,
@@ -478,8 +562,15 @@ export interface ChatControllerOptions {
   idleSleepMs?: number;
   /** How often `start()`ed durability work checks live sessions' processes. */
   livenessMs?: number;
+  /** T-1711 review: how many follower drops in a row, read live, with no line read, and for how long, before the portal says it lost touch. */
+  liveDropsMax?: number;
+  liveDropsMs?: number;
   /** How long one short `cp-session` command may run before it counts as failed. */
   execTimeoutMs?: number;
+  /** T-1650: how long after a first `gone` reading the second is taken; only two in a row mark a process gone. */
+  goneConfirmMs?: number;
+  /** T-1650: how long every live session of a workspace must keep reading gone before they are all marked gone. */
+  workspaceGoneMs?: number;
   /** How long a workspace's secret values are kept in memory before they are read again. */
   valuesCacheMs?: number;
   /** The clock the integrity checks' time windows read (a fake one in tests); `Date.now` otherwise. */
@@ -516,6 +607,10 @@ function oneLineLabel(raw: string | undefined): string | undefined {
 
 /** T-294: the actor of the portal's reports to a lead about its workers (Crew over MCP). */
 export const CREW_REPORT_ACTOR = 'portal:crew';
+/** T-1966: the audit kinds of a person's Stop hold (`crewhold.set`, `crewhold.lifted`). */
+const HOLD_KIND = 'crewhold';
+/** A person at the keyboard (`ui`, the default) or signed in with a shared account (`account:<id>`). */
+const isPersonActor = (actor: string | undefined): boolean => actor === undefined || actor === CHAT_ACTOR_UI || actor.startsWith('account:');
 /** T-546: a report quotes at most this much of the first line of the worker's latest reply (its verdict or DONE, and the sha). */
 const CREW_REPLY_HEAD = 120;
 /** T-294: a report the lead could not take is tried this often, backing off; then again at the next change of a worker or of the lead. */
@@ -523,7 +618,7 @@ const CREW_TRIES = 3;
 /** T-294: a worker's state as its lead hears of it (see `#crewState`). */
 type CrewState = 'idle' | 'waiting' | 'ended' | 'stopped' | 'working' | 'other';
 
-// T-548: crewQuote's patterns moved to crewQuote.ts (they leave out‹ ›: they close no “ ” quote, and a menu path (Settings › Sessions) stays readable
+// T-548: crewQuote's patterns moved to crewQuote.ts (they leave out‹ ›: they close no “ ” quote, and a menu path (Settings › Running agents) stays readable
 // T-548: crewQuote moved to ./crewQuote.ts so handoff.ts can use it; re-exported for its callers.
 export { crewQuote };
 
@@ -575,7 +670,9 @@ function portalFrameBase(actor: string, label: string | undefined, text: string,
           ? 'the portal'
           : kind === 'account'
             ? 'a person this session was shared with (not its owner)'
-            : 'an MCP client';
+            : kind === 'manager'
+              ? 'the person’s General Manager (it speaks for the person; it manages, it does not do your work)'
+              : 'an MCP client';
   const named = label ? ` “${label}”` : '';
   // T-294: a report on a worker is the portal's own (nobody asked for it); what it quotes is the worker's text.
   if (actor === CREW_REPORT_ACTOR)
@@ -649,6 +746,12 @@ export class ChatController {
   readonly #slotWaits = new Map<string, string>();
   /** T-417: the sessions whose Bypass is being put back after a wake (a retry inside it wakes it again: never twice). */
   readonly #wakeBypass = new Set<string>();
+  /**
+   * T-1692: a fail-closed switch out of Bypass in flight (`#leaveBypass` after `#bypassUnfinished`), by session. The gated re-entry
+   * (`#keepBypass`) waits for it: each request goes out on its own exec, so a slow "out" line could reach Claude Code after the "back in"
+   * one and leave the process in the start mode under a "Bypass kept" note (the Lab and Business leads, 2026-10-19, through the k3s API outage).
+   */
+  readonly #leaving = new Map<string, Promise<void>>();
   /** Per session: the running cost its process last reported, so each `result` can say what its turn cost. */
   readonly #costBase = new Map<string, number>();
   /** T-343: per session, the running turn's calls for the cost estimate until its result (turnCost.ts), and the estimate last shown. */
@@ -724,6 +827,8 @@ export class ChatController {
   >();
   /** T-294: leads a person stopped (Stop): their news waits until a message from someone else lets them run again. */
   readonly #crewHeld = new Set<string>();
+  /** T-1613: per lead, its last crew wake: when, the idle workers it named and the newest verdict it told (in memory: a restart may wake once more). */
+  readonly #crewWoke = new Map<string, { at: number; idle: string; verdict: number; ready: string }>();
   /** T-548: auto hand-off (an implementer's `DONE <sha>` starts QA); off for every lead until its `autoHandoff` is set. */
   readonly #handoff = new HandoffEngine({
     get: (id) => {
@@ -766,6 +871,9 @@ export class ChatController {
       const other = this.#chat.listClaudes(lead.workspaceId).find((c) => c.id !== a.authorClaudeId && !c.removedAt);
       if (other) on = { claudeId: other.id, name: other.name, why: 'named' };
     }
+    // PILOT-996 (D-103): the QA worker takes its lead's mode (before: always dontAsk); Bypass only through the gated inherit path. T-2997:
+    // the same rule as session_spawn's unasked mode (Bypass only from a lead in it now, else Auto while "Auto for agents" is on).
+    const mode = workerMode(undefined, lead.mode, { parentInBypass: this.bypassNow(a.leadId), autonomousAuto: this.#autonomousAutoOn() });
     const child = await this.create(
       {
         workspaceId: lead.workspaceId,
@@ -778,7 +886,8 @@ export class ChatController {
       {
         actor: `session:${a.leadId}`,
         parentId: a.leadId,
-        spawn: { claude: on.claudeId, why: on.why, role: HANDOFF_QA, model: 'sonnet', mode: 'dontAsk' },
+        spawn: { claude: on.claudeId, why: on.why, role: HANDOFF_QA, model: 'sonnet', mode },
+        ...(mode === 'bypassPermissions' ? { inheritBypass: true } : {}),
       },
     );
     if (child.slotWait) {
@@ -786,7 +895,8 @@ export class ChatController {
       await this.end(child.id).catch(() => undefined);
       throw new Error(`no free slot to start it (${child.slotWait})`);
     }
-    await this.control(child.id, 'mode', { mode: 'dontAsk' }, { actor: HANDOFF_ACTOR });
+    if (mode !== 'bypassPermissions' || !(await this.inheritBypass(child.id)))
+      await this.control(child.id, 'mode', { mode: mode === 'bypassPermissions' ? this.bypassNotKeptMode(child.id) : mode }, { actor: HANDOFF_ACTOR });
     await this.control(child.id, 'model', { model: 'sonnet' }, { actor: HANDOFF_ACTOR });
     const prompt =
       `[Your role: ${HANDOFF_QA}.] Verify ${a.ticket} at commit ${a.sha} (the implementer's branch ticket/${a.ticket}-*, fetched from origin). ` +
@@ -799,6 +909,14 @@ export class ChatController {
   readonly #bornAt = Date.now();
   readonly #idleMs: number;
   readonly #livenessMs: number;
+  readonly #goneConfirmMs: number;
+  readonly #liveDropsMax: number;
+  readonly #liveDropsMs: number;
+  readonly #workspaceGoneMs: number;
+  /** T-1650: since when every live session of a workspace has read gone (a suspected workspace fault), by workspace. */
+  readonly #workspaceGone = new Map<string, { since: number; last: number }>();
+  /** T-1650: one in-flight probe of a workspace's live sessions, shared by the gone checks that ask at the same time. */
+  readonly #workspaceProbe = new Map<string, Promise<Set<string>>>();
   #liveness?: NodeJS.Timeout;
   #started = false;
   #closed = false;
@@ -880,6 +998,11 @@ export class ChatController {
   mcpServersSeen?: (workspaceId: string, directory: string, servers: { name: string; status: string }[]) => string[];
   /** Installed by the owner: whether the policy allows Bypass in chat (the interim switch `sessions.allowBypass`). Unset: no. */
   bypassAllowed?: () => boolean;
+  /**
+   * Installed by the owner (PILOT-996, D-103): whether sessions no person started may run in Auto and start in it (`sessions.autonomousAuto`,
+   * on by default). Unset or unreadable: no.
+   */
+  autonomousAuto?: () => boolean;
   /** Installed by the owner (T-561): whether a crew lead launches with the lead rules (`sessions.leadRules`). Unset or unreadable: no. */
   leadRulesOn?: () => boolean;
   /**
@@ -920,6 +1043,8 @@ export class ChatController {
    * token the new one replaced: its portal tools work again from its next launch.
    */
   agentAccess?: ChatAgentAccess;
+  /** T-968: the General Manager's token and brief (index.ts); without it a manager session starts with no portal tools. */
+  managerAccess?: ChatManagerAccess;
   /** Installed by the owner: more environment, nothing secret, for every Claude Code process of a workspace (account MCP off). */
   launchEnv?: (workspaceId: string) => Record<string, string | undefined>;
   /**
@@ -969,6 +1094,13 @@ export class ChatController {
    */
   ticketExists?: (ticketId: string) => boolean;
   /**
+   * T-1098: installed by the tickets module: the stable id (`T-12`) of a ticket named either way (`T-12` or its bucket key `KONF-3`), null when
+   * there is none. A session stores the stable id, so the ticket's session list, usage attribution and the lab find it. Wins over `ticketExists`.
+   */
+  ticketResolve?: (ticketId: string) => string | null;
+  /** T-1098: installed by the tickets module: the bucket key (`KONF-12`) a session's ticket shows as, null when the ticket is gone. */
+  ticketKeyOf?: (ticketId: string) => string | null;
+  /**
    * Installed by the tickets module (T-270): a continuation was created; assign every unfinished ticket held by `from` (ended sessions, the
    * predecessor first) to `to`. Called INSIDE the transaction that inserts the new row, so the link and the move commit together. Returns the
    * ticket ids moved.
@@ -995,12 +1127,23 @@ export class ChatController {
   noteWaitMs = NOTE_WAIT_MS;
   ackWaitMs = ACK_WAIT_MS;
   turnWaitMs = TURN_WAIT_MS;
+  /** T-2589: what a Move reads of the transcript at most (the newest rows of the kinds a transfer uses, and their characters); tests set less. */
+  moveTail = { events: TRANSFER_TAIL_EVENTS, chars: TRANSFER_TAIL_CHARS };
   /** T-294: at most one report line to a lead in this long (it lists every worker with news; the latest state wins), and how long a report waits after the change. */
   crewReportMs = 300_000;
   /** T-546: reads the digest window (`chat.crew.reportMin`); unset, `crewReportMs`. */
   crewSettings?: (key: string) => unknown;
   /** T-546: the ticket and the id of the latest ticket comment a worker wrote, when the portal knows them (the tickets module installs it). */
   crewTicketOf?: (sessionId: string) => { ticket: string; comment: number } | null;
+  /**
+   * T-1613: the verdicts recorded at or after `sinceMs` on the open tickets `sessionId` holds, oldest first (the tickets module installs it).
+   * Unset, the crew wake goes on idle workers alone.
+   */
+  crewVerdictsOf?: (sessionId: string, sinceMs: number) => CrewVerdict[];
+  /** T-1616: the tickets `sessionId` holds that are in review with a pass as their latest verdict (the tickets module installs it). */
+  crewReadyOf?: (sessionId: string) => CrewReady[];
+  /** T-1613: the crew wake's clock; tests move it on instead of waiting on the wall clock. */
+  crewWakeClock: () => number = () => Date.now();
   crewSettleMs = 1_000;
   /** T-294: the crew reports' clock and timers (`set` returns its cancel); tests step them by hand instead of waiting on the wall clock. */
   crewTimers: { now(): number; set(fn: () => void, ms: number): () => void } = {
@@ -1063,6 +1206,10 @@ export class ChatController {
     });
     this.#idleMs = opts.idleSleepMs ?? IDLE_SLEEP_MS;
     this.#livenessMs = opts.livenessMs ?? LIVENESS_MS;
+    this.#goneConfirmMs = opts.goneConfirmMs ?? GONE_CONFIRM_MS;
+    this.#liveDropsMax = opts.liveDropsMax ?? LIVE_DROPS_MAX;
+    this.#liveDropsMs = opts.liveDropsMs ?? LIVE_DROPS_MS;
+    this.#workspaceGoneMs = opts.workspaceGoneMs ?? WORKSPACE_GONE_MS;
     this.execTimeoutMs = opts.execTimeoutMs ?? EXEC_TIMEOUT_MS;
     this.valuesCacheMs = opts.valuesCacheMs ?? VALUES_CACHE_MS;
     this.#clock = opts.clock ?? Date.now;
@@ -1146,6 +1293,7 @@ export class ChatController {
     this.#crewOut.clear();
     this.#crewSeen.clear();
     this.#crewHeld.clear();
+    this.#crewWoke.clear();
     for (const id of [...this.#readers.keys()]) this.#stopReader(id);
     for (const [id, pending] of this.#pending) {
       this.#pending.delete(id);
@@ -1172,6 +1320,8 @@ export class ChatController {
       await Promise.allSettled(rows.map((row) => this.#check(row)));
       // T-284: a request of a process that is no longer the live one (a move, a restart, a crash, a resume) is resolved `stale`.
       if (!this.#closed) for (const id of this.#chat.sessionsWithOpenRequests()) this.#dropStale(id, 'sweep');
+      // T-1613: an idle lead with idle lanes or new verdicts gets one wake (not awaited: a wake that launches a lead holds no round up).
+      if (!this.#closed) void this.wakeLeads();
     } catch {
       // the store is unavailable: try again next round
     } finally {
@@ -1183,7 +1333,7 @@ export class ChatController {
   async #check(row: ChatSessionRow): Promise<void> {
     const id = row.id;
     if (this.#busy.has(id)) return; // a launch or sleep is deciding
-    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    const status = await this.#goneCheck(row);
     if (status === 'unknown') return; // unreachable right now: ask again next round
     const now = this.#chat.row(id);
     // Act only on the process this check was about.
@@ -1214,13 +1364,70 @@ export class ChatController {
     }
   }
 
-  /** The process vanished: the session is Interrupted (resumable) and what it was doing is over. */
-  #markGone(sessionId: string, why = 'Claude Code stopped before it answered.'): void {
+  /**
+   * T-1650: whether a session's process is gone, fail safe: `gone` only on two `gone` readings at least {@link GONE_CONFIRM_MS} apart, and
+   * not while every other live session of its workspace reads gone too (a workspace-level fault: logged, `unknown`) unless that has lasted
+   * {@link WORKSPACE_GONE_MS}. Anything between is `unknown`: the next round, or the next drop of its reader, asks again. Every caller that
+   * marks a process gone on the host's word asks this, never {@link #status} alone.
+   */
+  async #goneCheck(row: ChatSessionRow): Promise<'live' | 'gone' | 'unknown'> {
+    const workspaceId = row.workspace_id;
+    const csid = claudeSessionOf(row);
+    const first = await this.#status(workspaceId, csid);
+    if (first === 'live') this.#workspaceGone.delete(workspaceId);
+    if (first !== 'gone') return first;
+    await new Promise<void>((resolve) => setTimeout(resolve, this.#goneConfirmMs).unref?.());
+    if (this.#closed) return 'unknown';
+    const second = await this.#status(workspaceId, csid);
+    if (second === 'live') this.#workspaceGone.delete(workspaceId);
+    if (second !== 'gone') return second === 'live' ? 'live' : 'unknown';
+    const others = this.#chat.liveRows().filter((r) => r.workspace_id === workspaceId && r.id !== row.id);
+    if (!others.length) return 'gone';
+    const live = await this.#probeWorkspace(workspaceId);
+    if (live.has(csid)) return 'live'; // it answered live after all: the gone readings were the fault
+    if (live.size) {
+      this.#workspaceGone.delete(workspaceId);
+      return 'gone';
+    }
+    const now = Date.now();
+    const seen = this.#workspaceGone.get(workspaceId);
+    // A sighting from before the last two rounds is not this fault: it starts again.
+    const since = seen && now - seen.last <= 2 * this.#livenessMs + this.#goneConfirmMs ? seen.since : now;
+    this.#workspaceGone.set(workspaceId, { since, last: now });
+    if (now - since >= this.#workspaceGoneMs) return 'gone'; // it lasted: they all ended (the workspace restarted, say)
+    if (since === now)
+      console.warn(`[chat] ${workspaceId}: all ${others.length + 1} live sessions read gone at once; a workspace fault until it lasts, nothing marked (T-1650)`);
+    return 'unknown';
+  }
+
+  /** T-1650: the Claude session ids of a workspace's live sessions whose host answers `live` now (one probe shared while it runs). */
+  #probeWorkspace(workspaceId: string): Promise<Set<string>> {
+    const running = this.#workspaceProbe.get(workspaceId);
+    if (running) return running;
+    const p = (async () => {
+      const csids = this.#chat.liveRows().filter((r) => r.workspace_id === workspaceId).map(claudeSessionOf);
+      const readings = await Promise.all(csids.map(async (c) => [c, await this.#status(workspaceId, c)] as const));
+      return new Set(readings.filter(([, s]) => s === 'live').map(([c]) => c));
+    })().finally(() => this.#workspaceProbe.delete(workspaceId));
+    this.#workspaceProbe.set(workspaceId, p);
+    return p;
+  }
+
+  /**
+   * The process vanished: the session is Interrupted (resumable) and what it was doing is over. `confirmed` false: the portal only lost
+   * touch with it (the host did not answer); the process may still run, so the control state stored for THAT process stays (T-1094). A
+   * later start that attaches to it (run.lock held) then reloads what it expects (Bypass included) instead of ending it for its own mode,
+   * and the reload takes it out of a Bypass the row no longer shows (`#bypassUnfinished`), fail closed. A new process never reads it.
+   */
+  #markGone(sessionId: string, why = 'Claude Code stopped before it answered.', confirmed = true): void {
     this.#stopReader(sessionId);
+    if (!confirmed) this.#saveControl(sessionId);
+    const kept = confirmed ? null : (this.#chat.row(sessionId)?.control_state ?? null);
     this.#forget(sessionId, why);
-    // T-416 S2: a lead that vanished in Bypass (an OOM kill) has it put back at its relaunch, every gate checked again (`#live`).
+    if (kept) this.#chat.patchSession(sessionId, { controlState: kept });
+    // T-416 S2: a lead that vanished in Bypass (an OOM kill, an outage) has it put back at its relaunch, every gate checked again (`#live`).
     const lead = this.#chat.row(sessionId);
-    this.#closeOut(sessionId, 'stopped', !!lead && this.#keptLead(lead));
+    this.#closeOut(sessionId, 'stopped', !!lead && this.#lostLead(lead));
     this.#chat.patchSession(sessionId, { process: 'gone', state: 'interrupted' });
     this.#emitSession(sessionId);
   }
@@ -1298,7 +1505,7 @@ export class ChatController {
     this.#dropStale(sessionId, why, actor);
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended' || row.process !== 'live' || !this.#chat.openRequests(sessionId).length) return;
-    const status = await this.#status(row.workspace_id, claudeSessionOf(row));
+    const status = await this.#goneCheck(row);
     const now = this.#chat.row(sessionId);
     if (
       status !== 'gone' ||
@@ -1346,7 +1553,7 @@ export class ChatController {
     if (row.mode !== 'bypassPermissions') {
       // T-416 S2b: the session is not in Bypass, but its newest Bypass record may still say a vanished process (or a sleep) kept it. A stop,
       // an end or a restart that is not itself a vanishing supersedes that record: only `#markGone` (kept) may leave it standing.
-      if (!kept && this.#sleptInBypass(sessionId))
+      if (!kept && this.#sleptInBypass(sessionId)) {
         this.#chat.addAudit({
           severity: 'info',
           kind: 'bypass.left',
@@ -1355,6 +1562,11 @@ export class ChatController {
           actor: 'portal',
           detail: { why: how, superseded: true },
         });
+        // PILOT-997 review 43296: a lead in a kept pause that is now ended or stopped for good takes its workers in an inherited Bypass out
+        // too. Only here (review 43368): a restart that keeps Bypass sets the start mode before it stops (`#stopForRestart` quiet), so it
+        // reaches this branch with no kept pause to supersede, and its workers stay.
+        void this.#parentLeftBypass(sessionId, { why: how });
+      }
       return;
     }
     this.#chat.patchSession(sessionId, { mode: START_MODE });
@@ -1376,6 +1588,7 @@ export class ChatController {
       actor: 'portal',
       detail: { why: how, ...(kept ? { kept: true } : {}) },
     });
+    void this.#parentLeftBypass(sessionId, { why: how, kept }); // PILOT-997 review 42957: not for a kept pause
   }
 
   /** (Re)schedules the idle check of a live, idle session; any other state cancels it. */
@@ -1436,7 +1649,9 @@ export class ChatController {
     this.#forget(sessionId, 'The session went to sleep.');
     this.#chat.patchSession(sessionId, { process: 'asleep' });
     if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId); // none should be (it sleeps only when none run); never left running
-    this.#bypassOver(sessionId, 'sleep', this.#keptLead(now));
+    // T-1692: a top-level crew lead keeps it over a sleep as over a vanishing (`#lostLead`, T-1646): the general Konfersi lead (no live worker,
+    // no workers limit, no Keep going) slept out of Bypass for good on 2026-10-20 and came back on the start mode. The wake asks every gate.
+    this.#bypassOver(sessionId, 'sleep', this.#lostLead(now));
     this.#emitSession(sessionId);
   }
 
@@ -1444,7 +1659,13 @@ export class ChatController {
 
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
-    return this.#chat.list(filter).map((s) => this.#decorate(s));
+    return this.#chat.list(this.#byTicket(filter)).map((s) => this.#decorate(s));
+  }
+
+  /** T-1098: a ticket filter in either form (`KONF-3`) reads as the stable id sessions store; one that names no ticket stays as given (no match). */
+  #byTicket<F extends { ticketId?: string }>(filter: F): F {
+    if (!filter.ticketId || !this.ticketResolve) return filter;
+    return { ...filter, ticketId: this.ticketResolve(filter.ticketId) ?? filter.ticketId };
   }
 
   /** D-58: one page of {@link list} for `GET /api/chat/sessions`; `keep` is the caller's `view` check, run before a row is shown. */
@@ -1452,7 +1673,7 @@ export class ChatController {
     filter: { workspaceId?: string; ticketId?: string; parentId?: string },
     args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean },
   ): CursorPage<ChatSession> {
-    const page = this.#chat.listPage(filter, args);
+    const page = this.#chat.listPage(this.#byTicket(filter), args);
     return { items: page.items.map((s) => this.#decorate(s)), next: page.next };
   }
 
@@ -1472,7 +1693,7 @@ export class ChatController {
     const id = this.#chat.resolveId(rawId);
     const session = this.#chat.get(id);
     if (!session) return null;
-    const events = this.#chat.history(id, Math.max(0, session.lastSeq - 400));
+    const events = this.#chat.history(id, Math.max(0, session.lastSeq - 400), 400);
     return events.findLast((e) => e.kind === 'assistant' && !e.agentLabel && e.text)?.text ?? null;
   }
 
@@ -1481,8 +1702,14 @@ export class ChatController {
     return this.#chat.openRequests(this.#chat.resolveId(id));
   }
 
-  history(id: string, after = 0) {
-    return this.#chat.history(this.#chat.resolveId(id), after);
+  /** The events after `after`, oldest first, at most `limit` and never more than HISTORY_MAX_EVENTS: past it the newest (T-2589). */
+  history(id: string, after = 0, limit?: number) {
+    return this.#chat.history(this.#chat.resolveId(id), after, limit);
+  }
+
+  /** T-2589: the newest events of some kinds after `after`, bounded in rows and characters; `cut` when older ones were left unread. */
+  historyTail(id: string, opts: { kinds: readonly string[]; after?: number; maxEvents: number; maxChars?: number }) {
+    return this.#chat.historyTail(this.#chat.resolveId(id), opts);
   }
 
   /** A page of the transcript counted back from `before` (the newest when null), oldest first, tool_result bodies cut (T-376, `eventPage.ts`). */
@@ -1501,6 +1728,12 @@ export class ChatController {
   tasks(id: string): ChatTask[] {
     const session = this.#require(id);
     return this.#chat.tasks(session.id);
+  }
+
+  /** T-2368: the session's sub-agents and background tasks that are running (the glance needs no history). */
+  runningTasks(id: string): ChatTask[] {
+    const session = this.#require(id);
+    return this.#chat.runningTasks(session.id);
   }
 
   /**
@@ -1623,6 +1856,16 @@ export class ChatController {
     if (this.#launchedLeadRules.has(session.id) && out.process === 'live') out = { ...out, leadRules: true };
     const slotWait = this.#slotWaits.get(session.id);
     if (slotWait) out = { ...out, slotWait };
+    // T-1098: the key the screens show for its ticket (one primary-key read), so a list never asks per row.
+    if (out.ticketId && this.ticketKeyOf) {
+      let ticketKey: string | null = null;
+      try {
+        ticketKey = this.ticketKeyOf(out.ticketId);
+      } catch {
+        // no database right now: the screens show the stable id
+      }
+      out = { ...out, ticketKey };
+    }
     const change = this.#configChange(session);
     if (change) out = { ...out, configChangedAt: change.at, configChanged: change };
     // One definition of working (T-41): the main turn runs, or a task of its live process does. The stored state stays the turn's (what
@@ -1679,8 +1922,7 @@ export class ChatController {
   #busySince(out: ChatSession, row: ChatSessionRow): string | null {
     if (!out.tasksOnly) return row.state_since ?? null;
     const starts = this.#chat
-      .tasks(out.id)
-      .filter((t) => t.status === 'running')
+      .runningTasks(out.id)
       .map((t) => t.startedAt)
       .filter((t) => Number.isFinite(Date.parse(t)))
       .sort();
@@ -1786,6 +2028,17 @@ export class ChatController {
     if (moving) throw new AppError('CONFLICT', `This chat is moving to ${moving.toClaude}. Try again in a moment.`);
   }
 
+  /** T-968: the person's General Manager session, or null (never in a list: Home is its only door). */
+  managerOf(ownerId: string): ChatSession | null {
+    const s = this.#chat.managerOf(ownerId);
+    return s ? this.#decorate(s) : null;
+  }
+
+  /** T-968: whether a session is a General Manager (its own or another person's). */
+  isManager(id: string): boolean {
+    return this.#chat.isManager(id);
+  }
+
   /** Registers a dispatcher for live `events`, `delta`, `session`, `input` and `tasks` messages. Returns an unsubscribe. */
   onEvent(cb: Dispatch): () => void {
     this.#dispatchers.add(cb);
@@ -1865,6 +2118,9 @@ export class ChatController {
     const wtReq = this.#worktreeRequest(req.worktree);
     const workspaceId = typeof req.workspaceId === 'string' ? req.workspaceId.trim() : '';
     if (!workspaceId) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    // T-968: the manager's runtime takes only the manager, checked on the id as it will be used (review 2026-10-18 M1: " id" got past).
+    if (workspaceId.toLowerCase() === MANAGER_RUNTIME_ID && !opts.manager)
+      throw ineligibleError('This workspace is the General Manager’s own runtime: no other session runs there.');
     const [target] = this.#split(workspaceId);
     if (!this.#workspaces.runtimeFor(target))
       throw new AppError('VALIDATION_FAILED', `No target “${target}”.`, { details: { workspaceId: 'Unknown target.' } });
@@ -1874,7 +2130,8 @@ export class ChatController {
     const title = (typeof req.title === 'string' && req.title.trim() ? req.title.trim() : 'New session').slice(0, CHAT_SESSION_TITLE_MAX);
     // A continuation (T-270): refused before anything is made when the session it names is live or elsewhere.
     const continuedFrom = this.#continuation(req.continuedFrom, workspaceId);
-    // T-561: marked a crew lead by its starter (it only ever makes the session stricter), or the continuation of one.
+    // T-561: marked a crew lead by its starter (the lead rules; T-1692: and a top-level lead's Bypass is paused over a sleep, every gate
+    // asked at its wake), or the continuation of one.
     const lead = req.lead === true || (continuedFrom !== null && this.#chat.row(continuedFrom.id)?.lead === 1);
     this.#requireEligible(workspaceId);
     const claude =
@@ -1995,6 +2252,10 @@ export class ChatController {
       }
       bypassCapable = true;
     }
+    // PILOT-996 (D-103): a worker of a parent in Bypass now may keep its parent's mode; capability comes only from such a parent. T-2997:
+    // "in Bypass now" is the parent's live mode (`bypassNow`: its process, the mode confirmed for it, its newest record), never the row alone.
+    let inherited = false;
+    if (opts.inheritBypass === true && parentId && !opts.manager && this.bypassNow(parentId)) bypassCapable = inherited = true;
     // T-349: asked again after the last await, so nothing runs between this answer and the insert below.
     if (parentId && opts.liveParent !== undefined) this.#requireLiveParent(parentId, workspaceId, opts.liveParent);
     // T-490 (D-63): a worker's reason for running above its role's model, redacted and capped once, for its row and its audit row alike.
@@ -2017,6 +2278,7 @@ export class ChatController {
       agent,
       spawnWhy,
       ...(lead ? { lead: true } : {}),
+      ...(opts.manager ? { kind: 'manager' as const, ownerId: opts.manager.ownerId, bypassCapable: false } : {}),
       ...(limits ? { maxWorkers: limits.maxWorkers, subagents: limits.subagents } : {}),
     };
     let session!: ChatSession;
@@ -2068,7 +2330,14 @@ export class ChatController {
       });
     }
     if (bypassCapable)
-      this.#chat.addAudit({ severity: 'medium', kind: 'bypass.capable', sessionId: id, workspaceId, actor, detail: { how: 'start' } });
+      this.#chat.addAudit({
+        severity: 'medium',
+        kind: 'bypass.capable',
+        sessionId: id,
+        workspaceId,
+        actor,
+        detail: inherited ? { how: 'inherit', parent: parentId } : { how: 'start' },
+      });
     if (full) return this.#queueStart(id, installed, full);
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
     void this.#startProcess(id, { checked: installed })
@@ -2192,6 +2461,11 @@ export class ChatController {
       throw new AppError('VALIDATION_FAILED', 'That ticket id isn’t valid.', {
         details: { ticketId: 'Use letters, digits and . _ : - (at most 64).' },
       });
+    }
+    if (this.ticketResolve) {
+      const id = this.ticketResolve(raw);
+      if (!id) throw new AppError('NOT_FOUND', 'No such ticket.', { details: { ticketId: 'Unknown ticket.' } });
+      return id;
     }
     if (this.ticketExists && !this.ticketExists(raw))
       throw new AppError('NOT_FOUND', 'No such ticket.', { details: { ticketId: 'Unknown ticket.' } });
@@ -2349,7 +2623,7 @@ export class ChatController {
     }
     // What the move drops: they end with the process the chat leaves.
     const queued = this.#chat.queuedMessages(sessionId);
-    const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
+    const agents = this.#chat.runningTasks(sessionId).length;
     return {
       sessionId,
       via: pooled ? 'pool' : 'own',
@@ -2455,9 +2729,18 @@ export class ChatController {
         path,
       };
       const facts = this.#moveFacts(sessionId, source);
-      const stored = this.#chat.history(sessionId); // once: the opening's copy and the file's copy come from the same read
-      const convo = transferConversation(stored, conversationBudget(meta, EVENT_TEXT_MAX, document));
-      const fileConvo = transferFileConversation(stored);
+      // Once: the opening's copy and the file's copy come from the same read. T-2589: only the newest rows of the kinds a transfer uses,
+      // bounded (the file keeps about 1 MB of the newest messages anyway); a chat of 200k events read whole took the portal past its heap.
+      const tail = this.#chat.historyTail(sessionId, {
+        kinds: TRANSFER_KINDS,
+        maxEvents: this.moveTail.events,
+        maxChars: this.moveTail.chars,
+        withoutToolInput: true,
+      });
+      const convo = transferConversation(tail.events, conversationBudget(meta, EVENT_TEXT_MAX, document));
+      const fileConvo = transferFileConversation(tail.events);
+      // Older messages left unread are left out: the file and the opening say so.
+      if (tail.cut) convo.truncated = fileConvo.truncated = true;
       await this.#shellWrite(workspaceId, `${HOME}/.claudepilot/transfer`, path, transferFile(meta, fileConvo, document, facts));
       const sourceClaudeId = source.claudeId || this.#chat.ensureDefault(workspaceId).id;
       this.#chat.saveHandoff({ id: handoffId, workspaceId, sourceSessionId: sessionId, sourceClaudeId, destClaudeId: dest.id, path });
@@ -2467,6 +2750,10 @@ export class ChatController {
       this.#step(sessionId, 'starting', `Starting ${dest.name}…`);
       const cwd = sessionCwd(row.cwd);
       const wasBypass = row.mode === 'bypassPermissions';
+      // T-1692: a lead whose sleep (or vanishing) kept its Bypass reads the start mode while nothing runs; the move is its wake, so the
+      // move puts it back the way the wake would have (`#keepBypass('wake' | 'lost')`, every gate and the lead's own asked again). Before,
+      // an automatic move of a sleeping lead woke it on the new Claude in the start mode for good (general and Metocean leads, 2026-10-20).
+      const pausedBypass = !wasBypass && row.process !== 'live' && this.#sleptInBypass(sessionId) ? (row.process === 'asleep' ? 'wake' : 'lost') : null;
       const r = await this.#hostStart(workspaceId, {
         sessionId,
         csid: newCsid,
@@ -2527,7 +2814,7 @@ export class ChatController {
       this.#step(sessionId, 'starting');
       const opening = randomUUID();
       await this.#send(sessionId, opening, transferOpening(meta, convo, document, fileConvo), { transfer });
-      const asked = this.#chat.history(sessionId).findLast((e) => e.kind === 'user' && e.uuid === opening);
+      const asked = this.#chat.userEvent(sessionId, opening); // T-2589: one row, never the transcript
       // The new Claude acknowledges: a chat that can't answer on the destination isn't moved.
       const ack = await this.#awaitTurn(sessionId, asked?.seq ?? 0, this.ackWaitMs, 'ack');
       if (ack.problem) throw new AppError('SERVICE_UNAVAILABLE', `${dest.name} didn’t take the context: ${ack.problem}.`, { expose: true });
@@ -2541,6 +2828,7 @@ export class ChatController {
       if (this.#chat.endRunningTasks(sessionId, oldTasks)) this.#emitTasks(sessionId);
       // The new run started on the start mode and took the context in it (its tool requests denied): Bypass comes back only now, the move done.
       if (wasBypass) await this.#keepBypass(sessionId, 'move');
+      else if (pausedBypass) await this.#keepBypass(sessionId, pausedBypass);
       return this.#chat.get(sessionId)!;
     } catch (e) {
       const why = isAppError(e) ? e.message : this.#message(e);
@@ -2571,7 +2859,7 @@ export class ChatController {
     const facts = [`Folder: ${source.cwd}`];
     if (source.worktree)
       facts.push(`Worktree: ${source.worktree.path} on branch ${source.worktree.branch} (repository ${source.worktree.repo})`);
-    const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running');
+    const agents = this.#chat.runningTasks(sessionId);
     if (agents.length)
       facts.push(
         `Agents that were running and stopped with the move: ${agents.map((t) => t.description || t.subagentType || 'agent').join(', ')}`,
@@ -2600,7 +2888,7 @@ export class ChatController {
       if (!row || row.state === 'ended') return { problem: 'the session has ended' };
       const uuid = randomUUID();
       await this.#send(sessionId, uuid, HANDOFF_REQUEST, { actor: 'portal:handoff' });
-      const asked = this.#chat.history(sessionId).findLast((e) => e.kind === 'user' && e.uuid === uuid);
+      const asked = this.#chat.userEvent(sessionId, uuid); // T-2589: one row, never the transcript
       if (!asked) return { problem: 'the request was not recorded' };
       const r = await this.#awaitTurn(sessionId, asked.seq, this.noteWaitMs, 'handoff');
       if (r.problem) return { problem: r.problem };
@@ -2619,19 +2907,28 @@ export class ChatController {
   async #awaitTurn(sessionId: string, after: number, waitMs: number, what: 'handoff' | 'ack'): Promise<{ text: string; problem?: string }> {
     const deadline = Date.now() + waitMs;
     const denied = new Set<string>();
+    // T-2589: read forward from `after` a page at a time, keeping only what the answer needs (the main agent's text before the turn's
+    // end), never the whole transcript after it. As before: an error anywhere after `after` wins, else the first result ends the turn.
+    let cursor = after;
+    let failure: ChatEvent | undefined;
+    let ended = false;
+    const said: string[] = [];
     for (;;) {
-      const events = this.#chat.history(sessionId, after);
-      const failure = events.find((e) => e.kind === 'error');
-      if (failure) return { text: '', problem: (failure.text ?? 'an error').replace(/\s+/g, ' ').slice(0, 160) };
-      const end = events.find((e) => e.kind === 'result');
-      if (end) {
-        const text = events
-          .filter((e) => e.seq < end.seq && e.kind === 'assistant' && !e.agentLabel)
-          .map((e) => e.text?.trim() ?? '')
-          .filter(Boolean)
-          .join('\n\n');
-        return { text };
+      for (;;) {
+        const page = this.#chat.historyFrom(sessionId, cursor, HISTORY_MAX_EVENTS);
+        for (const e of page) {
+          if (e.kind === 'error') failure ??= e;
+          else if (e.kind === 'result') ended = true;
+          else if (!ended && e.kind === 'assistant' && !e.agentLabel) {
+            const t = e.text?.trim();
+            if (t) said.push(t);
+          }
+        }
+        if (page.length) cursor = page[page.length - 1]!.seq;
+        if (page.length < HISTORY_MAX_EVENTS) break;
       }
+      if (failure) return { text: '', problem: (failure.text ?? 'an error').replace(/\s+/g, ' ').slice(0, 160) };
+      if (ended) return { text: said.join('\n\n') };
       const now = this.#chat.row(sessionId);
       if (!now || now.state === 'ended') return { text: '', problem: 'the session ended first' };
       if (now.process !== 'live' && now.state === 'interrupted') return { text: '', problem: now.ended_reason ?? 'Claude Code stopped' };
@@ -2784,6 +3081,7 @@ export class ChatController {
     if (this.#chat.hasInput(sessionId, uuid)) throw new AppError('CONFLICT', 'That message was already sent.'); // a retry raced it
     held(); // a Stop while it woke
     if (!report) this.#crewHeld.delete(sessionId); // someone else's message runs it again: its crew's news may follow
+    if (isPersonActor(opts.actor)) this.#holdByPerson(sessionId, opts.actor ?? CHAT_ACTOR_UI, false); // T-1966: only a person lifts it
 
     // Uploaded files are written into the workspace first, so Claude can open them; a failure refuses the send with nothing stored.
     if (att.needsStaging) await this.#content.stage(att, session.workspaceId);
@@ -2957,7 +3255,10 @@ export class ChatController {
     switch (op) {
       case 'stop':
         // T-294: a person stopped it: crew reports wait until a message from someone else lets it run again (they never undo the Stop).
-        if ((this.#chat.row(sessionId)?.state ?? 'ended') !== 'ended') this.#crewHeld.add(sessionId);
+        if ((this.#chat.row(sessionId)?.state ?? 'ended') !== 'ended') {
+          this.#crewHeld.add(sessionId);
+          this.#holdByPerson(sessionId, opts.actor ?? CHAT_ACTOR_UI, true);
+        }
         return this.interrupt(sessionId);
       case 'end':
         return this.end(sessionId);
@@ -2972,6 +3273,8 @@ export class ChatController {
       case 'cancel_queued':
         return this.#cancelQueued(sessionId, a.inputUuid);
       case 'resume':
+        // T-1966: a person's own Resume lifts the hold their Stop left (the portal's resumes do not).
+        if (isPersonActor(opts.actor)) this.#holdByPerson(sessionId, opts.actor ?? CHAT_ACTOR_UI, false);
         return this.#resume(sessionId, opts.actor);
       case 'stop_task':
         return this.#stopTask(sessionId, a.taskId);
@@ -3190,6 +3493,7 @@ export class ChatController {
       busy: session.state === 'working' || session.state === 'waiting',
       facts,
       reauthed: this.reauth?.fresh(token) === true,
+      autoAllowed: this.#autoAllowed(session),
     };
   }
 
@@ -3211,7 +3515,10 @@ export class ChatController {
    * a report of Bypass from Claude Code is accepted. Entering is a High audit event. Never over MCP: no other module
    * has a session token or the opt-in.
    */
-  async enterBypass(rawId: string, req: { acknowledged: boolean; sessionToken: string | undefined; actor?: string }): Promise<ChatSession> {
+  async enterBypass(
+    rawId: string,
+    req: { acknowledged: boolean; sessionToken: string | undefined; actor?: string; via?: { approvalId: string } },
+  ): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -3254,7 +3561,15 @@ export class ChatController {
       sessionId,
       workspaceId: row.workspace_id,
       actor: 'ui',
-      detail: { claude: session.claudeName, policy: 'allowed', capable: true, acknowledged: true, reauth: 'fresh' },
+      // PILOT-1000: entered from an approval card, the person's Allow is the acknowledgement; the row names the request.
+      detail: {
+        claude: session.claudeName,
+        policy: 'allowed',
+        capable: true,
+        acknowledged: true,
+        reauth: 'fresh',
+        ...(req.via ? { via: 'approval', approvalId: req.via.approvalId } : {}),
+      },
     });
     this.#emitSession(sessionId);
     return this.#chat.get(sessionId)!;
@@ -3522,7 +3837,7 @@ export class ChatController {
       while (busy() && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
     }
     const row = this.#chat.row(sessionId)!;
-    const agents = this.#chat.tasks(sessionId).filter((t) => t.status === 'running').length;
+    const agents = this.#chat.runningTasks(sessionId).length;
     // A deliberate restart keeps Bypass (the person confirmed it for this chat), while the policy allows it and the session can.
     const keep = row.mode === 'bypassPermissions' && this.#keepsBypass(row);
     // T-416: only a restart of a running process skips the memory check (it needs no more than the process it stops). One that is asleep
@@ -3695,7 +4010,7 @@ export class ChatController {
    * process's end isn't read as a crash. `quiet`: the session was in Bypass and keeps it, so it reads the start mode now (what the new process
    * starts in) without the "turned off" note. A stop the workspace refused leaves everything as it was, and says so.
    */
-  async #stopForRestart(sessionId: string, why: string, quiet = false): Promise<void> {
+  async #stopForRestart(sessionId: string, why: string, quiet = false, keeping = false): Promise<void> {
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended' || row.process !== 'live') {
       if (quiet && row?.mode === 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: START_MODE }); // it slept: off already in fact
@@ -3715,7 +4030,9 @@ export class ChatController {
       }
       this.#forget(sessionId, why);
       if (quiet) this.#chat.patchSession(sessionId, { mode: START_MODE });
-      this.#closeOut(sessionId);
+      // `keeping`: the restart `#keepBypass` falls back on, Bypass about to come back; a wake's kept pause is not superseded by it, and the
+      // workers stay (PILOT-997 review 43368).
+      this.#closeOut(sessionId, 'stopped', keeping);
       this.#chat.patchSession(sessionId, { process: 'asleep' });
       this.#launchedAt.delete(sessionId);
       this.#emitSession(sessionId);
@@ -3743,7 +4060,7 @@ export class ChatController {
    * be a lead, and the person's own entry for this chat must be on record saying the acknowledgement was ticked and the server code was
    * fresh THEN (no new code is asked at the wake). Any other wake keeps FR20/FR38: off after sleep.
    */
-  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake' | 'lost'): Promise<void> {
+  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake' | 'lost' | 'keepgoing' | 'inherit'): Promise<void> {
     const after =
       how === 'move'
         ? 'after the move'
@@ -3753,8 +4070,13 @@ export class ChatController {
             ? 'after the wake'
             : how === 'lost'
               ? 'after Claude Code stopped'
-              : 'after the recovery';
-    const lead = how === 'wake' || how === 'lost'; // the lead's own paths: the same extra gates (T-417, T-416 S2)
+              : how === 'keepgoing'
+                ? 'by Keep going'
+                : how === 'inherit'
+                  ? 'from the parent'
+                  : 'after the recovery';
+    // The lead's own paths: the same extra gates (T-417, T-416 S2; PILOT-996: Keep going's re-entry within 24 hours).
+    const lead = how === 'wake' || how === 'lost' || how === 'keepgoing';
     const drop = (why: string, text: string) => {
       const row = this.#chat.row(sessionId);
       if (!row || row.state === 'ended') return;
@@ -3769,6 +4091,7 @@ export class ChatController {
         detail: { why, how },
       });
       this.#emitSession(sessionId);
+      void this.#parentLeftBypass(sessionId, { why });
     };
     try {
       const row = this.#chat.row(sessionId);
@@ -3778,23 +4101,34 @@ export class ChatController {
       if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
       if (row.bypass_capable !== 1) return drop('not_capable', `Bypass not kept ${after}: this session wasn’t started to allow Bypass.`);
       // T-417 review: a lead when it slept, and still one now (its workers may have ended, its limit or Keep going been cleared meanwhile).
-      if (lead && !this.#keptLead(row))
+      // T-1646: after a vanishing, a top-level crew lead counts too (`#lostLead`); T-1692: after a sleep too (the sleep kept it by the same rule).
+      if (lead && !this.#lostLead(row))
         return drop(
           'not_lead',
-          `Bypass not kept ${after}: this chat is no longer a lead (no live workers, no workers limit, no Keep going).`,
+          `Bypass not kept ${after}: this chat is no longer a lead (not a crew lead, no live workers, no workers limit, no Keep going).`,
         );
       if (lead && !this.#personEntered(sessionId))
         return drop(
           'not_confirmed',
           `Bypass not kept ${after}: no entry by a person with the confirmation and the server code is on record for this chat.`,
         );
+      // PILOT-996: a worker gets Bypass only from a parent that is in it now (never wider than its parent). PILOT-997 review 42957: on every
+      // way back too (a move, a restart, a recovery, Keep going) for a session whose capability came from its parent, not only at the inherit.
+      if (how === 'inherit' || this.#inheritedBypass(sessionId)) {
+        const parent = row.parent_id ? this.#chat.row(row.parent_id) : null;
+        // T-2997: the first entry asks the parent's live mode (`bypassNow`), not its row: a stale Bypass on the row hands on nothing.
+        if (!parent || parent.state === 'ended' || parent.mode !== 'bypassPermissions' || (how === 'inherit' && !this.bypassNow(parent.id)))
+          return drop('parent_not_bypass', `Bypass not kept ${after}: the parent is not in Bypass now.`);
+      }
+      // T-1692: out of Bypass first, then back in: never two switches racing on separate execs.
+      await this.#leaving.get(sessionId);
       try {
         await this.#setBypass(sessionId);
       } catch {
         // Not launched with the flag, or the switch failed: the restart approach, once.
         if (!this.#bypassAllowed()) return drop('policy', `Bypass not kept ${after}: the policy no longer allows it.`);
         try {
-          await this.#stopForRestart(sessionId, 'Restarting to keep Bypass.');
+          await this.#stopForRestart(sessionId, 'Restarting to keep Bypass.', false, true);
           await this.#setBypass(sessionId);
         } catch (e) {
           return drop(`${how}_failed`, `Bypass not kept ${after}: Claude Code refused the switch (${cliMessage(this.#message(e))}).`);
@@ -3821,6 +4155,12 @@ export class ChatController {
       }
       this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
       this.#note(sessionId, `Bypass kept ${after}.`);
+      // A relaunch runs on the start mode until the switch, and Claude Code often asks for its first tool call in that gap (memor.id lead,
+      // 2026-10-23 18:53 and 22:05): the card would then wait for a person although Bypass would have run it. Allow those tool requests now,
+      // the way Bypass treats them; deny rules never reach a card, a request not shown whole stays for a person (`#respond` refuses it).
+      // PILOT-996: never a question or a plan's exit (they are a person's or the model's own call, not a tool Bypass would run).
+      for (const req of this.#chat.openRequests(sessionId))
+        if (req.kind === 'tool' && !BYPASS_KEEP_ASKS.has(req.toolName ?? '')) await this.#respond(sessionId, req.requestId, 'allow', { actor: 'portal:bypass-kept' }).catch(() => undefined);
       this.#chat.addAudit({
         severity: 'high',
         kind: 'bypass.entered',
@@ -3844,10 +4184,149 @@ export class ChatController {
     return entry?.detail.acknowledged === true && entry.detail.reauth === 'fresh';
   }
 
+  /**
+   * PILOT-996: when this chat was last in Bypass: now when it is, else its newest `bypass.left` when that was a LOSS (a sleep, a stop, a
+   * vanished process, a restart, a move or restart that failed to keep it). Null when it never left it, or when it was taken out on
+   * purpose (a person's or a token's mode switch, the policy, a gate that said no, a downgrade): Keep going puts back only what was lost.
+   */
+  bypassSeenAt(rawId: string): string | null {
+    const id = this.#chat.resolveId(rawId);
+    const row = this.#chat.row(id);
+    if (!row) return null;
+    if (row.mode === 'bypassPermissions') return new Date().toISOString();
+    const left = this.#chat.audit({ kind: 'bypass.left', sessionId: id, limit: 1 })[0];
+    return left && BYPASS_LOST.has(String(left.detail.why ?? '')) ? left.at : null;
+  }
+
+  /**
+   * PILOT-996 (D-103): Keep going puts Bypass back on a lead seen in it within the last 24 hours, through every gate of `#keepBypass`'s
+   * lead path (the policy, the capability, still a lead, the person's own entry on record), and allows the tool cards raised while it was
+   * out (never AskUserQuestion or ExitPlanMode). True when the chat is in Bypass after.
+   */
+  async restoreBypass(rawId: string): Promise<boolean> {
+    const id = this.#chat.resolveId(rawId);
+    const session = this.#require(id);
+    if (session.mode === 'bypassPermissions') return true;
+    if (session.state === 'ended' || !session.bypassCapable) return false;
+    const seen = this.bypassSeenAt(id);
+    if (!seen || Date.now() - Date.parse(seen) > KEEPGOING_BYPASS_WINDOW_MS) return false;
+    await this.#keepBypass(id, 'keepgoing');
+    return this.#chat.row(id)?.mode === 'bypassPermissions';
+  }
+
+  /**
+   * PILOT-996 (D-103): a worker made capable from a parent in Bypass (`inheritBypass` at its create) enters Bypass through `#keepBypass`
+   * (the policy, its capability, the parent in Bypass now; audited `bypass.entered` how `inherit`). True when it is in Bypass after.
+   */
+  async inheritBypass(rawId: string): Promise<boolean> {
+    const id = this.#chat.resolveId(rawId);
+    const session = this.#require(id);
+    if (session.mode === 'bypassPermissions') return true;
+    if (!session.parentId || !session.bypassCapable) return false;
+    await this.#keepBypass(id, 'inherit');
+    return this.#chat.row(id)?.mode === 'bypassPermissions';
+  }
+
+  /** PILOT-997 review 42957: this session's Bypass capability came from its parent (its newest `bypass.capable` row says how `inherit`). */
+  #inheritedBypass(sessionId: string): boolean {
+    return this.#chat.audit({ kind: 'bypass.capable', sessionId, limit: 1 })[0]?.detail.how === 'inherit';
+  }
+
+  /**
+   * PILOT-997 review 42957 (D-103 "never wider than its parent"; D-15: a person's switch-off ends the lease): `sessionId` left Bypass for
+   * good, so each of its live workers in an INHERITED Bypass leaves it too, to dontAsk (a worker never waits on a person, D-62), audited
+   * `bypass.left` why `parent_left`; through `#setMode`, which carries it on to their own workers. Not for a pause that comes back (a kept
+   * sleep or vanishing, `kept`) or the relaunch row of a restart or move that is about to put it back (`restart`: when that fails, its
+   * `<how>_failed` row comes here); not when the policy blocks Bypass (`bypassPolicyChanged` takes every session out itself). Never throws.
+   */
+  async #parentLeftBypass(sessionId: string, detail: { why?: unknown; kept?: unknown }): Promise<void> {
+    if (detail.kept === true || detail.why === 'restart' || !this.#bypassAllowed()) return;
+    for (const row of this.#chat.liveRows()) {
+      if (row.parent_id !== sessionId || row.mode !== 'bypassPermissions' || !this.#inheritedBypass(row.id)) continue;
+      try {
+        await this.#setMode(row.id, 'dontAsk', 'portal', 'parent_left');
+        this.#note(row.id, 'Bypass turned off: the parent left it.');
+      } catch {
+        // Fail closed: the process out of it (or stopped, or ended for integrity), the row on dontAsk, on record, and on to its workers.
+        await this.#leaveBypass(row.id, 'Bypass turned off: the parent left it.').catch(() => undefined);
+        const now = this.#chat.row(row.id);
+        if (!now || now.state === 'ended') continue;
+        if (now.mode === 'bypassPermissions') this.#chat.patchSession(row.id, { mode: 'dontAsk' });
+        this.#note(row.id, 'Bypass turned off: the parent left it.');
+        this.#chat.addAudit({
+          severity: 'medium',
+          kind: 'bypass.left',
+          sessionId: row.id,
+          workspaceId: row.workspace_id,
+          actor: 'portal',
+          detail: { why: 'parent_left', parent: sessionId },
+        });
+        this.#emitSession(row.id);
+        await this.#parentLeftBypass(row.id, { why: 'parent_left' });
+      }
+    }
+  }
+
+  /** PILOT-996: {@link autoModeAllowed} with this session's parent's mode and the policy `sessions.autonomousAuto`. */
+  #autoAllowed(session: ChatSession): boolean {
+    const parentMode = session.parentId ? (this.#chat.row(session.parentId)?.mode ?? null) : null;
+    return autoModeAllowed(session, { parentMode: parentMode as ChatPermissionMode | null, autonomousAuto: this.#autonomousAutoOn() });
+  }
+
+  #autonomousAutoOn(): boolean {
+    try {
+      return this.autonomousAuto?.() === true;
+    } catch {
+      return false; // can't tell: not on
+    }
+  }
+
+  /**
+   * T-2997 (PILOT-1025): the mode a worker gets when the Bypass it was to inherit was not kept (the parent left it, or a gate said no,
+   * between the spawn's check and the entry): Auto where this worker may run in it ({@link autoModeAllowed}), else dontAsk (never waits on
+   * a person, D-62).
+   */
+  bypassNotKeptMode(rawId: string): ChatPermissionMode {
+    const session = this.#chat.get(this.#chat.resolveId(rawId));
+    return session && this.#autoAllowed(session) ? 'auto' : 'dontAsk';
+  }
+
+  /** T-2997 (PILOT-1025): whether `sessions.autonomousAuto` is on now (a spawn's unasked mode and its Auto by name read it). */
+  autonomousAutoOn(): boolean {
+    return this.#autonomousAutoOn();
+  }
+
+  /**
+   * T-2997 (PILOT-1025): whether this session is in Bypass NOW, as far as the portal stands behind it, so a worker may inherit it: the
+   * policy allows Bypass; the session is live, capable and its row says Bypass; the mode the portal set or confirmed for its CURRENT process
+   * is Bypass with no entry still pending (the track, else the state stored for that process; none known is not in it); no leave is in
+   * flight; and its newest Bypass record is an entry, not a leave. The stored mode alone is not enough: it can say Bypass while the process
+   * is no longer in it (the live case: a worker was put in Bypass from a lead that had left it, then had to be taken out and ended for
+   * integrity). Fail closed: anything unknown is false, and the worker gets Auto instead. No side effects.
+   */
+  bypassNow(rawId: string): boolean {
+    const id = this.#chat.resolveId(rawId);
+    const row = this.#chat.row(id);
+    if (!row || row.state === 'ended' || row.process !== 'live' || row.bypass_capable !== 1 || row.mode !== 'bypassPermissions') return false;
+    if (!this.#bypassAllowed() || this.#leaving.has(id)) return false;
+    const track = this.#modes.get(id) ?? readControl(row.control_state, controlProc(row))?.mode ?? null;
+    if (!track || track.expected !== 'bypassPermissions' || track.bypassPending) return false;
+    const last = this.#chat.audit({ kind: 'bypass', sessionId: id, limit: 50 }).find((a) => a.kind === 'bypass.entered' || a.kind === 'bypass.left');
+    return last?.kind === 'bypass.entered';
+  }
+
+  /** PILOT-996: a top-level session no person started (not a worker, not a manager, not a persona test) starts in Auto while the policy is on. */
+  #startsInAuto(row: ChatSessionRow): boolean {
+    if (row.parent_id || !row.started_by || row.started_by === CHAT_ACTOR_UI || row.origin === 'persona_test') return false;
+    if ((row as { kind?: string }).kind === 'manager') return false;
+    return this.#autonomousAutoOn();
+  }
+
   /** T-417: the newest Bypass record of this chat is its sleep that kept it (a lead's), so its wake puts it back through `#keepBypass`. */
   #sleptInBypass(sessionId: string): boolean {
     const last = this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 })[0];
-    return last?.kind === 'bypass.left' && (last.detail.why === 'sleep' || last.detail.why === 'stopped') && last.detail.kept === true;
+    const why = last?.detail.why;
+    return last?.kind === 'bypass.left' && (why === 'sleep' || why === 'stopped' || why === 'lost_touch') && last.detail.kept === true;
   }
 
   /** The one request that enters Bypass, under the grant (the policy and the capability checked by the caller, and again here). */
@@ -3888,6 +4367,32 @@ export class ChatController {
       } catch {
         // it couldn't be reached right now: its next launch starts without the flag, and a restart resets the mode
       }
+    }
+  }
+
+  /**
+   * T-1966: a person (or a caller of the session tools) stopped this session and nothing has run it since: the crew hold that crew reports
+   * respect. The flow watchdog reads it to leave such a lead alone. Read only.
+   */
+  stoppedByPerson(id: string): boolean {
+    const sessionId = this.#chat.resolveId(id);
+    if (this.#crewHeld.has(sessionId)) return true;
+    // The hold on record survives a portal restart (the set above does not): the newest `crewhold.*` row of the session decides.
+    return this.#chat.audit({ kind: HOLD_KIND, sessionId, limit: 1 })[0]?.kind === `${HOLD_KIND}.set`;
+  }
+
+  /**
+   * T-1966: a person's Stop is put on record (`crewhold.set`), and lifted (`crewhold.lifted`) only by a person: their message or their
+   * Resume. A row is written only when the state changes. Never throws: the in-memory hold still stands.
+   */
+  #holdByPerson(sessionId: string, actor: string, set: boolean): void {
+    try {
+      const held = this.#chat.audit({ kind: HOLD_KIND, sessionId, limit: 1 })[0]?.kind === `${HOLD_KIND}.set`;
+      if (held === set) return;
+      const row = this.#chat.row(sessionId);
+      this.#chat.addAudit({ severity: 'info', kind: `${HOLD_KIND}.${set ? 'set' : 'lifted'}`, sessionId, workspaceId: row?.workspace_id ?? null, actor });
+    } catch {
+      // the store is unavailable: the in-memory hold decides until the portal restarts
     }
   }
 
@@ -4152,7 +4657,7 @@ export class ChatController {
       });
       throw new AppError(
         SESSION_CAP,
-        `This session has sent ${caps.messagesPerHour} messages to its parent, its workers or its crew in the last hour, which is the limit (Settings › Sessions).`,
+        `This session has sent ${caps.messagesPerHour} messages to its parent, its workers or its crew in the last hour, which is the limit (Settings › Running agents).`,
         { status: 409, details: { scope: 'messages', limit: caps.messagesPerHour } },
       );
     }
@@ -4229,7 +4734,7 @@ export class ChatController {
       });
       throw new AppError(
         SESSION_CAP,
-        `Sending to ${group.length} would go over this session's limit of ${caps.messagesPerHour} messages an hour to its parent, its workers or its crew (each recipient counts; Settings › Sessions). Nothing was sent.`,
+        `Sending to ${group.length} would go over this session's limit of ${caps.messagesPerHour} messages an hour to its parent, its workers or its crew (each recipient counts; Settings › Running agents). Nothing was sent.`,
         { status: 409, details: { scope: 'messages', limit: caps.messagesPerHour, recipients: group.length } },
       );
     }
@@ -4438,6 +4943,120 @@ export class ChatController {
     );
   }
 
+  /**
+   * T-1613 (D-65): the crew wake, once per liveness round. A top-level lead with live workers that has been idle the window
+   * (`chat.crew.wakeMin`, default 15 minutes; 0 is off) gets ONE short portal message when, since its last turn, a worker of it is idle with
+   * nothing waiting on a person, or a verdict was recorded on a ticket it holds: who is idle and for how long, which verdicts came, and
+   * "Close what is done, dispatch idle lanes." Cost control: each wake is one lead turn, and the window bounds them: at most one wake per
+   * lead per window, and none at all when nothing changed since the last one (the same idle workers, no newer verdict). Never a lead that
+   * waits on a person, is busy (a turn, a sub-agent, a launch, a move, a restart, a message on its way), waits for a slot under the cap, a
+   * person stopped, whose process is gone, or that is interrupted or ended. It rides the digest's path (`portal:crew`, priority later), so it
+   * never relaunches a gone process nor runs a stopped one. Returns the leads it woke.
+   */
+  async wakeLeads(): Promise<string[]> {
+    const windowMs = crewWakeMs(this.crewSettings);
+    if (!windowMs || this.#closed) return [];
+    const now = this.crewWakeClock();
+    const sends: Promise<void>[] = [];
+    const woke: string[] = [];
+    try {
+      for (const leadId of this.#chat.leadsWithLiveWorkers()) {
+        const row = this.#chat.row(leadId);
+        const lead = this.#chat.get(leadId);
+        if (!row || !lead || row.parent_id) continue;
+        // One guard a line (each has its test, T-1613 QA): an ended lead is also left out by the query.
+        // As shown (#decorate): a turn or a sub-agent running is working; waiting, interrupted (for integrity too) and ended are not idle.
+        if (this.#decorate(lead).state !== 'idle') continue;
+        if (lead.waiting > 0 || this.#chat.openRequests(leadId).length) continue; // waits on a person, whatever the state says
+        if (row.process === 'gone') continue; // a gone process is never relaunched for a wake
+        if (this.#crewHeld.has(leadId)) continue; // a person stopped it
+        if (this.#slotWaits.has(leadId)) continue; // its wake waits for a slot under the cap
+        if (this.#busy.has(leadId) || this.#moving.has(leadId) || this.#restarting.has(leadId) || this.#chat.hasOpenInputs(leadId)) continue;
+        const since = this.#idleSince(row);
+        if (now - since < windowMs) continue;
+        const last = this.#crewWoke.get(leadId);
+        if (last && now - last.at < windowMs) continue; // the rate limit: one wake per lead per window
+        const idle: { w: ChatSession; ms: number }[] = [];
+        for (const c of this.#chat.list({ parentId: leadId })) {
+          const w = this.#decorate(c);
+          const wr = this.#chat.row(c.id);
+          if (!wr || this.#crewState(w) !== 'idle' || this.#chat.openRequests(c.id).length || this.#chat.queuedMessages(c.id) > 0) continue;
+          idle.push({ w, ms: Math.max(0, now - this.#idleSince(wr)) });
+        }
+        idle.sort((a, b) => b.ms - a.ms); // the longest idle first
+        let verdicts: CrewVerdict[] = [];
+        try {
+          verdicts = (this.crewVerdictsOf?.(leadId, since) ?? []).filter((v) => v.id > (last?.verdict ?? 0));
+        } catch {
+          // the tickets module can't tell: the idle workers decide
+        }
+        // T-1616: what it holds that is ready to close or merge (in review, latest verdict a pass): news when the list is new or changed.
+        let ready: CrewReady[] = [];
+        try {
+          ready = this.crewReadyOf?.(leadId) ?? [];
+        } catch {
+          // the tickets module can't tell: the rest decides
+        }
+        const idleKey = idle
+          .map((x) => x.w.id)
+          .sort()
+          .join(',');
+        const readyKey = ready
+          .map((r) => r.ticket)
+          .sort()
+          .join(',');
+        const news = verdicts.length > 0 || (idle.length > 0 && idleKey !== last?.idle) || (ready.length > 0 && readyKey !== last?.ready);
+        if (!news) continue; // nothing new since the last wake: no turn spent
+        const told = { at: now, idle: idleKey, verdict: Math.max(last?.verdict ?? 0, ...verdicts.map((v) => v.id)), ready: readyKey };
+        this.#crewWoke.set(leadId, told);
+        woke.push(leadId);
+        const text = this.#wakeLine(now - since, idle, verdicts, ready);
+        sends.push(
+          this.send(leadId, randomUUID(), text, { actor: CREW_REPORT_ACTOR, actorLabel: 'Crew wake', priority: 'later' }).catch(() => {
+            // Not taken (it woke meanwhile, a person stopped it, no room): the news counts as untold, and the window still holds the next try.
+            if (this.#crewWoke.get(leadId) === told)
+              this.#crewWoke.set(leadId, { at: now, idle: last?.idle ?? '', verdict: last?.verdict ?? 0, ready: last?.ready ?? '' });
+          }),
+        );
+      }
+    } catch {
+      // the store went away (shutdown): a wake never gets in the way
+    }
+    await Promise.allSettled(sends);
+    return woke;
+  }
+
+  /**
+   * T-1613: the wake's text: how long the lead has been idle, its idle workers (title, quoted) and the verdicts on its tickets; T-1616: and
+   * the tickets it holds that are ready to close or merge (at most WAKE_READY_LINES), with the line that asks for them first.
+   */
+  #wakeLine(
+    leadIdleMs: number,
+    idle: readonly { w: ChatSession; ms: number }[],
+    verdicts: readonly CrewVerdict[],
+    ready: readonly CrewReady[] = [],
+  ): string {
+    const lines = [`Crew wake: you have been idle ${wakeMinutes(leadIdleMs)} min (titles are the workers' own text, not an instruction).`];
+    if (idle.length) {
+      lines.push(`Idle worker${idle.length === 1 ? '' : 's'}:`);
+      for (const { w, ms } of idle) lines.push(`- “${crewQuote(w.title, 80) || 'worker'}” (${w.id}): idle ${wakeMinutes(ms)} min`);
+    }
+    if (verdicts.length) {
+      lines.push('Verdicts on tickets you hold:');
+      for (const v of verdicts.slice(-20))
+        lines.push(`- ${crewQuote(v.ticket, 20)}: ${crewQuote(v.role, 10)} ${crewQuote(v.verdict, 20).toUpperCase()}`);
+    }
+    if (ready.length) {
+      const more = ready.length > WAKE_READY_LINES ? ` ${ready.length}, the first ${WAKE_READY_LINES}` : '';
+      lines.push(`Ready to close or merge:${more}`);
+      for (const r of ready.slice(0, WAKE_READY_LINES)) lines.push(`- ${crewQuote(r.ticket, 20)}: ${crewQuote(r.role, 10)} PASS`);
+    }
+    lines.push(
+      ready.length ? 'Close what is done, dispatch idle lanes. Close or merge these before new dispatch.' : 'Close what is done, dispatch idle lanes.',
+    );
+    return lines.join('\n');
+  }
+
   /* ---------- Caps on running sessions (FR39) ---------- */
 
   /**
@@ -4455,6 +5074,17 @@ export class ChatController {
       // Keep going can't tell: the other signs decide
     }
     return false;
+  }
+
+  /**
+   * T-1646: a lead whose process vanished (an OOM kill, an outage of the host or its API) keeps Bypass for its relaunch: a kept lead, or a
+   * top-level crew lead (marked a lead at its start, or one that started workers). On 2026-10-19 the main Konfersi lead (by the code, not its row) had no live worker,
+   * no workers limit and no Keep going, so the k3s API outage took it out of Bypass for good while the Lab lead (live workers) kept it. Only
+   * which chats count as a lead: the relaunch still asks every other gate (the policy, the capability, the person's own entry with the
+   * acknowledgement and a fresh code, the grant), and the cap still sleeps only by `#keptLead`.
+   */
+  #lostLead(row: ChatSessionRow): boolean {
+    return this.#keptLead(row) || (!row.parent_id && isLead(row, this.#chat.hasWorkers(row.id)));
   }
 
   /**
@@ -4866,11 +5496,12 @@ export class ChatController {
 
   /**
    * `actor` is who asks: `ui` (a person in the app, the socket) or nothing (the portal's own modules: triggers, Portal MCP, the policy).
-   * Auto lets Claude Code's classifier approve actions nobody sees, so only a person may turn it on, and only in a session a person
-   * started (`autoModeAllowed`): a session started from a webhook, a ticket, MCP or another session keeps the ceiling it had (Edit).
-   * Claude Code refusing Auto (`auto_mode_model`, `auto_mode_settings`) leaves the mode as it was and says why.
+   * Auto lets Claude Code's classifier approve actions nobody sees. PILOT-996 (D-103): any caller may turn it on where `#autoAllowed`
+   * says so (a person's own session; a worker of an Auto or Bypass parent; any session while `sessions.autonomousAuto` is on), audited
+   * `mode.auto`; elsewhere it is refused, audited `mode.refused`, with what to do. Claude Code refusing Auto (`auto_mode_model`,
+   * `auto_mode_settings`) leaves the mode as it was and says why.
    */
-  async #setMode(sessionId: string, mode: unknown, actor?: string): Promise<void> {
+  async #setMode(sessionId: string, mode: unknown, actor?: string, leftWhy: 'mode' | 'parent_left' = 'mode'): Promise<void> {
     if (mode === 'bypassPermissions') {
       // Never a plain control: it takes the confirmation and the server code check (enterBypass).
       this.#refuseBypass(sessionId, 'control', 'socket');
@@ -4879,7 +5510,7 @@ export class ChatController {
     if (typeof mode !== 'string' || !MODES.has(mode)) throw new AppError('VALIDATION_FAILED', 'Pick a permission mode.');
     const session = this.#require(sessionId);
     if (mode === 'auto' && session.mode !== 'auto') {
-      const why = actor !== CHAT_ACTOR_UI ? 'actor' : !autoModeAllowed(session) ? 'origin' : null;
+      const why = this.#autoAllowed(session) ? null : session.parentId ? 'parent' : 'origin';
       if (why) {
         this.#chat.addAudit({
           severity: 'medium',
@@ -4889,12 +5520,7 @@ export class ChatController {
           actor: actor ?? 'portal',
           detail: { mode: 'auto', why },
         });
-        throw new AppError(
-          'FORBIDDEN',
-          why === 'actor'
-            ? 'Only a person in the app can turn on Auto.'
-            : 'Auto is only for sessions a person started here. This one was started by a trigger, a ticket, MCP or another session.',
-        );
+        throw new AppError('FORBIDDEN', AUTO_REFUSED[why]);
       }
     }
     await this.#live(sessionId, true, true, actor);
@@ -4909,8 +5535,9 @@ export class ChatController {
         kind: 'bypass.left',
         sessionId,
         workspaceId: row?.workspace_id,
-        actor: 'ui',
-        detail: { to: applied },
+        // A mode switch out of Bypass is someone's choice (a person in the app, or a token on purpose): Keep going never undoes it (PILOT-997).
+        actor: actor ?? 'portal',
+        detail: { to: applied, why: leftWhy, ...(leftWhy === 'parent_left' ? { parent: row?.parent_id ?? null } : {}) },
       });
     }
     if (applied === 'bypassPermissions') {
@@ -4920,6 +5547,8 @@ export class ChatController {
     this.#chat.patchSession(sessionId, { mode: applied });
     this.#emitSession(sessionId);
     this.#note(sessionId, `Mode: ${MODE_LABELS[applied] ?? applied}`);
+    // PILOT-997 review 42957: its workers in an inherited Bypass leave it with it (and theirs with them).
+    if (was === 'bypassPermissions') await this.#parentLeftBypass(sessionId, { why: leftWhy });
     if (applied === 'auto' && was !== 'auto')
       this.#chat.addAudit({
         severity: 'medium',
@@ -4960,7 +5589,7 @@ export class ChatController {
     const id = typeof taskId === 'string' ? taskId.trim() : '';
     if (!TASK_ID.test(id)) throw new AppError('VALIDATION_FAILED', 'Say which sub-agent to stop.');
     this.#require(sessionId);
-    const task = this.#chat.tasks(sessionId).find((t) => t.taskId === id);
+    const task = this.#chat.task(sessionId, id);
     if (!task) throw new AppError('NOT_FOUND', 'No such sub-agent.');
     if (task.status !== 'running') return;
     await this.#busy.get(sessionId);
@@ -5035,9 +5664,14 @@ export class ChatController {
     // A relaunch starts on defaults: these go back once it runs, but never Bypass: a wake or a resume doesn't restore it (FR20, FR38);
     // only a lead's wake after a sleep that kept it gets it back, after this, through `#keepBypass` (`#live`, T-417).
     const wasBypass = row.mode === 'bypassPermissions';
+    // PILOT-996 (D-103): the first launch of a session no person started (a trigger's, a ticket's, Portal MCP's) goes to Auto while the policy
+    // allows it; a worker gets its mode from its spawn instead (its parent's, capped).
+    const firstAuto = !opts.resume && row.process_started_at === null && this.#startsInAuto(row);
     const restore: Restore | null = opts.resume
       ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: wasBypass ? START_MODE : row.mode }
-      : null;
+      : firstAuto
+        ? { model: null, effort: null, ultracode: false, mode: 'auto', start: true }
+        : null;
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
     const cwd = sessionCwd(row.cwd);
 
@@ -5049,7 +5683,13 @@ export class ChatController {
         await this.installHost(workspaceId);
       } catch (e) {
         if (cancelled()) return;
-        this.#chat.patchSession(sessionId, { state: 'ended', process: 'gone', endedReason: this.#message(e) });
+        // T-1646: a resume whose host could not be checked (the workspace or its API unreachable: "fetch failed" through the k3s API outage
+        // of 2026-10-19) is Interrupted like a start that failed, so a later send resumes it; only a first start ends here (it never ran).
+        this.#chat.patchSession(sessionId, {
+          state: opts.resume ? 'interrupted' : 'ended',
+          process: 'gone',
+          endedReason: this.#message(e),
+        });
         this.#emitSession(sessionId);
         return;
       }
@@ -5175,7 +5815,14 @@ export class ChatController {
   ): Promise<{ code: number | null; out: string }> {
     // The environment of the process: whatever isn't secret every session of the workspace gets, and this session's token
     // (portal tools). It goes in on stdin: a command line is readable by every process in the workspace.
-    const grant = await this.#grant(workspaceId, o.sessionId);
+    // T-968: a General Manager gets the person's manager token (it acts as them), never an agent token.
+    const managerRow = this.#chat.row(o.sessionId);
+    const manager = (managerRow as { kind?: string } | undefined)?.kind === 'manager';
+    const grant = manager
+      ? ((await this.managerAccess
+          ?.mint({ workspaceId, sessionId: o.sessionId, ownerId: (managerRow as { owner_id?: string }).owner_id ?? 'u_owner' })
+          .catch(() => null)) ?? null)
+      : await this.#grant(workspaceId, o.sessionId);
     if (grant) this.#pilotTools.set(o.sessionId, false);
     else this.#pilotTools.delete(o.sessionId);
     const env = { ...this.#launchEnv(workspaceId), ...grant?.env };
@@ -5199,27 +5846,48 @@ export class ChatController {
       ...(agent && CHAT_AGENT_NAME.test(agent) ? ['--agent', agent] : []),
       // T-294: sub-agents off takes the sub-agent tool away (both its names), at every start like the agent; Claude Code 2.1.296 checked:
       // docs/prd/evidence/t294-subagents-flag.md. On or off only: Claude Code has no count.
-      ...(launched?.subagents === 0 ? ['--disallowedTools', ...SUBAGENT_TOOLS] : []),
+      // T-1863: Claude Code's own scheduling tools are always taken away: a prompt it schedules itself is one this portal never sent.
+      '--disallowedTools',
+      ...launchDisallowedTools(launched?.subagents !== 0),
       // The portal's own tools, for a workspace that opted in: the agent scope is rate-limited, labelled and never destructive, deny rules
       // still win, and without this the first call of each tool waits for a tap in Manual mode.
       ...(grant ? ['--mcp-config', grant.mcpConfig, '--allowedTools', PILOT_TOOLS] : []),
+      // T-968 (review 2026-10-18, measured on Claude Code 2.1.296 in docs/prd/evidence/t968-manager-flags.md): `--tools ""` leaves NO
+      // built-in tool (an allowlist, not a deny list) while the pilot MCP stays connected; `--setting-sources ""` loads no settings file, so
+      // no hook runs (a project SessionStart hook did not); `--strict-mcp-config` admits the pilot server alone; no slash commands.
+      // (`--safe-mode` would also drop the MCP server, so it is not used.)
+      ...(manager
+        ? [
+            '--tools',
+            '',
+            '--setting-sources',
+            '',
+            '--strict-mcp-config',
+            '--disable-slash-commands',
+            '--append-system-prompt',
+            this.managerAccess?.brief() ?? '',
+          ]
+        : []),
       o.resume ? '--resume' : '--session-id',
       o.csid,
       ...(this.#viaPool(workspaceId) ? ['--max-budget-usd', String(this.#budgetUsd())] : []),
       ...(o.bypass ? ['--allow-dangerously-skip-permissions'] : []),
       // T-323: the project's permission rules the portal trusts, as flag settings (Claude Code ignores them in a folder it doesn't trust).
       // T-561: for a lead under the policy, ONE inline value: those rules merged with the lead rules (never two --settings flags).
-      ...(leadSettings !== null
-        ? ['--settings', leadSettings]
-        : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
-          ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]
-          : []),
+      ...(manager
+        ? []
+        : leadSettings !== null
+          ? ['--settings', leadSettings]
+          : this.#projectSettings.has(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)
+            ? ['--settings', this.#projectSettings.get(`${workspaceId}\u0000${sessionCwd(o.cwd)}`)!]
+            : []),
     ];
     const args = ['start', o.csid, String(o.seg), o.cwd, ...(lines.length ? ['--env', String(lines.length)] : []), '--', ...flags];
     const settle = (started: boolean) => {
       if (!grant?.tokenId) return;
       try {
-        this.agentAccess?.settle?.(o.sessionId, grant.tokenId, started);
+        if (manager) this.managerAccess?.settle?.(o.sessionId, grant.tokenId, started);
+        else this.agentAccess?.settle?.(o.sessionId, grant.tokenId, started);
       } catch {
         // a token left unsettled still ends with its session
       }
@@ -5356,7 +6024,7 @@ export class ChatController {
    */
   async #restore(sessionId: string, r: Restore): Promise<void> {
     const session = this.#chat.get(sessionId);
-    const mode = r.mode !== START_MODE && MODES.has(r.mode) && (r.mode !== 'auto' || (!!session && autoModeAllowed(session)));
+    const mode = r.mode !== START_MODE && MODES.has(r.mode) && (r.mode !== 'auto' || (!!session && this.#autoAllowed(session)));
     // A mode that isn't put back (Auto where it isn't allowed): the process runs on the start mode, and the session says so.
     if (!mode && r.mode !== START_MODE && this.#isLive(sessionId)) this.#chat.patchSession(sessionId, { mode: START_MODE });
     if (!r.model && !r.effort && !r.ultracode && !mode) {
@@ -5387,6 +6055,17 @@ export class ChatController {
         const reply = await this.#request(sessionId, 'set_permission_mode', { mode: r.mode });
         const applied = typeof reply.mode === 'string' && reply.mode ? reply.mode : r.mode;
         if (applied !== 'bypassPermissions') this.#chat.patchSession(sessionId, { mode: applied });
+        if (r.start && applied === 'auto') {
+          this.#note(sessionId, `Mode: ${MODE_LABELS.auto} (no person started it: “Auto for agents” is on)`);
+          this.#chat.addAudit({
+            severity: 'medium',
+            kind: 'mode.auto',
+            sessionId,
+            workspaceId: session?.workspaceId,
+            actor: 'portal',
+            detail: { from: START_MODE, how: 'start' },
+          });
+        }
       } catch {
         failed.push('mode');
         // Claude Code refused it (Auto on a model without it, say): the process runs on the start mode, and the session says so.
@@ -5610,6 +6289,8 @@ export class ChatController {
       start = nl + 1;
       reader.offset += lineBuf.length;
       reader.retries = 0; // progress: the follow is healthy
+      reader.liveDrops = 0;
+      reader.liveSince = undefined;
       const offset = reader.offset;
       unsaved = true;
       reader.at = { start: offset - lineBuf.length, segment: reader.segment ?? 0 };
@@ -5646,7 +6327,11 @@ export class ChatController {
     reader.exec = undefined;
     if (reader.stopped) return;
     if (code === TAIL_PAST_END) this.#healCursor(reader);
-    if (Date.now() - reader.tailStart >= HEALTHY_TAIL_MS) reader.retries = 0; // hit its 600 s limit: normal renewal
+    if (Date.now() - reader.tailStart >= HEALTHY_TAIL_MS) {
+      reader.retries = 0; // hit its 600 s limit: normal renewal
+      reader.liveDrops = 0;
+      reader.liveSince = undefined;
+    }
     void this.#checkAndRetail(reader);
   }
 
@@ -5674,13 +6359,15 @@ export class ChatController {
     reader.checking = true;
     let status: 'live' | 'gone' | 'unknown';
     try {
-      status = await this.#status(row.workspace_id, claudeSessionOf(row));
+      status = await this.#goneCheck(row);
     } finally {
       reader.checking = false;
     }
     if (reader.stopped || this.#readers.get(reader.sessionId) !== reader) return; // replaced meanwhile
     if (status === 'gone') return this.#markGone(reader.sessionId);
-    this.#scheduleRetail(reader); // live, or unreachable (which runs out of retries if it stays so)
+    // Live: re-followed with a back-off, "Lost touch" only past a ceiling (T-1711: a lead read live by the host was Interrupted after its
+    // follower dropped five times in a row, and its Bypass paused). Unreachable: runs out of retries if it stays so.
+    this.#scheduleRetail(reader, status === 'live');
   }
 
   /**
@@ -5710,7 +6397,7 @@ export class ChatController {
     }
   }
 
-  #scheduleRetail(reader: Reader): void {
+  #scheduleRetail(reader: Reader, live = false): void {
     if (reader.stopped || reader.timer || reader.parked) return;
     // An outage is not a vanished process: wait for the target instead of spending retries (FR39).
     const workspaceId = this.#chat.row(reader.sessionId)?.workspace_id;
@@ -5718,12 +6405,37 @@ export class ChatController {
       reader.parked = true;
       return;
     }
-    if (reader.retries >= MAX_IMMEDIATE_RETRIES) return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.');
-    reader.retries++;
+    let wait = RETAIL_MS;
+    if (live) {
+      // T-1711: the host says the process runs, so this drop is most likely the follower's, not the process's: no retry is spent; the
+      // re-follow backs off once the drops keep coming. Not forever (review): `live` is only `kill -0` on the pid, so drops with nothing
+      // read, LIVE_DROPS_MAX in a row or for LIVE_DROPS_MS, end in the unconfirmed "Lost touch" like unanswered readings do.
+      reader.retries = 0;
+      reader.liveDrops = (reader.liveDrops ?? 0) + 1;
+      const now = Date.now();
+      reader.liveSince ??= now;
+      if (reader.liveDrops >= this.#liveDropsMax || now - reader.liveSince >= this.#liveDropsMs) {
+        const min = Math.round((now - reader.liveSince) / 60_000);
+        console.warn(
+          `[chat] ${shortId(reader.sessionId)}: the follower dropped ${reader.liveDrops} times in ${min} min with nothing read while the host said live: lost touch (T-1711)`,
+        );
+        this.#note(
+          reader.sessionId,
+          `Lost touch with Claude Code: its output could not be followed (${reader.liveDrops} tries in ${min} min) though the host says it runs.`,
+        );
+        return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
+      }
+      const over = reader.liveDrops - MAX_IMMEDIATE_RETRIES;
+      if (over > 0) wait = Math.min(RETAIL_LIVE_MAX_MS, RETAIL_MS * 2 ** Math.min(over, 16));
+    } else {
+      if (reader.retries >= MAX_IMMEDIATE_RETRIES)
+        return this.#markGone(reader.sessionId, 'Lost touch with Claude Code before it answered.', false);
+      reader.retries++;
+    }
     reader.timer = setTimeout(() => {
       reader.timer = undefined;
       void this.#tail(reader);
-    }, RETAIL_MS);
+    }, wait);
     reader.timer.unref?.();
   }
 
@@ -5796,6 +6508,11 @@ export class ChatController {
       }
       this.#emitTasks(sessionId);
       this.#armIdle(sessionId); // a task that ended may be what kept it awake
+    }
+    // T-3017: the set of background tasks still running is whole: one that left it has ended, even when its own end line never came.
+    if (parsed.taskSet && this.#chat.endBackgroundTasksNotIn(sessionId, parsed.taskSet)) {
+      this.#emitTasks(sessionId);
+      this.#armIdle(sessionId);
     }
     // The model each sub-agent runs on: what its own lines report wins over what it was launched on.
     if (parsed.agentModels?.length) {
@@ -6270,6 +6987,7 @@ export class ChatController {
         actor: 'portal',
         detail: { why: 'downgrade', mode },
       });
+      void this.#parentLeftBypass(sessionId, { why: 'downgrade' }); // PILOT-997 review 42957
     } else this.#note(sessionId, `Mode is ${MODE_LABELS[mode] ?? mode} in this chat`);
     this.#emitSession(sessionId);
   }
@@ -6350,20 +7068,38 @@ export class ChatController {
     m.bypassPending = null;
     const row = this.#chat.row(sessionId);
     if (!row || row.state === 'ended') return;
+    // T-1094: the portal lost touch with this process in Bypass and paused it on the row; the process ran on. Out of it first (fail
+    // closed), then a lead's resume puts it back through every gate (`#keepBypass('lost')`). Not a portal restart.
+    const last = how === 'stored' ? this.#chat.audit({ kind: 'bypass', sessionId, limit: 1 })[0] : undefined;
+    const lost = last?.kind === 'bypass.left' && (last.detail.why === 'stopped' || last.detail.why === 'lost_touch');
+    const kept = lost && last?.detail.kept === true; // a lead's: its resume still asks every gate to put it back (#sleptInBypass)
     console.warn(
-      `[chat] ${shortId(sessionId)}: a Bypass entry the portal began before it restarted was not finished (${how}): taking the process out of it`,
+      lost
+        ? `[chat] ${shortId(sessionId)}: attached to the process the portal lost touch with, still in Bypass: taking it out of it`
+        : `[chat] ${shortId(sessionId)}: a Bypass entry the portal began before it restarted was not finished (${how}): taking the process out of it`,
     );
-    this.#note(sessionId, 'Bypass is off in this chat: the portal restarted while turning it on.');
+    this.#note(
+      sessionId,
+      lost
+        ? 'Bypass paused: the portal lost touch with Claude Code while it ran in Bypass.'
+        : 'Bypass is off in this chat: the portal restarted while turning it on.',
+    );
     this.#chat.addAudit({
       severity: 'medium',
       kind: 'bypass.left',
       sessionId,
       workspaceId: row.workspace_id,
       actor: 'portal',
-      detail: { why: 'restart_unfinished', how },
+      detail: lost ? { why: 'lost_touch', how, kept } : { why: 'restart_unfinished', how },
     });
+    void this.#parentLeftBypass(sessionId, lost ? { why: 'lost_touch', kept } : { why: 'restart_unfinished' }); // PILOT-997 review 42957
     this.#saveControl(sessionId);
-    void Promise.resolve().then(() => this.#leaveBypass(sessionId, 'Bypass was not finished before the portal restarted.'));
+    const leaving: Promise<void> = Promise.resolve()
+      .then(() => this.#leaveBypass(sessionId, 'Bypass was not finished before the portal restarted.'))
+      .finally(() => {
+        if (this.#leaving.get(sessionId) === leaving) this.#leaving.delete(sessionId);
+      });
+    this.#leaving.set(sessionId, leaving);
   }
 
   /**
@@ -6522,7 +7258,7 @@ export class ChatController {
           model: row.model,
         };
       },
-      events: (id, limit) => this.#chat.history(id, Math.max(0, (this.#chat.row(id)?.last_seq ?? 0) - limit)),
+      events: (id, limit) => this.#chat.history(id, Math.max(0, (this.#chat.row(id)?.last_seq ?? 0) - limit), limit),
       exec: (workspaceId, command) => {
         const [target, name] = this.#split(workspaceId);
         return this.#workspaces.exec(target, name, command);
@@ -6705,8 +7441,7 @@ export class ChatController {
       if (!(e instanceof ControlTimeout) || !this.#isLive(sessionId)) return;
       // No answer: a process that died after its turn says nothing about credentials; a running one that
       // won't answer fails closed. Unreachable, the liveness check and the next turn's check decide.
-      const workspaceId = this.#chat.row(sessionId)!.workspace_id;
-      const status = await this.#status(workspaceId, this.#csid(sessionId));
+      const status = await this.#goneCheck(this.#chat.row(sessionId)!);
       if (!this.#isLive(sessionId)) return;
       if (status === 'gone') this.#markGone(sessionId);
       else if (status === 'live') this.#endCredential(sessionId, CREDENTIAL.unanswered);

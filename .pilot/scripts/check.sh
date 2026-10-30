@@ -26,6 +26,13 @@ if [ -n "${PILOT_RUNNER:-}" ]; then
   echo "check: on the runner $PILOT_RUNNER: the gate at ${sha:0:8} runs here"
   exec bash scripts/gate.sh "$sha"
 fi
-# The cluster is shared and busy: here only typecheck and the web build (the deploy runs the whole gate, the suite included).
-echo "check: no runner free (or the hand-off failed): typecheck and web build at ${sha:0:8} go to the cluster as a Job"
-exec bash scripts/gate-job.sh "$sha" typecheck,web-build
+# T-1609: a gate Job for this commit already exists in the cluster (the deploy's whole gate, or an earlier check): another one only waits in
+# the shared Job queue for what that one checks (2026-10-18: #464, #466 and #470 each waited 30-40 min behind Konfersi Jobs for nothing).
+if command -v kubectl >/dev/null 2>&1 &&
+  kubectl -n "${GATE_NAMESPACE:-isnan-claudepilot}" get jobs -o name 2>/dev/null | grep -q "^job.batch/claudepilot-gate-${sha:0:7}-"; then
+  echo "check: a gate Job for ${sha:0:8} is already in the cluster (the deploy's or an earlier check's): nothing to add"
+  exit 0
+fi
+# The cluster is shared and busy: here only typecheck, the web build and the web unit tests (the deploy runs the whole gate, the suite included).
+echo "check: no runner free (or the hand-off failed): typecheck, web build and web tests at ${sha:0:8} go to the cluster as a Job"
+exec bash scripts/gate-job.sh "$sha" typecheck,web-build,web-tests

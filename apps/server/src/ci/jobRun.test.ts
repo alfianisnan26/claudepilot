@@ -24,7 +24,11 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
 import { runPod } from './jobRunTestkit.js';
+import { JOBRUN_DENIED_GLOBS, jobRunDenies, passesContent, passOf } from '../approvals/pass.js';
 
+/** An override value that removes the variable from a child's environment. */
+const UNSET = '\u0000unset';
+const withoutUnset = (e: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(e).filter(([, v]) => v !== UNSET));
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const SCRIPT = join(REPO, 'scripts/job-run.sh');
 const TEMPLATE = join(REPO, 'deploy/k3s-build/job-run.yaml');
@@ -77,7 +81,9 @@ const failing = (w) => { const f = path.join(F, 'fail'); return fs.existsSync(f)
 // kubectl error that quotes the object might. Without this the 2>&1 on the real create could be dropped and no test would notice.
 const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.values(JSON.parse(t).data || {}).map((v) => Buffer.from(v, 'base64').toString()).join(' '); } catch {}
   process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
-if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
+// T-1982: the API server proxying the registry's service: the file "cluster-tags.json" is its answer; none = the call fails.
+if (verb === 'get' && kind === '--raw') { const t = path.join(F, 'cluster-tags.json'); if (!fs.existsSync(t)) process.exit(1); process.stdout.write(fs.readFileSync(t, 'utf8')); }
+else if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
@@ -119,6 +125,7 @@ interface Seed {
   owner?: string;
   program?: string;
   repo?: string;
+  role?: string;
 }
 /** What the fake "kubectl top nodes" prints for the control-plane node (T-611): a memory percentage, a raw text, or "FAIL"; none = the metrics API is missing (exit 1). */
 interface Scenario {
@@ -140,6 +147,53 @@ function jobLog(root: string, rc: number, extra = '') {
   writeFileSync(join(art, 'reports/junit.xml'), '<testsuites tests="1"/>');
   const tgz = spawnSync('tar', ['-czf', '-', '-C', art, 'reports']).stdout.toString('base64');
   return `=== JOB-RUN checked out claudepilot at abc1234 in 1s\nhello from the job\n${extra}=== JOB-RUN ARTIFACTS BEGIN\n${tgz}\n\n=== JOB-RUN ARTIFACTS END\n=== JOB-RUN SUMMARY claudepilot@abc1234 checkout=1s steps=2s run=3s rc=${rc} node=k3s-master\n=== JOB-RUN EXIT ${rc}\n`;
+}
+
+// PILOT-998: the names world()'s fake pool delivers as env, and the drop-in file for a list (the values are filler: the script reads only keys).
+const WORLD_DELIVERED = [
+  'E2E_CF_ACCESS_CLIENT_SECRET',
+  'E2E_CF_ACCESS_CLIENT_ID',
+  'E2E_CF_ACCESS_NOT_SET',
+  'E2E_QA_EMAIL',
+  'E2E_QA2_PASSWORD',
+  'E2E_QA3_EMAIL',
+  'E2E_STAFF_PASSWORD',
+  'E2E_STAFF2_EMAIL',
+  'E2E_TURNSTILE_TOKEN',
+  'KONEVIRO_S3_RO_ACCESS_KEY_ID',
+  'KONEVIRO_S3_RO_SECRET_ACCESS_KEY',
+];
+const poolDropin = (names: string[]) =>
+  JSON.stringify({ env: Object.fromEntries(names.map((n) => [n, 'filler'])), permissions: { deny: [] } });
+// The drop-in path is fixed in the read-only helper (no variable overrides it: review 42840; job-run.sh never names it: T-2865), so a
+// test runs a scratch copy of the script, its helper and the template, with the helper's one line pointing at its fixture.
+const NAMES_HELPER = join(REPO, 'scripts/pool-env-names.sh');
+const DROPIN_LINE = 'dropin=/etc/claude-code/managed-settings.d/20-claudepilot-env.json\n';
+// T-2889: the passes file and its owner are fixed the same way, in the read-only helper scripts/approval-passes.sh (job-run.sh never
+// names the file: review B1, the T-2865 pattern); a pass test points the helper's copy at its own file and owner.
+const PASSES_HELPER = join(REPO, 'scripts/approval-passes.sh');
+const PASS_FILE_LINE = 'passes=/etc/claudepilot/approval-passes\n';
+const PASS_UID_LINE = 'owner=0\n';
+function scriptWithDropin(dropin: string, pass?: { file: string; uid: number }) {
+  const dir = mkdtempSync(join(tmpdir(), 'cp-jobrun-pool-'));
+  roots.push(dir);
+  mkdirSync(join(dir, 'scripts'));
+  mkdirSync(join(dir, 'deploy/k3s-build'), { recursive: true });
+  writeFileSync(join(dir, 'deploy/k3s-build/job-run.yaml'), readFileSync(TEMPLATE, 'utf8'));
+  const script = readFileSync(SCRIPT, 'utf8');
+  assert.ok(!script.includes('/etc/claudepilot/approval-passes'), 'job-run.sh never names the passes file (B1)');
+  writeFileSync(join(dir, 'scripts/job-run.sh'), script);
+  const src = readFileSync(NAMES_HELPER, 'utf8');
+  assert.equal(src.split(DROPIN_LINE).length, 2, 'the helper names the drop-in path on exactly one line');
+  writeFileSync(join(dir, 'scripts/pool-env-names.sh'), src.replace(DROPIN_LINE, `dropin=${dropin}\n`));
+  const helper = readFileSync(PASSES_HELPER, 'utf8');
+  assert.equal(helper.split(PASS_FILE_LINE).length, 2, 'the helper names the passes file on exactly one line');
+  assert.equal(helper.split(PASS_UID_LINE).length, 2, 'the helper names the passes owner on exactly one line');
+  writeFileSync(
+    join(dir, 'scripts/approval-passes.sh'),
+    pass ? helper.replace(PASS_FILE_LINE, `passes=${pass.file}\n`).replace(PASS_UID_LINE, `owner=${pass.uid}\n`) : helper,
+  );
+  return join(dir, 'scripts/job-run.sh');
 }
 
 function world(seeds: Seed[] = [], scenario: Scenario = {}) {
@@ -175,22 +229,35 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     gitconfig,
     `[credential "https://git.konfersi.com"]\n\thelper = "!f() { echo username=bot; echo password=${giteaToken}; }; f"\n`,
   );
-  const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-    PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
-    HOME: home,
-    TMPDIR: root,
-    FAKE: root,
-    GIT_CONFIG_GLOBAL: gitconfig,
-    GIT_CONFIG_NOSYSTEM: '1',
-    JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1',
-    JOB_RUN_POLL_S: '0.1',
-    JOB_RUN_WATCH_PID: 'none',
-    JOB_RUN_LOG: join(root, 'job.log'),
-    NODE_AUTH_TOKEN: npmToken,
-    PILOT_SESSION_ID: 'chat-a',
-    PILOT_AGENT: 't107',
-    ...over,
-  });
+  // PILOT-998: the fake Secrets env drop-in, the names this workspace's pool delivers (its values are never read by the script).
+  const dropin = join(root, 'env-dropin.json');
+  writeFileSync(dropin, poolDropin(WORLD_DELIVERED));
+  // run() with the real script runs the copy that reads this drop-in; a mutant passed in runs as it is.
+  const poolScript = scriptWithDropin(dropin);
+  // UNSET as an override value leaves that variable out entirely (to test a script default that applies only when it is unset).
+  const env = (over: Record<string, string> = {}): NodeJS.ProcessEnv =>
+    withoutUnset({
+      PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
+      HOME: home,
+      TMPDIR: root,
+      FAKE: root,
+      GIT_CONFIG_GLOBAL: gitconfig,
+      GIT_CONFIG_NOSYSTEM: '1',
+      JOB_RUN_IMAGE: 'registry.test/claudepilot/workspace:1-dev-1',
+      JOB_RUN_POLL_S: '0.1',
+      // The queue tests are written for these caps (the script's defaults until T-1624); the defaults themselves have their own test.
+      JOB_RUN_MAX: '3',
+      JOB_RUN_MAX_PER_CHAT: '2',
+      JOB_RUN_MAX_PER_PROGRAM: '2',
+      // The placement tests are written with no node avoided (T-1643 made k3s-master the default; that default has its own test).
+      JOB_RUN_AVOID_NODES: '',
+      JOB_RUN_WATCH_PID: 'none',
+      JOB_RUN_LOG: join(root, 'job.log'),
+      NODE_AUTH_TOKEN: npmToken,
+      PILOT_SESSION_ID: 'chat-a',
+      PILOT_AGENT: 't107',
+      ...over,
+    });
   const start = (argv: string[], over: Record<string, string> = {}) => {
     const p = spawn('bash', [SCRIPT, ...argv], { env: env(over), cwd: root });
     children.push(p);
@@ -201,7 +268,9 @@ function world(seeds: Seed[] = [], scenario: Scenario = {}) {
     return { p, done, out: () => out };
   };
   const run = (argv: string[], over: Record<string, string> = {}, script = SCRIPT) => {
-    const r = spawnSync('bash', [script, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
+    // Only --pool-env reads the drop-in: those runs use the copy that names the fixture; the rest run the real script in place.
+    const file = script === SCRIPT && argv.includes('--pool-env') ? poolScript : script;
+    const r = spawnSync('bash', [file, ...argv], { env: env(over), cwd: root, encoding: 'utf8', timeout: 30_000 });
     return { code: r.status, out: r.stdout + r.stderr };
   };
   const state = () =>
@@ -295,7 +364,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(r.code, 3, r.out);
   assert.match(r.out, /hello from the job/);
   assert.match(r.out, /=== JOB-RUN SUMMARY claudepilot@abc1234 .* rc=3/);
-  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master with 4Gi; log: /);
+  assert.match(r.out, /job-run: claudepilot-job-[0-9a-f]{8} rc=3 in \d+s \(queued \d+s\) on k3s-master with 3Gi; log: /);
   assert.doesNotMatch(r.out, /OOM|Pending|evicted/, 'a plain failure is not reported as memory');
   assert.doesNotMatch(r.out, /ARTIFACTS BEGIN/, 'the artifacts block is not shown');
   assert.equal(readFileSync(join(w.root, 'got/reports/junit.xml'), 'utf8'), '<testsuites tests="1"/>');
@@ -324,7 +393,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
     /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/,
   );
   // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
-  assert.deepEqual(c.resources, { requests: { cpu: '500m', memory: '4Gi' }, limits: { cpu: '4', memory: '4Gi' } });
+  assert.deepEqual(c.resources, { requests: { cpu: '500m', memory: '3Gi' }, limits: { cpu: '4', memory: '3Gi' } });
   // T-401: fetch-home holds the fetch container's credential helper and .npmrc; the run container never mounts it.
   assert.deepEqual(pod.volumes, [
     { name: 'tmp', emptyDir: { medium: 'Memory', sizeLimit: '2Gi' } },
@@ -473,6 +542,93 @@ test('T-491 Event: without a GitHub token the run is refused before anything is 
   assert.doesNotMatch(w.calls(), /create secret|apply/);
 });
 
+// T-1982: with no JOB_RUN_IMAGE the newest -dev- workspace tag is looked up. The registry first (the pod); when this host cannot reach it
+// (the Mac devcontainer: "Could not resolve host") the cluster answers through kubectl (the API server proxies the registry's service).
+// The fake curl answers with the file "curl-tags.json", or fails as an unresolvable host does (exit 6).
+function imageLookup(curlTags: string | null, clusterTags: string | null, over: Record<string, string> = {}) {
+  const w = world();
+  writeFileSync(
+    join(w.root, 'bin', 'curl'),
+    '#!/bin/sh\n[ -f "$FAKE/curl-tags.json" ] || { echo "curl: (6) Could not resolve host" >&2; exit 6; }\ncat "$FAKE/curl-tags.json"\n',
+  );
+  chmodSync(join(w.root, 'bin', 'curl'), 0o755);
+  if (curlTags !== null) writeFileSync(join(w.root, 'curl-tags.json'), curlTags);
+  if (clusterTags !== null) writeFileSync(join(w.root, 'cluster-tags.json'), clusterTags);
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'true'], {
+    JOB_RUN_IMAGE: UNSET,
+    DEPLOY_REGISTRY: UNSET,
+    ...over,
+  });
+  const raw = w
+    .calls()
+    .split('\n')
+    .filter((l) => l.includes('--raw'));
+  return { w, r, raw };
+}
+const tagsJson = (...tags: string[]) => JSON.stringify({ name: 'claudepilot/workspace', tags });
+
+test('T-1982: the registry unreachable from here, the cluster names the newest development workspace image', () => {
+  const { w, r, raw } = imageLookup(
+    null,
+    tagsJson('2.1.296-dev-2026.10.13-1', '2.1.296-2026.10.15-2', '2.1.296-dev-2026.10.15-1', '2.1.296-dev-2026.10.9-3'),
+  );
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /did not answer from here: asking the cluster/);
+  assert.deepEqual(raw, [
+    'kubectl get --raw /api/v1/namespaces/isnan-registry/services/registry:5000/proxy/v2/claudepilot/workspace/tags/list',
+  ]);
+  assert.equal(container(yamlLoad(w.applied1()) as Manifest).image, 'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.15-1');
+});
+
+test('T-1982: the registry answering (the pod) is used as before, with no call to the cluster for it', () => {
+  const { w, r, raw } = imageLookup(tagsJson('1.0.0-dev-2026.1.1-1', '1.0.0-dev-2026.1.2-1'), tagsJson('9.9.9-dev-2026.1.1-1'));
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(raw, []);
+  assert.ok(!r.out.includes('asking the cluster'), r.out);
+  assert.equal(container(yamlLoad(w.applied1()) as Manifest).image, 'registry.int.isnan.me/claudepilot/workspace:1.0.0-dev-2026.1.2-1');
+});
+
+test('T-1982: neither the registry nor the cluster answers: exit 1, no Job; another DEPLOY_REGISTRY never asks the internal one', () => {
+  const none = imageLookup(null, null);
+  assert.equal(none.r.code, 1, none.r.out);
+  assert.match(none.r.out, /no development workspace image in registry\.int\.isnan\.me: set JOB_RUN_IMAGE/);
+  assert.deepEqual(none.w.applied(), []);
+  const other = imageLookup(null, tagsJson('9.9.9-dev-2026.1.1-1'), { DEPLOY_REGISTRY: 'registry.test' });
+  assert.equal(other.r.code, 1, other.r.out);
+  assert.deepEqual(other.raw, []);
+  assert.deepEqual(other.w.applied(), []);
+});
+
+test('T-1624, D-96, T-2966: with no cap set, the defaults are 12 at once, 4 per chat and 9 per program', async () => {
+  const w = world(Array.from({ length: 12 }, (_, i) => ({ name: `claudepilot-job-${String(i + 1).padStart(8, '0')}`, chat: `chat-${i}` })));
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], {
+    JOB_RUN_MAX: '',
+    JOB_RUN_MAX_PER_CHAT: '',
+    JOB_RUN_MAX_PER_PROGRAM: '',
+  });
+  await waitFor('the queue line', () => /queued behind 12 \(at most 12 at once, 4 per chat, 9 per program\)/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  await s.done;
+});
+
+test('T-2966: with the default per-chat cap, one chat (a lead and its Agent lanes) runs a fourth Job; a fifth waits for one to end', async () => {
+  const caps = { JOB_RUN_MAX: '12', JOB_RUN_MAX_PER_CHAT: '', JOB_RUN_MAX_PER_PROGRAM: '9', PILOT_SESSION_ID: 'chat-a' };
+  const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-a' })));
+  const fourth = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], caps).done;
+  assert.equal(fourth.code, 0, fourth.out);
+  assert.doesNotMatch(fourth.out, /queued behind/, 'three running in this chat: the fourth goes');
+  const v = world([1, 2, 3, 4].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-a' })));
+  const fifth = v.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], caps);
+  await waitFor('the fifth queued', () => /queued behind 4 \(at most 12 at once, 4 per chat, 9 per program\)/.test(fifth.out()));
+  v.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  const r = await fifth.done;
+  assert.equal(r.code, 0, r.out);
+});
+
 test('the cluster-wide cap: three running Jobs, the fourth says "queued behind 3" and starts when one ends', async () => {
   const w = world([
     { name: 'claudepilot-job-00000001', chat: 'chat-x' },
@@ -509,6 +665,61 @@ test('the per-chat cap: a chat with two running waits, another chat goes past it
   assert.equal(r.code, 0, r.out);
 });
 
+test('T-2967 priority lane: a konfersi-stg-deploy Job is not held by the per-chat or per-program cap (pipeline runs share the chat "manual")', async () => {
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'manual', program: 'konfersi' },
+    { name: 'claudepilot-job-0000000b', chat: 'manual', program: 'konfersi' },
+  ]);
+  const args = ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true'];
+  const r = await w.start(args, { PILOT_SESSION_ID: '' }).done;
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /queued behind/, 'two of its chat and two of its program run: the deploy still goes');
+  const lane = ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--role', 'lane', '--', 'true'];
+  const other = w.start(lane, { PILOT_SESSION_ID: '' });
+  await waitFor('a lane Job of the same chat waits', () =>
+    /queued behind 2 \(at most 3 at once, 2 per chat, 2 per program\)/.test(other.out()),
+  );
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  assert.equal((await other.done).code, 0);
+});
+
+test('T-2967 priority lane: a deploy goes ahead of a lane Job that waited longer, and takes the next free cluster slot', async () => {
+  const w = world([
+    { name: 'claudepilot-job-00000001', chat: 'chat-x' },
+    { name: 'claudepilot-job-00000002', chat: 'chat-y' },
+    { name: 'claudepilot-job-00000003', chat: 'chat-z' },
+    { name: 'claudepilot-job-00000004', chat: 'chat-w', suspend: true },
+  ]);
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true']);
+  await waitFor('behind the three running only', () => /queued behind 3 \(/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  const r = await s.done;
+  assert.equal(r.code, 0, r.out);
+  assert.equal(w.state().jobs.find((j) => j.name === 'claudepilot-job-00000004')?.suspend, true, 'the older lane Job still waits');
+});
+
+test('T-2967 priority lane: JOB_RUN_PRIORITY_ROLES is a comma list of labels; empty turns the lane off', async () => {
+  const w = world([
+    { name: 'claudepilot-job-0000000a', chat: 'manual' },
+    { name: 'claudepilot-job-0000000b', chat: 'manual' },
+  ]);
+  assert.equal(w.run(['--list'], { JOB_RUN_PRIORITY_ROLES: 'a b' }).code, 2, 'a space is refused');
+  assert.equal(w.run(['--list'], { JOB_RUN_PRIORITY_ROLES: 'x,,y' }).code, 2, 'an empty item is refused');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--role', 'konfersi-stg-deploy', '--', 'true'], {
+    PILOT_SESSION_ID: '',
+    JOB_RUN_PRIORITY_ROLES: '',
+  });
+  await waitFor('off: the per-chat cap holds it', () => /queued behind 2/.test(s.out()));
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  assert.equal((await s.done).code, 0);
+});
+
 test('T-524 the per-program cap: two Konfersi Jobs running (one from before the label, known by its repo), a third waits; ClaudePilot goes past it', async () => {
   const w = world([
     { name: 'claudepilot-job-0000000a', chat: 'chat-x', program: 'konfersi' },
@@ -533,9 +744,9 @@ test('T-524 the per-program cap: two Konfersi Jobs running (one from before the 
   assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: 'x' }).code, 2, 'the cap is a number');
 });
 
-test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {
+test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 3Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {
   for (const [argv, mem, tmp] of [
-    [[], '4Gi', '2Gi'],
+    [[], '3Gi', '2Gi'],
     [['--big'], '8Gi', '4Gi'],
   ] as const) {
     const w = world();
@@ -548,11 +759,16 @@ test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 4Gi with /t
       name: 'tmp',
       emptyDir: { medium: 'Memory', sizeLimit: tmp },
     });
-    assert.deepEqual((m.spec.template.spec.affinity as { nodeAffinity: unknown }).nodeAffinity, {
-      preferredDuringSchedulingIgnoredDuringExecution: [
-        { weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } },
-      ],
-    });
+    // T-1643: no node preference any more (every node is control-plane); the Jobs spread across the nodes instead.
+    assert.equal((m.spec.template.spec.affinity as { nodeAffinity?: unknown }).nodeAffinity ?? null, null);
+    assert.deepEqual(m.spec.template.spec.topologySpreadConstraints, [
+      {
+        maxSkew: 1,
+        topologyKey: 'kubernetes.io/hostname',
+        whenUnsatisfiable: 'ScheduleAnyway',
+        labelSelector: { matchLabels: { app: 'claudepilot-job-run' } },
+      },
+    ]);
   }
 });
 
@@ -561,7 +777,7 @@ test('T-524 OOMKilled: the container killed at its limit says so with the limit 
   for (const [argv, re] of [
     [
       [],
-      /was OOMKilled: it reached its memory limit of 4Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/,
+      /was OOMKilled: it reached its memory limit of 3Gi \(the in-memory \/tmp counts too\); rerun with --big \(8Gi, prefers k3s-node2\)/,
     ],
     [['--big'], /was OOMKilled: it reached its memory limit of 8Gi .*; 8Gi is the most a Job gets: split the command/],
   ] as const) {
@@ -578,7 +794,7 @@ test('T-524 OOMKilled: the container killed at its limit says so with the limit 
   });
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npm test']);
   assert.equal(r.code, 1, r.out);
-  assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 4Gi; rerun with --big/);
+  assert.match(r.out, /2 process\(es\) were OOM-killed at the memory limit of 3Gi; rerun with --big/);
   // Evicted for /tmp over its sizeLimit.
   const ev = world([], {
     rc: 1,
@@ -601,7 +817,7 @@ test('T-524 Pending for memory: one clear line (not a silent wait), then the Job
   );
   const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
   await waitFor('the Pending line', () =>
-    /is Pending: no node has 4Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()),
+    /is Pending: no node has 3Gi of memory free to request \(0\/2 nodes are available: 2 Insufficient memory\./.test(s.out()),
   );
   assert.match(s.out(), /it starts when a Job ends and frees memory \(waits up to 900s\)/);
   await new Promise((r) => setTimeout(r, 400));
@@ -623,7 +839,7 @@ test('T-524 a full in-memory /tmp: "No space left on device" in a failed Job giv
   for (const [argv, re] of [
     [
       [],
-      /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 4Gi limit\); rerun with --big \(\/tmp 4Gi\)/,
+      /: No space left on device: \/tmp holds at most 2Gi in memory \(it and \/dev\/shm count against the 3Gi limit\); rerun with --big \(\/tmp 4Gi\)/,
     ],
     [['--big'], /: No space left on device: \/tmp holds at most 4Gi in memory .*the 8Gi limit\); 4Gi is the most \/tmp gets/],
   ] as const) {
@@ -843,6 +1059,8 @@ test('usage errors: nothing is created', () => {
     // T-491: the Event token is for that one repository; no second one rides along.
     [['--repo', 'event', '--also', 'x/y', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
     [['--also', 'x/y', '--repo', 'event', '--ref', 'main', '--', 'x'], /--also cannot be used with --repo event/],
+    // T-2865: --deploy-layout only changes the --also clones; without one it is a mistake, not a no-op.
+    [['--repo', 'claudepilot', '--ref', 'main', '--deploy-layout', '--', 'x'], /--deploy-layout needs --also/],
   ];
   for (const [argv, re] of cases) {
     const r = w.run(argv);
@@ -1347,6 +1565,90 @@ test("the Job's own script: the proof (passes on the ref, fails on the other, ke
   const dead = pod({ JR_STEPS: 'npm-ci', NPM_FAIL_UNTIL: '9' });
   assert.equal(dead.status, 7);
   assert.match(dead.stdout, /retrying once[\s\S]*npm ci failed in claudepilot \(rc=7\)\n=== JOB-RUN EXIT 7\n$/);
+
+  // T-2865: every JR_POOL_<name> the manifest holds (job-run.sh decides which names may be there) reaches the command as <name>, and
+  // neither form is in npm's environment. A fixed case list here let KONEVIRO_S3_RO_* through job-run.sh but never to the command.
+  const pbin = join(root, 'pbin');
+  mkdirSync(pbin);
+  const seen = join(root, 'npm.env');
+  writeFileSync(
+    join(pbin, 'npm'),
+    `#!/bin/sh\nprintf '%s|%s\\n' "\${KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" "\${JR_POOL_KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" >> "${seen}"\nmkdir -p node_modules\n`,
+  );
+  chmodSync(join(pbin, 'npm'), 0o755);
+  const poolVal = `kv${hex(10)}`;
+  const got = join(root, 'cmd.env');
+  const cmd = `printf '%s|%s\\n' "\${KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" "\${JR_POOL_KONEVIRO_S3_RO_ACCESS_KEY_ID:-unset}" > "${got}"`;
+  const pooled = runPod(
+    TEMPLATE,
+    {
+      PATH: `${pbin}:${process.env.PATH}`,
+      JR_ROOT: join(root, `run-${hex(3)}`),
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: '',
+      JR_STEPS: 'npm-ci',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from(cmd).toString('base64'),
+      NODE_NAME: 'k3s-master',
+    },
+    {},
+    { JR_POOL_KONEVIRO_S3_RO_ACCESS_KEY_ID: poolVal },
+  );
+  assert.equal(pooled.status, 0, text(pooled));
+  assert.equal(readFileSync(got, 'utf8'), `${poolVal}|unset\n`, 'the command gets the name, and the JR_POOL_ form is gone');
+  assert.match(readFileSync(seen, 'utf8'), /^(unset\|unset\n)+$/, 'npm (and its lifecycle scripts) see neither');
+  assert.ok(!text(pooled).includes(poolVal), 'the value is not printed');
+});
+
+test("T-2865 the Job's own script: --deploy-layout installs the repository alone (the --also clone has no npm step, no node_modules); without it both install", () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-layout-'));
+  roots.push(root);
+  const env0 = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8', env: env0 });
+  for (const name of ['claudepilot', 'shared']) {
+    const src = join(root, `${name}-src`);
+    mkdirSync(src);
+    git(['init', '-q', '-b', 'main'], src);
+    writeFileSync(join(src, 'package.json'), '{}');
+    writeFileSync(join(src, 'package-lock.json'), '{}');
+    git(['add', '.'], src);
+    git(['commit', '-qm', name], src);
+    git(['clone', '-q', '--bare', src, join(root, `${name}.git`)], root);
+  }
+  // A fake npm: which folder it ran in, and the subcommand; npm ci leaves a node_modules.
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  const calls = join(root, 'npm.calls');
+  writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "$(basename "$PWD") $1" >> "${calls}"\n[ "$1" != ci ] || mkdir -p node_modules\n`);
+  chmodSync(join(bin, 'npm'), 0o755);
+  const pod = (layout: string) => {
+    rmSync(calls, { force: true });
+    const jr = join(root, `run-${hex(3)}`);
+    const r = runPod(TEMPLATE, {
+      PATH: `${bin}:${process.env.PATH}`,
+      JR_ROOT: jr,
+      JR_REPO_URL: `file://${join(root, 'claudepilot.git')}`,
+      JR_REF: 'main',
+      JR_ALSO: `shared=file://${join(root, 'shared.git')}@main`,
+      JR_LAYOUT: layout,
+      JR_STEPS: 'npm-ci',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from('test -f ../shared/package.json').toString('base64'),
+      NODE_NAME: 'k3s-master',
+    });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return { calls: readFileSync(calls, 'utf8'), sharedModules: existsSync(join(jr, 'w/shared/node_modules')) };
+  };
+  const deploy = pod('deploy');
+  assert.equal(deploy.calls, 'claudepilot ci\nclaudepilot rebuild\n', 'only the repository installs');
+  assert.equal(deploy.sharedModules, false, 'the --also clone is there, as stg-deploy lays it out: no node_modules');
+  const plain = pod('');
+  assert.equal(plain.calls, 'shared ci\nclaudepilot ci\nshared rebuild\nclaudepilot rebuild\n', 'without it nothing changes: both install');
+  assert.equal(plain.sharedModules, true);
 });
 
 test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred: a required rule left every Job Pending)', () => {
@@ -1383,7 +1685,7 @@ test('T-365: job-run and gate Jobs prefer a node away from the portal (preferred
   assert.match(readFileSync(join(REPO, 'deploy/k3s/portal.yaml'), 'utf8'), /app: claudepilot-portal/);
 });
 
-test('T-524: the heavy Jobs prefer a node other than the control plane (preferred only) and request all the memory they may use', () => {
+test('T-524, T-1643: the heavy Jobs keep off the control plane (the gate by a required rule) and request all the memory they may use', () => {
   type Pod = {
     affinity?: {
       nodeAffinity?: {
@@ -1403,21 +1705,20 @@ test('T-524: the heavy Jobs prefer a node other than the control plane (preferre
   for (const name of ['job-run.yaml', 'gate-job.yaml', 'browser-job.yaml']) {
     const text = readFileSync(join(REPO, 'deploy/k3s-build', name), 'utf8')
       .replace(/__MASTER_REQUIRED__/g, '')
-      .replace(/__MEMORY__/g, '4Gi')
+      .replace(/__MEMORY__/g, '3Gi')
       .replace(/__TMP_SIZE__/g, '2Gi')
       .replace(/__[A-Z_]+__/g, 'x');
     const pod = (yamlLoad(text) as { spec: { template: { spec: Pod } } }).spec.template.spec;
     const na = pod.affinity?.nodeAffinity;
-    assert.equal(
-      na?.requiredDuringSchedulingIgnoredDuringExecution,
-      undefined,
-      `${name}: never required (a required rule left every Job Pending)`,
-    );
-    assert.deepEqual(
-      na?.preferredDuringSchedulingIgnoredDuringExecution,
-      [{ weight: 100, preference: { matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] } }],
-      name,
-    );
+    if (name === 'job-run.yaml') assert.equal(na ?? null, null, `${name}: T-1643 no node preference, a topology spread instead`);
+    else {
+      assert.equal(na?.requiredDuringSchedulingIgnoredDuringExecution, undefined, `${name}: the template itself has no required rule`);
+      assert.deepEqual(
+        na?.preferredDuringSchedulingIgnoredDuringExecution,
+        [{ weight: 100, preference: { matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] } }],
+        name,
+      );
+    }
     for (const c of [...pod.containers, ...(pod.initContainers ?? [])])
       assert.equal(c.resources.requests.memory, c.resources.limits.memory, `${name}: memory request = limit`);
     const tmp = pod.volumes?.find((v) => v.name === 'tmp')?.emptyDir?.sizeLimit;
@@ -1503,14 +1804,34 @@ test('T-426 without --pool-env the run container has no secretKeyRef at all (T-4
   );
 });
 
-test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_ACCESS_*, a non-name (not echoed), an unset, empty or multi-line one', () => {
+test('T-426 --pool-env refusals, before any kubectl call: a deny-listed or undelivered name, a non-name (not echoed), an unset, empty or multi-line one', () => {
   const w = world();
   const val = `cs${hex(20)}`;
+  const NOT_DELIVERED =
+    /--pool-env: refused: not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/;
   const cases: [string[], Record<string, string>, RegExp][] = [
-    [['--pool-env', 'GITHUB_TOKEN'], { GITHUB_TOKEN: val }, /--pool-env: refused: not an allowed name \(E2E_CF_ACCESS_\*\)/],
-    [['--pool-env', 'E2E_CF_ACCESS_'], {}, /not an allowed name/],
-    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /not an allowed name/],
-    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not an allowed name/],
+    [
+      ['--pool-env', 'GITHUB_TOKEN'],
+      { GITHUB_TOKEN: val },
+      /--pool-env: refused: a deny-listed name .*It needs a person's approval \(PILOT-1000\)/,
+    ],
+    // PILOT-998: a name near a delivered one is not delivered (set in the shell or not).
+    [['--pool-env', 'E2E_QA4_EMAIL'], { E2E_QA4_EMAIL: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_STAFF3_PASSWORD'], { E2E_STAFF3_PASSWORD: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_STAFF_TOKEN'], { E2E_STAFF_TOKEN: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_TURNSTILE_TOKEN_X'], { E2E_TURNSTILE_TOKEN_X: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_TURNSTILE_SECRET'], { E2E_TURNSTILE_SECRET: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_TURNSTILE_TOKEN'], { E2E_TURNSTILE_TOKEN: 'short7!' }, /E2E_TURNSTILE_TOKEN is shorter than 8 characters/],
+    [['--pool-env', 'E2E_QA3_EMAIL'], {}, /--pool-env: E2E_QA3_EMAIL is not set in this workspace/],
+    [['--pool-env', 'E2E_STAFF_PASSWORD'], {}, /--pool-env: E2E_STAFF_PASSWORD is not set in this workspace/],
+    [['--pool-env', 'E2E_STAFF2_EMAIL'], {}, /--pool-env: E2E_STAFF2_EMAIL is not set in this workspace/],
+    [['--pool-env', 'E2E_QA2_PASSWORD'], {}, /--pool-env: E2E_QA2_PASSWORD is not set in this workspace/],
+    [['--pool-env', 'E2E_QA_TOKEN'], { E2E_QA_TOKEN: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_QA_EMAIL_X'], { E2E_QA_EMAIL_X: val }, NOT_DELIVERED],
+    [['--pool-env', 'E2E_QA_EMAIL'], {}, /--pool-env: E2E_QA_EMAIL is not set in this workspace/],
+    [['--pool-env', 'E2E_CF_ACCESS_'], {}, NOT_DELIVERED],
+    [['--pool-env', 'E2E_CF_ACCESS_id'], { E2E_CF_ACCESS_id: val }, /--pool-env: refused: not a variable name .*the argument is not shown/],
+    [['--pool-env', `E2E_CF_ACCESS_X=${val}`], {}, /not a variable name/],
     [['--pool-env', POOL_ID], { [POOL_ID]: 'short7!' }, /shorter than 8 characters/],
     [['--pool-env', 'E2E_CF_ACCESS_NOT_SET'], {}, /--pool-env: E2E_CF_ACCESS_NOT_SET is not set in this workspace/],
     [['--pool-env', POOL_ID], { [POOL_ID]: '' }, /--pool-env: E2E_CF_ACCESS_CLIENT_ID is not set in this workspace/],
@@ -1524,6 +1845,262 @@ test('T-426 --pool-env refusals, before any kubectl call: a name outside E2E_CF_
   }
   assert.equal(w.calls(), '', 'refused before any kubectl call');
   assert.deepEqual(w.applied(), []);
+});
+
+test('T-2865 --pool-env without jq: refused with a message that names jq (review 43381 nit 3), before any kubectl call', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  // A PATH with every program of the usual folders but jq.
+  const nojq = join(w.root, 'nojq');
+  mkdirSync(nojq);
+  for (const d of ['/usr/local/bin', '/usr/bin', '/bin']) {
+    if (!existsSync(d)) continue;
+    for (const f of readdirSync(d)) {
+      if (f === 'jq' || existsSync(join(nojq, f))) continue;
+      symlinkSync(join(d, f), join(nojq, f));
+    }
+  }
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', POOL_ID, '--', 'true'], {
+    [POOL_ID]: val,
+    PATH: `${join(w.root, 'bin')}:${nojq}`,
+  });
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /--pool-env: refused: jq is not installed here/);
+  assert.ok(!r.out.includes(val), 'a value is never shown');
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+});
+
+test('T-2885 a deny-listed --pool-env name files one approval request (name, exact arguments, folder, session; never a value) and shows its id', () => {
+  const w = world();
+  const val = `cs${hex(20)}`;
+  const box = join(w.root, 'home', '.claudepilot', 'outbox');
+  mkdirSync(box, { recursive: true });
+  const argv = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--', 'npm test -- --grep "a b"'];
+  const r = w.run(argv, { GITHUB_TOKEN: val });
+  assert.equal(r.code, 2, r.out);
+  const id = /approval request (apr-[0-9a-f]{18}) is filed for this exact run/.exec(r.out)?.[1];
+  assert.ok(id, r.out);
+  assert.match(r.out, /It needs a person's approval \(PILOT-1000\)/);
+  assert.match(r.out, /When it is allowed, run this same command again, in the same folder, within 15 minutes: it passes once \(T-2889\)/);
+  assert.ok(!r.out.includes('GITHUB_TOKEN'), 'the name is not shown');
+  const raw = readFileSync(join(box, 'approval.jsonl'), 'utf8');
+  assert.ok(!raw.includes(val) && !r.out.includes(val), 'a value is never written or shown');
+  const lines = raw.trim().split('\n');
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0]!.length <= 4000);
+  const line = JSON.parse(lines[0]!) as { id: string; type: string; kind: string; session: string; payload: unknown };
+  assert.equal(line.id, id);
+  assert.equal(line.type, 'request');
+  assert.equal(line.kind, 'jobrun.pool_env');
+  assert.equal(line.session, 'chat-a');
+  assert.deepEqual(line.payload, { name: 'GITHUB_TOKEN', args: argv, cwd: w.root });
+  assert.equal(w.calls(), '', 'refused before any kubectl call');
+  // No outbox (a home without one): refused as before, nothing filed, and it says so.
+  rmSync(box, { recursive: true });
+  const n = w.run(argv, { GITHUB_TOKEN: val });
+  assert.equal(n.code, 2, n.out);
+  assert.match(n.out, /no request could be filed from here/);
+  assert.ok(!existsSync(join(box, 'approval.jsonl')));
+});
+
+test('T-2885 review M3: the 4000 cap on a request line counts bytes, not characters (a UTF-8 locale counts characters)', (t) => {
+  // The cap only differs from a character count in a UTF-8 locale; without one here the test would prove nothing.
+  const probe = spawnSync('bash', ['-c', 'x=é; printf %s "${#x}"'], {
+    env: { LC_ALL: 'C.UTF-8', PATH: '/usr/bin:/bin' },
+    encoding: 'utf8',
+  });
+  if (probe.stdout !== '1') return t.skip('no UTF-8 locale here');
+  const w = world();
+  const box = join(w.root, 'home', '.claudepilot', 'outbox');
+  mkdirSync(box, { recursive: true });
+  // About 2,700 characters but about 5,300 bytes: under the cap as characters, over it as bytes.
+  const argv = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--', `echo ${'é'.repeat(2500)}`];
+  const r = w.run(argv, { GITHUB_TOKEN: `cs${hex(20)}`, LC_ALL: 'C.UTF-8' });
+  assert.equal(r.code, 2, r.out);
+  assert.match(r.out, /no request could be filed from here/);
+  assert.ok(!existsSync(join(box, 'approval.jsonl')) || readFileSync(join(box, 'approval.jsonl'), 'utf8') === '', 'nothing filed');
+});
+
+test('T-2885 review M1: the portal deny-list copy (approvals/pass.ts) is exactly job-run.sh pool_denied, and matches as the shell does', () => {
+  const src = readFileSync(SCRIPT, 'utf8');
+  const body = /^pool_denied\(\) \{\n([\s\S]*?)^\}/m.exec(src)?.[1] ?? '';
+  const globs = [...body.matchAll(/^\s*([^#\s][^)\n]*)\)\s*return 0 ;;/gm)].flatMap((m) => m[1]!.split('|').map((s) => s.trim()));
+  assert.ok(globs.length > 10, `pool_denied parsed: ${body}`);
+  assert.deepEqual([...new Set(globs)].sort(), [...JOBRUN_DENIED_GLOBS].sort());
+  // The glob reading agrees with bash's own `case` for names on and off the list.
+  const names = [
+    'GITHUB_TOKEN',
+    'X_RW_Y',
+    'MY_ADMIN_KEY',
+    'STG_SEARCH_READ_KEY',
+    'CLAUDE_X',
+    'PILOTX',
+    'NODE_AUTH_TOKEN',
+    'RW',
+    'A_PRD',
+    'PRDX',
+  ];
+  for (const n of names) {
+    const sh = spawnSync('bash', ['-c', `${/^pool_denied\(\) \{\n[\s\S]*?^\}/m.exec(src)![0]}\npool_denied "$1"`, 'x', n]).status === 0;
+    assert.equal(jobRunDenies(n), sh, n);
+  }
+});
+
+test('T-2889 a one-time pass lets exactly the allowed run through once; another argument, folder, an expired pass or a file root does not own is refused', () => {
+  const w = world();
+  const box = join(w.root, 'home', '.claudepilot', 'outbox');
+  mkdirSync(box, { recursive: true });
+  // The deny-listed name is delivered by the pool, so a run the pass lets through goes on to the Job (the pass skips the deny-list only).
+  const dropin = join(w.root, 'dropin-2889.json');
+  writeFileSync(dropin, poolDropin([...WORLD_DELIVERED, 'GITHUB_TOKEN']));
+  const over = { GITHUB_TOKEN: `v${hex(12)}` };
+  const passes = join(w.root, 'approval-passes');
+  const uid = process.getuid!();
+  const script = scriptWithDropin(dropin, { file: passes, uid });
+  const argv = ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--', 'npm test -- --grep "a b"'];
+  // The portal's own hash of the stored payload (approvals/pass.ts) is what the script must compute: the two sides agree.
+  const pass = passOf('jobrun.pool_env', { name: 'GITHUB_TOKEN', args: argv, cwd: w.root })!;
+  const write = (list: { pass: string; until: number }[], mode = 0o644) => {
+    writeFileSync(passes, passesContent(list));
+    chmodSync(passes, mode);
+  };
+  const refused = (r: { code: number | null; out: string }, what: string) => {
+    assert.equal(r.code, 2, `${what}: ${r.out}`);
+    assert.match(r.out, /a deny-listed name/, what);
+  };
+  // No pass, a pass for another folder, a pass for another argument, an expired pass: refused.
+  refused(w.run(argv, over, script), 'no passes file');
+  write([
+    { pass: passOf('jobrun.pool_env', { args: argv, cwd: '/elsewhere' })!, until: Date.now() + 60_000 },
+    { pass: passOf('jobrun.pool_env', { args: [...argv.slice(0, -1), 'npm test'], cwd: w.root })!, until: Date.now() + 60_000 },
+    { pass, until: Date.now() - 1000 },
+  ]);
+  refused(w.run(argv, over, script), 'other folder, other argument, expired');
+  // The live pass in a file group or others may write, or one root does not own (the script's own uid line is 0): refused.
+  write([{ pass, until: Date.now() + 60_000 }], 0o664);
+  refused(w.run(argv, over, script), 'group-writable');
+  write([{ pass, until: Date.now() + 60_000 }]);
+  refused(w.run(argv, over, scriptWithDropin(dropin, { file: passes, uid: uid + 1 })), 'not the owner');
+  // A different run, the live pass there: still refused (its argv hashes differently).
+  refused(w.run([...argv.slice(0, -1), 'npm test'], over, script), 'another argument');
+  assert.equal(w.calls(), '', 'every refusal comes before any kubectl call');
+  // The exact run: through, once; the use is reported on the outbox with the pass (no name, no value).
+  const ok = w.run(argv, over, script);
+  assert.equal(ok.code, 0, ok.out);
+  assert.match(ok.out, /passes its deny-listed --pool-env names once, on a one-time pass a person allowed \(T-2889\)/);
+  assert.notEqual(w.calls(), '', 'the Job was made');
+  assert.equal(readFileSync(join(w.root, 'home', '.claudepilot', 'approval-passes-used'), 'utf8'), `${pass}\n`);
+  const used = readFileSync(join(box, 'approval.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l) as { id: string; type: string; pass?: string })
+    .filter((l) => l.type === 'used');
+  assert.equal(used.length, 1);
+  assert.equal(used[0]!.pass, pass);
+  assert.ok(used[0]!.id.length <= 100);
+  assert.ok(!JSON.stringify(used).includes('GITHUB_TOKEN') && !JSON.stringify(used).includes(over.GITHUB_TOKEN));
+  // The same run again, the pass still in the file (the portal has not pulled yet): refused.
+  refused(w.run(argv, over, script), 'used once already');
+});
+
+test('PILOT-998 --pool-env: any name the Secrets pool delivers is accepted (the two T-2823 keys too); a deny-listed one is refused even when delivered; an undelivered one is refused and never shown', () => {
+  const w = world();
+  const custom = 'STG_SEARCH_READ_KEY'; // a name no old allow-list held
+  const deny = [
+    'GITHUB_TOKEN',
+    'GITEA_TOKEN',
+    'CLOUDFLARE_API_TOKEN',
+    'KONEVIRO_S3_RW_ACCESS_KEY_ID',
+    'STG_ADMIN_PASSWORD',
+    'PRODUCTION_DB_URL',
+    'APP_PROD_KEY',
+    'KONFERSI_PRD_SECRET',
+    'VAULT_MASTER_KEY',
+    'KONEVIRO_S3_RW',
+    'NODE_AUTH_TOKEN',
+    'GH_TOKEN',
+    'ANTHROPIC_API_KEY',
+    'CLAUDEPILOT_PORTAL_TOKEN',
+    'PILOT_MCP_TOKEN',
+  ];
+  const dropin = join(w.root, 'dropin-998.json');
+  writeFileSync(dropin, poolDropin([...WORLD_DELIVERED, custom, ...deny]));
+  const vals: Record<string, string> = {};
+  for (const n of [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY', ...deny]) vals[n] = `v${hex(12)}`;
+  const over = vals;
+  const script = scriptWithDropin(dropin);
+  // Review 42840: no variable moves the drop-in. A caller's JOB_RUN_POOL_ENV_DROPIN naming a file that delivers the name is ignored:
+  // world's own drop-in (which does not deliver it) is what the script reads.
+  const moved = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'], {
+    ...over,
+    JOB_RUN_POOL_ENV_DROPIN: dropin,
+  });
+  assert.equal(moved.code, 2, moved.out);
+  assert.match(moved.out, /not delivered as env by this workspace's Secrets pool/);
+  // Refused first (before any kubectl call): each deny-listed name, delivered and set, with why and what to do; the name is not shown.
+  for (const n of deny) {
+    const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--pool-env', n, '--', 'true'], over, script);
+    assert.equal(r.code, 2, `${n}: ${r.out}`);
+    assert.match(
+      r.out,
+      /--pool-env: refused: a deny-listed name \(write, admin, production or master credentials.*\); the argument is not shown\. It needs a person's approval \(PILOT-1000\)/,
+      n,
+    );
+    assert.ok(!r.out.includes(n), `${n} is not shown`);
+    assert.ok(!r.out.includes(vals[n] as string), 'nor its value');
+  }
+  // An undelivered name, set in the shell, built at runtime: refused with what to do, and shown nowhere.
+  const stray = `STRAY_${hex(6).toUpperCase()}`;
+  const u = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', stray, '--', 'true'],
+    { ...over, [stray]: `v${hex(12)}` },
+    script,
+  );
+  assert.equal(u.code, 2, u.out);
+  assert.match(
+    u.out,
+    /not delivered as env by this workspace's Secrets pool; the argument is not shown\. Turn on expose for it in its pool/,
+  );
+  assert.ok(!u.out.includes(stray), 'the undelivered name is not shown');
+  // No drop-in (nothing exposed in this workspace): refused with what to do.
+  const none = w.run(
+    ['--repo', 'claudepilot', '--ref', 'main', '--pool-env', custom, '--', 'true'],
+    over,
+    scriptWithDropin(join(w.root, 'no-such.json')),
+  );
+  assert.equal(none.code, 2, none.out);
+  assert.match(none.out, /delivers no env .*Turn on expose for the secret in its pool/);
+  assert.ok(!none.out.includes(custom));
+  assert.equal(w.calls(), '', 'every refusal comes before any kubectl call');
+  // Accepted: the custom delivered name and the two read-only Koneviro keys of T-2823, as secretKeyRefs of the run container.
+  const ok = w.run(
+    [
+      '--repo',
+      'claudepilot',
+      '--ref',
+      'main',
+      '--pool-env',
+      custom,
+      '--pool-env',
+      'KONEVIRO_S3_RO_ACCESS_KEY_ID',
+      '--pool-env',
+      'KONEVIRO_S3_RO_SECRET_ACCESS_KEY',
+      '--',
+      'true',
+    ],
+    over,
+    script,
+  );
+  assert.equal(ok.code, 0, ok.out);
+  const m = yamlLoad(w.applied1()) as Manifest;
+  assert.deepEqual(
+    container(m)
+      .env.filter((e) => e.name.startsWith('JR_POOL_'))
+      .map((e) => e.valueFrom?.secretKeyRef?.key),
+    [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY'],
+  );
+  for (const n of [custom, 'KONEVIRO_S3_RO_ACCESS_KEY_ID', 'KONEVIRO_S3_RO_SECRET_ACCESS_KEY'])
+    assert.ok(!ok.out.includes(vals[n] as string), 'no value shown');
 });
 
 test('T-426 --pool-env: a pasted value that looks like a variable name (lowercase hex starting with a letter) is refused and shown nowhere', () => {
@@ -1976,7 +2553,7 @@ test('S1d the create failing (its stderr quotes the decoded value): a fixed mess
 // ---- T-611: placement. The scheduler counts memory REQUESTS, the control-plane node's own pods use far more for real. job-run.sh reads its real
 // use (kubectl top) and, when use PLUS the Job's expected peak is over JOB_RUN_MASTER_MAX_PCT (85; 75 before T-731's 2026-10-17 change), makes the rule away from it REQUIRED.
 // The fake master prints 9000Mi at the given percentage (allocatable = 9000 * 100 / pct); the default expected peak is 2300 Mi, --big's is 8192 Mi.
-const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' }] }] };
+const CP_RULE = { nodeSelectorTerms: [{ matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }] }] };
 type NodeAff = { requiredDuringSchedulingIgnoredDuringExecution?: unknown; preferredDuringSchedulingIgnoredDuringExecution?: unknown };
 const topLine = (used: string, pct: string) => `k3s-master   310m   7%   ${used}   ${pct}\n`;
 function placed(top: number | string | undefined, extra: string[] = [], over: Record<string, string> = {}, script = SCRIPT) {
@@ -1984,8 +2561,8 @@ function placed(top: number | string | undefined, extra: string[] = [], over: Re
   const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over, script);
   const required =
     r.code === 0
-      ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity: NodeAff }).nodeAffinity
-          .requiredDuringSchedulingIgnoredDuringExecution
+      ? ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity?: NodeAff | null }).nodeAffinity
+          ?.requiredDuringSchedulingIgnoredDuringExecution
       : undefined;
   return { r, w, required };
 }
@@ -2219,7 +2796,7 @@ test('T-611 C5: 50% at create and 90% at release adds the required rule to the s
   assert.match(
     up.patches[0] ?? '',
     new RegExp(
-      `"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"node-role.kubernetes.io/control-plane","operator":"DoesNotExist"\\}\\]\\}\\]\\}\\}\\}`,
+      `"affinity":\\{"nodeAffinity":\\{"${REQ}":\\{"nodeSelectorTerms":\\[\\{"matchExpressions":\\[\\{"key":"isnan.me/pool","operator":"NotIn","values":\\["control"\\]\\}\\]\\}\\]\\}\\}\\}`,
     ),
   );
   assert.match(up.patches[1] ?? '', /\{"spec":\{"suspend":false\}\}/, 'the release comes after the affinity patch');
@@ -2300,7 +2877,7 @@ const AVOID_RULE = {
   nodeSelectorTerms: [
     {
       matchExpressions: [
-        { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' },
+        { key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] },
         { key: 'kubernetes.io/hostname', operator: 'NotIn', values: ['k3s-master'] },
       ],
     },
@@ -2337,8 +2914,15 @@ test('T-733 S5: scripts/job-run.sh has no syntax error (bash -n)', () => {
 
 // ---- T-611 S2: JOB_RUN_AVOID_NODES, a comma list of node names a Job may never run on (default none). A required hostname NotIn rule, in the same
 // term as the control-plane rule when the memory decision adds it.
+test('T-1643: with JOB_RUN_AVOID_NODES unset no node is avoided (the master is allowed again); set to k3s-master, the required hostname rule', () => {
+  kept(placed(50, [], { JOB_RUN_AVOID_NODES: UNSET }), 'unset: no required rule');
+  const off = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  assert.equal(off.r.code, 0, off.r.out);
+  assert.deepEqual(off.required, rule(HOST('k3s-master')), 'named: the master is avoided');
+});
+
 const HOST = (...names: string[]) => ({ key: 'kubernetes.io/hostname', operator: 'NotIn', values: names });
-const CP_EXPR = { key: 'node-role.kubernetes.io/control-plane', operator: 'DoesNotExist' };
+const CP_EXPR = { key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] };
 const rule = (...exprs: unknown[]) => ({ nodeSelectorTerms: [{ matchExpressions: exprs }] });
 test('T-611 S2: JOB_RUN_AVOID_NODES gives a required hostname NotIn rule, alone when the master has room, with the control-plane rule when it is over', () => {
   const alone = placed(50, [], { JOB_RUN_AVOID_NODES: 'k3s-master,node-9.lan' });
@@ -2599,10 +3183,10 @@ test('T-524: a Job queued while the master was under the line is read again when
   assert.match(r.out, /placement: the control-plane node is at 88% of its memory \(over 85%\)/);
   const calls = w.calls().split('\n');
   const rule = calls.findIndex((c) =>
-    /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*node-role\.kubernetes\.io\/control-plane.*DoesNotExist/.test(c),
+    /patch job .*requiredDuringSchedulingIgnoredDuringExecution.*isnan\.me\/pool.*NotIn.*control/.test(c),
   );
   assert.ok(
-    !/node-role[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''),
+    !/isnan\.me\/pool[^\n]*kubernetes\.io\/hostname/.test(calls[rule] ?? ''),
     'no avoid list: the patch holds the control-plane expression alone',
   );
   const go = calls.findIndex((c) => /patch job .*"suspend":false/.test(c));
@@ -2762,7 +3346,16 @@ test('T-731 reuse: a changed commit, command, steps, --against, --also, the hash
   miss('--steps none', go(w, c, 'npm test', ['--steps', 'none']));
   miss('--against', go(w, c, 'npm test', ['--against', sha()]));
   miss('--keep-tests', go(w, c, 'npm test', ['--against', sha(), '--keep-tests', 'a.test.ts']));
-  miss('--also at a commit', go(w, c, 'npm test', ['--also', `org/shared@${sha()}`]));
+  const shared = `org/shared@${sha()}`;
+  miss('--also at a commit', go(w, c, 'npm test', ['--also', shared]));
+  // T-2865: a pass made with the --also clone installed never stands for one without (or the other way round).
+  miss('--deploy-layout', go(w, c, 'npm test', ['--also', shared, '--deploy-layout']));
+  assert.match(
+    go(w, c, 'npm test', ['--also', shared, '--deploy-layout']).out,
+    /reused a passed result/,
+    '--deploy-layout is keyed: a hit',
+  );
+  assert.match(go(w, c, 'npm test', ['--also', shared]).out, /reused a passed result/, 'the run without it is still its own hit');
   const upgraded = mutant(
     (y) => `${y}# a newer runner\n`,
     (s) => s,
@@ -2955,7 +3548,7 @@ test('T-611 merge (8207 item 3): with a saved entry present, --reuse and a bad -
   const bad = `BAD_${hex(6)}`;
   const r = go(w, c, 'npm test', ['--pool-env', bad]);
   assert.equal(r.code, 2, r.out);
-  assert.match(r.out, /--pool-env: refused: not an allowed name/);
+  assert.match(r.out, /--pool-env: refused: not a variable name/);
   assert.ok(!r.out.includes(bad), 'the argument is not shown');
   assert.doesNotMatch(r.out, /reused a passed result/);
   assert.equal(w.calls(), calls, 'no kubectl call');

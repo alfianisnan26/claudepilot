@@ -17,7 +17,7 @@ spec:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
-              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
+              preference: {matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}
       containers:
         - name: kaniko
           image: gcr.io/kaniko-project/executor:v1.23.2

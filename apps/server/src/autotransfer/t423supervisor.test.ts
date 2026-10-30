@@ -26,6 +26,7 @@ const sup = (await import(pathToFileURL(resolve(import.meta.dirname, '../../../.
   slotsFull: (sessions: Row[], cur: Lead, cap: number, now?: number) => boolean;
   compactLanes: (t: { key: string }, ts: { laneCompacted?: Record<string, number> }, sessions: unknown[], cur: Lead) => Promise<void>;
   wakeStaleLanes: (t: { key: string }, ts: { laneWoken?: Record<string, number> }, sessions: unknown[], cur: Lead, now?: number) => Promise<void>;
+  wakeStaleLeads: (st: { leadWoken?: Record<string, number> }, sessions: unknown[], now?: number) => Promise<void>;
   COMPACT: string;
   COMPACT_LANE: string;
   LANES: (prog: string) => string;
@@ -107,6 +108,30 @@ test('a lane working with no event for 45 min is woken to read its task output, 
   assert.equal(ts.laneWoken!.stuck, now, 'not again within the hour');
   await sup.wakeStaleLanes({ key: 'orchestrator' }, ts, sessions, lead, now + 61 * MIN);
   assert.equal(ts.laneWoken!.stuck, now + 61 * MIN, 'again after the gap while it stays silent');
+});
+
+test('T-1692: a top-level crew lead working with no event for 45 min is woken too, tracked or not, once per hour; one with its own sub-agent running, busy, idle, unmarked and worker sessions are left', async () => {
+  const now = Date.now();
+  const at = (min: number) => new Date(now - min * MIN).toISOString();
+  const s = (id: string, state: string, min: number, o: Record<string, unknown> = {}) => ({ id, state, parentId: null, process: 'live', title: id, lastActivityAt: at(min), ...o });
+  const sessions = [
+    s('lab', 'working', 150, { lead: true }), // a unit lead no track names, marked a lead at its start
+    s('business', 'working', 150), // a lead by its live workers
+    s('lane', 'idle', 10, { parentId: 'business', agent: 'lane-backend' }),
+    s('waits', 'working', 150, { lead: true, agentsRunning: 1 }), // its own sub-agent runs: waiting on it
+    s('busy', 'working', 5, { lead: true }),
+    s('idle', 'idle', 150, { lead: true }),
+    s('plain', 'working', 150), // a chat that is no lead
+    s('asleep', 'working', 150, { lead: true, process: 'asleep' }),
+    s('worker', 'working', 150, { parentId: 'lab', lead: true }),
+  ];
+  const st: { leadWoken?: Record<string, number> } = { leadWoken: { gone: now - 120 * MIN } };
+  await sup.wakeStaleLeads(st, sessions, now);
+  assert.deepEqual(Object.keys(st.leadWoken ?? {}).sort(), ['business', 'lab'], 'only the silent working leads; the ended one left the state');
+  await sup.wakeStaleLeads(st, sessions, now + 30 * MIN);
+  assert.equal(st.leadWoken!.lab, now, 'not again within the hour');
+  await sup.wakeStaleLeads(st, sessions, now + 61 * MIN);
+  assert.equal(st.leadWoken!.lab, now + 61 * MIN, 'again after the gap while it stays silent');
 });
 
 test('worktree trust: only rules, and only settings the portal already trusted here (a worker cannot widen its own rules on its branch)', () => {

@@ -55,8 +55,13 @@ export const scopeAllows = (granted: PortalScope, needed: PortalScope): boolean 
 
 /** Who is calling: the token behind an authenticated request. */
 export interface PortalPrincipal {
-  /** `user`: an admin's token (cpat_). `agent`: a per-session token (cpst_) minted for one chat session. */
-  kind: 'user' | 'agent';
+  /**
+   * `user`: an admin's token (cpat_). `agent`: a per-session token (cpst_) minted for one chat session. `manager`: the person's General
+   * Manager (cpmt_, T-968): it acts as the person `userId` (their can(), at use time); it is not an agent and has no workspace.
+   */
+  kind: 'user' | 'agent' | 'manager';
+  /** The person a `manager` token acts for. Unset for the other kinds (the seam reads the founding user for those today). */
+  userId?: string;
   tokenId: string;
   label: string;
   scope: PortalCallerScope;
@@ -69,6 +74,12 @@ export interface PortalPrincipal {
   client: string | null;
   /** The knowledge vaults this token may use, or null for whatever each vault's own policy allows. */
   vaults: string[] | null;
+  /**
+   * T-1105: a person's operate or admin token (cpat_) only, never an agent's or the manager's: where `ticket_create` puts a ticket that names
+   * no workspace, as a person set it. A handler uses it only while that workspace exists and the token may still operate it (at call time);
+   * never from arguments.
+   */
+  defaultWorkspaceId?: string | null;
 }
 
 /** The portal-wide switches a tool may depend on. */
@@ -161,6 +172,12 @@ export interface PortalToolDefinition<S extends z.ZodObject = z.ZodObject> {
 
 /** Whether an agent's per-session token may call the tool. */
 export const agentCallable = (t: Pick<PortalToolDefinition, 'scope' | 'audience'>): boolean => t.scope === 'agent' || t.audience === 'both';
+
+/** The tools only for an agent acting as itself: a manager token (cpmt_) is never offered them and is refused if it calls one (T-968, PRD §4). */
+export const AGENT_SELF_TOOLS: ReadonlySet<string> = new Set(['session_rename_self', 'persona_get_self', 'persona_propose_update', 'session_request_clear', 'worktree_create']);
+
+/** Whether a manager token may call the tool: anything an admin's token of its scope may, except the agent-self tools. */
+export const managerCallable = (t: Pick<PortalToolDefinition, 'name'>): boolean => !AGENT_SELF_TOOLS.has(t.name);
 
 /** The tier an admin's token needs for the tool: an `agent` tool is `read` when it only reads, `operate` otherwise. */
 export function userTier(t: Pick<PortalToolDefinition, 'scope' | 'hints'>): PortalScope {

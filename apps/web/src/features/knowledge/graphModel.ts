@@ -8,8 +8,8 @@ export const LENS_LABEL: Record<GraphLens, string> = { docs: 'Docs', context: 'C
 /** One line for the ⓘ beside the lens switch. */
 export const LENS_HELP: Record<GraphLens, string> = {
   docs: 'How notes link to each other, with tags and files when you ask for them.',
-  context: 'Which sessions, tickets and tokens read or wrote which notes lately.',
-  agentic: 'Workspaces, sessions, tickets and Claudes, and the notes that mention them.',
+  context: 'Which agents, tickets and tokens read or wrote which notes lately.',
+  agentic: 'Workspaces, agents, tickets and Claudes, and the notes that mention them.',
 };
 
 export const KIND_LABEL: Record<GraphNodeKind, string> = {
@@ -17,7 +17,7 @@ export const KIND_LABEL: Record<GraphNodeKind, string> = {
   tag: 'Tag',
   attachment: 'File',
   unresolved: 'Missing note',
-  session: 'Session',
+  session: 'Agent',
   ticket: 'Ticket',
   workspace: 'Workspace',
   claude: 'Claude',
@@ -32,7 +32,7 @@ export const KIND_LABEL: Record<GraphNodeKind, string> = {
 
 /** The kinds the agents lens can be narrowed to, in the order the filter lists them. */
 export const AGENT_KINDS: { value: GraphNodeKind; label: string }[] = [
-  { value: 'session', label: 'Sessions' },
+  { value: 'session', label: 'Agents' },
   { value: 'ticket', label: 'Tickets' },
   { value: 'workspace', label: 'Workspaces' },
   { value: 'claude', label: 'Claudes' },

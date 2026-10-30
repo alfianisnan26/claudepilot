@@ -426,6 +426,7 @@ function sessionTree(input: AttributionInput, grand: ChatUsageTotals): { rows: A
       claudeId,
       claudeName: input.claudeName(claudeId, workspaceId),
       ticketId: info?.ticketId ?? null,
+      ...(info?.ticketKey ? { ticketKey: info.ticketKey } : {}),
       parentId: info?.parentId ?? null,
       continuedFrom: info?.continuedFrom ?? null,
       depth,

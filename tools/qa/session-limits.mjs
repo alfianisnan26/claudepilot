@@ -78,7 +78,7 @@ const liveAgain = () => db.prepare(`UPDATE chat_sessions SET process = 'live', s
 const limitsText = () => b.eval(`document.querySelector('[data-crew-workers-limit] output [aria-hidden]')?.textContent ?? null`);
 const patches = () => b.requests.filter((r) => r.method === 'PATCH' && r.url.endsWith('/limits')).length;
 const openInfo = async () => {
-  await b.clickSel('[data-session-header] button[aria-label$="session info"]');
+  await b.clickSel('[data-session-header] button[aria-label$="agent info"]');
   await b.waitFor(`!!document.querySelector('[data-crew-limits]')`, 6000, 'Session info').catch(() => {});
   await sleep(400);
 };

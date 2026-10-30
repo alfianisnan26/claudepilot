@@ -5,6 +5,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { ServerCodeInput } from '@/features/auth/ServerCodeInput';
 import { ApiError, errorText } from '@/lib/api';
 import { chatApi } from './api';
+import { BYPASS_LIFETIME, BYPASS_LIFETIME_ABOUT } from './bypassCopy';
 
 /** What the confirmation says of the workspace: only what the portal knows to be true of it. */
 export function bypassClaim(workspace: string, facts: ChatBypassFacts): string {
@@ -95,7 +96,7 @@ export function BypassDialog({
         confirming ? (
           <span className="inline-flex items-center gap-1">
             Turn on Bypass?
-            <InfoTip label="About Bypass">Deny rules still apply. Bypass turns off when the session sleeps, restarts or moves to another Claude.</InfoTip>
+            <InfoTip label="About Bypass">{BYPASS_LIFETIME_ABOUT}</InfoTip>
           </span>
         ) : (
           'Enter the server code'
@@ -130,6 +131,9 @@ export function BypassDialog({
             />
             <span className="min-w-0 flex-1">{bypassClaim(workspace, facts)}</span>
           </label>
+          <p data-bypass-lifetime="" className="text-[14px] text-ink-soft [overflow-wrap:anywhere]">
+            {BYPASS_LIFETIME}
+          </p>
           {error && <Problem>{error}</Problem>}
         </div>
       ) : (

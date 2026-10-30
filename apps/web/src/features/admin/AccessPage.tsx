@@ -74,7 +74,7 @@ export function AccessPage() {
   };
 
   const others = state ? state.sessions - 1 : 0;
-  const othersText = others === 1 ? '1 other session' : `${others} other sessions`;
+  const othersText = others === 1 ? '1 other agent' : `${others} other agents`;
 
   return (
     <>
@@ -157,7 +157,7 @@ export function AccessPage() {
               <StorageRow />
               <SettingRow
                 icon={<Users className="size-5" />}
-                label="Sessions"
+                label="Agents"
                 sub={
                   <span title={`This device signed in ${formatDateTime(state.signedInAt)}`}>
                     {others ? `You + ${others} other${others === 1 ? '' : 's'}` : 'Only you'}

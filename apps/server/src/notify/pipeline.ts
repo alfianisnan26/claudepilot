@@ -4,6 +4,7 @@
 
 import { isMuteGuarded, NOTIFY_KIND_INFO, type NotifyDecision, type NotifyDestination, type NotifyError, type NotifyEvent, type NotifyKind, type TestResult, zonedTime, zoneLabel } from '@portal/contracts';
 import type { PlatformOwner } from '../platform/owner.js';
+import { defineLoop } from '../schedules/registry.js';
 import type { Store } from '../store/store.js';
 import { answerOffer, type ActChat, type NotifyActions } from './actions.js';
 import type { NotifyBus } from './bus.js';
@@ -18,6 +19,10 @@ import { sendPush, type PushMessage } from './push.js';
 import { holds, inQuietHours } from './quiet.js';
 import { render, summary, tagOf, type Rendered } from './templates.js';
 import type { NotifyKeys } from './vapid.js';
+
+const CLOCK_MS = 30_000;
+/** The clock's heartbeat in the schedules registry (T-968 S2b). */
+export const NOTIFY_LOOP = defineLoop({ name: 'notify-clock', module: 'notify', intervalMs: CLOCK_MS, description: 'Sends the summaries held back by quiet hours and the throttle.' });
 
 /** What a tab said about itself on the live socket. */
 export interface Presence {
@@ -103,11 +108,13 @@ export class NotifyPipeline {
   start(): void {
     if (this.#off) return;
     this.#off = this.d.bus.on('*', (e) => void this.handle(e).catch((err: unknown) => console.error(`[notify] delivery of ${e.kind} failed: ${(err as Error).message}`)));
-    this.#tick = setInterval(() => void this.tick().catch(() => undefined), 30_000);
+    this.#tick = setInterval(() => void this.tick().then(() => NOTIFY_LOOP.ok(), (e: unknown) => NOTIFY_LOOP.fail(e)), CLOCK_MS);
     this.#tick.unref();
+    NOTIFY_LOOP.started();
   }
 
   stop(): void {
+    if (this.#off) NOTIFY_LOOP.stopped();
     this.#off?.();
     this.#off = null;
     if (this.#tick) clearInterval(this.#tick);

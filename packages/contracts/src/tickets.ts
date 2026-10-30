@@ -53,9 +53,13 @@ export const TICKET_TAG = /^[a-z0-9][a-z0-9._-]*$/;
 export const TICKET_DEFAULT_USER = 'admin';
 
 export interface Ticket {
-  /** `T-12`. */
+  /** `T-12`: the ticket's stable id, kept for ever (a PERMANENT alias of its bucket key, T-1098). URLs, sessions and trailers may use either. */
   id: string;
   number: number;
+  /** T-1098: the bucket it belongs to (`KONF`). Absent from an older server. */
+  bucket?: string;
+  /** T-1098: its id in its bucket, `KONF-12`: what the portal shows. Absent from an older server (show `id`). */
+  key?: string;
   type: TicketType;
   priority: TicketPriority;
   status: TicketStatus;
@@ -129,7 +133,34 @@ export const TICKET_SETTING_KEYS = {
   agentOpenPerWorkspace: 'tickets.agentOpenPerWorkspace',
   /** D-62 (T-483): the tags that let an agent put a ticket on a person; comma separated. */
   agentAssignUserTags: 'tickets.agentAssignUserTags',
+  /** FR9g (D-85): groups of lead sessions that may comment on each other's tickets: groups split by `;`, session ids by `,`. Owner only. */
+  leadPeerGroups: 'tickets.leadPeerGroups',
+  /**
+   * T-2881: which bucket a ticket filed without one goes to, by its tags: rules split by `;`, each `KEY: tag, tag, prefix-*`. An exact tag
+   * beats a `prefix-*` pattern; two buckets tied on the stronger kind decide nothing. Owner only (the settings route).
+   */
+  bucketRoutes: 'tickets.bucketRoutes',
 } as const;
+
+/**
+ * T-2881: the routes the portal ships with. `claudepilot` or `program-claudepilot` keeps the portal's own tickets (which carry `area-*` tags too) in PILOT; Konfersi's
+ * `konfersi-migration` and `area-*` go to KONF; the trading lab's `tradingbot` to TB. A rule naming a bucket that does not exist is skipped.
+ */
+export const TICKET_BUCKET_ROUTES_DEFAULT = 'PILOT: claudepilot, program-claudepilot; KONF: konfersi-migration, area-*; TB: tradingbot';
+
+/**
+ * T-2881: why a new ticket went to its bucket. `named` the request said so; `tags` a `tickets.bucketRoutes` rule matched its tags; `parent`
+ * the bucket of the ticket named as its parent; `workspace` the one bucket whose default workspace is the ticket's; `session_ticket` and
+ * `lead_ticket` the bucket of the ticket the filing session, then its lead, works on; `default` {@link TICKET_DEFAULT_BUCKET}.
+ */
+export type TicketBucketReason = 'named' | 'tags' | 'parent' | 'workspace' | 'session_ticket' | 'lead_ticket' | 'default';
+
+export interface TicketBucketChoice {
+  bucket: string;
+  reason: TicketBucketReason;
+  /** One line for the caller: the rule, tag or ticket that decided it. */
+  why: string;
+}
 
 export type TicketEventKind =
   | 'created'
@@ -150,7 +181,9 @@ export type TicketEventKind =
   /** A person (or a script) pushed it into a running session (FR28): `data` `{ sessionId, sessionTitle, mode }`, `body` the note. */
   | 'bumped'
   /** A file was attached (`data` `{ attachmentId, name, size, mediaType }`) or removed (`data` adds `removed: true`). */
-  | 'attachment';
+  | 'attachment'
+  /** T-1967: it moved to another bucket: `data` `{ from, to }`, its key before and after (the old key stays an alias). */
+  | 'bucket';
 
 /** One entry on a ticket's timeline: who did what, when. Never edited. */
 export interface TicketEvent {
@@ -170,6 +203,48 @@ export interface TicketEvent {
   fromAgent: boolean;
 }
 
+/** T-119: a state a ticket's flow shows: its status, or `waiting` (it carries the tag `needs-a-person`). */
+export type TicketFlowState = TicketStatus | 'waiting';
+
+export interface TicketFlowActor {
+  /** `ui`, `session:<id>`, `portal-mcp:<token id>`, `system`. */
+  actor: string;
+  label: string;
+  /** The session id, when the actor is a session. */
+  session: string | null;
+}
+
+/** One stretch of a ticket in one state (derived from its events: `ticketFlow`, tickets/ticketFlow.ts). A closed state ends where it starts. */
+export interface TicketFlowSpan {
+  state: TicketFlowState;
+  /** ISO. */
+  start: string;
+  /** ISO; null while the span runs. */
+  end: string | null;
+  durationMs: number;
+  /** Who moved the ticket into this state. */
+  by: TicketFlowActor | null;
+  reason: string | null;
+}
+
+export type TicketFlowMarkerKind = 'assigned' | 'claimed' | 'bumped' | 'comment' | 'priority' | 'tags' | 'ci' | 'waiting';
+
+/** A point on a ticket's flow: an assignment, a claim, a bump, a person's comment, a priority or tag change, a CI result. */
+export interface TicketFlowMarker {
+  kind: TicketFlowMarkerKind;
+  at: string;
+  by: TicketFlowActor;
+  detail: string | null;
+}
+
+export interface TicketFlow {
+  spans: TicketFlowSpan[];
+  markers: TicketFlowMarker[];
+  state: TicketFlowState | null;
+  /** Milliseconds per state over all spans. */
+  totals: Partial<Record<TicketFlowState, number>>;
+}
+
 export interface TicketDetail {
   ticket: TicketItem;
   /** Oldest first. */
@@ -180,6 +255,8 @@ export interface TicketDetail {
   checks: TicketCheck[];
   /** Files attached to it, oldest first. Absent from an older server. */
   attachments?: TicketAttachment[];
+  /** T-2014: the merge gate's latest word per repo (`ticket_merge_status`), newest first. Absent from an older server. */
+  merge?: TicketMergeStatus[];
 }
 
 /** A file on a ticket (owner, 2026-10-17: "ticket support with attachment, all files"): any type, kept by the portal, served only to who may see the ticket. */
@@ -211,6 +288,50 @@ export const TICKET_ATTACHMENT_INLINE_TYPES = ['image/png', 'image/jpeg', 'image
 export const TICKET_CHECK_STATES = ['queued', 'running', 'passed', 'failed', 'cancelled'] as const;
 export type TicketCheckState = (typeof TICKET_CHECK_STATES)[number];
 
+/**
+ * FR36d (T-1987, D-93): the shared evidence of a verdict recorded in a batch (`ticket_verdict_batch`): the job run, the batch branch, a
+ * note. Stored with each verdict of the batch and in its timeline entry (`data.batch`). Absent on a verdict recorded alone.
+ */
+export interface TicketVerdictBatch {
+  jobId: string | null;
+  branch: string | null;
+  note: string | null;
+}
+
+/**
+ * T-2014 (tickets PRD FR36e): what the merge gate (the merge-gate lead of a flow program, or a worker it started) says of a ticket's pull
+ * request in one repo. `ready`: open with the verdicts it needs on `prHead`; `merged`; `conflict`: needs a rebase; `waiting`: open, verdicts
+ * on its head not yet in; `no_pr`: no pull request is open for it; `failed`: the gate tried and could not merge (`reason`).
+ */
+export const TICKET_MERGE_STATES = ['ready', 'merged', 'conflict', 'waiting', 'no_pr', 'failed'] as const;
+export type TicketMergeState = (typeof TICKET_MERGE_STATES)[number];
+
+export interface TicketMergeStatus {
+  /** `owner/name` as the forge spells it. */
+  repo: string;
+  /** The pull request number; null only with `no_pr`. */
+  pr: number | null;
+  /** The pull request's head when the gate looked: a full 40-character sha, lowercase; null only with `no_pr`. */
+  prHead: string | null;
+  state: TicketMergeState;
+  /** One line from the gate, or null. Written by an agent: untrusted text. */
+  reason: string | null;
+  /** `session:<id>` of the gate (or its worker) that recorded it. */
+  actor: string;
+  at: string;
+}
+
+export const TICKET_MERGE_LIMITS = { repo: 120, reason: 300, pr: 1_000_000_000 } as const;
+
+export const TICKET_VERDICT_BATCH_LIMITS = { items: 20, jobId: 120, branch: 120, note: 500 } as const;
+
+/**
+ * A batch branch name as D-93 spells it, as a whole token: Konfersi `qa/batch-<date>-<n>`, ClaudePilot `batch/<date>-<n>`, the date
+ * `YYYY-MM-DD` or `YYYYMMDD`; or `wip/qa-batch-<date>-<unit>-<n>[-<sha>]`, the form leads can push today (qa/batch-* is not on their push allow list). A remote prefix (`origin/`) is allowed; a path such as `src/batch/foo.ts` is not a batch (QA on T-1987).
+ */
+export const TICKET_BATCH_BRANCH =
+  /(?:^|[^A-Za-z0-9._-])((?:qa\/batch-|batch\/)(?:\d{4}-\d{2}-\d{2}|\d{8})-\d+|wip\/qa-batch-(?:\d{4}-\d{2}-\d{2}|\d{8})(?:-[A-Za-z0-9]+)+)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])/;
+
 /** A check a CI run attached to a ticket (interface I10): its latest state. */
 export interface TicketCheck {
   name: string;
@@ -225,6 +346,8 @@ export interface TicketCheck {
 
 export interface TicketCounts {
   byStatus: Record<TicketStatus, number>;
+  /** T-1098: unfinished tickets per bucket key (only buckets that have one). Absent from an older server. */
+  byBucket?: Record<string, number>;
   /** Not closed and assigned to a person. */
   needsYou: number;
   /** Open and assigned to nobody: the agents' queue. */
@@ -255,6 +378,8 @@ export interface TicketPage extends CursorPage<TicketItem> {
 export type TicketAssigneeFilter = 'any' | 'unassigned' | 'user' | `session:${string}`;
 
 export interface TicketFilter {
+  /** T-1098: one bucket's tickets (its key, `KONF`). */
+  bucket?: string;
   status?: TicketStatus[];
   priority?: TicketPriority[];
   type?: TicketType[];
@@ -278,6 +403,14 @@ export interface TicketFilter {
 }
 
 export interface CreateTicketRequest {
+  /**
+   * T-1098: the bucket (`KONF`). Left out (T-2881), in this order: the bucket a `tickets.bucketRoutes` rule gives the tags; the `parent`
+   * ticket's bucket; the bucket whose default workspace is the ticket's (or the agent's) workspace; the bucket of the ticket the calling
+   * session, then its lead, works on; else {@link TICKET_DEFAULT_BUCKET}. See {@link TicketBucketReason}.
+   */
+  bucket?: string;
+  /** T-2881: the epic or parent ticket (`T-12` or `KONF-3`); only its bucket is used, when no bucket is named. One the caller cannot see is ignored. */
+  parent?: string;
   summary: string;
   description?: string;
   type?: TicketType;
@@ -289,6 +422,8 @@ export interface CreateTicketRequest {
 }
 
 export interface UpdateTicketRequest {
+  /** T-1967: move it to another bucket (its key): it takes that bucket's next number; its old key keeps resolving. */
+  bucket?: string;
   summary?: string;
   description?: string;
   type?: TicketType;
@@ -347,9 +482,89 @@ export interface TicketTag {
   count: number;
 }
 
+/** T-119 S1b: the scale a timeline is asked at. */
+export const TICKET_TIMELINE_GRANULARITIES = ['minute', 'hour', 'day'] as const;
+export type TicketTimelineGranularity = (typeof TICKET_TIMELINE_GRANULARITIES)[number];
+
+/**
+ * The longest window a granularity may ask for (a minute scale over a long window would be thousands of columns the chart cannot show) and the
+ * window it gets when `from` is absent. A longer one is a 422 (VALIDATION_FAILED) that names the limit; a bad cursor is a 400. The maxima are the ticket's (T-119): 24 hours, 14 days, 180 days.
+ */
+export const TICKET_TIMELINE_LIMITS: Record<TicketTimelineGranularity, { maxWindowMs: number; defaultWindowMs: number }> = {
+  minute: { maxWindowMs: 24 * 3_600_000, defaultWindowMs: 6 * 3_600_000 },
+  hour: { maxWindowMs: 14 * 86_400_000, defaultWindowMs: 3 * 86_400_000 },
+  day: { maxWindowMs: 180 * 86_400_000, defaultWindowMs: 30 * 86_400_000 },
+};
+
+/** Rows per timeline page: 50 when absent, at most 200 (the chart asks for 200). */
+export const TICKET_TIMELINE_PAGE = { defaultLimit: 50, maxLimit: 200 } as const;
+
+/**
+ * GET `/api/tickets/timeline` query: `from` and `to` are ISO times, `granularity` a {@link TicketTimelineGranularity} (default `hour`), `limit`
+ * 1..200 (50), `cursor`. The filters are the list's (`bucket`, `status`, `priority`, `type`, `tag`, `assignee`, `workspace`, `q`); closed
+ * tickets are in unless `status` says otherwise. A next page sends the `from` and `to` the first page answered with.
+ */
+export interface TicketTimelineQuery extends Pick<TicketFilter, 'bucket' | 'status' | 'priority' | 'type' | 'tag' | 'assignee' | 'workspaceId' | 'query'> {
+  from?: string;
+  to?: string;
+  granularity?: TicketTimelineGranularity;
+  limit?: number;
+  cursor?: string;
+}
+
+/** Who has a timeline row's ticket, as its label column shows it (initials): a person, or a session by its title. */
+export interface TicketTimelineAssignee {
+  kind: 'user' | 'session';
+  /** The person's name, or the session's title (`Agent gone` when it no longer exists). */
+  label: string;
+  /** The session id, for a session. */
+  sessionId: string | null;
+}
+
+/**
+ * One ticket on the timeline: a summary row and its flow. `flow.spans` and `flow.markers` are the ones that touch the window (a span that
+ * overlaps it, a marker inside it); `flow.totals` and `flow.state` are over the ticket's whole life.
+ */
+export interface TicketTimelineRow {
+  id: string;
+  /** T-1098: its bucket key (`KONF-12`), what the row shows. */
+  key: string;
+  bucket: string;
+  summary: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  type: TicketType;
+  assignee: TicketTimelineAssignee | null;
+  createdAt: string;
+  closedAt: string | null;
+  flow: TicketFlow;
+}
+
+/** The tickets whose life overlaps the window (created before `to`, not closed before `from`), oldest number first, a page at a time. */
+export interface TicketTimeline {
+  /** ISO, as resolved (absent params filled in). */
+  from: string;
+  to: string;
+  granularity: TicketTimelineGranularity;
+  /** ISO: the time the open spans run to. */
+  now: string;
+  items: TicketTimelineRow[];
+  next: string | null;
+}
+
 export const TICKET_API = {
+  /** GET `TicketTimelineQuery` as a query string: `TicketTimeline` (T-119). */
+  timeline: '/api/tickets/timeline',
   /** GET `TicketFilter` as a query string: `TicketList`. POST `CreateTicketRequest`: `TicketItem`. */
   list: '/api/tickets',
+  /** GET: `TicketBucket[]` (the ones the caller may view). POST `CreateTicketBucketRequest`: `TicketBucket` (T-1098). */
+  buckets: '/api/tickets/buckets',
+  /** GET: `TicketBucket`. PATCH `UpdateTicketBucketRequest`: `TicketBucket`. */
+  bucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}`,
+  /** POST `MergeTicketBucketRequest`: `MergeTicketBucketResult` (T-1967, owner only): every ticket of the bucket moves into `into`, then it is gone. */
+  bucketMerge: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/merge`,
+  /** POST `TicketBucketMovesRequest`: `TicketBucketMoveResult[]` (T-1967, owner only), each move on its own. */
+  bucketMoves: '/api/tickets/bucket-moves',
   /** GET: `TicketDetail`. PATCH `UpdateTicketRequest`: `TicketItem`. DELETE: remove it. */
   one: (id: string) => `/api/tickets/${encodeURIComponent(id)}`,
   /** POST `CommentTicketRequest`: the new `TicketEvent`. */
@@ -371,6 +586,8 @@ export const TICKET_API = {
   attachments: (id: string) => `/api/tickets/${encodeURIComponent(id)}/attachments`,
   /** GET: the file (inline for a preview image, else a download). DELETE: remove it. */
   attachment: (id: string, attachmentId: number) => `/api/tickets/${encodeURIComponent(id)}/attachments/${attachmentId}`,
+  /** GET: `TicketMergeStatus[]`, the merge gate's latest word per repo, newest first (T-2014). */
+  merge: (id: string) => `/api/tickets/${encodeURIComponent(id)}/merge`,
   /** GET: the tickets bumped into a session, as `TicketBumped[]` (FR31). */
   bumped: (sessionId: string) => `/api/tickets/bumped?session=${encodeURIComponent(sessionId)}`,
 } as const;
@@ -378,20 +595,113 @@ export const TICKET_API = {
 /** `T-12` for 12. */
 export const ticketIdOf = (n: number): string => `T-${n}`;
 
+/* ---------- Buckets (T-1098): a project of tickets with its own id prefix and number counter ---------- */
+
+/** A bucket's key: 2 to 6 capital letters (`KONF`, `CP`). Never `T` alone, so `T-12` always names the stable id. */
+export const TICKET_BUCKET_KEY = /^[A-Z]{2,6}$/;
+/** Where a ticket goes when nothing names a bucket, and where the migration put every ticket without a project tag. */
+export const TICKET_DEFAULT_BUCKET = 'PILOT';
+/** `KONF-12`. */
+export const ticketKeyOf = (bucket: string, n: number): string => `${bucket}-${n}`;
+
+export interface TicketBucket {
+  /** The id prefix, `KONF`. Fixed once made. */
+  key: string;
+  name: string;
+  description: string;
+  /** Where its tickets go when a create names no workspace; and an agent files in it only from this workspace. Null: any. */
+  defaultWorkspaceId: string | null;
+  /** Tags every new ticket in it gets. */
+  defaultTags: string[];
+  /** A knowledge vault for its notes, or null. */
+  vaultId: string | null;
+  /** The number its next ticket takes. */
+  nextNumber: number;
+  /** Its unfinished tickets. */
+  open: number;
+  /** T-1967: all its tickets, closed ones too (what a merge moves). Absent from an older server. */
+  total?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateTicketBucketRequest {
+  key: string;
+  name: string;
+  description?: string;
+  defaultWorkspaceId?: string | null;
+  defaultTags?: string[];
+  vaultId?: string | null;
+}
+
+export type UpdateTicketBucketRequest = Partial<Omit<CreateTicketBucketRequest, 'key'>>;
+
+/** T-1967: merge a bucket into another; `name` and `description` rename the target as it takes them in (optional). */
+export interface MergeTicketBucketRequest {
+  into: string;
+  name?: string;
+  description?: string;
+}
+
+/** One ticket a merge or a bulk move moved: its stable id and its key before and after. */
+export interface TicketBucketMove {
+  id: string;
+  from: string;
+  to: string;
+}
+
+export interface MergeTicketBucketResult {
+  bucket: TicketBucket;
+  /** In creation order. */
+  moved: TicketBucketMove[];
+}
+
+export interface TicketBucketMovesRequest {
+  moves: { id: string; bucket: string }[];
+}
+
+/** One move of a bulk request: done (`to` is its new key; `from === to` when it was already there) or refused with why. */
+export type TicketBucketMoveResult = (TicketBucketMove & { ok: true }) | { id: string; ok: false; error: string };
+
 /**
- * The ticket a git branch is for: `ticket/T-12-fix-login`, `ticket/12-fix-login` or `feature/ticket/12`
- * (interface I10: CI finds a ticket from the branch it ran on). Null when the branch names none.
+ * What a ticket reference names: the stable id (`T-12`, `#12`, `12`) or a bucket key (`KONF-12`, any case). Null when it is neither.
+ * Every place that takes a ticket id takes both (T-1098: `T-<n>` is a permanent alias).
+ */
+export function parseTicketRef(raw: string): { number: number } | { bucket: string; n: number } | null {
+  const v = raw.trim();
+  const id = /^(?:T-|#)?(\d{1,9})$/i.exec(v);
+  if (id) return { number: Number(id[1]) };
+  const key = /^([A-Za-z]{2,6})-(\d{1,9})$/.exec(v);
+  return key ? { bucket: key[1]!.toUpperCase(), n: Number(key[2]) } : null;
+}
+
+/** A reference as one canonical string: `T-12` or `KONF-12`. Null when it is not one. */
+export function normalTicketRef(raw: string): string | null {
+  const r = parseTicketRef(raw);
+  if (!r) return null;
+  return 'number' in r ? ticketIdOf(r.number) : ticketKeyOf(r.bucket, r.n);
+}
+
+/**
+ * The ticket a git branch is for: `ticket/T-12-fix-login`, `ticket/12-fix-login`, `feature/ticket/12` or `ticket/KONF-12-fix-login`
+ * (interface I10: CI finds a ticket from the branch it ran on). Null when the branch names none. A bucket key comes back as it is; the tickets
+ * service resolves it.
  */
 export function parseTicketBranch(branch: string): string | null {
   const m = /(?:^|\/)ticket\/(?:T-)?(\d{1,9})(?:[-_/]|$)/i.exec(branch.trim());
-  return m ? ticketIdOf(Number(m[1])) : null;
+  if (m) return ticketIdOf(Number(m[1]));
+  // Capitals only (`ticket/fix-12-login` is not a bucket key).
+  const k = /(?:^|\/)ticket\/([A-Z]{2,6})-(\d{1,9})(?:[-_/]|$)/.exec(branch.trim());
+  return k ? ticketKeyOf(k[1]!, Number(k[2])) : null;
 }
 
-/** The tickets a commit message names in `Ticket: T-12` trailers (interface I10), in order, without repeats. */
+/** The tickets a commit message names in `Ticket: T-12` (or `Ticket: KONF-12`) trailers (interface I10), in order, without repeats. */
 export function parseTicketTrailers(message: string): string[] {
   const ids: string[] = [];
-  for (const m of message.matchAll(/^Ticket:[ \t]*(?:T-|#)?(\d{1,9})\b/gim)) {
-    const id = ticketIdOf(Number(m[1]));
+  for (const m of message.matchAll(/^Ticket:[ \t]*(?:(?:T-|#)?(\d{1,9})|([A-Za-z]{2,6})-(\d{1,9}))\b/gim)) {
+    // A bucket key in capitals only, as the portal writes it (the `i` flag is for `Ticket:`).
+    if (m[1] === undefined && !TICKET_BUCKET_KEY.test(m[2]!)) continue;
+    const id = m[1] !== undefined ? ticketIdOf(Number(m[1])) : ticketKeyOf(m[2]!, Number(m[3]));
     if (!ids.includes(id)) ids.push(id);
   }
   return ids;

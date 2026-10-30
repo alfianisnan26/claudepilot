@@ -202,7 +202,8 @@ export const ACCOUNT_HELPER = '/etc/claudepilot/bin/account-key';
  *   exec stdin closes or after 600 s. An offset past the segment's end is refused: exit 6 with the size on
  *   stdout (GNU tail would take the next write for a truncation and replay the file from byte 0; T-265).
  *   tail's own stderr goes to `tail.err` in the session folder, never into the stream.
- * - `stop <id>` SIGTERMs the whole process group; `status <id>` prints `live <pid>` or `gone`.
+ * - `stop <id>` SIGTERMs the whole process group; `status <id>` prints `live <pid>` or `gone`, and nothing (exit 4) when it
+ *   cannot tell (T-1650).
  * - `purge <id>` deletes the session's directory (segments, uploads, staged inputs) for a deleted
  *   session; exit 3, nothing deleted, while its process is still alive.
  * - `put <id> <name> <nchars> <nbytes>` stages an attachment (chat content, FR31): `<nchars>` characters of
@@ -618,8 +619,18 @@ case "$cmd" in
     id="\${1:-}"
     valid "$id" || exit 2
     dir="$base/$id"
-    pid="$(cat "$dir/parent.pid" 2>/dev/null)"
-    if [ -n "\${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then echo "live $pid"; else echo gone; fi
+    # "gone" only on evidence, read without a fork (T-1650): no pid file, an empty one, or a pid no process has. A reading that
+    # fails (the file there but unreadable, a pid kill cannot signal that /proc still shows) says nothing: exit 4, no word.
+    pid=
+    if [ -e "$dir/parent.pid" ]; then
+      read -r pid 2>/dev/null < "$dir/parent.pid"
+      [ "$?" -le 1 ] || exit 4
+    fi
+    if [ -z "$pid" ]; then echo gone; exit 0; fi
+    digits "$pid" || exit 4
+    if kill -0 "$pid" 2>/dev/null; then echo "live $pid"; exit 0; fi
+    [ ! -e "/proc/$pid" ] || exit 4
+    echo gone
     ;;
   ls)
     exec 2>/dev/null

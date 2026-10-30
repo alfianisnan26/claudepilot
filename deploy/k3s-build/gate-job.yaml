@@ -32,10 +32,12 @@ spec:
         # Placement as in job-run.yaml (T-365, T-524; how the weights add up is explained there). All PREFERRED, never required: a required
         # rule left every Job Pending (2026-10-15). Away from the control-plane node (k3s-master, also the API server), away from the
         # portal's node and from workspace pods; with memory requested = limited the node with the most room left wins the tie.
+        # T-1643: never on the control-plane node (k3s-master); k3s-node3 joined the worker pool, so a required rule leaves room to run.
         nodeAffinity:
+          # T-1643, 2026-10-19 15:4x: preferred again (all nodes are control-plane; the workers alone ran out of memory requests).
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
-              preference: {matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}
+              preference: {matchExpressions: [{key: isnan.me/pool, operator: NotIn, values: [control]}]}
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -158,6 +160,9 @@ spec:
               # Defined and empty: the repository's .npmrc has an auth line `${NODE_AUTH_TOKEN}`, which npm refuses when the variable is not set.
               # There is no token here: a package missing from npm's cache (the fetch container filled it) makes npm ci fail, and the verdict is red.
               export NODE_AUTH_TOKEN=
+              printf '%s' "$GATE_VERDICT_SH" | base64 -d > /tmp/gate-verdict.sh
+              # T-1992: a commit from before the web-tests step has no such step in its gate.sh; the steps it runs and the verdict reads are the same trimmed list.
+              GATE_STEPS=$(bash /tmp/gate-verdict.sh steps "$GATE_STEPS" scripts/gate.sh) && export GATE_STEPS
               GATE_DIR=/tmp/gate bash scripts/gate.sh HEAD
               grep -q '^npm-ci rc=0 ' /tmp/gate.logs/SUMMARY.txt 2>/dev/null || echo "=== npm ci failed in the gate container: it has no credential and installs from the cache the fetch container filled; a package missing there (ENOTCACHED, 401, 404 in the log below) is red, never skipped"
               echo "=== SUMMARY"; cat /tmp/gate.logs/SUMMARY.txt 2>/dev/null
@@ -165,8 +170,8 @@ spec:
               mib() { v=$(cat "/sys/fs/cgroup/$1" 2>/dev/null) && [[ $v =~ ^[0-9]+$ ]] && echo "$((v / 1048576))Mi" || echo "${v:-?}"; }
               echo "memory peak=$(mib memory.peak) limit=$(mib memory.max) oom_kills=$(sed -n 's/^oom_kill //p' /sys/fs/cgroup/memory.events 2>/dev/null | grep . || echo '?')"
               [ -s /tmp/gate.logs/failures.txt ] && { echo "=== FAILURES (each failing test's own report)"; cat /tmp/gate.logs/failures.txt; }
-              for s in npm-ci typecheck web-build; do grep -q "^$s rc=0 " /tmp/gate.logs/SUMMARY.txt 2>/dev/null || { [ -f "/tmp/gate.logs/$s.log" ] && { echo "=== the end of $s's log"; tail -n 40 "/tmp/gate.logs/$s.log"; }; }; done
-              printf '%s' "$GATE_VERDICT_SH" | base64 -d > /tmp/gate-verdict.sh && bash /tmp/gate-verdict.sh logs /tmp/gate.logs "$GATE_STEPS"
+              for s in npm-ci typecheck web-build web-tests; do grep -q "^$s rc=0 " /tmp/gate.logs/SUMMARY.txt 2>/dev/null || { [ -f "/tmp/gate.logs/$s.log" ] && { echo "=== the end of $s's log"; tail -n 40 "/tmp/gate.logs/$s.log"; }; }; done
+              bash /tmp/gate-verdict.sh logs /tmp/gate.logs "$GATE_STEPS"
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
           resources:

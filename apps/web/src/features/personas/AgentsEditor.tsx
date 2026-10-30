@@ -30,7 +30,7 @@ export function AgentsEditor({ value, onChange, errors, disabled }: { value: Per
     <div className="flex flex-col gap-2">
       <LabelRow
         label="Subagents"
-        tip="Helpers Claude can hand work to, each with its own prompt. They run in the session’s permission mode and never get hooks, MCP servers or skills of their own. A subagent here hides a repository or user subagent with the same name."
+        tip="Helpers Claude can hand work to, each with its own prompt. They run in the agent’s permission mode and never get hooks, MCP servers or skills of their own. A subagent here hides a repository or user subagent with the same name."
         right={
           <Button
             size="sm"

@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
+  VSCODE_API,
   isStableWorkspaceId,
   type RenameWorkspaceRequest,
   type UpdateWorkspaceResourcesRequest,
@@ -23,6 +24,8 @@ import {
   type CreatePortalUserRequest,
   type DelegatedSession,
   type SessionShareCap,
+  type AppPortSession,
+  type PortalLoop,
   levelOfCaps,
   type ChatEvent,
   DELEGATED_EVENTS_MAX,
@@ -111,6 +114,7 @@ import { createUsageSpendRoutes, type UsageSpend } from './usagespend/index.js';
 import type { Lab } from './lab/index.js';
 import { createLabRoutes } from './lab/routes.js';
 import { createGlanceRoutes, type Glance } from './glance/index.js';
+import { createApprovalRoutes, type Approvals } from './approvals/index.js';
 import { createAttentionRoutes, type AttentionRegistry } from './attention/index.js';
 import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
@@ -120,9 +124,13 @@ import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
+import { listLoops } from './platform/loops.js';
+import { managerHealer } from './manager/access.js';
+import { ManagerService } from './manager/service.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
+import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -186,6 +194,7 @@ export function createApp(
     repos,
     glance,
     attention,
+    approvals,
     codespaces,
     platform,
     claudeVersions,
@@ -229,6 +238,8 @@ export function createApp(
     glance?: Glance;
     /** Needs you: what waits for a person, from every module, read only (`/api/attention`). */
     attention?: AttentionRegistry;
+    /** Approvals: what an agent asks and a person allows or denies; the portal runs it (`/api/approvals`, docs/prd/approvals.md). */
+    approvals?: Approvals;
     /** GitHub Codespaces POC: GitHub connections and the codespace lifecycle (`/api/codespaces`, docs/prd/codespaces-poc.md). */
     codespaces?: Codespaces;
     /** The platform track: notifications, the platform audit, and the modules that register with it (`/api/notify`, `/api/platform`, `/hooks`). */
@@ -347,6 +358,11 @@ export function createApp(
     return c.json(success(status));
   });
 
+  const healManager = managerHealer({
+    managerOf: (ownerId) => chatController.managerOf(ownerId),
+    hasLive: portalMcp?.managers ? (id) => portalMcp.managers.hasLive(id) : undefined,
+    restart: (id, opts) => chatController.restart(id, opts),
+  });
   app.post(API.login, async (c) => {
     const key = clientKey(c);
     if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
@@ -386,6 +402,8 @@ export function createApp(
       path: '/',
       maxAge: Math.floor(ttlMs / 1000),
     });
+    // T-968: a sign-in brings the person's General Manager back when a sign-out had revoked its token (it gets a new one at its restart).
+    healManager(portal.anySession(token)?.userId ?? 'u_owner');
     // A member's sign-in answers no admin state (it holds the server code): the web reads /api/me and shows the member page.
     return c.json(success(portal.session(token) ? portal.adminState(token) : { member: true }));
   });
@@ -500,7 +518,7 @@ export function createApp(
       // Review M1: bounded; a delegate far behind gets the newest DELEGATED_EVENTS_MAX, never the whole transcript.
       const last = chatController.get(d.id)?.lastSeq ?? 0;
       const from = Math.max(0, Number(after) || 0, last - DELEGATED_EVENTS_MAX);
-      return c.json(success(delegateView(chatController.history(d.id, from).slice(-DELEGATED_EVENTS_MAX))));
+      return c.json(success(delegateView(chatController.history(d.id, from, DELEGATED_EVENTS_MAX))));
     }
     const before = c.req.query('before');
     const limit = Math.min(DELEGATED_EVENTS_MAX, Math.max(1, Number(c.req.query('limit') ?? 80) || 80));
@@ -582,6 +600,51 @@ export function createApp(
   const state = (c: Context<Env>) => c.json(success<AdminState>(portal.adminState(c.get('token'))));
 
   admin.get('/state', state);
+  // Open app sessions (T-948 app hosts) and the portal's own loops (owner, 2026-10-18), a full session only.
+  admin.get('/app-sessions', (c) => {
+    const rows = appPorts?.grants.list() ?? [];
+    return c.json(
+      success<AppPortSession[]>(
+        rows.map((r) => ({
+          id: r.id,
+          workspaceId: r.workspaceId,
+          port: r.port,
+          host: r.host,
+          openedBy: actorString(r.actor),
+          createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+          lastUsedAt: r.lastUsedAt ? new Date(r.lastUsedAt).toISOString() : null,
+          expiresAt: new Date(r.expiresAt).toISOString(),
+        })),
+      ),
+    );
+  });
+  admin.delete('/app-sessions/:id', (c) => {
+    const removed = appPorts?.grants.revoke(c.req.param('id')) ?? false;
+    if (removed) audit('workspace.port.closed', null, { session: c.req.param('id') }, 'info', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success({ removed }));
+  });
+  admin.get('/loops', (c) => c.json(success<PortalLoop[]>(listLoops())));
+
+  // T-968: the person's General Manager (one per person): its state, Enable (makes and starts it), Disable (ends it).
+  const managers = new ManagerService(chatController, workspaces);
+  const managerOwner = (c: Context<Env>) => portal.session(c.get('token'))?.userId ?? 'u_owner';
+  admin.get('/manager', async (c) => c.json(success(await managers.status(managerOwner(c)))));
+  admin.post('/manager/prepare', async (c) => {
+    const st = await managers.prepare(managerOwner(c));
+    audit('manager.prepared', null, { workspaceId: st.runtime?.workspaceId ?? null }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success(st));
+  });
+  admin.post('/manager/enable', async (c) => {
+    const st = await managers.enable(managerOwner(c));
+    audit('manager.enabled', null, { sessionId: st.sessionId, workspaceId: st.workspaceId }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success(st));
+  });
+  admin.post('/manager/disable', async (c) => {
+    const st = await managers.disable(managerOwner(c));
+    audit('manager.disabled', null, {}, 'info', portal.session(c.get('token'))?.userId ?? null);
+    return c.json(success(st));
+  });
+
   // Session shares, teams and SSO providers, the owner's side (a full session): identity/routes.ts.
   identity.mountAdmin(admin);
 
@@ -1109,6 +1172,56 @@ export function createApp(
     app.route('/api/portal-mcp', pm);
   }
 
+  // The VS Code extension (docs/prd/vscode-extension.md): the device flow's public calls, the signed-in person's approval of a code, and
+  // the bearer routes the extension reads and acts through. Its tokens are Portal MCP tokens (one table, revoked in Access → MCP too).
+  if (portalMcp) {
+    const vsDeps: VscodeDeps = {
+      tokens: {
+        create: (req, by, origin) => portalMcp.createToken(req, '', by, origin),
+        verify: (secret, ip) => portalMcp.tokens.verify(secret, ip),
+        revoke: (id, reason) => portalMcp.revokeToken(id, reason, 'vscode'),
+      },
+      chat: chatController,
+      workspaces,
+      tickets,
+      usage: claudeUsage,
+      glance,
+      audit: (kind, detail, actor) => {
+        try {
+          platform?.audit.record({ kind, actor, userId: null, detail, severity: 'info' });
+        } catch {
+          // the audit never breaks a sign-in or a message
+        }
+      },
+      clientKey: (c) => clientKey(c as Context<Env>),
+      mcpSettings: () => portalMcp.settings.get(),
+      idCheck: async (c) => {
+        const field = await hostileWorkspaceField(c as Context<Env>);
+        if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
+      },
+      origin: (c) => {
+        const sso = process.env.PORTAL_SSO_ORIGIN?.trim();
+        if (sso) return sso.replace(/\/+$/, '');
+        const proto = config.trustProxy ? c.req.header('x-forwarded-proto')?.split(',')[0]?.trim() : undefined;
+        const u = new URL(c.req.url);
+        return `${proto === 'https' || proto === 'http' ? proto : u.protocol.replace(':', '')}://${c.req.header('host') ?? u.host}`;
+      },
+    };
+    const vsFlow = createVscodeFlow(vsDeps.tokens);
+    // The device flow's two public calls take a few bytes, like sign-in: 4 KiB at most, refused before anything reads them (review M3).
+    app.use(VSCODE_API.device, loginLimit);
+    app.use(VSCODE_API.token, loginLimit);
+    const vs = new Hono<Env>();
+    // The id rule of every /api route (QA-032): requireSession runs it for the cookie routes; the public routes run it after their
+    // address limit, the bearer routes before the token is looked up (`idCheck`).
+    vs.use('/pending', requireSession);
+    vs.use('/approve', requireSession);
+    vs.route('/', createVscodePublicRoutes(vsFlow, vsDeps) as never);
+    vs.route('/', createVscodeApproveRoutes(vsFlow, vsDeps) as never);
+    vs.route('/', createVscodeBearerRoutes(vsDeps) as never);
+    app.route('/api/vscode', vs);
+  }
+
   // Tickets: the queue of work for people and agents; agents reach it through Portal MCP tools instead.
   if (tickets) {
     const tk = new Hono<Env>();
@@ -1149,6 +1262,14 @@ export function createApp(
     at.use(requireSession);
     at.route('/', createAttentionRoutes(attention));
     app.route('/api/attention', at);
+  }
+
+  // Approvals (docs/prd/approvals.md, PILOT-1000): a person's queue, one request, Allow and Deny; the service refuses anyone else (404).
+  if (approvals) {
+    const ap = new Hono<Env>();
+    ap.use(requireSession);
+    ap.route('/', createApprovalRoutes(approvals));
+    app.route('/api/approvals', ap);
   }
 
   // Claude Code version pinning: the registry, the compatibility canary and its schedule, images and the default pin (docs/prd/claude-version-pinning.md).

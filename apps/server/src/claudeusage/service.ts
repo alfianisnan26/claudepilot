@@ -31,6 +31,7 @@ import {
   type UsageSummary,
 } from '@portal/contracts';
 import { isUsageRange } from '../chat/usage.js';
+import { defineLoop } from '../schedules/registry.js';
 import type { Store } from '../store/store.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { ALERT_RANK, alertLevelOf, headroomOf, stateOf, viewWindows, withLimitReport } from './derive.js';
@@ -45,7 +46,11 @@ import { SpendReader } from './spend.js';
 import { buildSummary, summaryRowsFrom } from './summary.js';
 import { parseRateLimitInfo, sortWindows, windowLevel, type WindowReading } from './parse.js';
 import { probeClaude, type ProbeIo, type ProbeResult } from './probe.js';
+import { runPrime, type PrimeOutcome } from './prime.js';
+import { PRIME_MIN_DEFAULT } from './settings.js';
+import { fallbackReset } from './limitMessage.js';
 import { UsageStore, type AlertMark, type LatestRow, type ProjectionMark } from './store.js';
+import { loop } from '../platform/loops.js';
 
 /** A Claude of a workspace, as this module needs to know it. */
 export interface SourceClaude {
@@ -68,6 +73,8 @@ export interface UsageSource {
   /** The workspace has an account pool: its Claudes run on API keys and have no plan limits. */
   pooled(workspaceId: string): boolean;
   exec(target: string, name: string, command: string[]): Promise<ExecSession>;
+  /** T-1707: whether a chat session's Claude Code process is live on this Claude now (a prime waits for none). */
+  sessionOn(claude: Pick<SourceClaude, 'id' | 'directory' | 'workspaceId'>): boolean;
   /** The workspace and Claude a live chat session runs in; `claudeId` is what the reader knows ('' for Default). */
   sessionClaude(sessionId: string, claudeId: string): { workspaceId: string; claudeId: string; name: string; workspaceName: string } | null;
 }
@@ -98,12 +105,20 @@ export interface UsageOptions {
    * snapshot, the summary, the Requests report, the export and the Move recommendation leave out the Claudes it refuses; an error in it refuses.
    */
   canUseClaude?: (actorId: string, claudeId: string) => boolean;
+  /** T-1707: minutes between two primes of one Claude (`claude.usage.primeMin`, read at each use); 0 turns priming off. Absent: the default. */
+  primeMin?: () => number;
+  /** Test seam: replaces the prime. */
+  prime?: (claude: SourceClaude, io: ProbeIo) => Promise<PrimeOutcome>;
+  /** The platform audit: one `claude.usage.prime` row per prime. */
+  audit?: (e: { kind: string; actor: string; userId: string | null; subject?: string | null; detail?: Record<string, unknown> }) => void;
 }
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 export const TICK_MS = 15_000;
 const FIRST_TICK_MS = 20_000;
+/** The probe pass's heartbeat in the schedules registry (T-968 S2b). A pass with probes off still beats: the loop is alive. */
+export const USAGE_LOOP = defineLoop({ name: 'usage-probe', module: 'claudeusage', intervalMs: TICK_MS, description: 'Probes the plan limits of the Claudes that are due.' });
 const PRUNE_EVERY_MS = 6 * HOUR;
 /** A Claude found signed out, or on a key, is looked at again this rarely (nothing changes until someone signs in). */
 const SETTLED_MS = HOUR;
@@ -150,6 +165,8 @@ export class ClaudeUsageMonitor {
   readonly #warned = new Set<string>();
   /** Workspaces whose Claude Code has no `--safe-mode`, told once in the log. */
   readonly #unsafe = new Set<string>();
+  /** T-1707: when each Claude was last primed (in memory: a restart allows one more). */
+  readonly #primed = new Map<string, number>();
 
   constructor(private readonly o: UsageOptions) {
     this.#store = new UsageStore(o.store);
@@ -192,13 +209,16 @@ export class ClaudeUsageMonitor {
     this.#prune();
     void this.#list(true);
     const first = setTimeout(() => void this.tick(), FIRST_TICK_MS);
-    const every = setInterval(() => void this.tick(), TICK_MS);
+    const run = loop('claudeusage.poll', TICK_MS, 'Claude usage: read each Claude’s plan usage and limits').wrap(() => this.tick());
+    const every = setInterval(() => void run(), TICK_MS);
     const prune = setInterval(() => this.#prune(), PRUNE_EVERY_MS);
     for (const t of [first, every, prune]) t.unref();
     this.#timers = [first, every, prune];
+    USAGE_LOOP.started();
   }
 
   stop(): void {
+    if (this.#timers.length) USAGE_LOOP.stopped();
     for (const t of this.#timers) clearTimeout(t);
     this.#timers = [];
   }
@@ -251,7 +271,17 @@ export class ClaudeUsageMonitor {
 
   #due(c: SourceClaude, now: number): boolean {
     const row = this.#store.latest(c.id);
-    return !row || now - row.lastProbeAtMs >= this.#waitFor(row, now);
+    return !row || now - row.lastProbeAtMs >= this.#waitFor(row, now) || this.#periodEnded(row, now);
+  }
+
+  /**
+   * T-1835: a period of the Claude ended since its last probe (a window's reset time, or a limit report's end, between that probe and now).
+   * Its reading says `period_reset` (unknown) until a probe reads the new period, and an unknown Claude takes no worker and comes last for
+   * auto move, so it is due at once, not after the interval or a backoff. Once per reset: the probe moves `lastProbeAtMs` past it.
+   */
+  #periodEnded(row: LatestRow, now: number): boolean {
+    const ended = (t: number | null | undefined) => typeof t === 'number' && t > row.lastProbeAtMs && t <= now;
+    return ended(row.limitReport?.untilMs) || row.windows.some((w) => ended(w.resetsAtMs));
   }
 
   /** One pass: probes the Claudes that are due (FR10, FR11). Public so a test can drive it. */
@@ -259,7 +289,10 @@ export class ClaudeUsageMonitor {
     if (this.#ticking) return;
     this.#ticking = true;
     try {
-      if (!this.#settings.probes || !this.#active()) return;
+      if (!this.#settings.probes || !this.#active()) {
+        USAGE_LOOP.ok();
+        return;
+      }
       const list = await this.#list(true);
       const now = this.#now();
       const due = list
@@ -268,21 +301,119 @@ export class ClaudeUsageMonitor {
       for (const c of due) {
         if (this.#running >= MAX_PARALLEL) break;
         if (this.#busy.has(c.workspaceId)) continue;
-        void this.#probe(c);
+        void this.#probe(c, true);
       }
+      USAGE_LOOP.ok();
     } catch (e) {
+      USAGE_LOOP.fail(e);
       this.#warn('the probe pass', e);
     } finally {
       this.#ticking = false;
     }
   }
 
-  async #probe(c: SourceClaude): Promise<void> {
+  /** Probes one Claude, holding its workspace's slot; a background pass (`prime`) may then prime it and probe again (T-1707). */
+  async #probe(c: SourceClaude, prime = false): Promise<void> {
     this.#busy.add(c.workspaceId);
     this.#running++;
-    const started = this.#now();
     try {
       const io: ProbeIo = { exec: (t, n, cmd) => this.o.source.exec(t, n, cmd) };
+      const read = await this.#probeOnce(c, io);
+      if (prime && read && (await this.#prime(c, io))) await this.#probeOnce(c, io);
+    } catch (e) {
+      this.#warn('a prime', e);
+    } finally {
+      this.#busy.delete(c.workspaceId);
+      this.#running--;
+      this.o.notify?.();
+    }
+  }
+
+  /** Minutes between two primes of one Claude; 0 (or a value that isn't a number) is off. */
+  #primeMin(): number {
+    try {
+      const v = this.o.primeMin ? this.o.primeMin() : PRIME_MIN_DEFAULT;
+      return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
+    } catch {
+      return 0; // a setting that can't be read primes nothing
+    }
+  }
+
+  /**
+   * T-1707: a signed-in Claude whose fresh reading is 0 % with no reset time (`no_reset_time`) gets one tiny request, so the next probe reads a
+   * real number, or the refusal marks it used up. Only when priming is on, the workspace runs, no live session is on that Claude (it would read
+   * the window itself, and must not share a turn with ours), and it was not primed in the last `primeMin` minutes. True: probe again now.
+   */
+  async #prime(c: SourceClaude, io: ProbeIo): Promise<boolean> {
+    const mins = this.#primeMin();
+    if (mins <= 0 || !c.running || !this.#active()) return false;
+    const now = this.#now();
+    const row = this.#store.latest(c.id);
+    if (!row || row.runsOn !== 'plan' || this.o.source.pooled(c.workspaceId)) return false;
+    if (this.#view(c, row, now).unavailable !== 'no_reset_time') return false;
+    const last = this.#primed.get(c.id);
+    if (last !== undefined && now - last < mins * MINUTE && !this.#resetSince(c.id, row, last, now)) return false;
+    let busy: boolean;
+    try {
+      busy = this.o.source.sessionOn(c);
+    } catch {
+      busy = true; // not known: leave it alone
+    }
+    if (busy) return false;
+    this.#primed.set(c.id, now);
+    let r: PrimeOutcome;
+    try {
+      r = await (this.o.prime ?? ((claude, i) => runPrime(i, claude.target, claude.workspaceName, claude.directory)))(c, io);
+    } catch {
+      r = { outcome: 'failed', why: 'error' };
+    }
+    let until: number | null = null;
+    try {
+      if (r.outcome === 'limited') until = this.#primeRefused(c, r.info);
+    } catch (e) {
+      this.#warn('a prime refusal', e);
+    }
+    this.#log(`${c.id} primed: ${r.outcome}${r.outcome === 'failed' ? ` (${r.why})` : ''}${until !== null ? ` until ${new Date(until).toISOString()}` : ''}`);
+    try {
+      this.o.audit?.({
+        kind: 'claude.usage.prime',
+        actor: 'system',
+        userId: null,
+        subject: c.id,
+        detail: { claudeId: c.id, workspaceId: c.workspaceId, outcome: r.outcome, ...(r.outcome === 'failed' ? { why: r.why } : {}), ...(until !== null ? { until: new Date(until).toISOString() } : {}) },
+      });
+    } catch (e) {
+      this.#warn('the prime audit', e);
+    }
+    return r.outcome === 'ok';
+  }
+
+  /**
+   * T-1835: whether a period of the Claude ended after `sinceMs` (a reset in `(sinceMs, now]`): a reset its session window's readings since
+   * then carried, one its latest reading still carries, or the end of a limit report. A new period began, so the prime's cooldown, which
+   * kept a Claude blind for up to `primeMin` after its 5-hour window reset, no longer holds; the prime it allows sets `sinceMs` past that
+   * reset, so it is still one prime per period.
+   */
+  #resetSince(claudeId: string, row: LatestRow, sinceMs: number, now: number): boolean {
+    const ended = (t: number | null | undefined) => typeof t === 'number' && t > sinceMs && t <= now;
+    if (ended(row.limitReport?.untilMs) || row.windows.some((w) => ended(w.resetsAtMs))) return true;
+    return this.#store.windowSamples(claudeId, 'session', sinceMs).some((s) => ended(s.resetsAtMs));
+  }
+
+  /** A prime refused for a plan limit: the Claude is used up until the stated reset (the next 5-hour boundary when none is stated). */
+  #primeRefused(c: SourceClaude, info: Record<string, unknown>): number | null {
+    const now = this.#now();
+    const parsed = parseRateLimitInfo(info);
+    const w = parsed?.windows.find((x) => parsed.rejected.includes(x.key));
+    const stated = w && w.resetsAtMs !== null && w.resetsAtMs > now;
+    const given = stated ? info : { ...info, resetsAt: Math.round(fallbackReset(now) / 1000), resetGuessed: true };
+    return this.#passive({ claudeId: c.id, workspaceId: c.workspaceId, name: c.name, workspaceName: c.workspaceName }, given, { sessionId: null, report: true });
+  }
+
+  /** One probe and what it found kept. True when it read (a settled answer). */
+  async #probeOnce(c: SourceClaude, io: ProbeIo): Promise<boolean> {
+    const started = this.#now();
+    try {
       const result = await (this.o.probe ?? ((claude, i) => probeClaude(i, claude.target, claude.workspaceName, claude.directory)))(c, io);
       this.#apply(c, result);
       this.#log(`${c.id} ${result.failed ? `failed (${result.problem}${result.unsupported ? ', no --safe-mode' : ''})` : result.runsOn} in ${this.#now() - started} ms`);
@@ -291,6 +422,7 @@ export class ClaudeUsageMonitor {
         this.#unsafe.add(c.workspaceId);
         this.#log(`${c.workspaceName}: Claude Code there has no --safe-mode (it is older than 2.1.169), so its usage is not read: a probe would run the Claude's hooks. Update Claude Code in that workspace.`);
       }
+      return !result.failed;
     } catch (e) {
       this.#warn('a probe', e);
       try {
@@ -298,10 +430,7 @@ export class ClaudeUsageMonitor {
       } catch {
         // the store is gone: nothing more to record
       }
-    } finally {
-      this.#busy.delete(c.workspaceId);
-      this.#running--;
-      this.o.notify?.();
+      return false;
     }
   }
 
@@ -381,46 +510,56 @@ export class ClaudeUsageMonitor {
   onRateLimit(sessionId: string, claudeId: string, info: unknown): void {
     try {
       if (!this.#active()) return;
-      const parsed = parseRateLimitInfo(info);
-      if (!parsed) return;
       const target = this.o.source.sessionClaude(sessionId, claudeId);
       if (!target || this.o.source.pooled(target.workspaceId)) return;
-      const now = this.#now();
       // T-255: Claude Code's limit message in the chat (the chat reader made it a refusal of that window): kept as a report until its reset.
-      const fromMessage = (info as Record<string, unknown>).reportedBy === LIMIT_MESSAGE_SOURCE;
-      let limitReport: LatestRow['limitReport'] = undefined;
-      if (fromMessage) {
-        const w = parsed.windows.find((x) => parsed.rejected.includes(x.key));
-        const raw = info as Record<string, unknown>;
-        // A line read again later (a reader that starts over) whose reset is past says nothing about now.
-        if (!w || w.resetsAtMs === null || w.resetsAtMs <= now) return;
-        const at = typeof raw.reportedAtMs === 'number' && Number.isFinite(raw.reportedAtMs) && raw.reportedAtMs <= now ? raw.reportedAtMs : now;
-        limitReport = { window: w.key, atMs: at, untilMs: w.resetsAtMs, guessed: raw.resetGuessed === true, sessionId };
-        console.info(`[claudeusage] limit reported by a chat: claude=${target.claudeId} window=${w.key} until=${new Date(w.resetsAtMs).toISOString()}${limitReport.guessed ? ' (guessed: no reset time in the message)' : ''}`);
-      }
-      const prev = this.#store.latest(target.claudeId);
-      const byKey = new Map((prev?.windows ?? []).map((w) => [w.key, w]));
-      for (const w of parsed.windows) byKey.set(w.key, { ...w, label: w.label || byKey.get(w.key)?.label || w.key });
-      const windows = sortWindows([...byKey.values()]);
-      const row: LatestRow = {
-        ...(prev ?? { claudeId: target.claudeId, workspaceId: target.workspaceId, checkedAtMs: null, lastProbeAtMs: 0, runsOn: 'plan', plan: null, windows: [], extra: null, source: null, problem: null, fails: 0, snoozedUntilMs: null, alerted: {}, projAlerted: {}, projSnoozedUntilMs: null }),
-        workspaceId: target.workspaceId,
-        runsOn: 'plan',
-        windows,
-        checkedAtMs: now,
-        source: 'live',
-        problem: prev?.problem === 'unavailable' || prev?.problem === 'no_scope' ? null : prev?.problem ?? null,
-        ...(limitReport ? { limitReport } : {}),
-      };
-      // A guessed reset time is no reading of the window's period: no sample from it.
-      if (!limitReport?.guessed) this.#store.addSamples(target.claudeId, target.workspaceId, now, parsed.windows, 'live');
-      const who: SourceClaude = { id: target.claudeId, name: target.name, directory: '', workspaceId: target.workspaceId, workspaceName: target.workspaceName, target: '', running: true };
-      this.#store.saveLatest(this.#alerts(who, row, now));
-      this.o.notify?.();
-      this.#reading();
+      const fromMessage = !!info && typeof info === 'object' && (info as Record<string, unknown>).reportedBy === LIMIT_MESSAGE_SOURCE;
+      this.#passive(target, info, { sessionId, report: fromMessage });
     } catch (e) {
       this.#warn('a live reading', e);
     }
+  }
+
+  /**
+   * Keeps a `rate_limit_info` of a Claude: from a chat (`sessionId`), or from a prime (null, T-1707). `report`: the refusal it carries is kept
+   * as a limit report until its reset (the Claude is used up, whatever a probe reads meanwhile). Returns that reset, or null when none was kept.
+   */
+  #passive(target: { claudeId: string; workspaceId: string; name: string; workspaceName: string }, info: unknown, o: { sessionId: string | null; report: boolean }): number | null {
+    const { sessionId } = o;
+    const parsed = parseRateLimitInfo(info);
+    if (!parsed) return null;
+    const now = this.#now();
+    let limitReport: LatestRow['limitReport'] = undefined;
+    if (o.report) {
+      const w = parsed.windows.find((x) => parsed.rejected.includes(x.key));
+      const raw = info as Record<string, unknown>;
+      // A line read again later (a reader that starts over) whose reset is past says nothing about now.
+      if (!w || w.resetsAtMs === null || w.resetsAtMs <= now) return null;
+      const at = typeof raw.reportedAtMs === 'number' && Number.isFinite(raw.reportedAtMs) && raw.reportedAtMs <= now ? raw.reportedAtMs : now;
+      limitReport = { window: w.key, atMs: at, untilMs: w.resetsAtMs, guessed: raw.resetGuessed === true, sessionId };
+      console.info(`[claudeusage] limit reported by ${sessionId ? 'a chat' : 'a prime'}: claude=${target.claudeId} window=${w.key} until=${new Date(w.resetsAtMs).toISOString()}${limitReport.guessed ? ' (guessed: no reset time in the message)' : ''}`);
+    }
+    const prev = this.#store.latest(target.claudeId);
+    const byKey = new Map((prev?.windows ?? []).map((w) => [w.key, w]));
+    for (const w of parsed.windows) byKey.set(w.key, { ...w, label: w.label || byKey.get(w.key)?.label || w.key });
+    const windows = sortWindows([...byKey.values()]);
+    const row: LatestRow = {
+      ...(prev ?? { claudeId: target.claudeId, workspaceId: target.workspaceId, checkedAtMs: null, lastProbeAtMs: 0, runsOn: 'plan', plan: null, windows: [], extra: null, source: null, problem: null, fails: 0, snoozedUntilMs: null, alerted: {}, projAlerted: {}, projSnoozedUntilMs: null }),
+      workspaceId: target.workspaceId,
+      runsOn: 'plan',
+      windows,
+      checkedAtMs: now,
+      source: 'live',
+      problem: prev?.problem === 'unavailable' || prev?.problem === 'no_scope' ? null : prev?.problem ?? null,
+      ...(limitReport ? { limitReport } : {}),
+    };
+    // A guessed reset time is no reading of the window's period: no sample from it.
+    if (!limitReport?.guessed) this.#store.addSamples(target.claudeId, target.workspaceId, now, parsed.windows, 'live');
+    const who: SourceClaude = { id: target.claudeId, name: target.name, directory: '', workspaceId: target.workspaceId, workspaceName: target.workspaceName, target: '', running: true };
+    this.#store.saveLatest(this.#alerts(who, row, now));
+    this.o.notify?.();
+    this.#reading();
+    return limitReport ? limitReport.untilMs : null;
   }
 
   /* ---------- Alerts (§12) ---------- */

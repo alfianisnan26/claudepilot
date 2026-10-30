@@ -359,6 +359,22 @@ As built:
   Tested against the real routes and endpoint in `portalmcp/tokenLease.test.ts`, including the twin that an expired, a revoked and an
   unknown token get the same 401.
 
+### 12.1c A token's default workspace (T-1105, built)
+
+An external client's tickets (the Konfersi Hermes agent's `hermes-konfersi-admin`) had no workspace, so they sat in the shared queue, where
+a workspace's crew lead can't hand them out (tickets FR9f) and its lanes can't comment (FR9b). An operate or admin token may now have a
+**default workspace** (`pmcp_tokens.default_workspace_id`, migration 46, nullable; the token view's `defaultWorkspaceId`).
+
+- **Who sets it:** a person, on Access → MCP (a token's Menu, "Workspace": a select of the workspaces, or none), through
+  `PATCH /api/portal-mcp/tokens/:id` `{ defaultWorkspaceId: "<target>/<name>" | null }`. It needs `manage` on the token and `operate` on the
+  workspace (declared in `portalmcp/authz.ts`); no tool writes it, so an agent can't redirect a token's tickets. Refused: a revoked or expired
+  token (409), a read token (422: it makes no tickets), a workspace that is not there (404), one the person may not operate (404) or the
+  token may not operate (403). Each change leaves a `token_default_workspace` audit row (`workspace`, `from`, `by`).
+- **What it does:** `ticket_create` from that token with no `workspace_id` puts the ticket in the default workspace. An explicit
+  `workspace_id` wins (an empty one is the shared queue). At call time the workspace must still exist (`Workspaces.resolve`: a removed one is
+  retired) and the token must still be allowed to operate it (the seam's `can`); otherwise the ticket goes to the shared queue as before. Agents' per-session tokens never use it (their tickets are always in their own
+  workspace), nor does the General Manager's token. A session assignee still moves the ticket to that session's workspace.
+
 ### 12.1a The client's name: every token has a label (T-6, built)
 
 A token's **label** is typed by the owner when the token is made (Access → MCP): required, trimmed, 1 to 60 characters, one line of plain
@@ -513,8 +529,9 @@ so they get their own tools.
 | --- | --- | --- | --- | --- |
 | `pool_types` | read | R I | none | Per type: description, one or many per workspace, content JSON Schema, secret fields |
 | `pool_list` | read | R I | `type`, `query`, `cursor`, `limit` | Name, type, revision, review status, used by N |
-| `pool_get` | read | R I | `id`, `revision` | Content with secrets masked, last 10 revisions, workspaces |
-| `pool_create` | admin | – | `type`, `name`, `description`, `content` (approved versions only, no secret values) | id, revision, status, `secrets_missing[]` |
+| `pool_get` | read | R I | `id`, `revision` | Content with secrets as name, options and fingerprint only, last 10 revisions, workspaces, `warnings` (unexposed env-style secrets) |
+| `pool_create` | admin | – | `type`, `name`, `description`, `content` (approved versions only, no secret values; secrets: names only) | id, revision, status, `secrets_missing[]` |
+| `pool_secret_set` | agent | – | `pool`, `name`, `value` (write-only), `expose`, `note` | Name, revision, `expose`, fingerprint, version; never the value. Own workspace's pools only; protected pools refused (T-2866) |
 | `pool_update` | admin | D U C\* | `id`, `base_revision`, `content` or `restore_revision`, `note` | New revision, status (`deliverable`, `waiting_review` or `draft`), rollout plan. A stale `base_revision` gets `CONFLICT`. |
 | `pool_delete` | admin | D I U C | `id`, `unassign`, `confirm_token` | Preview, then done. Refused while in use unless `unassign`. |
 | `pool_assign` | admin | D I U C\* | `pool_id`, `workspace_ids[]` (up to 50), `pinned_revision` | Per workspace: result, pool replaced, delivery status |
@@ -550,7 +567,7 @@ threshold), none above ceil((sessions + 1) / Claudes) + 1 sessions not ended (as
 `no_room_lowest`; its own only when no other qualifies), `role` (the worker runs as `.claude/agents/<role>.md`), `model` (default: the
 role's model in the workspace persona, T-490), `why` (T-490, D-63: required on a role whose model is below opus for any model but a sonnet or haiku alias or id (`sonnet`, `claude-haiku-*`, `[1m]` suffix allowed; so opus, fable, `default`, `opusplan`, `best` and an unknown id need it), else
 `VALIDATION_FAILED` naming D-63; kept as the worker's `spawnWhy`; the result says `model` and `why`), `effort`, `mode` (`default`, `plan`,
-`dontAsk`), `ticket` (`T-<n>`: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
+`dontAsk`), `ticket` (`T-<n>` or its bucket key `KONF-<n>`, stored as `T-<n>`, T-1098: the worker's ticket, the field usage attribution reads, so its cost counts under that ticket;
 none means "No ticket"; a malformed id or a ticket that does not exist is refused as `NOT_FOUND` and starts nothing, T-449;
 T-397: while nobody holds that ticket the worker may `ticket_comment` on it, and on its lead's tickets, comment only, audited as the worker:
 [Tickets](tickets.md) FR9b),
@@ -591,6 +608,11 @@ other run reads as `No such run.`
 | `session_send` | admin | D O U | `id`, `text`, `priority` (`next` steers this turn, `later` waits for it to end) | Accepted, message state |
 | `session_configure` | admin | D U; C when raising the mode | `id`, `model`, `effort`, `mode`, `max_workers`, `subagents` | Values after policy caps. Modes rank `plan`, then `default` or `dontAsk`, then `acceptEdits` ([Monitoring](monitoring-dashboard.md) §12). T-294, the session's limits ([Chat sessions](chat-sessions.md) FR51, "Limits per session"): `max_workers` (0 to 20, or null for the global `sessions.maxChildren`; above the global cap counts as the cap) applies at once; `subagents` (on or off: off launches its process with `--disallowedTools Agent Task Workflow RemoteTrigger` (a forked skill can still run a sub-agent: the known gap)) applies at its next start, and the result's `restart_needed` says when a Restart is due. Audited `session.limits`. An agent's token never reaches it (admin scope), so a session never changes its own limits. |
 | `crew_scorecard` | agent (reach session: its own program); an admin's token reads every program | R I | `program` (a program id: its first lead session), `window` (`1h`, `6h`, `day` default, `week`), `compare` (default true: the window before too), `full` | T-450, [Claude usage](claude-usage.md) §28.14: per program (a lead chain with its continuations and every worker under it) tickets done by type and per hour, lead time p50 and p90, reopened, wont_do, the review backlog (age, what it waits for), CI runs by pipeline, deploys; cost (estimated dollars) total, lead versus workers, per done ticket all-in and workers only (per type from usage spend's `ticketReport`, T-449, over the tickets' life); efficiency: token-class shares, requests, context p50 and p90 per role and per lead, top sessions, model mix, sessions per role, live per Claude, hand-overs, spikes; health: refusals by scope, bad endings (pod memory unavailable); the D-61, D-62 and D-63 targets as `ok`, `warn`, `breach` or `unavailable` with offenders. Short by default (headline figures now and before, target states, flags); `full` gives every figure with its basis (`measured`, `estimate`, `unavailable` with a reason), the sources named once in `basis`. Another program, or one that does not exist, is `NOT_FOUND`. Declared in `lab/authz.ts`; the same as `GET /api/lab/scorecard`. |
+| `metrics_overview` | agent (reach: a LEAD session only, a top-level chat with no parent whose recorded owner may view `usage`, and only its own crew's tickets, no paces, no score before, no trend; a worker or an unknown session is `NOT_FOUND`); an admin's or the manager's token with `view` on the area `usage` | R I | `program` (default `all`), `window` (`24h` default, `7d`), `full` | T-2360, [Claude usage](claude-usage.md) §28.15: the efficiency and effectiveness scores 0-100 with the one a window ago, the change and each part (a value or `unavailable:<reason>`, never 0); done and won't-do now and before; per stage n, left out, p50 and p90 in hours; test rounds; open work; the crews' pace, resolved, dollars per resolved and per done (estimates). `full`: every part with its basis and raw figure. The same as `GET /api/lab/metrics/overview`. |
+| `metrics_flow_times` | as `metrics_overview` | R I | `program`, `window`, `group_by` (`program`, `lead`, `type`, `priority`), `full` | Per stage (start, report, implement, test, deliver, resolve, work) n, left out, median and p90 in hours, the median before; per group biggest first (short: 30 groups, medians; `full`: every stage of every group that fits, the rest counted in `omitted`). `GET /api/lab/metrics/flow`. |
+| `metrics_trend` | as `metrics_overview` | R I | `metric` (required: `efficiency`, `effectiveness`, `done24h`, `wontDo24h`, `openWork`, `blocked`, `inReview`, `<stage>P50`), `program`, `window` (`24h`, `7d` default, `30d`) | The snapshots (every 10 min, kept 30 days), oldest first, at most about 200 `[ms, value]` points, null where a snapshot had none; first, last, min, max and the unit. No snapshot: the summary says unavailable. `GET /api/lab/metrics/trend`. |
+| `metrics_insights` | as `metrics_overview` | R I | `program`, `window` | Plain-language findings (slowest stage, biggest regression, idle capacity, blocked share, review wait, outliers; `no_data` for a program without tickets), each with its severity (`act`, `warn`, `info`) and ticket ids. `GET /api/lab/metrics/insights`. |
+| `metrics_tickets` | as `metrics_overview` | R I | `program`, `window`, `stage`, `group_by` and `group`, `cursor`, `limit` (25 default, at most 100) | The drill-down: the tickets closed done or won't-do in the window, newest close first; each ticket and `ticket_key`, type, priority, status, closed, lead, hours per stage (null: left out), rounds, fails. Paged (`next_cursor`, bound to the query); a page over the size limit keeps fewer rows and the next page goes on from there. No ticket text, no session title. `GET /api/lab/metrics/tickets`. |
 
 Resources (read scope, no subscriptions): `pilot://status`,
 `pilot://workspaces/{target}/{name}` and `pilot://pools/{id}`, attached with `@` in
@@ -624,8 +646,32 @@ monitoring 2 (`monitor_overview`, `usage_report`) and the catalog 3 (`mcp_propos
 `mcp_proposal_withdraw`, `mcp_catalog_list`: interface I3, scope `agent`, §12.6). Where the tables above
 and the code differ, the code is what ships:
 
-- `pool_*` cover the types that exist (skillset, MCP set). **Secrets pools are read-only over MCP**: a write
-  answers `UI_ONLY` (Q13 decided). Persona and browser pools are not listed until their services are in.
+- `pool_*` cover the types that exist (skillset, MCP set, secrets). **Secrets pools are write-only over MCP**
+  (T-2866, PILOT-996 S3; `pool_types` says `mcp_writes: "write-only"`): `pool_create` takes names only
+  (`{ "names": [...] }`, a value or a variable is `VALIDATION_FAILED`), `pool_secret_set` sets one value as a
+  new revision, and `pool_update` and `pool_delete` still answer `UI_ONLY`. No tool returns a value:
+  `pool_get` shows each secret's name, options and fingerprint (not the hint), and `pool_get` and `pool_list`
+  carry `warnings` for an environment-style name (`API_KEY`) stored without `expose` (T-2823).
+  A value sent to `pool_create` or `pool_update` by mistake is never kept: wherever the call is kept (audit
+  row, chat tool row, approval card; `maskWriteOnlyArgs` in contracts) `pool_update`'s `content` is
+  `[write-only]` whole (it names the pool by id, so it may be a secrets pool's); `pool_create`'s for a secrets
+  pool keeps only `names`, each entry's `kind` and `name` and boolean options, and every other field is
+  `[write-only]`; for any other type, `value`, `values`, `newValue`, `secret`, `secrets`, `keys`, `password`, `token` and
+  `credential(s)` keys of `content` are masked at any depth. The "looks like a secret" refusal still reads that
+  content unmasked (only `pool_secret_set`'s `value` is left out of it), so a key in an MCP set is refused.
+  Persona and browser pools are not listed until their services are in.
+- **`pool_secret_set`** (scope `agent`, 10 a minute, 60 an hour): `pool` (id or exact name), `name`,
+  `value`, `expose` (default true for an environment-style name that is not reserved), `note`. The value is
+  write-only (`PORTAL_WRITE_ONLY_ARGS` in contracts): masked as `[write-only]` in the audit row, in the chat
+  transcript's tool row and on an approval card, and not refused by the "looks like a secret" check. Its
+  result is the pool, name, revision, status, `expose`, `fingerprint` and `version`. Access goes through
+  `pools/authz.ts` (`secretWriteAccess`, one `can()`): an agent writes only to a secrets pool assigned to its
+  own workspace and to no other (a shared pool is `SHARED_POOL`); a pool it can't reach is the same
+  `NOT_FOUND` as a missing one; a token needs `manage` (admin). A protected pool (a name with the word `prd`,
+  `prod` or `production` in any case, split on any separator, a case change or a letter-digit change, so
+  `konfersi_PRD`, `KonfersiProd` and `prod2` count and `product` does not; or `[protected]` in its description) is refused for everyone with `PROTECTED`:
+  "protected pool: needs a person's approval (PILOT-1000)"; the approval card is PILOT-1000 (S4). Not
+  covered: Claude Code's own session log in the workspace keeps the call's input as the agent sent it.
 - Not built: `settings_get`, `settings_update`, `event_search`, `account_pool_update`, `account_update`,
   `account_delete`, `secret_link_create` and the relaxation guard (FR13): their services, or the Settings
   PRD, are not in yet. `workspace_get` takes `include` of `usage`, `sessions`, `claudes` and `pools`
@@ -644,6 +690,16 @@ and the code differ, the code is what ships:
 - Not built: elicitation. Confirmation is the server's `confirm_token`.
 
 ## 14. Safety mechanics
+
+### 13.6 Ticket buckets (T-1098)
+
+Tickets live in buckets ([Tickets](tickets.md) FR37 to FR42), and the server reports version `0.2.0` from this change. Every tool that takes a
+ticket takes its stable id (`T-12`, a permanent alias) or its bucket key (`KONF-3`, any case): the `ticket_*` tools' `id`, `session_start`'s
+`ticket_id`, `session_spawn`'s `ticket`, `lab_arm_draw`'s `ticket`, and the filters `session_list` `ticket_id` and `ci_runs_list` `ticket`.
+What is stored is always `T-<n>`. Results carry both: ticket rows have `id` and `key`, and session, CI run, trigger run, lab and usage rows
+have `ticket_id` and `ticket_key` (a by-ticket usage row has `ticket.id` and `ticket.key`). New: `ticket_buckets` (agent, read: the buckets
+the caller may use), `bucket` on `ticket_create` (operate on the bucket, checked at dispatch) and on `ticket_list` (view). `ticket_update` takes `bucket` (T-1967: a move to that bucket's next number, operate on it checked at dispatch; the old key stays an alias).
+T-119: `ticket_timeline` (agent, read: the flow of the tickets of a window, the same checks as `ticket_list`; [Tickets](tickets.md) FR47). The server's instructions and the `pilot://tickets/{id}` resource say the same; the resource takes either form and lists tickets titled by their key.
 
 ### 14.1 Confirming destructive actions
 

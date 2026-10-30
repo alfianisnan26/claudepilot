@@ -267,6 +267,27 @@ export interface DrawStat {
 /** The roles whose slices draw (docs/dev-sessions/orchestrator.md: every implementer slice while E2 runs). */
 export const DRAW_ROLES: readonly string[] = ['implementer'];
 
+/**
+ * T-1098: a ticket named either way (`T-12` or its bucket key `KONF-3`) as the stable `T-<n>` the lab stores, read from the tickets table; a
+ * key that names no ticket (or no table) is null. `T-<n>` is only normalised (its existence is `ticketExistsIn`'s).
+ */
+export function canonTicket(db: DatabaseSync, t: string): string | null {
+  const v = t.trim();
+  if (/^T-\d{1,9}$/i.test(v)) return normTicket(v.toUpperCase());
+  const k = /^([A-Za-z]{2,6})-(\d{1,9})$/.exec(v);
+  if (!k) return null;
+  try {
+    const key = [k[1]!.toUpperCase(), Number(k[2])] as const;
+    const r = db.prepare('SELECT number FROM tickets WHERE bucket_key = ? AND bucket_number = ?').get(...key) as { number: number } | undefined;
+    if (r) return `T-${r.number}`;
+    // T-1967: a key a moved ticket had (an alias), as the tickets service resolves it.
+    const was = db.prepare('SELECT ticket_number AS number FROM ticket_key_aliases WHERE bucket_key = ? AND bucket_number = ?').get(...key) as { number: number } | undefined;
+    return was ? `T-${was.number}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Whether ticket `T-<n>` exists in the portal's tickets table; false without the table (a bare store). */
 export function ticketExistsIn(db: DatabaseSync, ticket: string): boolean {
   const m = /^T-(\d{1,9})$/.exec(ticket);

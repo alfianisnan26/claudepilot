@@ -7,7 +7,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { TeamDialog } from '@/features/auth/TeamDialog';
 import { api, errorText } from '@/lib/api';
 
-const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-accent';
+const field = 'h-12 w-full rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
 
 /** Teams (owner, 2026-10-17: "team based multiaccount"): groups of accounts a session can be shared with. Owners of a team manage its people. */
 export function TeamsSection() {
@@ -68,7 +68,7 @@ export function TeamsSection() {
       <div className="mb-2 flex items-center gap-1 px-1">
         <h2 id="settings-teams" className="flex flex-1 items-center gap-1 text-[13px] font-semibold text-muted">
           Teams
-          <InfoTip label="About teams">Groups of accounts. Share a session with a team and everyone in it gets that access while they are in it. A team’s owners add and remove its people.</InfoTip>
+          <InfoTip label="About teams">Groups of accounts. Share an agent with a team and everyone in it gets that access while they are in it. A team’s owners add and remove its people.</InfoTip>
         </h2>
         <Button variant="ghost" size="icon" aria-label="Add a team" onClick={() => setAdding(true)}>
           <Plus className="size-[18px]" />

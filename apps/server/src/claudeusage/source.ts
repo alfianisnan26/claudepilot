@@ -10,6 +10,8 @@ import type { UsageSource } from './service.js';
 export interface ClaudeDirectory {
   listClaudes(workspaceId: string): WorkspaceClaude[];
   get(sessionId: string): { workspaceId: string; claudeId: string } | null;
+  /** A workspace's sessions (T-1707 reads which Claude each runs on and whether its process is live). */
+  list(filter: { workspaceId: string }): { claudeId: string; state: string; process: string }[];
 }
 
 export function usageSource(workspaces: Pick<Workspaces, 'list' | 'exec'>, chat: ClaudeDirectory, pooled: (workspaceId: string) => boolean): UsageSource {
@@ -33,6 +35,12 @@ export function usageSource(workspaces: Pick<Workspaces, 'list' | 'exec'>, chat:
     },
     pooled,
     exec: (target, name, command) => workspaces.exec(target, name, command),
+    sessionOn(claude) {
+      // A session from before Claudes (no id) runs in Default (Workspace Claudes FR2).
+      return chat
+        .list({ workspaceId: claude.workspaceId })
+        .some((s) => s.state !== 'ended' && s.process === 'live' && (s.claudeId === claude.id || (!s.claudeId && claude.directory === '')));
+    },
     sessionClaude(sessionId, claudeId) {
       const session = chat.get(sessionId);
       if (!session) return null;

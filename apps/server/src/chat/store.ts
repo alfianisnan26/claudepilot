@@ -24,6 +24,7 @@ import type {
 import { CHAT_SPAWN_WHY_MAX, CURSOR_MAX_LIMIT, TASK_EVENTS_MAX, type CursorPage } from '@portal/contracts';
 import { createHash, randomBytes } from 'node:crypto';
 import { posix } from 'node:path';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { clampLimit, cursorAfter, keysetPage, SCAN_FACTOR } from '../store/keyset.js';
 import type { Store } from '../store/store.js';
 import { HOME } from '../workspaces/runtime.js';
@@ -212,6 +213,9 @@ type RequestRow = {
   created_at: string;
 };
 
+/** T-2368: a list's per-session counts, read once for all its rows (see `ChatStore.toSession`). */
+type SessionCounts = { waiting: Map<string, number>; agents: Map<string, number> };
+
 /** Fields `patchSession` can change. `cost` is absolute; `turnsDelta` is added to the current count. */
 export interface ChatSessionPatch {
   model?: string | null;
@@ -296,7 +300,64 @@ const PROCESS_STATES = new Set<string>(['live', 'asleep', 'gone']);
 /** Whole, redacted event text over this many characters is truncated before it reaches the row. */
 export const EVENT_TEXT_MAX = 16_000;
 
+/**
+ * T-2589: the most events one {@link ChatStore.history} read returns. One chat held 204k events (208 MB of payload), and a read of its
+ * whole transcript (every row parsed at once, for a Move, an MCP session_get, a tab far behind) took the portal past its heap (exit 139).
+ * Past the cap a read returns the NEWEST events; the older ones stay reachable through the paged read (`historyBefore`).
+ */
+export const HISTORY_MAX_EVENTS = 2_000;
+/** T-2589: what a Move's tail read takes at most: rows of the kinds a transfer uses, and characters of their payloads. */
+export const TRANSFER_TAIL_EVENTS = 5_000;
+export const TRANSFER_TAIL_CHARS = 8_000_000;
+/** The kinds a transfer reads (`transfer.ts`): messages, the tools a turn used, and the turn ends (the handoff exchange is skipped by them). */
+export const TRANSFER_KINDS = ['user', 'assistant', 'tool_use', 'result'] as const;
+/** T-2589: a tail read walks back this many rows at a time, so it stops near its bounds instead of reading past them. */
+const TAIL_PAGE = 500;
+
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'killed']);
+
+/** T-3017: whether the session has a Claude Code process that can still run sub-agents. */
+const hasLiveProcess = (row: { process: string; state: string }): boolean => row.process === 'live' && row.state !== 'ended';
+
+/** T-2368: a task {@link taskOut} reads as running (`running`, NULL, or a status this portal does not know), in SQL. */
+const TASK_RUNNING_SQL = `(status IS NULL OR status NOT IN (${[...TASK_STATUSES]
+  .filter((s) => s !== 'running')
+  .map((s) => `'${s}'`)
+  .join(', ')}))`;
+
+/** The chat store's view of the database: `prepare` hands back one prepared statement per SQL text (T-2368), `raw` is the database itself. */
+type ChatDb = { prepare(sql: string): StatementSync; exec(sql: string): void; readonly raw: DatabaseSync };
+
+/** Prepared statements kept per database at most; past it the cache starts afresh (SQL built per call, like `IN (?, ?)`, varies). */
+const STATEMENTS_MAX = 512;
+
+/**
+ * T-2368: the portal spent a sixth of its CPU in `prepare()`: every read prepared its SQL again (a list of 1,500 sessions, thousands). A
+ * statement is prepared once per database and reused: node:sqlite resets it after each `run`, `get` and `all`, and SQLite prepares it
+ * again by itself after a schema change. Keyed by the database, so a reopened one starts afresh and a closed one's go with it.
+ */
+const chatDbs = new WeakMap<DatabaseSync, ChatDb>();
+function chatDb(db: DatabaseSync): ChatDb {
+  let out = chatDbs.get(db);
+  if (!out) {
+    const statements = new Map<string, StatementSync>();
+    out = {
+      prepare(sql) {
+        let st = statements.get(sql);
+        if (!st) {
+          if (statements.size >= STATEMENTS_MAX) statements.clear();
+          st = db.prepare(sql);
+          statements.set(sql, st);
+        }
+        return st;
+      },
+      exec: (sql) => db.exec(sql),
+      raw: db,
+    };
+    chatDbs.set(db, out);
+  }
+  return out;
+}
 
 /** An epoch-ms instant as ISO-8601, or null when it isn't a plausible one. */
 function isoFromMs(ms: number | undefined): string | null {
@@ -435,11 +496,11 @@ export class ChatStore {
     }
   }
 
-  /** The database, for reads. Throws when the store has no usable database. */
-  #db() {
+  /** The database, for reads (statements prepared once, T-2368). Throws when the store has no usable database. */
+  #db(): ChatDb {
     const db = this.#store.db;
     if (!db) throw new Error('The chat store has no database.');
-    return db;
+    return chatDb(db);
   }
 
   /** The database, for writes. Throws when the store is read-only (frozen / from a newer portal). */
@@ -479,6 +540,10 @@ export class ChatStore {
     spawnWhy?: string | null;
     /** T-561: its starter marked it a crew lead (stored 1; otherwise null). */
     lead?: boolean;
+    /** T-968: the person's General Manager (one per person, never listed); absent: a workspace session. */
+    kind?: 'manager';
+    /** T-968: whose manager it is (`u_owner` for the server code's person). */
+    ownerId?: string;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
@@ -486,8 +551,8 @@ export class ChatStore {
     db.prepare(
       `INSERT INTO chat_sessions (id, workspace_id, cwd, title, origin, state, state_since, created_at, last_activity_at, claude_id, predecessor_id,
            ticket_id, parent_id, started_by, worktree_path, worktree_branch, worktree_repo, claude_session_id, bypass_capable, continued_from, agent,
-           max_workers, subagents, folder_branch, spawn_why, lead)
-         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           max_workers, subagents, folder_branch, spawn_why, lead, kind, owner_id)
+         VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       opts.id,
       this.#refs ? this.#refs.storedRef(opts.workspaceId) : opts.workspaceId,
@@ -514,6 +579,8 @@ export class ChatStore {
       opts.worktree ? null : (opts.folderBranch ?? null),
       why,
       opts.lead === true ? 1 : null,
+      opts.kind === 'manager' ? 'manager' : 'workspace',
+      opts.ownerId ?? 'u_owner',
     );
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(
@@ -524,6 +591,19 @@ export class ChatStore {
       now,
     );
     return this.get(opts.id)!;
+  }
+
+  /** T-968: the person's General Manager session (the newest that is not ended), or null. */
+  managerOf(ownerId: string): ChatSession | null {
+    const r = this.#db()
+      .prepare("SELECT * FROM chat_sessions WHERE kind = 'manager' AND owner_id = ? ORDER BY (state = 'ended'), created_at DESC LIMIT 1")
+      .get(ownerId) as ChatSessionRow | undefined;
+    return r ? this.toSession(this.#keyed(r)) : null;
+  }
+
+  /** T-968: whether a session is a General Manager. */
+  isManager(id: string): boolean {
+    return !!this.#db().prepare("SELECT 1 FROM chat_sessions WHERE id = ? AND kind = 'manager'").get(this.resolveId(id));
   }
 
   /** The id a chat goes by now: a folded session's old id (an alias) resolves to the chat that took it in. */
@@ -553,7 +633,8 @@ export class ChatStore {
 
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
-    const where: string[] = [];
+    // T-968: a General Manager is never in a list (Sessions, session_list, crews, widgets); Home is its only door.
+    const where: string[] = ["kind != 'manager'"];
     const vals: string[] = [];
     if (filter.workspaceId) {
       const one = this.#inWorkspace(filter.workspaceId);
@@ -567,7 +648,22 @@ export class ChatStore {
         `SELECT * FROM chat_sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY last_activity_at DESC, created_at DESC`,
       )
       .all(...vals) as ChatSessionRow[];
-    return rows.map((r) => this.toSession(this.#keyed(r)));
+    const counts = this.#listCounts();
+    return rows.map((r) => this.toSession(this.#keyed(r), counts));
+  }
+
+  /**
+   * T-2368: what {@link toSession} counts per session (open requests, running tasks), for every session in two grouped reads, so a list
+   * of 1,500 rows does not ask 3,000 times. A session in neither has none.
+   */
+  #listCounts(): SessionCounts {
+    const db = this.#db();
+    const group = (sql: string) =>
+      new Map((db.prepare(sql).all() as { session_id: string; n: number }[]).map((r) => [r.session_id, r.n] as const));
+    return {
+      waiting: group('SELECT session_id, count(*) AS n FROM chat_requests WHERE answered_at IS NULL GROUP BY session_id'),
+      agents: group(`SELECT session_id, count(*) AS n FROM chat_tasks WHERE status IS NULL OR status = 'running' GROUP BY session_id`),
+    };
   }
 
   /**
@@ -580,7 +676,7 @@ export class ChatStore {
     filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {},
     args: { cursor?: string | undefined; limit?: unknown; keep?: (s: ChatSession) => boolean } = {},
   ): CursorPage<ChatSession> {
-    const where: string[] = [];
+    const where: string[] = ["kind != 'manager'"];
     const params: string[] = [];
     if (filter.workspaceId) {
       const one = this.#inWorkspace(filter.workspaceId);
@@ -606,7 +702,7 @@ export class ChatStore {
     let scanned = 0;
     let resume: string | null = null;
     while (scanned < maxScan) {
-      const got = keysetPage<ChatSessionRow>(this.#db(), spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
+      const got = keysetPage<ChatSessionRow>(this.#db().raw, spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
       scanned += got.rows.length;
       for (const r of got.rows) {
         const s = this.toSession(this.#keyed(r));
@@ -723,6 +819,18 @@ export class ChatStore {
     );
   }
 
+  /** T-1613: the ids of the top-level sessions (no parent) that haven't ended and have at least one worker that hasn't ended. */
+  leadsWithLiveWorkers(): string[] {
+    return (
+      this.#db()
+        .prepare(
+          `SELECT DISTINCT p.id AS id FROM chat_sessions c JOIN chat_sessions p ON p.id = c.parent_id
+           WHERE c.state != 'ended' AND p.parent_id IS NULL AND p.state != 'ended'`,
+        )
+        .all() as { id: string }[]
+    ).map((r) => r.id);
+  }
+
   /** One workspace's sessions that haven't ended (whatever their process), oldest first. */
   workspaceRows(workspaceId: string): ChatSessionRow[] {
     const one = this.#inWorkspace(workspaceId);
@@ -733,12 +841,15 @@ export class ChatStore {
     ).map((r) => this.#keyed(r));
   }
 
-  toSession(row: ChatSessionRow): ChatSession {
-    const waiting = (
-      this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as {
-        n: number;
-      }
-    ).n;
+  /** `counts`: a list's grouped counts (T-2368); without them, this session's own are read. */
+  toSession(row: ChatSessionRow, counts?: SessionCounts): ChatSession {
+    const waiting = counts
+      ? (counts.waiting.get(row.id) ?? 0)
+      : (
+          this.#db().prepare('SELECT count(*) AS n FROM chat_requests WHERE session_id = ? AND answered_at IS NULL').get(row.id) as {
+            n: number;
+          }
+        ).n;
     let waitingFor: string | null = null;
     if (waiting > 0) {
       const ask = this.#db()
@@ -772,11 +883,16 @@ export class ChatStore {
       lastSeq: row.last_seq,
       waiting,
       waitingFor,
-      agentsRunning: (
-        this.#db()
-          .prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
-          .get(row.id) as { n: number }
-      ).n,
+      // T-3017: a chat with no live process (asleep, gone, ended) runs nothing, whatever rows a process that is over left behind.
+      agentsRunning: !hasLiveProcess(row)
+        ? 0
+        : counts
+          ? (counts.agents.get(row.id) ?? 0)
+          : (
+            this.#db()
+              .prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
+              .get(row.id) as { n: number }
+          ).n,
       createdAt: row.created_at,
       lastActivityAt: row.last_activity_at,
       endedReason: row.ended_reason ?? null,
@@ -807,7 +923,7 @@ export class ChatStore {
 
   /** The chain this session belongs to (T-136): every row from the root to the head, each one's cost, and their sum. Null when unknown. */
   lineage(sessionId: string): Lineage | null {
-    return lineageOf(this.#db(), sessionId);
+    return lineageOf(this.#db().raw, sessionId);
   }
 
   /** The other Claudes this chat ran on before its current one, oldest first, each once. */
@@ -969,13 +1085,87 @@ export class ChatStore {
     });
   }
 
-  history(sessionId: string, after = 0): ChatEvent[] {
+  /**
+   * The events after `after`, oldest first, at most `limit` (never more than {@link HISTORY_MAX_EVENTS}, T-2589). When more lie after
+   * `after`, the NEWEST of them: a reader far behind gets the latest and pages back for the rest (`historyBefore`). Never the whole
+   * transcript of a long chat at once.
+   */
+  history(sessionId: string, after = 0, limit: number = HISTORY_MAX_EVENTS): ChatEvent[] {
+    const n = Math.min(HISTORY_MAX_EVENTS, Math.max(0, Math.trunc(limit) || 0));
+    if (!n) return [];
     const rows = this.#db()
       .prepare(
-        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq',
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq DESC LIMIT ?',
       )
-      .all(sessionId, after) as EventRow[];
+      .all(sessionId, after, n) as EventRow[];
+    return rows.reverse().map((r) => this.#toEvent(r));
+  }
+
+  /**
+   * T-2589: the OLDEST events after `after`, at most `limit` (capped as {@link history}), oldest first: a reader that walks forward from a
+   * known seq a page at a time (a turn awaited after the message that started it) and must not skip any.
+   */
+  historyFrom(sessionId: string, after: number, limit: number = HISTORY_MAX_EVENTS): ChatEvent[] {
+    const n = Math.min(HISTORY_MAX_EVENTS, Math.max(0, Math.trunc(limit) || 0));
+    if (!n) return [];
+    const rows = this.#db()
+      .prepare(
+        'SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND seq > ? ORDER BY seq LIMIT ?',
+      )
+      .all(sessionId, after, n) as EventRow[];
     return rows.map((r) => this.#toEvent(r));
+  }
+
+  /** T-2589: the newest stored `user` event with this uuid (a message the portal just sent), or null: one row, never the transcript. */
+  userEvent(sessionId: string, uuid: string): ChatEvent | null {
+    const row = this.#db()
+      .prepare(
+        "SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, payload FROM chat_events WHERE session_id = ? AND kind = 'user' AND uuid = ? ORDER BY seq DESC LIMIT 1",
+      )
+      .get(sessionId, uuid) as EventRow | undefined;
+    return row ? this.#toEvent(row) : null;
+  }
+
+  /**
+   * T-2589: the newest events of some kinds after `after`, oldest first, read back from the newest a page at a time and stopped at
+   * `maxEvents` rows or about `maxChars` characters of payload, whichever comes first. A `tool_use` row comes without its input when
+   * `withoutToolInput` (a Move names a call by its summary, never its input). `cut` says older events of those kinds were left unread.
+   */
+  historyTail(
+    sessionId: string,
+    opts: { kinds: readonly string[]; after?: number; maxEvents: number; maxChars?: number; withoutToolInput?: boolean },
+  ): { events: ChatEvent[]; cut: boolean } {
+    const db = this.#db();
+    const after = opts.after ?? 0;
+    const maxEvents = Math.max(0, Math.trunc(opts.maxEvents) || 0);
+    const maxChars = opts.maxChars ?? Number.MAX_SAFE_INTEGER;
+    if (!opts.kinds.length) return { events: [], cut: false };
+    const kinds = opts.kinds.map(() => '?').join(', ');
+    const payload = opts.withoutToolInput
+      ? "CASE WHEN kind = 'tool_use' AND json_valid(payload) THEN json_remove(payload, '$.toolInput') ELSE payload END AS payload"
+      : 'payload';
+    const page = db.prepare(
+      `SELECT seq, at, kind, uuid, parent_tool_use_id, request_id, ${payload} FROM chat_events
+         WHERE session_id = ? AND seq > ? AND seq < ? AND kind IN (${kinds}) ORDER BY seq DESC LIMIT ?`,
+    );
+    const rows: EventRow[] = [];
+    let before = Number.MAX_SAFE_INTEGER;
+    let chars = 0;
+    for (;;) {
+      const want = Math.min(TAIL_PAGE, maxEvents - rows.length);
+      if (want <= 0 || chars >= maxChars) break;
+      const got = page.all(sessionId, after, before, ...opts.kinds, want) as EventRow[];
+      for (const r of got) {
+        rows.push(r);
+        chars += r.payload.length;
+      }
+      if (got.length) before = got[got.length - 1]!.seq;
+      if (got.length < want) return { events: rows.reverse().map((r) => this.#toEvent(r)), cut: false };
+    }
+    const older = db
+      .prepare(`SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND seq < ? AND kind IN (${kinds}) LIMIT 1`)
+      .get(sessionId, after, before, ...opts.kinds);
+    return { events: rows.reverse().map((r) => this.#toEvent(r)), cut: older !== undefined };
   }
 
   /**
@@ -1375,6 +1565,14 @@ export class ChatStore {
     return rows.map(taskOut);
   }
 
+  /** T-2368: the session's tasks that read as running (exactly `tasks().filter(running)`), oldest first, through the (session_id, status) index. */
+  runningTasks(sessionId: string): ChatTask[] {
+    const rows = this.#db()
+      .prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? AND ${TASK_RUNNING_SQL} ORDER BY started_at, task_id`)
+      .all(sessionId) as TaskRow[];
+    return rows.map(taskOut);
+  }
+
   /** One sub-agent or background task, or null. */
   task(sessionId: string, taskId: string): ChatTask | null {
     const row = this.#db().prepare(`SELECT ${TASK_COLUMNS} FROM chat_tasks WHERE session_id = ? AND task_id = ?`).get(sessionId, taskId) as
@@ -1456,6 +1654,21 @@ export class ChatStore {
         `UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')${pick}`,
       )
       .run(this.#stamp(), sessionId, ...(only ?? []));
+    return Number(result.changes) > 0;
+  }
+
+  /**
+   * T-3017: Claude Code's whole set of background tasks still running (`background_tasks_changed`). A background task that reads running
+   * here but is not in the set has ended: it reads `completed`, ended now (a later end line of its own still sets how it really ended).
+   * Foreground tasks are never in the set and are left alone. Says whether any changed.
+   */
+  endBackgroundTasksNotIn(sessionId: string, running: readonly string[]): boolean {
+    const keep = running.length ? ` AND task_id NOT IN (${running.map(() => '?').join(', ')})` : '';
+    const result = this.#writable()
+      .prepare(
+        `UPDATE chat_tasks SET status = 'completed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND background = 1 AND ${TASK_RUNNING_SQL}${keep}`,
+      )
+      .run(this.#stamp(), sessionId, ...running);
     return Number(result.changes) > 0;
   }
 
@@ -1887,7 +2100,7 @@ export class ChatStore {
     let scanned = 0;
     let resume: string | null = null;
     while (scanned < maxScan) {
-      const got = keysetPage<AuditRow>(this.#db(), spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
+      const got = keysetPage<AuditRow>(this.#db().raw, spec, { cursor, limit: Math.min(CURSOR_MAX_LIMIT, maxScan - scanned) });
       scanned += got.rows.length;
       for (const r of got.rows) {
         const e = auditEntry(r);

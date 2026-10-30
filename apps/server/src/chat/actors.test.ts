@@ -304,3 +304,16 @@ test('send: a delegate (account:<id>) is a real sender through the real controll
     await s.done();
   }
 });
+
+test('send: the General Manager (manager:<id>) is a real sender, framed as the person’s manager (T-968)', async () => {
+  const s = await liveSession();
+  try {
+    assert.ok(isChatActor('manager:m_1') && isPortalActor('manager:m_1'));
+    await s.controller.send(s.id, 'm-manager', 'status please', { actor: 'manager:m_1' });
+    await until(() => s.ws.sends.some((x) => x.line.includes('"type":"user"')));
+    const sent = sentText(s.ws.sends.filter((x) => x.line.includes('"type":"user"')).at(-1)!.line);
+    assert.match(sent, /the person’s General Manager/);
+  } finally {
+    await s.done();
+  }
+});

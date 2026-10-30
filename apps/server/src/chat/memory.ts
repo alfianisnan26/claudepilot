@@ -197,11 +197,11 @@ export function memoryAttentionSource(memory: Pick<WorkspaceMemory, 'alerts'>): 
             title: `${a.workspaceId}: memory ${pct}%${top ? ` (${top})` : ''}`,
             who: [],
             why: 'question',
-            risk: `${gib(r.usedBytes)} of ${gib(r.limitBytes)} GiB in use (anon + active file); at the limit every session in it stops`,
+            risk: `${gib(r.usedBytes)} of ${gib(r.limitBytes)} GiB in use (anon + active file); at the limit every agent in it stops`,
             since: a.since,
             link: '/admin/sessions',
             // The page and the deck only link (`link`); no route decides this item, a person ends or sleeps sessions on their own pages.
-            action: { label: 'Sessions', method: 'POST', path: CHAT_API.list },
+            action: { label: 'Agents', method: 'POST', path: CHAT_API.list },
           };
         });
     },

@@ -1,5 +1,14 @@
 import { Button, Dialog, FormDialog, Segmented, Select, TextField } from '@isnanme/ui';
-import { PORTAL_TOKEN_LABEL_IN_USE, PORTAL_TOKEN_LABEL_MAX, type CreatedPortalToken, type PortalScope, type PortalTokenLabelConflict, type PortalTokenLifetime } from '@portal/contracts';
+import {
+  PORTAL_TOKEN_LABEL_IN_USE,
+  PORTAL_TOKEN_LABEL_MAX,
+  type CreatedPortalToken,
+  type PortalAgentWorkspace,
+  type PortalScope,
+  type PortalToken,
+  type PortalTokenLabelConflict,
+  type PortalTokenLifetime,
+} from '@portal/contracts';
 import { TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
@@ -93,6 +102,59 @@ export function NewTokenDialog({ open, onClose, onCreated }: { open: boolean; on
           }
         />
       </div>
+    </FormDialog>
+  );
+}
+
+/** T-1105: where the token's tickets go when a call names no workspace. */
+export function TokenWorkspaceDialog({ token, workspaces, onClose, onSaved }: { token: PortalToken | null; workspaces: PortalAgentWorkspace[] | null; onClose: () => void; onSaved: () => void }) {
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    setValue(token.defaultWorkspaceId ?? '');
+    setError(null);
+  }, [token]);
+
+  const known = workspaces ?? [];
+  const current = token?.defaultWorkspaceId;
+  // A default whose workspace is gone stays selectable, so it can be seen and cleared.
+  const options = [
+    { value: '', label: 'None' },
+    ...known.map((w) => ({ value: w.workspaceId, label: w.name })),
+    ...(current && !known.some((w) => w.workspaceId === current) ? [{ value: current, label: current }] : []),
+  ];
+
+  const submit = async () => {
+    if (!token) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await portalMcpApi.updateToken(token.id, { defaultWorkspaceId: value || null });
+      onSaved();
+    } catch (e) {
+      setError(errorText(e, 'Couldn’t change it.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormDialog open={!!token} onClose={onClose} size="sm" title="Workspace" onSubmit={() => submit()} submitLabel="Save" saving={saving} error={error} dirty={value !== (current ?? '')}>
+      <Select
+        label="Tickets go to"
+        value={value}
+        onChange={setValue}
+        options={options}
+        hint={
+          <span className="inline-flex items-center gap-1">
+            When a ticket names none
+            <InfoTip label="About the workspace">Tickets this token makes without a workspace land here, so that workspace’s lead and crew can take them. None: the shared queue.</InfoTip>
+          </span>
+        }
+      />
     </FormDialog>
   );
 }

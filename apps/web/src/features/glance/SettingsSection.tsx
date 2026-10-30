@@ -10,8 +10,8 @@ import type { GlancePlacement } from './types';
 
 const PLACES: { id: GlancePlacement; label: string; about: string }[] = [
   { id: 'header', label: 'Header', about: 'The strip in the phone’s top bar and at the foot of the sidebar.' },
-  { id: 'list', label: 'Sessions page', about: 'A labelled row above the Sessions list (not repeated on a phone while the header strip shows).' },
-  { id: 'composer', label: 'Composer', about: 'A small row above the message box in a session.' },
+  { id: 'list', label: 'Agents page', about: 'A labelled row above the Agents list (not repeated on a phone while the header strip shows).' },
+  { id: 'composer', label: 'Composer', about: 'A small row above the message box in an agent.' },
   { id: 'dock', label: 'Side dock', about: 'From 1280 px wide: a rail of chips on the right edge. Open it to see every widget in full; it then makes room instead of covering the page.' },
 ];
 
@@ -29,7 +29,7 @@ export function GlanceSettingsSection() {
     <section aria-labelledby="settings-glance">
       <h2 id="settings-glance" className="mb-2 flex items-center gap-1 px-1 text-[13px] font-semibold text-muted">
         Glance
-        <InfoTip label="About glance">Small status widgets in the header, the Sessions list, the composer and a side dock. These choices are kept on this device only.</InfoTip>
+        <InfoTip label="About glance">Small status widgets in the header, the Agents list, the composer and a side dock. These choices are kept on this device only.</InfoTip>
         {changed && (
           <button type="button" onClick={resetGlanceSettings} aria-label="Reset glance settings" title="Reset glance settings" className="press ml-auto inline-flex size-8 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink">
             <RotateCcw className="size-4" />

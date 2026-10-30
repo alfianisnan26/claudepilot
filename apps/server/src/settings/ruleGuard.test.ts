@@ -15,8 +15,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { runInThisContext } from 'node:vm';
 import { ChatStore } from '../chat/store.js';
 import { compile } from '../delivery/compile.js';
 import { parseOutbox } from '../delivery/outbox.js';
@@ -940,6 +943,19 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['config include.path', `git -C ${wt} config include.path /tmp/c`],
     ['config core.sshCommand', `git -C ${wt} config core.sshCommand cmd`],
     ['config of a variable key', `git -C ${wt} config "$K" v`],
+    // T-974 FIX (blind review PWG 10575): config then push. Each key below redirects a later plain git push; none was refused before.
+    ['config remote.origin.push', `git -C ${wt} config remote.origin.push HEAD:main`],
+    ['config remote.origin.url', `git -C ${wt} config remote.origin.url https://example.invalid/other.git`],
+    ['config remote.origin.pushurl', `git -C ${wt} config remote.origin.pushurl https://example.invalid/other.git`],
+    ['config remote.x.y.push (a dotted remote name)', `git -C ${wt} config --add remote.x.y.push HEAD:stg`],
+    ['config push.default', `git -C ${wt} config push.default matching`],
+    ['config push.followTags', `git -C ${wt} config push.followTags true`],
+    ['config url.insteadOf', `git -C ${wt} config url.https://example.invalid/.insteadOf https://github.com/`],
+    ['config url.pushInsteadOf', `git -C ${wt} config url.https://example.invalid/.pushInsteadOf https://github.com/`],
+    ['config branch.pushRemote', `git -C ${wt} config branch.main.pushRemote other`],
+    ['config REMOTE.origin.PUSH (case)', `git -C ${wt} config REMOTE.origin.PUSH HEAD:uat`],
+    ['config --add alias', `git -C ${wt} config --add alias.p '!git push origin HEAD:main'`],
+    ['config ALIAS (case)', `git -C ${wt} config ALIAS.p '!cmd'`],
     // S2b (review 8740): git applies every -C first, so a relative --git-dir/--work-tree is read after the LAST -C.
     ['a relative --git-dir with a later -C', `git -C ${wt}/sub --git-dir=../../konfersi-universe/.git -C ${wt} commit -m x`],
     ['a relative --work-tree with a later -C', `git -C ${wt}/sub --work-tree=../../konfersi-universe -C ${wt} status`],
@@ -1059,10 +1075,14 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
     ['a # inside a word', `git -C ${wt} log a#b`],
     ['branch -a', `git -C ${wt} branch -a`],
     ['fetch origin', `git -C ${wt} fetch origin`],
-    ['rebase', `git -C ${wt} rebase origin/integration`],
+    // T-974 FIX3 (blind review 10892): allowed on the record; they change no push target.
+    ['remote prune origin', `git -C ${wt} remote prune origin`],
+    ['remote update', `git -C ${wt} remote update`],
     ['merge', `git -C ${wt} merge --no-ff ticket/T-1`],
     ['worktree list (same command)', `git -C ${wt} worktree list`],
     ['config of a harmless key', `git -C ${wt} config --get remote.origin.url`],
+    ['config read of a push key', `git -C ${wt} config --get remote.origin.pushurl`],
+    ['config read of push.default', `git -C ${wt} config --get push.default`],
     ['GIT_AUTHOR_NAME', `GIT_AUTHOR_NAME=x git -C ${wt} commit -m y`],
     ['GIT_TERMINAL_PROMPT', `GIT_TERMINAL_PROMPT=0 git -C ${wt} fetch origin`],
     ['env -C inside the lane', `env -C ${wt} git status`],
@@ -1071,6 +1091,174 @@ test('T-860 S2: --git-dir, --work-tree, -c, other options, GIT_ variables, wrapp
   ];
   for (const [what, command] of A) tryForm(() => allowed(sh(command), `S2 ${what}: ${JSON.stringify(command)}`));
   assert.deepEqual(misses, []);
+});
+
+// T-974: a git -C line is read as an argv and refused by subcommand and flags; the words of a -m, -F or --message value are never matched.
+test('T-974: git -C is refused by subcommand and flags; messages, HEAD~1, grep -o and .env.example stay allowed', () => {
+  const { wt, sh } = gitCRig();
+  const c = `git -C ${wt}`;
+  mkdirSync(join(wt, '.git'), { recursive: true }); // so --git-dir below names a folder that exists and the refusal is the policy's
+  const REFUSED: [string, string][] = [
+    ['reset --hard', `${c} reset --hard origin/integration`],
+    // T-974 (blind re-check 10774): git remote changes where a push goes, like the remote.*.url keys.
+    ['remote set-url', `${c} remote set-url origin https://example.invalid/other.git`],
+    ['remote set-url --push', `${c} remote set-url --push origin https://example.invalid/other.git`],
+    // T-974 FIX3 (blind review 10892): set-url has two more forms that change where a push goes.
+    ['remote set-url --add', `${c} remote set-url --add origin https://example.invalid/other.git`],
+    ['remote set-url --delete', `${c} remote set-url --delete origin https://example.invalid/other.git`],
+    ['remote add', `${c} remote add other https://example.invalid/other.git`],
+    ['remote add -f', `${c} remote add -f other https://example.invalid/other.git`],
+    ['remote rename', `${c} remote rename origin old`],
+    ['remote remove', `${c} remote remove origin`],
+    ['remote rm', `${c} remote rm origin`],
+    ['remote set-branches', `${c} remote set-branches origin main`],
+    ['remote set-head', `${c} remote set-head origin -d`],
+    ['remote with a flag before the subcommand', `${c} remote -v add other https://example.invalid/o.git`],
+    ['remote of a variable subcommand', `${c} remote $S origin x`],
+    // A future relaxation of -c would reopen a push redirect: keep one mixed-case row for it.
+    ['-c Remote.origin.pushurl (mixed case)', `${c} -c Remote.origin.pushurl=https://example.invalid/other.git push origin HEAD`],
+    ['-c REMOTE.ORIGIN.URL (upper case)', `${c} -c REMOTE.ORIGIN.URL=https://example.invalid/other.git fetch`],
+    ['reset --hard abbreviated', `${c} reset --ha HEAD~1`],
+    ['reset --hard after a ref', `${c} reset HEAD~1 --hard`],
+    ['clean', `${c} clean -fd`],
+    ['clean dry run', `${c} clean -n`],
+    ['restore', `${c} restore src/app.ts`],
+    ['restore --worktree --staged', `${c} restore --staged --worktree src`],
+    ['restore --source', `${c} restore --source=HEAD~1 .`],
+    ['checkout main', `${c} checkout main`],
+    ['checkout stg', `${c} checkout stg`],
+    ['checkout refs/heads/uat', `${c} checkout refs/heads/uat`],
+    ['checkout -B main', `${c} checkout -B main origin/main`],
+    ['switch main', `${c} switch main`],
+    ['switch -C stg', `${c} switch -C stg`],
+    ['switch --force', `${c} switch --force x`],
+    ['checkout -- paths', `${c} checkout -- src/app.ts`],
+    ['checkout .', `${c} checkout .`],
+    ['checkout commit path', `${c} checkout HEAD~1 src/app.ts`],
+    ['checkout -f', `${c} checkout -f x`],
+    ['rebase', `${c} rebase origin/integration`],
+    ['rebase --onto', `${c} rebase --onto a b c`],
+    ['branch -D', `${c} branch -D feature`],
+    ['branch -d', `${c} branch -d feature`],
+    ['branch --delete', `${c} branch --delete feature`],
+    ['branch -fD cluster', `${c} branch -fD feature`],
+    ['branch -f main', `${c} branch -f main HEAD`],
+    ['push main', `${c} push origin main`],
+    ['push HEAD:main', `${c} push origin HEAD:main`],
+    ['push to refs/heads/stg', `${c} push origin x:refs/heads/stg`],
+    ['push uat', `${c} push -u origin uat`],
+    ['push --force', `${c} push --force origin x`],
+    ['push -f', `${c} push -f origin x`],
+    ['push -fu cluster', `${c} push -fu origin x`],
+    ['push --force-with-lease', `${c} push --force-with-lease origin x`],
+    ['push --forc', `${c} push --forc origin x`],
+    ['push +refspec', `${c} push origin +x`],
+    ['push +x:y', `${c} push origin +x:y`],
+    ['push delete refspec', `${c} push origin :feature`],
+    ['push --delete', `${c} push origin --delete feature`],
+    ['push --mirror', `${c} push --mirror origin`],
+    ['push --all', `${c} push --all origin`],
+    ['push --receive-pack', `${c} push --receive-pack=cmd origin x`],
+    ['push a pattern', `${c} push origin 'refs/heads/*:refs/heads/*'`],
+    ['commit -n', `${c} commit -n -m x`],
+    ['commit -an cluster', `${c} commit -an -m x`],
+    ['commit -m then -n', `${c} commit -m x -n`],
+    ['commit --no-verify', `${c} commit --no-verify -m x`],
+    ['commit --no-verify after the message', `${c} commit -m "restore clean" --no-verify`],
+    ['commit --no-ver', `${c} commit --no-ver -m x`],
+    ['commit -nm glued', `${c} commit -nm x`],
+    ['commit a variable flag', `${c} commit $FLAGS -m x`],
+    ['commit a substitution as a flag', `${c} commit $(echo -n) -m x`],
+    ['commit backticks as a flag', `${c} commit \`echo -n\` -m x`],
+    ['push a variable branch', `${c} push origin $B`],
+    ['-c config', `${c} -c core.hooksPath=/tmp/h commit -m x`],
+    ['fetch --upload-pack', `${c} fetch --upload-pack=cmd origin`],
+    ['fetch --upload-pack separate', `${c} fetch --upload-pack cmd origin`],
+    ['ls-remote --upload-pack', `${c} ls-remote --upload-pack=cmd origin`],
+    ['pull --upload-pack', `${c} pull --upload-pack=cmd`],
+    ['clone -u', `${c} clone -u cmd x y`],
+    ['worktree remove', `${c} worktree remove ../x`],
+    ['worktree remove --force', `${c} worktree remove --force ../x`],
+    ['--work-tree form too', `git -C ${wt} --work-tree ${wt} reset --hard`],
+    ['--git-dir form too', `git --git-dir=${wt}/.git -C ${wt} clean -f`],
+    ['after &&', `${c} status && ${c} clean -f`],
+    ['after a pipe', `echo x | ${c} rebase main`],
+    ['in a shell -c string', `bash -c "${c} reset --hard"`],
+    ['an unbalanced quote', `${c} commit -m "x`],
+    ['a trailing backslash', `${c} commit -m x \\`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of REFUSED) {
+    const r = sh(command);
+    if (r.code !== 2) misses.push(`refused: ${what}: ${command} -> ${r.code}`);
+  }
+  assert.equal(misses.join('\n'), '');
+  const ALLOWED: [string, string][] = [
+    ['remote', `${c} remote`],
+    ['remote -v', `${c} remote -v`],
+    ['remote show origin', `${c} remote show origin`],
+    ['remote get-url', `${c} remote get-url origin`],
+    ['a message with restore', `${c} commit -m "restore the file"`],
+    ['a message with clean', `${c} commit -m 'clean up the notes'`],
+    ['a message with reset --hard', `${c} commit -m "docs: never reset --hard or rebase"`],
+    ['a message with every word', `${c} commit -m "restore clean reset rebase checkout main push --force"`],
+    ['a message that is a flag', `${c} commit -m --no-verify`],
+    ['a message -n', `${c} commit -m -n`],
+    ['a glued message', `${c} commit -m"clean restore"`],
+    ['a message with =', `${c} commit --message="rebase main"`],
+    ['a long message', `${c} commit --message "reset --hard"`],
+    ['an abbreviated long message', `${c} commit --mess "-n"`],
+    ['-am cluster', `${c} commit -am "restore x"`],
+    ['a message from a file', `${c} commit -F msg.txt`],
+    ['a message from stdin', `${c} commit -F -`],
+    ['a message by substitution', `${c} commit -m "$(cat msg.txt)"`],
+    ['a heredoc substitution message', `${c} commit -m "$(cat <<'EOF'\nreset --hard and restore\nEOF\n)"`],
+    ['commit with trailers', `${c} commit -m "x" -m "Ticket: T-974"`],
+    ['commit -uno', `${c} commit -uno -m x`],
+    ['commit -a', `${c} commit -a -m x`],
+    ['commit --amend', `${c} commit --amend --no-edit`],
+    ['tag with a message', `${c} tag -a v1 -m "restore clean"`],
+    ['merge with a message', `${c} merge -m "rebase clean" x`],
+    ['stash with a message', `${c} stash push -m "reset --hard"`],
+    ['rev-parse HEAD HEAD~1', `${c} rev-parse HEAD HEAD~1`],
+    ['log with ~', `${c} log HEAD~3..HEAD~1`],
+    ['diff with ~', `${c} diff HEAD~1`],
+    ['grep -o', `${c} grep -o foo -- src`],
+    ['add .env.example', `${c} add .env.example`],
+    ['add a pattern', `${c} add 'src/*.ts'`],
+    ['add a shell pattern', `${c} add src/*.ts`],
+    ['diff .env.example', `${c} diff -- .env.example`],
+    ['restore --staged', `${c} restore --staged src/app.ts`],
+    ['checkout a work branch', `${c} checkout ticket/T-974-git-argv`],
+    ['checkout -b', `${c} checkout -b ticket/T-1-x origin/integration`],
+    ['switch a work branch', `${c} switch ticket/T-974-git-argv`],
+    ['switch -c', `${c} switch -c ticket/T-1-x origin/integration`],
+    ['branch list', `${c} branch -r --contains abc123`],
+    ['branch a name with main inside', `${c} branch ticket/T-1-main-fix`],
+    ['branch -m of a work branch', `${c} branch -m old new`],
+    ['push a work branch', `${c} push -u origin ticket/T-974-git-argv`],
+    ['push a wip branch', `${c} push -q origin wip/be-infra-abc123`],
+    ['push a branch that contains main', `${c} push origin ticket/T-1-main`],
+    ['push HEAD to a work branch', `${c} push origin HEAD:ticket/T-1-x`],
+    ['fetch', `${c} fetch origin`],
+    ['fetch --prune', `${c} fetch --prune origin`],
+    ['pull', `${c} pull --ff-only`],
+    ['ls-remote', `${c} ls-remote origin`],
+    ['worktree add', `${c} worktree add ../x -b ticket/T-1-x`],
+    ['worktree list', `${c} worktree list`],
+    ['reset a path', `${c} reset HEAD src/app.ts`],
+    ['reset --soft', `${c} reset --soft HEAD~1`],
+    ['reset --mixed', `${c} reset HEAD~1`],
+    ['status', `${c} status --short`],
+    ['no -C: not read by this policy', 'git status'],
+  ];
+  for (const [what, command] of ALLOWED) {
+    const r = sh(command);
+    if (r.code !== 0) misses.push(`allowed: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+  }
+  assert.equal(misses.join('\n'), '');
+  // Without -C the line is not read by this policy (a text deny with a plain prefix still works there), and outside a lane workspace nothing changes.
+  allowed(sh('git rebase origin/integration'), 'no -C: rebase');
 });
 
 test('T-860: a refusal writes one outbox line with no path text, and the guard stays off in a workspace with no lane folder', () => {
@@ -1124,6 +1312,7 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
     '/home/node/work/claudepilot.worktrees',
     '/home/node/work/tradingbot.worktrees',
     '/home/node/work/konfersi-universe.worktrees',
+    'tool /home/node/work/claudepilot', // PILOT-998: the read-only tool checkout
   ]);
   const bundle = compile({
     portalId: 'p',
@@ -1147,6 +1336,200 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
   ]) {
     assert.throws(() => gitCRootsContent([bad]), /git -C root/, bad);
   }
+});
+
+// PILOT-998 (T-2865): a tool checkout (the main ClaudePilot folder) takes git -C for reads and fast-forwards only, and $HOME in a
+// git -C path is read as the session's HOME when nothing in the command can change it. Every refusal says what to do.
+function toolRig() {
+  const g = rig();
+  const lanes = join(g.home, 'work', 'agentic-worktrees');
+  const wt = join(lanes, 'lane1');
+  const tool = join(g.home, 'work', 'claudepilot');
+  for (const d of [wt, join(tool, '.git'), join(tool, 'scripts'), join(tool, '.claude')]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(tool, '.git', 'HEAD'), 'ref: refs/heads/integration\n'); // the checked-out branch the upstream forms name
+  const rootsFile = join(g.root, 'git-c-roots');
+  writeFileSync(rootsFile, gitCRootsContent([lanes], [tool]));
+  const sh = (command: string) =>
+    run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } });
+  return { g, lanes, wt, tool, sh, rootsFile };
+}
+
+test('PILOT-998: HOME_TOUCHED is reset per decision: a call that could change HOME does not taint the next clean $HOME call', () => {
+  const { g, wt, rootsFile } = toolRig();
+  // The guard script run in this process (no worker, no exit), so that several decisions share its module state.
+  const env = { HOME: g.home, PATH: process.env.PATH ?? '/usr/bin:/bin', CLAUDE_CONFIG_DIR: g.configDir };
+  const fakeProcess = Object.create(process, { env: { value: { ...env, CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } } });
+  const req = createRequire(import.meta.url);
+  const fakeRequire = (m: string) =>
+    m === 'os'
+      ? { ...req('node:os'), homedir: () => g.home }
+      : m === 'worker_threads'
+        ? { isMainThread: false, workerData: {}, parentPort: { postMessage() {} } }
+        : req(m);
+  const load = runInThisContext(`(function (require, process, __filename) {\n${RULE_GUARD_SCRIPT}\nreturn verdictOf;\n})`);
+  const verdictOf = load(fakeRequire, fakeProcess, join(g.root, 'bin', 'policy-rule-guard.cjs')) as (i: object) => unknown;
+  const decide = (command: string) => verdictOf({ tool_name: 'Bash', tool_input: { command, description: 'x' }, cwd: wt });
+  const clean = `git -C ${'$' + 'HOME'}/work/claudepilot status`;
+  assert.equal(decide(clean) ?? null, null, 'a clean $HOME call is allowed');
+  assert.match(JSON.stringify(decide(`export HOME=/tmp; ${clean}`)), /could change HOME/);
+  assert.equal(decide(clean) ?? null, null, 'the next clean call is allowed again: the flag did not leak');
+});
+
+test('PILOT-998: git -C on a tool checkout allows reads and fast-forwards, with $HOME, ~ and quoted paths resolved', () => {
+  const { tool, sh } = toolRig();
+  const c = `git -C ${tool}`;
+  const H = '$' + 'HOME';
+  const HB = '$' + '{HOME}';
+  const ALLOWED: [string, string][] = [
+    ['fetch', `${c} fetch origin`],
+    ['fetch --prune', `${c} fetch --prune origin`],
+    ['pull --ff-only', `${c} pull --ff-only`],
+    ['fetch of one branch', `${c} fetch origin integration`],
+    ['fetch alone', `${c} fetch`],
+    ['pull --ff-only of the checked-out branch', `${c} pull --ff-only origin integration`],
+    ['pull -q --ff-only', `${c} pull -q --ff-only`],
+    ['merge --ff-only of origin/<checked-out>', `${c} merge --ff-only origin/integration`],
+    ['merge --ff-only @{u}', `${c} merge --ff-only @{u}`],
+    ['log', `${c} log --oneline -5`],
+    ['show', `${c} show HEAD --stat`],
+    ['status', `${c} status --short`],
+    ['rev-parse', `${c} rev-parse HEAD`],
+    ['diff', `${c} diff HEAD~1 --stat`],
+    ['branch --contains', `${c} branch --contains HEAD`],
+    ['branch -r --contains', `${c} branch -r --contains HEAD`],
+    ['a sub folder', `git -C ${tool}/scripts status`],
+    ['double quoted', `git -C "${tool}" pull --ff-only`],
+    ['single quoted', `git -C '${tool}' log --oneline`],
+    ['$HOME', `git -C ${H}/work/claudepilot pull --ff-only`],
+    ['$HOME in double quotes', `git -C "${H}/work/claudepilot" fetch origin`],
+    ['$HOME quoted alone', `git -C "${H}"/work/claudepilot status`],
+    ['$HOME in braces', `git -C ${HB}/work/claudepilot rev-parse HEAD`],
+    ['~', 'git -C ~/work/claudepilot fetch origin'],
+    ['$HOME to a lane worktree', `git -C ${H}/work/agentic-worktrees/lane1 commit -m x`],
+    ['~ to a lane worktree', 'git -C ~/work/agentic-worktrees/lane1 status'],
+    ['$HOME and &&', `git -C ${H}/work/claudepilot fetch origin && git -C ${H}/work/claudepilot merge --ff-only origin/integration`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of ALLOWED) {
+    const r = sh(command);
+    if (r.code !== 0) misses.push(`allowed: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+  }
+  assert.equal(misses.join('\n'), '');
+});
+
+test('PILOT-998: git -C on a tool checkout refuses writes, plain pulls and merges, and an unseen HOME, each with what to do', () => {
+  const { g, tool, sh } = toolRig();
+  const c = `git -C ${tool}`;
+  const H = '$' + 'HOME';
+  const REFUSED: [string, string, RegExp][] = [
+    ['a plain pull', `${c} pull`, /without --ff-only.*What to do: add --ff-only/],
+    ['pull origin x', `${c} pull origin integration`, /without --ff-only/],
+    ['pull --rebase', `${c} pull --rebase`, /without --ff-only/],
+    ['pull --ff-only --rebase', `${c} pull --ff-only --rebase`, /with --rebase/],
+    ['pull --ff-only --no-ff', `${c} pull --ff-only --no-ff`, /with --no-ff/],
+    ['pull --ff-only --autostash', `${c} pull --ff-only --autostash`, /with --autostash/],
+    ['a plain merge', `${c} merge origin/integration`, /without --ff-only/],
+    ['merge --ff-only --squash', `${c} merge --ff-only --squash origin/x`, /with --squash/],
+    ['merge --abort', `${c} merge --abort`, /without --ff-only/],
+    // Review 43381 B1: only the checked-out branch's upstream, never a ref a lane chose.
+    [
+      'merge --ff-only of another branch',
+      `${c} merge --ff-only origin/ticket/x`,
+      /only the checked-out branch.s upstream, origin\/integration/,
+    ],
+    ['merge --ff-only of FETCH_HEAD', `${c} merge --ff-only FETCH_HEAD`, /only the checked-out branch/],
+    ['merge --ff-only of a commit', `${c} merge --ff-only 0123abc`, /only the checked-out branch/],
+    ['merge --ff-only of no ref', `${c} merge --ff-only`, /What to do: use git -C <tool root> merge --ff-only @\{u\}/],
+    ['merge --ff-only of two refs', `${c} merge --ff-only origin/integration origin/x`, /only the checked-out branch/],
+    ['pull --ff-only of another branch', `${c} pull --ff-only origin other`, /only the checked-out branch/],
+    ['pull --ff-only of another remote', `${c} pull --ff-only upstream integration`, /only the checked-out branch/],
+    ['pull --ff-only of a remote alone', `${c} pull --ff-only origin`, /only the checked-out branch/],
+    ['pull --ff-only of a url', `${c} pull --ff-only ../other.git integration`, /only the checked-out branch/],
+    ['fetch of another remote', `${c} fetch upstream`, /only origin and one branch/],
+    ['fetch of two branches', `${c} fetch origin a b`, /only origin and one branch/],
+    ['fetch --set-upstream', `${c} fetch --set-upstream origin integration`, /--set-upstream/],
+    ['pull --set-upstream', `${c} pull --ff-only --set-upstream origin integration`, /--set-upstream/],
+    ['fetch --stdin', `${c} fetch --stdin origin`, /with --stdin/],
+    ['fetch --depth', `${c} fetch --depth=1 origin`, /with --depth=1/],
+    // Review 43544: -- would put the refs out of the guard's sight; a trailing word after an allowed form is a second ref.
+    ['pull --ff-only -- origin other', `${c} pull --ff-only -- origin other`, /with -- \(the words after it/],
+    ['merge --ff-only @{u} -- origin/x', `${c} merge --ff-only @{u} -- origin/x`, /with -- \(the words after it/],
+    ['fetch origin -- +a:b', `${c} fetch origin -- +a:b`, /with -- \(the words after it/],
+    ['fetch -- alone', `${c} fetch --`, /with -- \(the words after it/],
+    ['pull of the branch and one word more', `${c} pull --ff-only origin integration other`, /only the checked-out branch/],
+    ['merge @{u} and one word more', `${c} merge --ff-only @{u} origin/x`, /only the checked-out branch/],
+    ['fetch of a branch and one word more', `${c} fetch origin integration other`, /only origin and one branch/],
+    ['push', `${c} push origin HEAD`, /git push \(not a read or a fast-forward\).*What to do: on a tool checkout only/],
+    ['push alone', `${c} push`, /not a read or a fast-forward/],
+    ['reset', `${c} reset HEAD~1`, /git reset/],
+    ['reset --hard', `${c} reset --hard origin/integration`, /reset/],
+    ['checkout', `${c} checkout ticket/T-1-x`, /git checkout/],
+    ['checkout -b', `${c} checkout -b ticket/T-1-x`, /git checkout/],
+    ['switch', `${c} switch ticket/T-1-x`, /git switch/],
+    ['commit', `${c} commit -m x`, /git commit/],
+    ['stash', `${c} stash`, /git stash/],
+    ['rebase', `${c} rebase origin/integration`, /rebase/],
+    ['tag', `${c} tag v1`, /git tag/],
+    ['worktree add', `${c} worktree add ../x`, /git worktree/],
+    ['config', `${c} config user.name x`, /git config/],
+    ['branch create', `${c} branch newbranch`, /without --contains/],
+    ['branch --contains with -D', `${c} branch --contains HEAD -D x`, /--delete|with -D/],
+    ['fetch into a local branch', `${c} fetch origin integration:integration`, /refspec that writes a local branch/],
+    ['fetch a forced refspec', `${c} fetch origin +integration`, /refspec/],
+    ['fetch -u', `${c} fetch -u origin`, /--update-head-ok/],
+    ['log --output', `${c} log --output=/tmp/x`, /--output \(it writes a file\)/],
+    ['diff --output', `${c} diff --output=/tmp/x`, /--output/],
+    ['a variable in the argv', `${c} log $REF`, /cannot see/],
+    ['env -C into the tool', `env -C ${tool} git push`, /env -C or sudo -D into a tool checkout/],
+    ['--git-dir of the tool', `git --git-dir=${tool}/.git log`, /--git-dir or --work-tree of a tool checkout/],
+    [
+      'the folder above the tool',
+      `git -C ${g.home}/work status`,
+      /outside the lane worktrees.*What to do: run git -C on your own worktree/,
+    ],
+    [
+      'HOME set first',
+      `HOME=/tmp git -C ${H}/work/claudepilot status`,
+      /value the guard cannot see .\$HOME, in a command that could change HOME/,
+    ],
+    ['HOME exported', `export HOME=/tmp; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['HOME spelled with quotes', `export HO''ME=/tmp; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['an assignment of another name', `N=1; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['read', `read X; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['eval', `eval true; git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['arithmetic', `(( X )); git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['a command substitution elsewhere', `echo $(id -u); git -C ${H}/work/claudepilot status`, /could change HOME/],
+    ['~ after HOME is set', 'HOME=/tmp git -C ~/work/claudepilot status', /~ in a command that could change HOME/],
+    ['another variable', `git -C $HOMEX/work/claudepilot status`, /a variable other than \$HOME/],
+    ['$HOME in single quotes', `git -C '${H}/work/claudepilot' status`, /path the guard cannot read/],
+    ['a write to a settings file in the tool', `echo x > ${tool}/.claude/settings.json`, /./],
+    ['a pull then a write to a settings file', `${c} pull --ff-only && echo '{}' > ${tool}/.claude/settings.json`, /./],
+  ];
+  const misses: string[] = [];
+  for (const [what, command, reason] of REFUSED) {
+    const r = sh(command);
+    if (r.code !== 2 || !r.stderr.startsWith(RULE_GUARD_MESSAGE)) misses.push(`refused: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+    else if (!reason.test(r.stderr)) misses.push(`reason: ${what}: ${command} -> ${r.stderr}`);
+    else if (!/What to do: |Propose the change/.test(r.stderr)) misses.push(`what to do: ${what}: ${r.stderr}`);
+  }
+  assert.equal(misses.join('\n'), '');
+});
+
+test('PILOT-998: a tool root is one checkout: never a worktrees folder, never one that holds a lane root, never shallow', () => {
+  const lanes = ['/home/node/work/claudepilot.worktrees'];
+  assert.match(gitCRootsContent(lanes, ['/home/node/work/claudepilot']), /^tool \/home\/node\/work\/claudepilot$/m);
+  for (const bad of [
+    '/home/node/work',
+    '/home/node',
+    '/',
+    'home/node/work/x',
+    '/home/node/work/../x',
+    '/home/node/work/x/',
+    '/home/node/work/a.worktrees',
+    '/home/node/work/a b',
+  ])
+    assert.throws(() => gitCRootsContent(lanes, [bad]), /git -C tool root/, bad);
+  assert.throws(() => gitCRootsContent(['/home/node/work/x/y.worktrees'], ['/home/node/work/x']), /git -C tool root/);
 });
 
 // T-860 S2c (QA of S2 and S2b): more wrappers, more ways to set a GIT_ variable, and git config --blob. Each R form was allowed before this
@@ -1274,4 +1657,182 @@ test('T-860 S2c: set -a, a for loop over a GIT_ name, GIT_ assigned by a paramet
     }
   }
   assert.deepEqual(misses, []);
+});
+
+// T-1092: a lead's python3 heredoc writing its own status file was refused as "a rule file is named": WRITE_API matched
+// open(p,'w') and the bare word "claude" matched "claudepilot-job-..." in the note's data. Resolved by guidance, not by
+// loosening (every exemption tried was a write path to a rule file): still refused, and the message says to use Edit or Write.
+test('T-1092: the 04:33 status-file heredoc is refused with guidance to use the Edit or Write tool, never "a rule file is named"', () => {
+  const notes = join(R.root, 'scratch', 'lead', 'notes');
+  mkdirSync(notes, { recursive: true });
+  const file = join(notes, 'status-lead.md');
+  const command = [
+    "python3 - <<'EOF'",
+    `p = '${file}'`,
+    "txt = '''# Status lead",
+    '- job claudepilot-job-b224b7d0 finished; claudepilot-job-x queued',
+    '- logs in ~/.claudepilot/outbox; the run moved to claudes/c2',
+    '- CLAUDEPILOT lane is green',
+    "'''",
+    "open(p, 'w').write(txt)",
+    'EOF',
+  ].join('\n');
+  const res = bash(command);
+  refused(res, 'the 04:33 status-file heredoc');
+  assert.match(
+    res.stderr,
+    /names something like a rule file: claude\. To edit a notes or status file, use the Edit or Write tool, not inline code/,
+  );
+  assert.doesNotMatch(res.stderr, /rule file is named/);
+});
+
+// The way the guidance points: the Edit and Write tools on a notes file never reach inlineReason (only Bash code does), so
+// a note whose text says claude, settings, claudepilot-job-x or .claude/settings.json is written.
+test('T-1092: Edit and Write of a notes or status file go through whatever its text says', () => {
+  const file = join(R.root, 'scratch', 'lead', 'notes', 'status-lead.md');
+  mkdirSync(join(R.root, 'scratch', 'lead', 'notes'), { recursive: true });
+  const content = '# Status lead\n- claudepilot-job-x done; one.claude moved; the settings page; see .claude/settings.json\n';
+  allowed(run(R, 'Write', { file_path: file, content }), 'Write of the status file');
+  allowed(run(R, 'Edit', { file_path: file, old_string: 'done', new_string: 'claude settings allowlist' }), 'Edit of the status file');
+});
+
+test('T-1092: a heredoc that writes or names a rule file is still refused; a fragment hit says so in its own words', () => {
+  refused(bash("python3 - <<'EOF'\nopen('.claude/settings.json', 'w').write('{}')\nEOF"), 'heredoc writing .claude/settings.json');
+  refused(
+    bash("python3 - <<'EOF'\nimport os\np = 'notes.md'\nopen(p, 'w').write('see .claude/settings.local.json')\nEOF"),
+    'heredoc whose text names .claude/settings.local.json',
+  );
+  // A fragment, not a named rule file: refused with the heuristic's message, which must not say a rule file is named.
+  const frag = bash("python3 - <<'EOF'\nimport os\nopen(os.path.join(os.environ['D'], 'settings.json'), 'w').write('{}')\nEOF");
+  refused(frag, 'heredoc writing a settings.json under a variable folder');
+  assert.match(frag.stderr, /the command writes a file and its text names something like a rule file: settings\.json/);
+  assert.doesNotMatch(frag.stderr, /rule file is named|rule file named/);
+  const piece = bash("python3 - <<'EOF'\nimport os\nopen(os.path.join('.cla' + 'ude', 'x'), 'w').write('{}')\nEOF");
+  refused(piece, 'a quoted piece of a rule file name');
+  assert.match(piece.stderr, /something like a rule file: a piece of \.claude\/settings\.json/);
+  // Shell values the guard cannot see keep the loose words: only "claude" and "settings" show here.
+  refused(bash('A=claude; B=settings; echo x > ~/.$A/$B.json'), 'a target built from variables');
+});
+
+// T-1092 blind review of 810ab250: code that writes and reaches a rule file by a glob, a folder listing, a bare word cut
+// out of a longer string, or a protected path split in two. Each was let through by 810ab250; the narrow net refuses it.
+const py = (body: string) => `python3 - <<'EOF'\n${body}\nEOF`;
+const T1092_BYPASSES: [string, string][] = [
+  ['glob .claude*/settings*.json', py("import glob\nfor p in glob.glob('.claude*/settings*.json'): open(p,'w').write('{}')")],
+  ['glob .cla*/settings*', py("import glob\nfor p in glob.glob('.cla*/settings*'): open(p,'w').write('{}')")],
+  ['glob */settings*.json', py("import glob\nfor p in glob.glob('*/settings*.json'): open(p,'w').write('{}')")],
+  ['glob */settings.*', py("import glob\nfor p in glob.glob('*/settings.*'): open(p,'w').write('{}')")],
+  ['Path.glob .cl*/settings*.json', py("from pathlib import Path\nfor p in Path('.').glob('.cl*/settings*.json'): p.write_text('{}')")],
+  [
+    'node readdir with startsWith .cl and settings',
+    `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.cl'))for(const f of fs.readdirSync(d))if(f.startsWith('settings'))fs.writeFileSync(d+'/'+f,'{}')"`,
+  ],
+  [
+    'node readdir with a two-letter start',
+    `node -e "const fs=require('fs');for(const d of fs.readdirSync('.'))if(d.startsWith('.c'))fs.writeFileSync(d+'/x','{}')"`,
+  ],
+  [
+    'node slice of x.claude',
+    `node -e "require('fs').writeFileSync('x.claude'.slice(1)+'/'+'Xsettings'.slice(1)+'Y.json'.slice(1),'{\\"w\\":1}')"`,
+  ],
+  ['python slice of x.claude', py("p = 'x.claude'[1:] + '/' + 'Xsettings'[1:] + 'Y.json'[1:]\nopen(p,'w').write('{}')")],
+  ['CLAUDE_ + CONFIG_DIR', py("import os\nopen(os.environ['CLAUDE_'+'CONFIG_DIR']+'/x','w').write('{}')")],
+  ['/etc/ + claudepilot/...', py("open('/etc/'+'claudepilot/bin/policy-rule-guard.cjs','w').write('x')")],
+  ['/etc/claudep + ilot/...', py("open('/etc/claudep'+'ilot/bin/policy-rule-guard.cjs','w').write('x')")],
+  // Re-review of f60cc9b7: words padded with letters and cut out again. The restored loose words refuse them.
+  ['python letter-padded words', py("p = '.'+'zclaudez'[1:-1]+'/'+'zsettingsz'[1:-1]+'z.jsonz'[1:-1]\nopen(p,'w').write('{}')")],
+  ["python 'claudeX'[:6]", py("p = '.' + 'claudeX'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ["python 'claude-x'[:6]", py("p = '.' + 'claude-x'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ['node slice(1,-1)', `node -e "require('fs').writeFileSync('.'+'zclaudez'.slice(1,-1)+'/x','{}')"`],
+  ['ruby [1..6]', `ruby -e 'File.write("." + "zclaudez"[1..6] + "/x", "{}")'`],
+  // Re-review of afae35b2: the claudepilot / claudes/ exemption was itself a write path (~/.claude.json and the like).
+  ["python 'claudepilot'[:6] to .claude.json", py("p = '.'+'claudepilot'[:6]+'.'+'js'+'on'\nopen(p,'w').write('{}')")],
+  ["python .replace('pilot','')", py("p = '.claudepilot'.replace('pilot','') + '.' + 'js' + 'on'\nopen(p,'w').write('{}')")],
+  ["python 'claudes/'[:6]", py("p = '.' + 'claudes/'[:6] + '/x'\nopen(p,'w').write('{}')")],
+  ['node slice(0,6)', `node -e "require('fs').writeFileSync('.'+'claudepilot'.slice(0,6)+'.'+'js'+'on','{}')"`],
+  ["node .replace('pilot','')", `node -e "require('fs').writeFileSync('.claudepilot'.replace('pilot','')+'.'+'js'+'on','{}')"`],
+  ['ruby [0,6]', `ruby -e 'File.write("." + "claudepilot"[0,6] + "." + "js" + "on", "{}")'`],
+  ["ruby .sub('pilot','')", `ruby -e 'File.write(".claudepilot".sub("pilot", "") + "." + "js" + "on", "{}")'`],
+  ["glob('.claudepilot*')", py("import glob\nfor p in glob.glob('.claudepilot*'): open(p + '/x','w').write('{}')")],
+  ["os.chdir('claudes/c1/..')", py("import os\nos.chdir('claudes/c1/..')\nopen('x','w').write('{}')")],
+];
+// The documented trade-off (coordinator decision): no word is exempt; any claude or settings in the data of code that
+// writes keeps it refused. Such notes go through the Edit or Write tool.
+test('T-1092: "one.claude" or "settings" in the data of a heredoc that writes is still refused', () => {
+  for (const line of ['- one.claude run moved', '- the settings page is fine']) {
+    const res = bash(py(`txt = '''${line}'''\nopen('notes.md', 'w').write(txt)`));
+    refused(res, line);
+    assert.match(res.stderr, /something like a rule file: (claude|settings)/);
+  }
+});
+
+for (const [what, command] of T1092_BYPASSES) {
+  test(`T-1092 review: refused, ${what}`, () => {
+    const res = bash(command);
+    refused(res, what);
+    assert.doesNotMatch(res.stderr, /rule file is named/);
+  });
+}
+
+// T-2099: scripts/cf-logs.sh (read-only) names /etc/claudepilot and once compared `since_ms > 7 * ...`, which the script check
+// read as a shell redirect, so lanes could not run it. The real script is allowed; the old line, put back, is still refused.
+test('T-2099 running scripts/cf-logs.sh is allowed; its old `> 7 *` comparison was read as a write', () => {
+  const real = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../scripts/cf-logs.sh'), 'utf8');
+  assert.match(real, /\/etc\/claudepilot/, 'the script still names /etc/claudepilot (else this test proves nothing)');
+  writeFileSync(join(R.repo, 'scripts', 'cf-logs.sh'), real, { mode: 0o755 });
+  allowed(bash('scripts/cf-logs.sh --since 1h'), 'cf-logs.sh');
+  allowed(bash('bash scripts/cf-logs.sh --help'), 'bash cf-logs.sh');
+  const old = real.replace('if 7 * 86400000 < since_ms:', 'if since_ms > 7 * 86400000:');
+  assert.notEqual(old, real, 'the comparison is in the script');
+  writeFileSync(join(R.repo, 'scripts', 'cf-logs-old.sh'), old, { mode: 0o755 });
+  refused(bash('scripts/cf-logs-old.sh --since 1h'), 'the old comparison');
+});
+
+// T-2865: S2 put the Secrets env drop-in's path into scripts/job-run.sh, which writes files, and the live guard refused every lane's
+// job-run (reverted in dc52db7c). The drop-in is now read by scripts/pool-env-names.sh, which only reads. This is the check that would
+// have caught it: the guard on the real scripts, by the absolute path the lanes use and with bash; and the old line, put back, refused.
+test('T-2865 the guard lets lanes run the real scripts/job-run.sh and scripts/pool-env-names.sh; job-run.sh naming the drop-in is refused', () => {
+  const scripts = join(dirname(fileURLToPath(import.meta.url)), '../../../../scripts');
+  const jobRun = join(scripts, 'job-run.sh');
+  const helper = join(scripts, 'pool-env-names.sh');
+  const dropin = '/etc/claude-code/managed-settings.d/20-claudepilot-env.json';
+  assert.ok(readFileSync(helper, 'utf8').includes(dropin), 'the helper names the drop-in (else this test proves nothing)');
+  allowed(bash(`${jobRun} --list`), 'job-run.sh by its absolute path');
+  allowed(bash(`bash ${jobRun} --list`), 'bash job-run.sh');
+  allowed(bash(`${helper}`), 'pool-env-names.sh by its absolute path');
+  allowed(bash(`bash ${helper}`), 'bash pool-env-names.sh');
+  // The helper may name the drop-in only while it writes nothing: a redirect added to it is refused.
+  writeFileSync(join(R.repo, 'scripts', 'pool-env-names-w.sh'), readFileSync(helper, 'utf8') + 'echo x > /tmp/names\n', { mode: 0o755 });
+  refused(bash('scripts/pool-env-names-w.sh'), 'the helper with a write');
+  // S2's line, put back into job-run.sh: refused, as the live guard did.
+  const old = readFileSync(jobRun, 'utf8').replace('pool_denied() {', `pool_dropin=${dropin}\npool_denied() {`);
+  assert.ok(old.includes(`pool_dropin=${dropin}`), 'the line is in the mutant');
+  writeFileSync(join(R.repo, 'scripts', 'job-run-old.sh'), old, { mode: 0o755 });
+  refused(bash('scripts/job-run-old.sh --list'), 'job-run.sh naming the drop-in');
+  refused(bash('bash scripts/job-run-old.sh --list'), 'bash job-run.sh naming the drop-in');
+});
+
+// T-2889 review B1: job-run.sh named the passes file (/etc/claudepilot/approval-passes) and writes, the PILOT-1016 pattern: the live guard
+// would refuse every lane's job-run. The file is now read by scripts/approval-passes.sh, which only reads. The check that catches it: the
+// guard on the real scripts, by the absolute path the lanes use and with bash; and the old line put back, refused.
+test('T-2889 the guard lets lanes run the real job-run.sh and approval-passes.sh; job-run.sh naming the passes file is refused', () => {
+  const scripts = join(dirname(fileURLToPath(import.meta.url)), '../../../../scripts');
+  const jobRun = join(scripts, 'job-run.sh');
+  const helper = join(scripts, 'approval-passes.sh');
+  const passes = '/etc/claudepilot/approval-passes';
+  assert.ok(readFileSync(helper, 'utf8').includes(passes), 'the helper names the passes file (else this test proves nothing)');
+  assert.ok(!readFileSync(jobRun, 'utf8').includes(passes), 'job-run.sh does not name it');
+  allowed(bash(`${jobRun} --list`), 'job-run.sh by its absolute path');
+  allowed(bash(`bash ${jobRun} --list`), 'bash job-run.sh');
+  allowed(bash(`${helper}`), 'approval-passes.sh by its absolute path');
+  allowed(bash(`bash ${helper}`), 'bash approval-passes.sh');
+  // The helper may name the file only while it writes nothing: a write added to it is refused.
+  writeFileSync(join(R.repo, 'scripts', 'approval-passes-w.sh'), readFileSync(helper, 'utf8') + 'echo x >> "$HOME/used"\n', { mode: 0o755 });
+  refused(bash('scripts/approval-passes-w.sh'), 'the helper with a write');
+  // The old line, put back into job-run.sh: refused.
+  const old = readFileSync(jobRun, 'utf8').replace('pool_pass() {', `pass_file=${passes}\npool_pass() {`);
+  assert.ok(old.includes(`pass_file=${passes}`), 'the line is in the mutant');
+  writeFileSync(join(R.repo, 'scripts', 'job-run-passes.sh'), old, { mode: 0o755 });
+  refused(bash('scripts/job-run-passes.sh --list'), 'job-run.sh naming the passes file');
+  refused(bash('bash scripts/job-run-passes.sh --list'), 'bash job-run.sh naming the passes file');
 });

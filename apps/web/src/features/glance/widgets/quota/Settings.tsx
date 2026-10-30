@@ -7,7 +7,7 @@ export function QuotaSettings() {
   const s = useGlanceSettings();
   return (
     <div className="divide-y divide-line">
-      <Row label="Mode" about="Active: the open session’s Claude, else the one used last. All: the chip shows the Claude with the least left, and the full form lists every Claude.">
+      <Row label="Mode" about="Active: the open agent’s Claude, else the one used last. All: the chip shows the Claude with the least left, and the full form lists every Claude.">
         <div className="w-40">
           <Segmented
             label="Quota mode"

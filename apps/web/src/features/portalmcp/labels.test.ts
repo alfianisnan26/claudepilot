@@ -18,6 +18,7 @@ const tok = (label: string, over: Partial<PortalToken> = {}): PortalToken => ({
   lastUsedIp: null,
   revokedAt: null,
   revokedReason: null,
+  defaultWorkspaceId: null,
   ...over,
 });
 

@@ -12,8 +12,8 @@ test('an MCP message stored without a label stays anonymous (an event from befor
 });
 
 test('a session, a ticket and CI keep their words', () => {
-  assert.deepEqual(portalSender('session:s1', 'Fix login'), { kind: 'session', id: 's1', who: 'session “Fix login”' });
-  assert.equal(portalSender('session:s1', undefined).who, 'another session');
+  assert.deepEqual(portalSender('session:s1', 'Fix login'), { kind: 'session', id: 's1', who: 'agent “Fix login”' });
+  assert.equal(portalSender('session:s1', undefined).who, 'another agent');
   assert.equal(portalSender('ticket:T-4', undefined).who, 'ticket T-4');
   assert.equal(portalSender('ci:r1', 'deploy').who, 'CI · deploy');
   assert.equal(portalSender('portal:ci-r9', undefined).who, 'CI');

@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import {
   CODE_ALPHABET,
+  FOUNDING_USER_ID,
   GENERATED_CODE_LENGTH,
   codeProblem,
   normalizeCode,
@@ -55,6 +56,23 @@ export class Portal {
   roleOf: AccountRole = () => null;
   /** Called after sessions end by sign-out or a new code, so what is tied to them (open sockets) can be cut. */
   onRevoked: () => void = () => {};
+  /**
+   * T-968 S1 (general-manager PRD Q3, lead decision #11136): called with each person whose session a sign-out, a revoke or a new code just
+   * ended, on ANY device, even when another device stays signed in (the server code's session is the founding user's). index.ts revokes
+   * their manager's token here; the manager gets a new one at the next sign-in.
+   */
+  onSignedOut: (userId: string) => void = () => {};
+
+  /** Calls `onSignedOut` once for each of `people`. */
+  #signedOut(people: Iterable<string>) {
+    for (const person of new Set(people)) {
+      try {
+        this.onSignedOut(person);
+      } catch (e) {
+        console.error(`[portal] after the last sign-out: ${(e as Error).message}`);
+      }
+    }
+  }
 
   constructor(
     envCode: string | undefined,
@@ -141,6 +159,7 @@ export class Portal {
     if (s && s.expiresAt <= Date.now()) {
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
+      this.#expired([s.userId ?? FOUNDING_USER_ID]);
       return undefined;
     }
     if (s?.userId) {
@@ -155,6 +174,16 @@ export class Portal {
     return s;
   }
 
+  /**
+   * T-968 (review 2026-10-18): whether the person is signed in anywhere now, so their General Manager is minted a token only while they
+   * are. A server-code session (no account) is the founding user's, as `signOut` counts it.
+   */
+  signedIn(userId: string): boolean {
+    const now = Date.now();
+    for (const s of this.#sessions.values()) if (s.expiresAt > now && (s.userId ?? FOUNDING_USER_ID) === userId) return true;
+    return false;
+  }
+
   /** Ends every session of one email account (a password change, a disable, a removal, a demotion), except `keepToken`'s; cuts its sockets. */
   revokeUser(userId: string, keepToken?: string) {
     const keep = keepToken ? tokenHash(keepToken) : null;
@@ -166,13 +195,16 @@ export class Portal {
       any = true;
     }
     if (any) this.onRevoked();
+    this.#signedOut([userId]);
   }
 
   signOut(token: string) {
     const hash = tokenHash(token);
+    const s = this.#sessions.get(hash);
     this.#sessions.delete(hash);
     this.#persist((st) => st.remove(hash));
     this.onRevoked();
+    if (s) this.#signedOut([s.userId ?? FOUNDING_USER_ID]);
   }
 
   /** Sets a new code (given, or generated) and signs out every session but `keep`. */
@@ -185,9 +217,15 @@ export class Portal {
     this.#source = input === undefined ? 'generated' : 'custom';
     this.#codeUpdatedAt = Date.now();
     const keepHash = tokenHash(keep);
-    for (const hash of this.#sessions.keys()) if (hash !== keepHash) this.#sessions.delete(hash);
+    const ended: string[] = [];
+    for (const [hash, s] of this.#sessions)
+      if (hash !== keepHash) {
+        ended.push(s.userId ?? FOUNDING_USER_ID);
+        this.#sessions.delete(hash);
+      }
     this.#persist((st) => st.removeAllExcept(keepHash));
     this.onRevoked();
+    this.#signedOut(ended);
   }
 
   setEnabled(enabled: boolean) {
@@ -196,11 +234,22 @@ export class Portal {
 
   #prune() {
     const now = Date.now();
+    const ended: string[] = [];
     for (const [hash, s] of this.#sessions) {
       if (s.expiresAt > now) continue;
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
+      ended.push(s.userId ?? FOUNDING_USER_ID);
     }
+    this.#expired(ended);
+  }
+
+  /**
+   * T-968 review M4 and N1: an expired login stops the person's manager only when it was their LAST live one (a sign-out stops it on any
+   * device, Q3; an expiry on the laptop while the phone is signed in does not).
+   */
+  #expired(people: string[]) {
+    this.#signedOut(people.filter((u) => !this.signedIn(u)));
   }
 
   adminState(token: string): AdminState {

@@ -7,7 +7,7 @@
 // any pipeline on a dev/* or ticket/* branch of its program's remote, and a worker's folder branch counts as its own (ci/authz.ts, agentStart). No tool approves, rejects or
 // changes an environment's protection: those are routes a signed-in person calls, and an agent's token reaches no route.
 import { AppError } from '@isnanme/core';
-import { BUMP_NOTE_MAX, BUMP_PRIORITY, BUMP_REFUSAL_LABEL, CI_BUMP_MODE_LABEL, CI_STATUSES, objectRef, sessionRef, type BumpMode, type CiRepo, type CiRun, type CiRunSummary, type CiStatus } from '@portal/contracts';
+import { BUMP_NOTE_MAX, BUMP_PRIORITY, BUMP_REFUSAL_LABEL, CI_BUMP_MODE_LABEL, CI_STATUSES, objectRef, sessionRef, type BumpMode, type CiRepo, type CiRun, type CiRunSummary, type CiStatus, type ManagerDeployRow } from '@portal/contracts';
 import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
 import { bumpNote } from '../chat/bump.js';
 import { fullInput } from '../portalmcp/compact.js';
@@ -15,6 +15,7 @@ import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../po
 import { agentStart, declareCiPolicies, leadReadsRemote, NO_RUN, noRemote, ownsBranchOn } from './authz.js';
 import type { CiService } from './service.js';
 import type { CiSessionsPort } from './sessions.js';
+import { ticketKeyField } from '../tickets/keys.js';
 
 /** Where a person approves a run's deployment: the run page of the portal. */
 export const runLink = (id: string): string => `/admin/ci/runs/${encodeURIComponent(id)}`;
@@ -59,6 +60,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     actor: r.actor,
     actor_label: r.actorLabel,
     ticket_id: r.ticketId,
+    ...ticketKeyField(r.ticketId),
     session_id: r.sessionId,
     created_at: r.createdAt,
     finished_at: r.finishedAt,
@@ -74,7 +76,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     sha: r.sha ? r.sha.slice(0, 12) : r.sha,
     status: r.status,
     ...(r.reason ? { reason: r.reason } : {}),
-    ...(r.ticketId ? { ticket_id: r.ticketId } : {}),
+    ...(r.ticketId ? { ticket_id: r.ticketId, ...ticketKeyField(r.ticketId) } : {}),
     created_at: r.createdAt,
     duration_ms: r.durationMs,
   });
@@ -82,13 +84,13 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
   registry.register({
     name: 'ci_runs_list',
     title: 'List CI runs',
-    description: 'Recent runs of the pipelines in workspace remotes, newest first, as short rows (id, pipeline, branch, short sha, status, ticket, when); full true for every field, ci_run_get for one run. An agent sees the runs of its own branch and ticket; a lead (has workers) also every run on its program\'s remotes, with stg_age_minutes per remote (minutes since the last stg deploy that passed, or "unavailable").',
+    description: 'Recent runs of the pipelines in workspace remotes, newest first, as short rows (id, pipeline, branch, short sha, status, ticket, when); full true for every field, ci_run_get for one run. An agent sees the runs of its own branch and ticket; a lead (has workers) also every run on its program\'s remotes, with stg_age_minutes per remote (minutes since the last stg deploy that passed, or "unavailable"). A ticket is T-12 or its bucket key (KONF-3); rows carry ticket_id and ticket_key.',
     scope: 'agent',
     hints: { readOnly: true },
     input: z.object({
       workspace_id: z.string().max(200).optional().describe('Admin tokens: limit to one workspace, e.g. docker/api. An agent is always in its own.'),
       branch: z.string().max(200).optional(),
-      ticket: z.string().max(20).optional().describe('A ticket id such as T-12.'),
+      ticket: z.string().max(20).optional().describe('A ticket: T-12 or its bucket key (KONF-3).'),
       status: z.enum(CI_STATUSES).optional(),
       limit: z.number().int().min(1).max(50).optional(),
       ...fullInput,
@@ -131,7 +133,7 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
     title: 'Get a CI run',
     description:
       'One run with its jobs and steps, their status, exit codes and durations, and what was wrong with the pipeline file when it was invalid. ' +
-      'A job with status "waiting" is held for a person\'s approval (deployments): tell the person to approve it on the run page (`link`); you can not approve it.',
+      'A job with status "waiting" is held for a person\'s approval (deployments): tell the person to approve it on the run page (`link`); you can not approve it. Its ticket shows as ticket_id (T-12) and ticket_key (KONF-3).',
     scope: 'agent',
     hints: { readOnly: true },
     input: z.object({ id: z.string().max(40).describe('A run id from ci_runs_list.') }),
@@ -154,6 +156,49 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
         waiting_for_approval: run.deployments.filter((d) => d.approval === 'waiting').map((d) => `${d.job} → ${d.environment}`),
         link: runLink(run.id),
       };
+    },
+  });
+
+  registry.register({
+    name: 'deploy_status',
+    title: 'Deploy status',
+    description:
+      'The latest runs that deploy (a job tied to an environment), newest first, of the runs you may view: pipeline, branch, sha, status, the job running or held now (stage), ' +
+      'the status of the job named gate ("unavailable" when the run has none), and which environments wait for a person\'s approval. Read only: you can not approve; a person approves on the run page (link).',
+    scope: 'read',
+    hints: { readOnly: true, idempotent: true },
+    input: z.object({
+      pipeline: z.string().min(1).max(100).optional().describe('Only this pipeline\'s runs, e.g. deploy.'),
+      limit: z.number().int().min(1).max(20).optional(),
+    }),
+    async handler(ctx, args) {
+      const actor = actorOfPrincipal(ctx.principal);
+      const limit = args.limit ?? 5;
+      const rows: ManagerDeployRow[] = [];
+      // Newest first; a run is opened only when the caller may view it, and kept only when it deploys.
+      for (const r of ci.list({ pipeline: args.pipeline, limit: 50 }).items) {
+        if (rows.length >= limit) break;
+        if (!can(actor, 'view', objectRef('ci_run', r.id)).allow) continue;
+        const run = await ci.show(r.id).catch(() => null);
+        if (!run?.deployments.length) continue;
+        const now = run.detail.find((j) => j.status === 'running' || j.status === 'waiting');
+        const gate = run.detail.find((j) => j.id === 'gate');
+        rows.push({
+          id: run.id,
+          number: run.number,
+          pipeline: ctx.untrusted(run.pipeline, 'ci', 100),
+          branch: ctx.untrusted(run.branch, 'ci', 200),
+          sha: run.sha ? run.sha.slice(0, 12) : null,
+          status: run.status,
+          stage: ctx.untrusted(now?.id, 'ci', 100),
+          gate: gate?.status ?? 'unavailable',
+          waiting_for_approval: run.deployments.filter((d) => d.approval === 'waiting').map((d) => d.environment),
+          created_at: run.createdAt,
+          link: runLink(run.id),
+        });
+      }
+      const waiting = rows.filter((r) => r.waiting_for_approval.length).length;
+      return { summary: `${rows.length} deploy run${rows.length === 1 ? '' : 's'}${waiting ? `, ${waiting} waiting for approval` : ''}`, deploys: rows };
     },
   });
 
@@ -235,13 +280,25 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
       // An agent (ci/authz.ts, agentStart): its own branch, a lead's dev/* or ticket/* branch of its program's remote, else deployments only
       // (the service checks the file it reads: their deploying jobs wait for a person).
       const start = ctx.isAgent ? agentStart(ctx.sessionId ? (sessions?.get(ctx.sessionId) ?? null) : null, repo, args.ref) : null;
+      // T-968 review: the General Manager starts DEPLOYMENT pipelines only (their deploying job waits for the person); never an arbitrary
+      // pipeline on any ref, which would run any branch's code as a shell.
+      // Review 2026-10-18 M2: the file's own jobs are not enough (a job without an environment runs before the deploying one waits), so
+      // also only on a trusted ref: `integration` (where crews land reviewed work) or the remote's default branch, never a feature branch.
+      const managerRule =
+        ctx.principal.kind === 'manager'
+          ? ({ rule: 'deployment', refusal: 'The General Manager starts deployment pipelines only, on integration or the default branch.' } as const)
+          : null;
+      if (managerRule) {
+        const ref = String(args.ref ?? '').replace(/^refs\/heads\//, '');
+        if (ref !== 'integration' && ref !== repo.defaultBranch) throw new AppError('FORBIDDEN', managerRule.refusal);
+      }
       const run = await ci.startRun({ repoId: repo.id, pipeline: args.pipeline, ref: start?.ref ?? args.ref, inputs: args.inputs }, ctx.actor, {
         sessionId: ctx.isAgent ? ctx.sessionId : null,
-        deploymentOnly: start?.rule === 'deployment' ? start.refusal : undefined,
+        deploymentOnly: managerRule ? managerRule.refusal : start?.rule === 'deployment' ? start.refusal : undefined,
         // T-558: a lead on `stg` of its program's remote: only a pipeline that deploys to exactly stg (its file decides), else a missing remote.
         stgOnly: start?.rule === 'program_stg' ? start.refusal : undefined,
         actorLabel: ctx.actorLabel ?? null,
-        rule: start?.rule ?? 'token',
+        rule: managerRule?.rule ?? start?.rule ?? 'token',
       });
       ctx.affected(`ci-run:${run.id}`);
       const held = run.deployments.filter((d) => d.approval === 'pending').map((d) => d.environment);

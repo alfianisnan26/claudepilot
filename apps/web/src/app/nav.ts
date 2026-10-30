@@ -1,4 +1,4 @@
-import { Bell, Boxes, ChartColumn, Hand, House, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
+import { Bell, Boxes, CalendarClock, ChartColumn, Hand, House, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface NavItem {
   id: string;
@@ -21,7 +21,7 @@ export const NAV: NavItem[] = [
   // Everything that waits for a person, from every module (attention PRD, T-146). In More until the deck (slice 2) takes a bar place.
   { id: 'attention', to: '/admin/attention', label: 'Needs you', icon: Hand, group: 'work' },
   { id: 'workspaces', to: '/admin/workspaces', label: 'Workspaces', icon: Boxes, group: 'work', bar: true },
-  { id: 'sessions', to: '/admin/sessions', label: 'Sessions', icon: MessagesSquare, group: 'work', bar: true },
+  { id: 'sessions', to: '/admin/sessions', label: 'Agents', icon: MessagesSquare, group: 'work', bar: true },
   // One queue of work for people and agents (Tickets PRD).
   { id: 'tickets', to: '/admin/tickets', label: 'Tickets', icon: Ticket, group: 'work', bar: true },
   // Vaults of Markdown notes people and agents share, with their graphs (Knowledge PRD).
@@ -30,6 +30,8 @@ export const NAV: NavItem[] = [
   // A git remote on each workspace and the runs of the pipelines in its repositories (Local git and CI/CD PRD).
   { id: 'ci', to: '/admin/ci', label: 'CI', icon: Workflow, group: 'work' },
   { id: 'usage', to: '/admin/usage', label: 'Usage', icon: ChartColumn, group: 'admin' },
+  // What runs by itself: cron triggers, the portal's loops, the apps open in App mode (owner, 2026-10-18; T-965).
+  { id: 'schedules', to: '/admin/schedules', label: 'Schedules', icon: CalendarClock, group: 'admin' },
   // One hub for every pool type, Accounts first (Skillset PRD §18 A8).
   { id: 'pools', to: '/admin/pools', label: 'Pools', icon: Layers, group: 'admin' },
   // Where workspaces run, and machines that connect to the portal (Targets and Connect PRD §16).

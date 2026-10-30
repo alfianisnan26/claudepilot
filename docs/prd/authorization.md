@@ -552,6 +552,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/settings/audit` | platform(settings,view) | admins |
 | `GET /api/settings/lockdown/:target/:name` | obj(workspace view path target+name) |  |
 | `PUT /api/settings/:key` | platform(settings,manage) | actor in setting_changes is the user |
+| `GET /api/schedules` | platform(system,view) | admins: every loop and every user's cron triggers (T-968 S2b) |
 | `GET /api/personas/workspaces/:target/:name` | obj(workspace view path target+name) |  |
 | `GET /api/personas/identities` | in:list(pool, poolType persona\|context) |  |
 | `GET /api/personas/pools` | in:list(pool, poolType persona\|context) |  |
@@ -611,6 +612,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/tickets` | in:list(ticket) |  |
 | `POST /api/tickets` | in:create(ticket); workspace view body workspaceId optional (a linked ticket needs the link target to be visible) |  |
 | `GET /api/tickets/tags` | in | tags of visible tickets only |
+| `GET /api/tickets/timeline` | in:list(ticket); bucket view query bucket optional | T-119: each row and its bucket pass view before it is shown; a cursor rests on a row shown |
 | `GET /api/tickets/:id` | obj(ticket view path id) |  |
 | `GET /api/tickets/:id/brief` | obj(ticket view path id) |  |
 | `GET /api/tickets/:id/opening` | obj(ticket view path id) |  |
@@ -741,6 +743,7 @@ Generated from the registered tool list (18 files) and checked for coverage. Sco
 | `pool_list` | read | list(pool) |  |
 | `pool_get` | read | pool view pool_id |  |
 | `pool_create` | admin | create(pool) |  |
+| `pool_secret_set` | agent | agent: workspace operate (own), pool(secrets) operate, pool assigned to its workspace only; token: pool(secrets) manage (`secretWriteAccess`, pools/authz.ts) | protected pool refused (PILOT-1000), value write-only (T-2866) |
 | `pool_update` | admin D | pool manage pool_id | delete +confirm |
 | `pool_delete` | admin D | pool manage pool_id | delete +confirm |
 | `pool_assign` | admin D | workspace manage workspace_id; pool operate pool_id |  |
@@ -815,6 +818,11 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `session_start` | workspace operate `workspace_id`; claude operate `claude_id`?; session operate `parent`? | all three (parent: `NO_PARENT` text) | parent live, same workspace, `requireCan` (`portalmcp/tools/sessions.ts:76-86`) |
 | `workspace_rename`, `workspace_resources` | workspace operate `id` | workspace operate (an agent outside its box; nothing more while `workspace` has no resolver) | scope admin only (`portalmcp/tools/workspaces.ts:131`, `:174`) |
 | `autotransfer_status` | session view `session_id` | yes ("No such session.") | `owner.can(view)` (`autotransfer/portalTools.ts:22`) |
+| `approvals_list`, `autotransfer_events` (T-968) | session view `session_id`? | yes ("No such session.") | each row `can(view)` on its session (`chat/managerTools.ts`, `autotransfer/portalTools.ts`) |
+| `crew_limits_get` (T-968) | session view `session_id` | yes ("No such session.") | nothing beyond scope read |
+| `settings_get` (T-968) | platform(settings, view) | yes | a credential-shaped value reads `[set]` (`settings/portalTools.ts`) |
+| `deploy_status` (T-968) | signed-in, filter ci_run | nothing | each run `can(view)` before it is opened (`ci/portalTools.ts`) |
+| `schedules_list` (T-968 S2b) | platform(system, view) | yes | a trigger's name is untrusted text, credentials cleaned (`schedules/portalTools.ts`) |
 | `session_keepgoing_set` | session operate `session_id`, confirm, audit | yes ("No such session.") | agents refused, `owner.can(view, operate)` (`keepgoing/portalTools.ts:44`) |
 | `ticket_bump` | ticket operate `id`; session operate `session_id`? (was required: corrected, the tool lists targets without it) | both | `requireCan` both (`tickets/portalTools.ts:425`, `:433`) |
 | `ci_run_get`, `ci_run_logs`, `ci_run_cancel` | ci_run view/view/operate `id` | yes (`NO_RUN`): the only ownership check for a person's token | an agent: its branch, ticket or session (`ci/portalTools.ts:24-36`) |
@@ -833,6 +841,7 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `ticket_verdict` | agent, reach workspace | nothing | the verdict rule `canRecordVerdict` (`tickets/verdicts.ts`): a QA or review session of its own role, never the author or the lead; an invisible ticket is the same not found (T-325) |
 | `lab_summary`, `lab_arm_draw` | agent, reach session | nothing | its own session only (`lab/portalTools.ts:81-82`, `:114`) |
 | `crew_scorecard` (T-450) | agent, reach session | nothing | its own program only (the top of its session's lineage; another program is `NOT_FOUND`) in `Lab.scorecard` (`lab/index.ts`) |
+| `metrics_overview`, `metrics_flow_times`, `metrics_trend`, `metrics_insights`, `metrics_tickets` (T-2360) | agent, reach session | nothing | `metricsReach` (`lab/metricsTools.ts`): an agent's token only for a LEAD session (a top-level chat, `chat_sessions.parent_id` null) whose recorded owner passes `canUser(owner_id, view, platform usage)` (`chat_sessions.owner_id`: a manager chat's owner; any other chat records the founding user today), and then only its own crew's tickets (`leadScope`, the lineage root as crew_scorecard; no paces, no score before, no trend); a worker or an unknown session is the same `NOT_FOUND`; an admin's or the manager's token only with `can(view, platform usage)`, the REST routes' rule (whose agent actor stays a 404). Counts, durations and ticket ids only |
 
 ### B.2 The workspaces router, declared and enforced (T-531)
 

@@ -14,6 +14,7 @@ import {
   type TicketPriority,
   type TicketStatus,
   type TicketType,
+  type TicketBucket,
 } from '@portal/contracts';
 import { Bot, ChevronLeft, ChevronsUp, Circle, GitBranch, MessageSquare, Play, RotateCcw, Trash2, User, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -27,8 +28,8 @@ import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
 import { Attachments, fileSize } from './Attachments';
-import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, fallbackSentence } from './labels';
-import { AssigneeChip, CheckChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge } from './parts';
+import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, bucketOption, fallbackSentence, ticketLabel, verdictBatchOf } from './labels';
+import { AssigneeChip, CheckChips, MergeChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge, VerdictBatchChips } from './parts';
 import { AssignDialog, CloseDialog, EditTicketDialog, StartSessionDialog, TagsDialog, TicketBumpDialog } from './TicketDialogs';
 
 type Dialog = 'edit' | 'tags' | 'assign' | 'close' | 'start' | 'bump' | 'delete' | null;
@@ -47,6 +48,20 @@ export function TicketPage() {
   const [failed, setFailed] = useState<'missing' | 'error' | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
+  // T-1967: the buckets a ticket can move to.
+  const [buckets, setBuckets] = useState<TicketBucket[]>([]);
+  useEffect(() => {
+    ticketsApi.buckets().then(setBuckets, () => undefined);
+  }, []);
+  // At phone width the select shows the key alone ("CP · ClaudePi" was cut at 390 px); the name stays in the field's tip.
+  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia('(min-width: 640px)').matches);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const q = matchMedia('(min-width: 640px)');
+    const on = () => setWide(q.matches);
+    q.addEventListener('change', on);
+    return () => q.removeEventListener('change', on);
+  }, []);
   // Beside the queue, Close floats at the panel's top right: the header keeps clear of it.
   const { split } = usePanel();
 
@@ -107,7 +122,9 @@ export function TicketPage() {
       <header className={split ? 'mb-5 pr-12' : 'mb-5'}>
         <p className="flex items-center gap-2 text-[13px] font-semibold text-muted">
           <PriorityMark priority={t.priority} />
-          <span className="tabular-nums">{t.id}</span>
+          <span className="tabular-nums">{ticketLabel(t)}</span>
+          {/* T-1098: the stable id stays a permanent alias (trailers, old links). */}
+          {t.key && t.key !== t.id && <span className="font-normal tabular-nums">{t.id}</span>}
           <span aria-hidden="true">·</span>
           <span title={formatDateTime(t.createdAt)}>Created {timeAgo(t.createdAt)}</span>
         </p>
@@ -128,13 +145,14 @@ export function TicketPage() {
                 </span>
               )}
             </span>
-            <InfoTip label="About an ended session">
-              Nobody works this ticket now. A few minutes after the session ended, the portal moves it by itself: to the session that continues the track, else back to the agents’ queue. A session that comes back keeps it.
+            <InfoTip label="About an ended agent">
+              Nobody works this ticket now. A few minutes after the agent ended, the portal moves it by itself: to the agent that continues the track, else back to the agents’ queue. An agent that comes back keeps it.
             </InfoTip>
           </div>
         )}
-        {detail.checks.length > 0 && (
-          <div className="mt-2">
+        {(detail.checks.length > 0 || (detail.merge?.length ?? 0) > 0) && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <MergeChips merge={detail.merge ?? []} />
             <CheckChips checks={detail.checks} />
           </div>
         )}
@@ -176,6 +194,17 @@ export function TicketPage() {
             <Select label="Status" value={t.status} disabled={busy} onChange={(v) => void change({ status: v as TicketStatus })} options={TICKET_STATUSES.map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] }))} />
             <Select label="Priority" value={t.priority} disabled={busy} onChange={(v) => void change({ priority: v as TicketPriority })} options={TICKET_PRIORITIES.map((p) => ({ value: p, label: TICKET_PRIORITY_LABEL[p] }))} />
             <Select label="Type" value={t.type} disabled={busy} onChange={(v) => void change({ type: v as TicketType })} options={TICKET_TYPES.map((x) => ({ value: x, label: TICKET_TYPE_LABEL[x] }))} />
+            {/* T-1967: a move takes the next number there; the old key keeps opening this ticket. */}
+            {t.bucket && buckets.length > 0 && (
+              <Select
+                label="Bucket"
+                value={t.bucket}
+                disabled={busy}
+                onChange={(v) => void change({ bucket: v }, `Moved to ${v}`)}
+                hint={wide ? undefined : buckets.find((b) => b.key === t.bucket)?.name}
+                options={(buckets.some((b) => b.key === t.bucket) ? buckets : [...buckets, { key: t.bucket, name: t.bucket } as TicketBucket]).map((b) => ({ value: b.key, label: bucketOption(b, wide) }))}
+              />
+            )}
             <Field label="Workspace">
               <p className="flex min-h-11 flex-wrap items-center gap-x-2 text-[14px]">
                 {t.workspaceId ?? <span className="text-muted">Shared queue</span>}
@@ -227,7 +256,7 @@ export function TicketPage() {
 
         {detail.sessions.length > 0 && (
           <Card className="p-4 sm:p-5">
-            <h2 className="mb-2 text-[13px] font-semibold text-muted">Sessions</h2>
+            <h2 className="mb-2 text-[13px] font-semibold text-muted">Agents</h2>
             <ul className="divide-y divide-line">
               {detail.sessions.map((s) => (
                 <li key={s.id}>
@@ -254,13 +283,13 @@ export function TicketPage() {
       <EditTicketDialog ticket={dialog === 'edit' ? t : null} onClose={() => setDialog(null)} onSaved={done('Saved')} />
       <TagsDialog ticket={dialog === 'tags' ? t : null} onClose={() => setDialog(null)} onSaved={done('Tags saved')} />
       <AssignDialog ticket={dialog === 'assign' ? t : null} onClose={() => setDialog(null)} onSaved={done('Assigned')} />
-      <CloseDialog ticket={dialog === 'close' ? t : null} onClose={() => setDialog(null)} onClosed={done(`${t.id} closed`)} />
+      <CloseDialog ticket={dialog === 'close' ? t : null} onClose={() => setDialog(null)} onClosed={done(`${ticketLabel(t)} closed`)} />
       <StartSessionDialog
         ticket={dialog === 'start' ? t : null}
         onClose={() => setDialog(null)}
         onStarted={(r) => {
           setDialog(null);
-          toast(`Session started for ${t.id}`);
+          toast(`Agent started for ${ticketLabel(t)}`);
           navigate(`/admin/sessions/${r.session.id}`);
         }}
       />
@@ -269,13 +298,13 @@ export function TicketPage() {
         onClose={() => setDialog(null)}
         onBumped={(r) => {
           setDialog(null);
-          toast(`Bumped into ${r.session.title || 'the session'}`);
+          toast(`Bumped into ${r.session.title || 'the agent'}`);
           void load();
         }}
       />
       <ConfirmDialog
         open={dialog === 'delete'}
-        title={`Delete ${t.id}?`}
+        title={`Delete ${ticketLabel(t)}?`}
         description="Removes it and its timeline for good."
         confirmLabel="Delete"
         loading={busy}
@@ -283,7 +312,7 @@ export function TicketPage() {
           setBusy(true);
           try {
             await ticketsApi.remove(t.id);
-            toast(`${t.id} deleted`);
+            toast(`${ticketLabel(t)} deleted`);
             navigate('/admin/tickets');
           } catch (e) {
             toast(errorText(e, 'Couldn’t delete it.'), 'error');
@@ -336,7 +365,7 @@ function sentence(e: TicketEvent): string {
   const label = (v: unknown, map: Record<string, string>) => (typeof v === 'string' ? (map[v] ?? v) : '');
   const assignee = (v: unknown) => {
     const a = v as { kind?: string; name?: string; sessionId?: string } | null;
-    return !a ? 'the agents’ queue' : a.kind === 'user' ? (a.name === 'admin' ? 'you' : (a.name ?? 'a person')) : 'a session';
+    return !a ? 'the agents’ queue' : a.kind === 'user' ? (a.name === 'admin' ? 'you' : (a.name ?? 'a person')) : 'an agent';
   };
   switch (e.kind) {
     case 'created':
@@ -363,15 +392,17 @@ function sentence(e: TicketEvent): string {
       if (d.fallback) return fallbackSentence(who, d);
       return d.claimed ? `${who} claimed it` : `${who} assigned it to ${assignee(d.to)}`;
     case 'session_started':
-      return `${who} started a session for it`;
+      return `${who} started an agent for it`;
     case 'bumped':
-      return `${who} bumped it into ${typeof d.sessionTitle === 'string' && d.sessionTitle ? `“${d.sessionTitle}”` : 'a session'} (${d.mode === 'prioritise' ? BUMP_MODE_LABEL.prioritise : BUMP_MODE_LABEL.ask})`;
+      return `${who} bumped it into ${typeof d.sessionTitle === 'string' && d.sessionTitle ? `“${d.sessionTitle}”` : 'an agent'} (${d.mode === 'prioritise' ? BUMP_MODE_LABEL.prioritise : BUMP_MODE_LABEL.ask})`;
     case 'session_ended':
-      return `The session ended${typeof d.reason === 'string' && d.reason ? `: ${d.reason}` : ''}`;
+      return `The agent ended${typeof d.reason === 'string' && d.reason ? `: ${d.reason}` : ''}`;
     case 'attachment':
       return d.removed ? `${who} removed ${typeof d.name === 'string' ? d.name : 'a file'}` : `${who} attached ${typeof d.name === 'string' ? d.name : 'a file'}${typeof d.size === 'number' ? ` (${fileSize(d.size)})` : ''}`;
     case 'ci':
       return `${who}: ${typeof d.name === 'string' ? d.name : 'a check'} ${typeof d.state === 'string' ? d.state : 'changed'}`;
+    case 'bucket':
+      return `${who} moved it from ${typeof d.from === 'string' ? d.from : 'its bucket'} to ${typeof d.to === 'string' ? d.to : 'another bucket'}${d.merged ? ' (buckets merged)' : ''}`;
     default:
       return `${who} changed it`;
   }
@@ -402,8 +433,9 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
         <InfoTip label="About the timeline">Agents working this ticket read your comments.</InfoTip>
       </h2>
       <ol className="flex flex-col gap-3">
-        {events.map((e) =>
-          e.kind === 'comment' ? (
+        {events.map((e) => {
+          const batch = e.kind === 'comment' ? verdictBatchOf(e.data) : null;
+          return e.kind === 'comment' ? (
             <li key={e.id} className="flex gap-3">
               <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-surface-2 text-ink-soft">{e.fromAgent ? <Bot className="size-4" /> : e.actor === 'system' ? <Circle className="size-3.5" /> : <User className="size-4" />}</span>
               <div className="min-w-0 flex-1 rounded-2xl border border-line bg-surface px-3.5 py-2.5">
@@ -411,6 +443,7 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
                   <span className="font-semibold text-ink-soft">{actorName(e.actor, e.actorLabel)}</span>
                   {e.fromAgent && <Badge>Agent</Badge>}
                   <span title={formatDateTime(e.at)}>{timeAgo(e.at)}</span>
+                  {batch && <VerdictBatchChips batch={batch} />}
                 </p>
                 <Markdown text={e.body ?? ''} className="max-w-measure text-[14px] leading-relaxed" />
               </div>
@@ -425,8 +458,8 @@ function Timeline({ events, ticketId, onChanged }: { events: TicketEvent[]; tick
                 {(e.kind === 'closed' || e.kind === 'bumped') && e.body && <span className="mt-1 block rounded-xl bg-surface-2/60 px-3 py-2 [overflow-wrap:anywhere] text-ink-soft">{e.body}</span>}
               </p>
             </li>
-          ),
-        )}
+          );
+        })}
       </ol>
       <div ref={end} />
       <div className="mt-4 flex flex-col gap-2">

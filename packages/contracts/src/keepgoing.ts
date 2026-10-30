@@ -32,10 +32,14 @@ export const KEEPGOING_CONSTANTS = {
   approvalReportMin: 10,
   /** A chat ended this long ago and not started again is down (T-257 item 4). */
   downAfterMin: 15,
-  /** After a failed action the chat is left alone this long. */
+  /** After a failed action the chat is left alone this long at most: the first failure in 30 minutes waits backoffFirstMin, each more one twice as long. */
   backoffMin: 15,
+  /** A first failure (a wake refused while the cluster was busy) is tried again this soon. */
+  backoffFirstMin: 2,
   /** Two starts of a chat's lineage are at least this far apart (the supervisor's RESTART_GAP_MIN). */
   restartGapMin: 5,
+  /** PILOT-996 (D-103): a lead out of Bypass is put back in it when it was in Bypass within this many hours (pilot-health's rule). */
+  bypassBackHours: 24,
 } as const;
 
 /**
@@ -111,7 +115,7 @@ export interface SetKeepGoingPauseRequest {
  * follows), `restarted` a new chat continues an ended one (written on the ended one, with the class of its ending as the cause).
  * T-257 item 4: `escalated` a chat left down was told to the coordinator's chat.
  */
-export const KEEPGOING_ACTIONS = ['nudged', 'woke', 'answered', 'reported', 'failed', 'capped', 'stood_down', 'set', 'recovered', 'recover_refused', 'restarted', 'escalated'] as const;
+export const KEEPGOING_ACTIONS = ['nudged', 'woke', 'answered', 'reported', 'failed', 'capped', 'stood_down', 'set', 'recovered', 'recover_refused', 'restarted', 'escalated', 'rebypassed'] as const;
 export type KeepGoingActionKind = (typeof KEEPGOING_ACTIONS)[number];
 
 /**

@@ -40,8 +40,8 @@ defineSetting({
   scope: 'global',
   group: 'sessions',
   order: 50,
-  label: 'Workers per session',
-  help: 'How many sessions started by one session may be running at once. They also count against the running-session caps.',
+  label: 'Workers per agent',
+  help: 'How many agents started by one agent may be running at once. They also count against the running-agent caps.',
 });
 defineSetting({
   key: AGENT_SPAWNS_SETTING,
@@ -97,6 +97,19 @@ export function effectiveMaxWorkers(caps: Pick<AgentCaps, 'maxChildren'> | null 
 export const SUBAGENT_TOOLS = ['Agent', 'Task', 'Workflow', 'RemoteTrigger'] as const;
 
 /**
+ * T-1863: Claude Code's own scheduling tools, taken away from EVERY session the portal starts (normal, lead, worker; at every start).
+ * A schedule set with them makes Claude Code queue a prompt the portal never sent, and the integrity check ends the session for it
+ * (incident 2026-10-20: a lead's `/loop` merge sweep). Schedules go through the portal (Triggers, keep-going). Names from `system/init`
+ * on Claude Code 2.1.296 (docs/prd/evidence/t294-subagents-flag.md). The bundled `/loop` skill has nothing left to schedule with.
+ */
+export const SCHEDULE_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger'] as const;
+
+/** The `--disallowedTools` values of a start: the scheduling tools always, the sub-agent tools too with sub-agents off (each name once). */
+export function launchDisallowedTools(subagents: boolean): string[] {
+  return [...new Set<string>([...(subagents ? [] : SUBAGENT_TOOLS), ...SCHEDULE_TOOLS])];
+}
+
+/**
  * Why a session may not start another, or null when it may. `parent` is the session that would start it, with its own limit on workers
  * (T-294: null for the global one, 0 for none). `caps` null: no global limits installed (tests); the session's own limit still holds.
  */
@@ -110,7 +123,7 @@ export function spawnProblem(
   if (caps && parent.depth + 1 > caps.maxDepth)
     return refuse(
       'depth',
-      caps.maxDepth === 0 ? 'Sessions may not start sessions here (Settings › Sessions).' : `Sessions started by sessions may go ${caps.maxDepth} ${caps.maxDepth === 1 ? 'level' : 'levels'} deep, and this session is at that depth (Settings › Sessions).`,
+      caps.maxDepth === 0 ? 'Sessions may not start sessions here (Settings › Running agents).' : `Sessions started by sessions may go ${caps.maxDepth} ${caps.maxDepth === 1 ? 'level' : 'levels'} deep, and this session is at that depth (Settings › Running agents).`,
       caps.maxDepth,
     );
   const own = effectiveMaxWorkers(null, parent.maxWorkers);
@@ -119,9 +132,9 @@ export function spawnProblem(
   // Its own limit when that is the tighter one, named as its own; else the global one.
   if (own !== null && (!caps || own < caps.maxChildren) && live >= own)
     return refuse('session_workers', `This session already has ${live} workers running, which is its own limit. Wait for one to finish, or end one.`, own);
-  if (caps && live >= caps.maxChildren) return refuse('children', `This session already has ${live} workers running, which is the limit (Settings › Sessions). Wait for one to finish, or end one.`, caps.maxChildren);
+  if (caps && live >= caps.maxChildren) return refuse('children', `This session already has ${live} workers running, which is the limit (Settings › Running agents). Wait for one to finish, or end one.`, caps.maxChildren);
   const recent = children.filter((c) => Date.parse(c.createdAt) > now - HOUR_MS).length;
-  if (caps && recent >= caps.spawnsPerHour) return refuse('rate', `This session has started ${recent} workers in the last hour, which is the limit (Settings › Sessions).`, caps.spawnsPerHour);
+  if (caps && recent >= caps.spawnsPerHour) return refuse('rate', `This session has started ${recent} workers in the last hour, which is the limit (Settings › Running agents).`, caps.spawnsPerHour);
   return null;
 }
 

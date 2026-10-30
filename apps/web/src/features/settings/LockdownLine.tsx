@@ -43,7 +43,7 @@ export function LockdownLine({ workspaceId }: { workspaceId: string }) {
       <span className="min-w-0 flex-1 truncate text-ink-soft" title={status.reason ?? covers(status)}>
         {status.state === 'locked' ? covers(status) : (status.reason ?? covers(status))}
       </span>
-      <InfoTip label="About the MCP lockdown">Set on the Settings page. A session that started before a change has to be restarted to get it.</InfoTip>
+      <InfoTip label="About the MCP lockdown">Set on the Settings page. An agent that started before a change has to be restarted to get it.</InfoTip>
     </div>
   );
 }

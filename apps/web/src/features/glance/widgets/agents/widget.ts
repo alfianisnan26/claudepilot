@@ -8,7 +8,7 @@ export const agentsWidget: GlanceWidget = {
   id: 'agents',
   label: 'Agents',
   icon: Bot,
-  about: 'The workers your sessions started and the sub-agents running inside them, under the session they belong to. Stop one right here.',
+  about: 'The workers your agents started and the sub-agents running inside them, under the agent they belong to. Stop one right here.',
   href: '/admin/sessions',
   useCompact: useAgentsCompact,
   Full: lazy(() => import('./Full').then((m) => ({ default: m.AgentsFull }))),

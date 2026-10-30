@@ -6,7 +6,7 @@ export const MUTE_SCOPE_LABEL: Record<MuteScopeType, string> = {
   repo: 'Repository',
   pipeline: 'Pipeline',
   environment: 'Environment',
-  session: 'Session',
+  session: 'Agent',
   ticket: 'Ticket',
   ci_run: 'CI run',
   claude: 'Claude',
@@ -22,7 +22,7 @@ export const SCOPE_HINT: Partial<Record<MuteScopeType, string>> = {
   repo: 'claudepilot',
   pipeline: 'repo/pipeline',
   environment: 'repo/environment',
-  session: 'Session id',
+  session: 'Agent id',
   ticket: 'T-12',
 };
 

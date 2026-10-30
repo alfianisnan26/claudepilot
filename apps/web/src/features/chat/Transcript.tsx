@@ -34,7 +34,7 @@ const HISTORY_SETTLE_MS = 800;
 /** Friendly words for a resolved request's outcome. */
 const OUTCOME: Record<string, string> = {
   allowed_once: 'Allowed',
-  allowed_session: 'Allowed for the session',
+  allowed_session: 'Allowed for the agent',
   denied: 'Denied',
   withdrawn: 'Withdrawn',
   expired: 'Expired',

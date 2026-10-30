@@ -33,6 +33,11 @@ export const config = {
   },
   /** Failed sign-ins allowed per client address in each window. */
   loginLimit: { attempts: 10, windowMs: 10 * 60 * 1000 },
+  /**
+   * The flow watchdog's read of a Gitea forge, so a merge record the gate left stale (a PR merged, closed, pushed to or conflicting outside
+   * it) is judged as the forge says it is now: a base URL and a token that may read pull requests. Unset: the records stand as recorded.
+   */
+  flowForge: { url: env('FLOW_FORGE_URL'), token: env('FLOW_FORGE_TOKEN') },
   /** Portal MCP (portal-mcp PRD): the `/mcp` endpoint, its access tokens, and how agents inside workspaces reach it. */
   portalMcp: {
     /** The `/mcp` URL shown in Access → MCP when it can't be worked out from the request (behind a proxy). */

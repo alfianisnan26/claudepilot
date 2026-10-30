@@ -33,6 +33,10 @@ export interface StandInRequest {
   path: string;
   /** Header names only. */
   headers: string[];
+  /** A model request's model, how many tools it carried, and the system prompt's length (T-1707: what a prime sends). */
+  model?: string;
+  tools?: number;
+  systemChars?: number;
 }
 
 export interface StandIn {
@@ -83,6 +87,18 @@ function messagesReply(res: ServerResponse, body: string, m: NonNullable<StandIn
   res.end();
 }
 
+/** The shape of a `POST /v1/messages` body: its model, its tool count, its system prompt's length. Nothing of the text is kept. */
+function messageShape(path: string, body: string): Pick<StandInRequest, 'model' | 'tools' | 'systemChars'> {
+  if (!path.startsWith('/v1/messages') || path.includes('count_tokens')) return {};
+  try {
+    const o = JSON.parse(body) as { model?: unknown; tools?: unknown; system?: unknown };
+    const system = typeof o.system === 'string' ? o.system : Array.isArray(o.system) ? o.system.map((b) => (b && typeof b === 'object' ? String((b as { text?: unknown }).text ?? '') : '')).join('') : '';
+    return { model: typeof o.model === 'string' ? o.model : undefined, tools: Array.isArray(o.tools) ? o.tools.length : 0, systemChars: system.length };
+  } catch {
+    return {};
+  }
+}
+
 export async function startStandIn(opts: StandInOptions = {}): Promise<StandIn> {
   const host = opts.host ?? '127.0.0.1';
   const pki: TestPki = makeTestPki();
@@ -94,7 +110,7 @@ export async function startStandIn(opts: StandInOptions = {}): Promise<StandIn> 
     req.on('data', (c) => (body += c));
     req.on('end', () => {
       const path = req.url ?? '';
-      requests.push({ method: req.method ?? '', path, headers: Object.keys(req.headers) });
+      requests.push({ method: req.method ?? '', path, headers: Object.keys(req.headers), ...messageShape(path, body) });
       const { usage, messages, routes } = state.script;
       const route = (routes ?? []).find((r) => path.startsWith(r.prefix));
       if (route) return json(res, route.status ?? 200, route.headers, route.body);

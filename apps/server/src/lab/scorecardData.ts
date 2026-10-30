@@ -211,14 +211,18 @@ export function loadToolResults(db: DatabaseSync, fromMs: number, toMs: number, 
   return [...by.values()].filter((r) => r.total > 0).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
 
-/** Tickets that may matter since `sinceMs`: not closed, or changed or closed since then (a ticket closed before it stayed closed). */
+/**
+ * Tickets that may matter since `sinceMs`: not closed, or changed or closed since then (a ticket closed before it stayed closed). Every
+ * term of the OR has its index (`tickets_queue` by status, `tickets_updated_at`, `tickets_closed_at`), so SQLite reads their union instead
+ * of every ticket (T-2360 review; metricsPerf.test.ts checks the plan). The open statuses are the CHECK's six minus done and won't-do.
+ */
+export const CREW_TICKETS_SQL = `SELECT number, type, status, closed_at, created_at, assignee_kind, assignee_ref FROM tickets
+       WHERE status IN ('open', 'in_progress', 'blocked', 'in_review') OR updated_at >= ? OR closed_at >= ?`;
+
 function loadTickets(db: DatabaseSync, sinceMs: number): CrewTicket[] {
   const since = new Date(sinceMs).toISOString();
   const rows = db
-    .prepare(
-      `SELECT number, type, status, closed_at, created_at, assignee_kind, assignee_ref FROM tickets
-       WHERE status NOT IN ('done', 'wont_do') OR updated_at >= ? OR closed_at >= ?`,
-    )
+    .prepare(CREW_TICKETS_SQL)
     .all(since, since) as unknown as { number: number; type: string; status: string; closed_at: string | null; created_at: string; assignee_kind: 'session' | 'user' | null; assignee_ref: string | null }[];
   const byNumber = new Map<number, CrewTicket>();
   for (const r of rows) {

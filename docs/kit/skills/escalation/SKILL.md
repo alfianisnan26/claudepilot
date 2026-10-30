@@ -9,14 +9,16 @@ Human touch is a scored term in two classes that are never mixed. A **required**
 
 ## 1. Who it goes to (D-62: the owner's only standing action is PRODUCTION)
 
-**Needs a human, and only these two:**
+**Needs a human, and only these:**
 
 | Class | Examples |
 | --- | --- |
 | Production | any change, deploy, data read, credential or published text that reaches production |
-| UAT | any change, deploy, data read or credential that reaches uat, including a migration on a database that uat shares (D-77), unless the owner asked for that uat step in so many words: then the crew does it (D-79, below) |
+| UAT | any change, deploy, data read or credential that reaches uat, unless the owner asked for that uat step in so many words: then the crew does it (D-79, below). A migration on a database stg shares with uat is not this class (D-92, see below). |
 
-**UAT on the owner's request (D-79):** when the owner asks for a uat promotion or deploy (a message or a ticket comment naming uat), it is the crew's work, not a question: dry run with a go/no-go per repo on the ticket, migrations on a shared database forward-only with their dry run (D-77), then the promotion through the normal path (promotion PRs, the uat pipelines), then smoke checks, evidence for each step. uat secrets by name only. Production stays a human step.
+**UAT on the owner's request (D-79):** when the owner asks for a uat promotion or deploy (a message or a ticket comment naming uat), it is the crew's work, not a question: dry run with a go/no-go per repo on the ticket, migrations on a shared database forward-only with their dry run (D-77, D-92), then the promotion through the normal path (promotion PRs, the uat pipelines), then smoke checks, evidence for each step. uat secrets by name only. Production stays a human step.
+
+**Shared-database migrations (D-92):** an additive migration (new objects, nullable or defaulted columns, seed rows by `INSERT OR IGNORE ... VALUES`) is applied by the app's stg-deploy with migrate_approval=<ticket> after QA PASS and the dry run in the same run; no person. Anything else is split expand/contract, and the contract part goes with the next uat promotion. This never reaches uat itself.
 
 **For the coordinator, never a person** (the coordinator decides or lands it, D-60/D-62; write it under `FOR THE COORDINATOR:` on the ticket, that exact phrase, and the coordinator's watch reads it within minutes):
 

@@ -214,6 +214,9 @@ function text(e: NotifyEvent, clock: Clock): { title: string; body: string } {
       };
     }
     case 'keepgoing_attention': {
+      // T-1966: the flow watchdog's stall, told once per stall (fixed words, counts and the program's name only).
+      if (f.what === 'flow_stalled')
+        return { title: 'Flow stalled', body: join(name(f.program, 'program'), typeof f.inReview === 'number' && `${f.inReview} in review`, typeof f.hours === 'number' && `none done in ${f.hours} h`) };
       // What Keep going may not repair, by its fixed words; never the chat's title (that is the untrusted detail, where a destination asked).
       const what = typeof f.what === 'string' && Object.hasOwn(KEEPGOING_CAUSE_TEXT, f.what) ? KEEPGOING_CAUSE_TEXT[f.what as keyof typeof KEEPGOING_CAUSE_TEXT] : 'needs you';
       return { title: 'Keep going', body: join(ws, what, typeof f.ticket === 'string' && name(f.ticket, '')) };

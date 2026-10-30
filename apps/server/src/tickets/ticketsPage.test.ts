@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { AppError, isAppError } from '@isnanme/core';
-import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, TICKET_LIST_TEXT, TICKET_PRIORITIES, ticketRef, type TicketPage } from '@portal/contracts';
+import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, objectRef, TICKET_LIST_TEXT, TICKET_PRIORITIES, ticketRef, type TicketPage } from '@portal/contracts';
 import { Hono } from 'hono';
 import { clearResolvers, registerResolver } from '../authz/seam.js';
 import { peekCursor } from '../store/keyset.js';
@@ -189,6 +189,8 @@ test('authz: a ticket the caller may not view is in no page and no cursor names 
       resolve: (id) => ({ ref: ticketRef(id), owner: mine.has(id) ? { kind: 'user', id: 'u_a' } : { kind: 'user', id: 'u_b' } }),
     });
     const them = app(h, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
+    // T-1098: a ticket is also reached through its bucket; u_a may view the bucket, so only the ticket rule hides rows here.
+    registerResolver({ type: 'ticket_bucket', resolve: (id) => ({ ref: objectRef('ticket_bucket', id), owner: { kind: 'user', id: 'u_a' } }) });
     const seen: string[] = [];
     const cursors: string[] = [];
     let cursor = '';

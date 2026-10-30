@@ -34,7 +34,7 @@ export function ShortcutsFull({ close }: GlanceFullProps) {
             navigate('/admin/sessions?new=1');
           }}
         >
-          <span className="min-w-0 flex-1 text-sm font-medium">New session</span>
+          <span className="min-w-0 flex-1 text-sm font-medium">New agent</span>
         </button>
       </GlanceRow>
     </GlanceList>

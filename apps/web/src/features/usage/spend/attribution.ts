@@ -6,7 +6,7 @@ import { formatCost } from '@/lib/usage/format';
 
 /** The dimensions the tab offers. (By Claude and by model are the Requests tab's.) */
 export const BY_OPTIONS: { value: AttributionBy; label: string }[] = [
-  { value: 'session', label: 'Session' },
+  { value: 'session', label: 'Agent' },
   { value: 'workspace', label: 'Workspace' },
   { value: 'ticket', label: 'Ticket' },
   { value: 'persona', label: 'Persona' },
@@ -34,12 +34,15 @@ export interface SessionLine {
   own: string | null;
   /** The session was deleted: its requests stay, its title and links are the last ones recorded. */
   deleted: boolean;
+  /** A later row of a continued chat (T-312): the same chat as the row it sits under, not another agent. */
+  continued: boolean;
 }
 
 export function sessionLine(row: AttributionRow): SessionLine | null {
   const s = row.session;
   if (!s) return null;
-  return { claude: s.claudeName, claudeId: s.claudeId, ticket: s.ticketId, own: s.children > 0 ? `own ${formatCost(row.own.costUsd)}` : null, deleted: !s.exists };
+  // T-1098: the ticket's bucket key (KONF-12) when the server sends it.
+  return { claude: s.claudeName, claudeId: s.claudeId, ticket: s.ticketKey ?? s.ticketId, own: s.children > 0 ? `own ${formatCost(row.own.costUsd)}` : null, deleted: !s.exists, continued: s.continuedFrom !== null && s.depth > 0 };
 }
 
 /** A ticket row's facts under its title (T-449): "feature · done · via lead $1.20"; the via-lead part only when leads' dollars were apportioned to it. Null for other rows. */
@@ -69,3 +72,43 @@ export function coverageNote(report: Pick<AttributionReport, 'coverage'>): { pct
   if (c.basis === 'unavailable') return null;
   return c.value >= 100 ? null : { pct: Math.round(c.value) };
 }
+
+/** Top-level rows shown at first, and how many more each "Load more" adds (T-377). */
+export const ATTRIBUTION_PAGE = 10;
+
+/** A top-level row and, by `session`, the agents it started (all the way down, in tree order), folded under it on the page. */
+export interface AttributionItem {
+  row: AttributionRow;
+  nested: AttributionRow[];
+}
+
+/**
+ * The report's rows as the page lists them (T-377, T-955): each top-level row with the rows nested under it (by `session`: depth > 0, in the
+ * server's tree order), "Others" (the roots past the server's limit) apart, and "No ticket" / "Not recorded" rows apart at the end. A row
+ * already listed (same state and key) is never listed again, so a lead shows once however the tree came in.
+ */
+export function foldRows(rows: readonly AttributionRow[]): { items: AttributionItem[]; others: AttributionRow | null; tail: AttributionRow[] } {
+  const items: AttributionItem[] = [];
+  const tail: AttributionRow[] = [];
+  let others: AttributionRow | null = null;
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const id = `${r.state}|${r.key}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (r.state === 'others') others = r;
+    else if (r.state !== 'known') tail.push(r);
+    else if ((r.session?.depth ?? 0) > 0 && items.length > 0) items.at(-1)!.nested.push(r);
+    else items.push({ row: r, nested: [] });
+  }
+  return { items, others, tail };
+}
+
+/** The first `shown` items (the server sends them biggest first) and how many are left for "Load more". */
+export function pageItems<T>(items: readonly T[], shown: number): { visible: T[]; left: number } {
+  const n = Math.max(0, Math.min(items.length, shown));
+  return { visible: items.slice(0, n), left: items.length - n };
+}
+
+/** The fold toggle's words: "3 agents" ("1 agent"). */
+export const nestedText = (n: number): string => `${n} ${n === 1 ? 'agent' : 'agents'}`;

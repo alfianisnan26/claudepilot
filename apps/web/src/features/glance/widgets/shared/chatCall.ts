@@ -61,7 +61,7 @@ export function callChat(message: ChatClientMessage, ackKey: string, deps: CallD
       if (error) reject(error);
       else resolve();
     };
-    const timer = setTimeout(() => finish(new CallError('The portal did not answer. Check the session before trying again.')), deps.timeoutMs ?? RESPOND_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(new CallError('The portal did not answer. Check the agent before trying again.')), deps.timeoutMs ?? RESPOND_TIMEOUT_MS);
     socket.onopen = () => socket.send(JSON.stringify(message));
     socket.onmessage = (e) => {
       let msg: ChatServerMessage;

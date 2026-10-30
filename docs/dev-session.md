@@ -43,6 +43,7 @@ scripts/gate.sh                                   # the same on a clean copy of 
 scripts/gate-job.sh <commit> [steps]              # the release gate as a Job in the cluster (other CPUs); the commit must be on GitHub
 scripts/scratch-portal.sh start 3403              # a clean-environment portal; tools/qa/*.mjs drive a real browser against it
 scripts/worktree-deps.sh <worktree>               # links a worktree's node_modules to this checkout's install (no npm ci); refuses, exit 2, when a package file differs (cluster npm ci needed) or the worktree is outside ~/work/claudepilot.worktrees; --main/--root are test-only (WORKTREE_TEST_MODE=1)
+scripts/typecheck-worktree.sh <worktree>          # the gate's typecheck (contracts, server, web) on a worktree with this checkout's install and the worktree's own @portal/contracts (T-1982); errors only, exit 0 clean, 1 errors, 3 only an environment gap (packages the install lacks and could not get), 2 refused (package files differ: use the cluster)
 scripts/worktree-new.sh T-<n> <slug>              # branch ticket/T-<n>-<slug> from origin/integration under ~/work/claudepilot.worktrees, deps linked; refuses an existing branch or folder, a bad slug (leading dash, glob characters); no path flags outside tests
 scripts/k3s-status.sh                             # Argo CD, pods, node load, warnings, the portal log
 kubectl -n isnan-claudepilot logs deploy/claudepilot-portal --tail=50
@@ -123,7 +124,7 @@ twice. `scripts/gate-job.sh <commit> [steps]` (T-37) runs `scripts/gate.sh` as a
   fills npm's cache with `npm ci --ignore-scripts` in a throwaway copy, then checks that the token is in no file under `/tmp`. The `gate`
   container has no token; `gate.sh`'s `npm ci` installs from that cache (`npm_config_prefer_offline`), so no install script, test or build
   can read it.
-- **Steps:** `typecheck,web-build,server-suite` by default; fewer for a heavy check without the suite, e.g. `typecheck,web-build`.
+- **Steps:** `typecheck,web-build,web-tests,server-suite` by default (`web-tests` is `npm test -w @portal/web`, every `apps/web/src/**/*.test.ts`, T-1992; the gate Job drops it, with a note, for a commit whose `gate.sh` predates it, so an older commit can still be green); fewer for a heavy check without the suite, e.g. `typecheck,web-build,web-tests`.
 - **The verdict:** the Job ends with one `GATE-VERDICT: green` or `GATE-VERDICT: red: <why>` line from `scripts/gate-verdict.sh` (the same
   reading the local gate uses: every step at rc=0, the last suite summary at 0 failing and 0 timed out). The script prints the summary and
   that line, keeps the whole log in `GATE_JOB_LOG` (default `/tmp/gate-job-<sha>.log`), exits 0 green, 1 red. The summary always ends with
@@ -149,6 +150,7 @@ after it ends), so the pod's flock queue is only for what must run in the pod:
 git push origin HEAD:wip/<name>                                              # the Job clones what is on the remote, nothing local
 scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
 scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
+scripts/job-run.sh --repo konfersi:platform/<app> --ref <commit> --also platform/konfersi-shared@stg --deploy-layout -- '<build>'   # T-2865: the sibling gets no npm ci (no node_modules), as stg-deploy lays it out; only the app installs
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 # Scripts that rewrite the checkout (tools/qa/rtk-history.sh, rtk-classes.sh, rtk-measure.sh, and the mutant runner rtk-guard-mutants.sh; T-736) refuse unless the Job's own env var JR_REPO_URL is set and the tree is clean.
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
@@ -194,8 +196,17 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
     ends everything. It also reads an OOMKill of the init container, so a fetch killed at the memory limit says so.
 - **Test credentials for the command (`--pool-env NAME`, T-426):** repeatable, for a command that needs a scoped test credential from the
   workspace's Secrets pool, today Konfersi's stg e2e and Lighthouse behind Cloudflare Access:
-  `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Only
-  `E2E_CF_ACCESS_*` names are accepted, and the variable must be set in the workspace; anything else is refused (exit 2) before a Job is made.
+  `scripts/job-run.sh --pool-env E2E_CF_ACCESS_CLIENT_ID --pool-env E2E_CF_ACCESS_CLIENT_SECRET -- 'scripts/e2e-stg.sh'`. Since PILOT-998
+  (decision PILOT-996 #42754) there is no fixed list: a name is accepted when it is a variable name (`[A-Z][A-Z0-9_]*`), it is not on the
+  deny-list, and this workspace's Secrets pool delivers it as env (a key of the env drop-in
+  `/etc/claude-code/managed-settings.d/20-claudepilot-env.json`; only the key names are read, by the read-only helper
+  `scripts/pool-env-names.sh`, so job-run.sh, which writes files, never names a rule file and the rule guard lets it run, T-2865). The deny-list, refused even when delivered,
+  "needs a person's approval (PILOT-1000)": `*_RW_*`, `*ADMIN*`, `*PROD*`, `*_PRD_*`, `CLOUDFLARE_API_TOKEN`, `GITEA_*`, `GITHUB_*`,
+  `*_MASTER_*`, and the same words at a name's start or end (`*_RW`, `RW_*`, `*_PRD`, `PRD_*`, `*_MASTER`, `MASTER_*`) plus the runner's
+  and the portal's own tokens (`GH_*`, `NODE_AUTH_TOKEN`, `ANTHROPIC_*`, `CLAUDE_*`, `CLAUDEPILOT_*`, `PILOT_*`). A name the pool does not
+  deliver gets "turn on expose for it in its pool". The earlier names (the stg e2e and QA accounts, T-384/T-1665/T-2294, and the two
+  read-only Koneviro keys of T-2823) keep working because the pool delivers them. The variable must also be set in the workspace; anything
+  else is refused (exit 2) before a Job is made. Known gap: a production credential whose name matches no deny pattern; the log mask stays.
   An unknown option now gets a quieter message than before (T-426: it names the argument only when it is a plain `--option`, otherwise it says
   an option is not known and shows nothing of it). The unknown-option branch and the `--pool-env` name check never show what they refuse (it may be a pasted value; an argument is named only
   when it is a plain `--option`), but other options' messages still show their own value (`--ref ... (got X)`): never paste a value into any
@@ -212,7 +223,7 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   not; this is the reverse of the git and npm tokens, on purpose. It is never on a command line or in the manifest, and the streamed log is masked
   for it. The run script moves each value out of the environment into a shell array at start, and exports `<name>` only for the command (after
   `npm rebuild` and the lifecycle scripts, T-426 S1f), so the install steps do not inherit it. Limits: (1) the shell's own start-up environment
-  (`/proc/1/environ`) still holds the value, so code that reads it still can (only scoped `E2E_CF_ACCESS_*` test credentials may be passed;
+  (`/proc/1/environ`) still holds the value, so code that reads it still can (only scoped test credentials may be passed, `E2E_CF_ACCESS_*` and the QA account's two;
   `--steps none` when the dependencies are already installed); (2) the
   raw Job log in the cluster is unmasked until the Job is cleaned up (TTL), only the streamed copy is masked; the mask is a plain text match of
   the value, so it does NOT cover a line shorter than 8 characters inside a multi-line secret, nor an encoded form of a secret (base64, URL or
@@ -226,9 +237,12 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   in a HAR or inside the Playwright HTML report's `index.html` (it can embed the report as a base64 zip). Switch the trace off or leave zips and
   the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.
-- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
+- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (4 since T-2966; was 2) per chat (`PILOT_SESSION_ID`; a lead's Agent sub-agent lanes share its chat) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
+  Priority lane (T-2967): a Job whose `--role` is in `JOB_RUN_PRIORITY_ROLES` (comma list, default `konfersi-stg-deploy`; empty turns it off)
+  goes ahead of every waiting Job and is not held by the per-chat or per-program cap (pipeline runs all share the chat `manual`); the
+  cluster-wide cap still holds.
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`). The test is on the node's use PLUS the Job's expected peak (use x pct /
   used gives allocatable, no new verb): `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note;

@@ -1,9 +1,19 @@
 import { Badge, Button, ConfirmDialog, FormDialog, Menu, TextField, useToast, type MenuItem } from '@isnanme/ui';
-import { CLAUDE_NAME_MAX, isLastKnownStatus, type Workspace, type WorkspaceClaude, type WorkspaceClaudeState, type WorkspaceTerminal } from '@portal/contracts';
-import { ArrowRightLeft, Bot, LogIn, LogOut, Pencil, Plus, SquareTerminal, Trash2 } from 'lucide-react';
+import {
+  CLAUDE_NAME_MAX,
+  isLastKnownStatus,
+  type AutoClaudeConfig,
+  type Workspace,
+  type WorkspaceClaude,
+  type WorkspaceClaudeState,
+  type WorkspaceTerminal,
+} from '@portal/contracts';
+import { ArrowRightLeft, Ban, Bot, LogIn, LogOut, Pencil, Plus, SquareTerminal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
+import { autoApi } from '@/features/autotransfer/api';
 import { ClaudeAutoMoveDialog } from '@/features/autotransfer/ClaudeAutoMoveDialog';
+import { EXCLUDE_TIP, excludeItem, isExcluded } from '@/features/autotransfer/pure';
 import { chatApi } from '@/features/chat/api';
 import { InfoTip } from '@/components/InfoTip';
 import { ClaudeMeter } from '@/features/usage/claude';
@@ -38,6 +48,25 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
     setTerminals(t);
   }, [w.id]);
   useEffect(() => void load(), [load]);
+
+  // Each Claude's auto move choices (T-2398: whether it is left out); none on an account pool, and none when they can't be read.
+  const [auto, setAuto] = useState<AutoClaudeConfig[]>([]);
+  const loadAuto = useCallback(async () => {
+    const o = await autoApi.overview().catch(() => null);
+    if (o) setAuto(o.claudes);
+  }, []);
+  useEffect(() => void loadAuto(), [loadAuto]);
+
+  const own = (claudeId: string) => auto.find((a) => a.claudeId === claudeId);
+  const setExcluded = async (c: WorkspaceClaude, excluded: boolean) => {
+    try {
+      await autoApi.setClaude(c.id, { excluded });
+      toast(excluded ? `${c.name} left out of auto move` : `${c.name} back in auto move`);
+      await loadAuto();
+    } catch (e) {
+      toast(errorText(e, 'Couldn’t save.'), 'error');
+    }
+  };
 
   /** Its first terminal, or a new Claude terminal on it. */
   const openTerminal = async (c: WorkspaceClaude) => {
@@ -127,6 +156,7 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
         <ul className="flex flex-col gap-1">
           {states.map(({ claude: c, auth, terminals: count }) => {
             const signedIn = !!auth?.loggedIn;
+            const exclude = excludeItem(own(c.id), pooled);
             const items: MenuItem[] = [
               {
                 label: signedIn ? 'Switch account…' : 'Sign in…',
@@ -138,6 +168,13 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
               { label: 'Rename…', icon: <Pencil className="size-4" />, onSelect: () => (setNaming({ claude: c }), setName(c.name), setNameError(undefined)) },
               // Auto move (FR20): this Claude's threshold and destinations; not on an account pool (no per-Claude quota there).
               { label: 'Auto move…', icon: <ArrowRightLeft className="size-4" />, onSelect: () => setAutoMove(c.id), disabled: pooled },
+              // T-2398: leave this Claude out of auto move (or back in): it stays signed in and usable by hand.
+              {
+                label: exclude.label,
+                icon: <Ban className="size-4" />,
+                onSelect: () => void setExcluded(c, exclude.next),
+                disabled: exclude.disabled,
+              },
               ...(c.directory
                 ? [{ label: 'Remove', icon: <Trash2 className="size-4" />, onSelect: () => setRemoving(c), danger: true, disabled: count > 0 }]
                 : []),
@@ -162,6 +199,12 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
                     {count ? `${count} terminal${count > 1 ? 's' : ''}` : 'No terminal'}
                     {c.directory ? '' : ' · original home'}
                   </p>
+                  {isExcluded(auto, c.id) && (
+                    <p className="mt-0.5 flex items-center gap-1">
+                      <Badge tone="neutral">Auto move off</Badge>
+                      <InfoTip label="About auto move off">{EXCLUDE_TIP}</InfoTip>
+                    </p>
+                  )}
                 </div>
                 <ClaudeMeter claudeId={c.id} />
                 <Button
@@ -181,7 +224,13 @@ export function ClaudesSection({ workspace: w, onLeave }: { workspace: Workspace
       )}
       {pooled && <p className="text-[12.5px] text-muted">This workspace uses its account pool; own sign-ins wait until it’s unassigned.</p>}
 
-      <ClaudeAutoMoveDialog claudeId={autoMove} onClose={() => setAutoMove(null)} />
+      <ClaudeAutoMoveDialog
+        claudeId={autoMove}
+        onClose={() => {
+          setAutoMove(null);
+          void loadAuto();
+        }}
+      />
       <ClaudeLoginDialog
         workspace={signingIn ? w : null}
         claude={signingIn}

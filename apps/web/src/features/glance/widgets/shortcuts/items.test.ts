@@ -27,6 +27,10 @@ test('sessions are findable by the Claude, the branch and the ticket, as the Ses
   assert.match(i!.keywords!, /ticket\/T-4-login/);
   assert.match(i!.keywords!, /T-4/);
   assert.match(i!.keywords!, /docker\/api-dev/);
+  // T-1098: and by its ticket's bucket key.
+  const [k] = sessionItems([session({ id: 'y', ticketId: 'T-3', ticketKey: 'KONF-3' })]);
+  assert.match(k!.keywords!, /\bKONF-3\b/);
+  assert.match(k!.keywords!, /\bT-3\b/);
 });
 
 const ws = (over: Partial<Workspace>): Workspace => ({ id: 'docker/api-dev', name: 'api-dev', target: 'docker', image: '', status: 'running', createdAt: '', ...over });
@@ -39,7 +43,9 @@ test('a workspace opens its shell while it runs, else the Workspaces page, and t
 
 test('tickets the portal found are matched already and open their page', () => {
   const t = { id: 'T-12', summary: 'Ship it', status: 'in_progress', tags: ['release', 'web'] } as TicketItem;
-  assert.deepEqual(ticketItems([t]), [{ id: 'ticket:T-12', kind: 'ticket', title: 'Ship it', hint: 'T-12 · In progress', to: '/admin/tickets/T-12', keywords: 'release web', matched: true }]);
+  assert.deepEqual(ticketItems([t]), [{ id: 'ticket:T-12', kind: 'ticket', title: 'Ship it', hint: 'T-12 · In progress', to: '/admin/tickets/T-12', keywords: 'T-12 release web', matched: true }]);
+  // T-1098: a ticket with a bucket key shows and links the key; both ids match.
+  assert.deepEqual(ticketItems([{ ...t, key: 'KONF-3' }])[0], { id: 'ticket:T-12', kind: 'ticket', title: 'Ship it', hint: 'KONF-3 · In progress', to: '/admin/tickets/KONF-3', keywords: 'T-12 KONF-3 release web', matched: true });
 });
 
 test('pages come from the sidebar\'s own list', () => {

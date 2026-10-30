@@ -6,6 +6,7 @@ import {
   TICKET_TYPES,
   TICKET_TYPE_LABEL,
   type CreateTicketRequest,
+  type TicketBucket,
   type BumpMode,
   type StartTicketSessionResult,
   type TicketBumpResult,
@@ -59,15 +60,16 @@ function TagPicks({ value, onPick }: { value: string; onPick: (tag: string) => v
   const picks = tags.filter((t) => !have.has(t.tag));
   if (!picks.length) return null;
   return (
-    <div className="-mt-2 flex flex-wrap gap-1.5">
+    // On a phone each pick is a 44 px tap box around the same small pill (T-1859); the rows touch, so the boxes never overlap.
+    <div className="-mt-2 flex flex-wrap gap-1.5 max-medium:gap-y-0">
       {picks.map((t) => (
         <button
           key={t.tag}
           type="button"
           onClick={() => onPick(t.tag)}
-          className="press rounded-md bg-surface-2 px-2 py-1 text-[12px] font-medium text-ink-soft hover:text-ink focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+          className="press group inline-flex items-center rounded-md text-[12px] font-medium text-ink-soft outline-hidden hover:text-ink max-medium:min-h-11 max-medium:min-w-11"
         >
-          + {t.tag}
+          <span className="rounded-md bg-surface-2 px-2 py-1 group-focus-visible:ring-2 group-focus-visible:ring-accent">+ {t.tag}</span>
         </button>
       ))}
     </div>
@@ -77,8 +79,22 @@ function TagPicks({ value, onPick }: { value: string; onPick: (tag: string) => v
 const NO_WORKSPACE = '';
 
 /** Makes a ticket (tickets PRD §13): what it is, how urgent, and who takes it. */
-export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (t: TicketItem) => void }) {
+export function NewTicketDialog({
+  open,
+  onClose,
+  onCreated,
+  buckets = [],
+  bucket: initialBucket = null,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (t: TicketItem) => void;
+  /** T-1098: the buckets to file in; empty picks itself (the workspace's bucket, else PILOT). */
+  buckets?: TicketBucket[];
+  bucket?: string | null;
+}) {
   const [summary, setSummary] = useState('');
+  const [bucket, setBucket] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState<TicketType>('task');
   const [priority, setPriority] = useState<TicketPriority>('normal');
@@ -99,6 +115,7 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
     setTags('');
     setMine('queue');
     setWorkspaceId(NO_WORKSPACE);
+    setBucket(initialBucket ?? '');
     setError(null);
     setErrors({});
     let current = true;
@@ -109,7 +126,7 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
     return () => {
       current = false;
     };
-  }, [open]);
+  }, [open, initialBucket]);
 
   const submit = async () => {
     setSaving(true);
@@ -123,7 +140,9 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
         priority,
         tags: tagsOf(tags),
         assignee: mine === 'me' ? ({ kind: 'user', name: '' } satisfies TicketAssignee) : null,
-        workspaceId: workspaceId || null,
+        // Left out (not null) when none is picked, so the bucket's default workspace applies.
+        workspaceId: workspaceId || undefined,
+        bucket: bucket || undefined,
       };
       onCreated(await ticketsApi.create(body));
     } catch (e) {
@@ -147,6 +166,14 @@ export function NewTicketDialog({ open, onClose, onCreated }: { open: boolean; o
       dirty={!!summary.trim() || !!description.trim()}
     >
       <div className="flex flex-col gap-4">
+        {buckets.length > 0 && (
+          <Select
+            label="Bucket"
+            value={bucket}
+            onChange={setBucket}
+            options={[{ value: '', label: 'Auto' }, ...buckets.map((b) => ({ value: b.key, label: `${b.key} · ${b.name}` }))]}
+          />
+        )}
         <TextField
           label="Summary"
           placeholder="Fix the login redirect"
@@ -374,7 +401,7 @@ export function AssignDialog({
     try {
       const assignee: TicketAssignee | null =
         who === 'queue' ? null : who === 'user' ? { kind: 'user', name: name.trim() || 'admin' } : { kind: 'session', sessionId };
-      if (who === 'session' && !sessionId) return setError('Pick a session.');
+      if (who === 'session' && !sessionId) return setError('Pick an agent.');
       onSaved(await ticketsApi.update(ticket.id, { assignee }));
     } catch (e) {
       setError(fieldErrors(e, ['assignee'] as const).fields.assignee ?? errorText(e, 'Couldn’t assign it.'));
@@ -401,16 +428,16 @@ export function AssignDialog({
           options={[
             { value: 'queue', label: 'Unassigned' },
             { value: 'user', label: 'Person' },
-            { value: 'session', label: 'Session' },
+            { value: 'session', label: 'Agent' },
           ]}
         />
         {who === 'user' && <TextField label="Name" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />}
         {who === 'session' && (
           <Select
-            label="Session"
+            label="Agent"
             value={sessionId}
             onChange={setSessionId}
-            placeholder={sessions.length ? 'Pick a session' : 'No running sessions'}
+            placeholder={sessions.length ? 'Pick an agent' : 'No running agents'}
             options={sessions.map((s) => ({ value: s.id, label: `${s.title} · ${s.workspaceId}` }))}
           />
         )}
@@ -556,8 +583,8 @@ export function StartSessionDialog({
       const details = (e as { details?: { folder?: string } }).details;
       setError(
         code === 'FOLDER_UNTRUSTED'
-          ? `${details?.folder ? `${details.folder} isn’t` : 'That folder isn’t'} trusted yet. Start a session there from Sessions once.`
-          : errorText(e, 'Couldn’t start the session.'),
+          ? `${details?.folder ? `${details.folder} isn’t` : 'That folder isn’t'} trusted yet. Start an agent there from Agents once.`
+          : errorText(e, 'Couldn’t start the agent.'),
       );
     } finally {
       setSaving(false);
@@ -569,10 +596,10 @@ export function StartSessionDialog({
     <FormDialog
       open={!!ticket}
       onClose={onClose}
-      title="Start a session"
+      title="Start an agent"
       description={ticket ? `${ticket.id} · ${ticket.summary}` : undefined}
       onSubmit={submit}
-      submitLabel="Start session"
+      submitLabel="Start agent"
       submitDisabled={!workspaceId}
       saving={saving}
       error={error}
@@ -599,7 +626,7 @@ export function StartSessionDialog({
         <div className="flex items-center gap-3">
           <p className="flex min-w-0 flex-1 items-center gap-1 text-sm font-semibold">
             Own git worktree
-            <InfoTip label="About worktrees">The session gets its own branch, so other work isn’t touched.</InfoTip>
+            <InfoTip label="About worktrees">The agent gets its own branch, so other work isn’t touched.</InfoTip>
           </p>
           <Switch label="Own git worktree" checked={worktree} onChange={setWorktree} />
         </div>
@@ -615,8 +642,8 @@ export function StartSessionDialog({
 
 /** The two ways, in the dialog's one ⓘ (tickets PRD FR28). */
 const BUMP_HELP: Record<BumpMode, string> = {
-  prioritise: 'the session takes it as its next work. It is assigned to that session and set in progress.',
-  ask: 'a question. The session answers in a comment here; the ticket stays as it is.',
+  prioritise: 'the agent takes it as its next work. It is assigned to that agent and set in progress.',
+  ask: 'a question. The agent answers in a comment here; the ticket stays as it is.',
 };
 
 /** Bump (FR28): the shared Bump dialog over this ticket's sessions; its assigned session comes first. */

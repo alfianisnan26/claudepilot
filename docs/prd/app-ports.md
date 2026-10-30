@@ -10,11 +10,11 @@ an iframe.
 
 ## 2. Hosts and the switch
 
-- Each workspace and port has its own host: `app-<name>-<port>.<PORT_PROXY_HOST_SUFFIX>` (one DNS label; the name lowercased). The app's
+- Each workspace and port has its own host: `<port>[-<app>]-<workspace>.<PORT_PROXY_HOST_SUFFIX>` (one DNS label; owner, 2026-10-18). `<workspace>` is the workspace's label as a slug (`isnan-pod`, else its name), `<app>` an optional name the person gives the port (kept on that device; the toolbar's Name button). Two workspaces with one slug can't open app hosts (409). The app's
   scripts never run on the portal's origin and never see the portal's cookie.
 - `PORT_PROXY_HOST_SUFFIX` unset: the feature is off. The list answers `{ enabled: false, ports: [] }`, the open is 404, and no host is an
   app host.
-- Parsing is strict (`parseAppPortHost`): one label, `app-<slug>-<port>`, port 1024 to 65535 without a leading zero. Ports never opened: the
+- Parsing is strict (`parseAppPortHost`): one label, `<port>-<rest>`, a 4- or 5-digit port 1024 to 65535 without a leading zero; the grant is bound to the exact host at open, so only the port is read back. Ports never opened: the
   portal's own, the browser's CDP and supervisor ports, and `PORT_PROXY_DENY_PORTS` (comma-separated). A malformed `app-…` host under the
   suffix is still the proxy's, and gets its 404, never the portal.
 - Only those ports are denied by default. Any other loopback service in the workspace (an agent's own helper, a database console) can be
@@ -80,11 +80,11 @@ The target is always `127.0.0.1:<port>` inside the workspace, over the channel e
 
 ## 7. Deploy
 
-`deploy/k3s/portal.yaml`: `PORT_PROXY_HOST_SUFFIX=ai.isnan.me` and the IngressRoute `claudepilot-app-ports` (`HostRegexp` for
-`app-*.ai.isnan.me`, the same Service, the existing `*.ai.isnan.me` certificate).
+`deploy/k3s/portal.yaml`: `PORT_PROXY_HOST_SUFFIX=pilot.ai.isnan.me` and the IngressRoute `claudepilot-app-ports` (`HostRegexp` for
+`<port>-*.pilot.ai.isnan.me`, the same Service, a `*.pilot.ai.isnan.me` certificate from the cloudflare resolver). The 2026-10-17 form `app-<name>-<port>.ai.isnan.me` is gone.
 
-**Untrusted apps only after T-976.** An app host is a sibling of the portal host under `ai.isnan.me`. Its scripts can set a
-`Domain=ai.isnan.me` cookie that the portal host receives. That cannot read the portal session, but it can shadow it (a broken sign-in or
+**Untrusted apps only after T-976.** An app host is a subdomain of the portal host (`*.pilot.ai.isnan.me`). Its scripts can set a
+`Domain=pilot.ai.isnan.me` cookie that the portal host receives. That cannot read the portal session, but it can shadow it (a broken sign-in or
 fixation). The `__Host-` session cookie of T-976 closes this. Until T-976 is live, open only the owner's own apps (the Tradingbot)
 through app ports; never an app whose code is untrusted.
 

@@ -20,7 +20,7 @@ export function actionItems(here: { pathname: string; search: string }): Palette
     return `${here.pathname}?${q.toString()}`;
   };
   return [
-    { id: 'action:new-session', kind: 'action', title: 'New session', hint: '', to: '/admin/sessions?new=1', keywords: 'create start chat' },
+    { id: 'action:new-session', kind: 'action', title: 'New agent', hint: '', to: '/admin/sessions?new=1', keywords: 'create start chat' },
     { id: 'action:attention', kind: 'action', title: 'Needs attention', hint: 'Approvals, tickets, CI', to: glance('attention'), keywords: 'approve deny waiting failed' },
     { id: 'action:quota', kind: 'action', title: 'Quota', hint: 'Plan left', to: glance('quota'), keywords: 'limit usage left reset' },
     { id: 'action:agents', kind: 'action', title: 'Agents', hint: 'Running now', to: glance('agents'), keywords: 'workers sub-agents stop' },
@@ -38,7 +38,8 @@ export function sessionItems(sessions: readonly ChatSession[]): PaletteItem[] {
       hint: `${SESSION_WORD[s.state]} · ${workspaceLabel(s.workspaceId)}`,
       to: `/admin/sessions/${encodeURIComponent(s.id)}`,
       // What the Sessions page's own search looks in, beside the title.
-      keywords: [s.claudeName, s.workspaceId, s.worktree?.branch, s.ticketId, s.id].filter(Boolean).join(' '),
+      // T-1098: its ticket by either id (T-3 and KONF-3).
+      keywords: [s.claudeName, s.workspaceId, s.worktree?.branch, s.ticketId, s.ticketKey, s.id].filter(Boolean).join(' '),
       recent: Date.parse(s.lastActivityAt) || 0,
       state: s.state,
     }));
@@ -65,9 +66,10 @@ export function ticketItems(tickets: readonly TicketItem[]): PaletteItem[] {
     id: `ticket:${t.id}`,
     kind: 'ticket' as const,
     title: t.summary,
-    hint: `${t.id} · ${TICKET_STATUS_LABEL[t.status]}`,
-    to: `/admin/tickets/${encodeURIComponent(t.id)}`,
-    keywords: t.tags.join(' '),
+    hint: `${t.key ?? t.id} · ${TICKET_STATUS_LABEL[t.status]}`,
+    to: `/admin/tickets/${encodeURIComponent(t.key ?? t.id)}`,
+    // T-1098: both ids match (the key shows, the stable T-n stays an alias).
+    keywords: [t.id, t.key ?? '', ...t.tags].filter(Boolean).join(' '),
     matched: true,
   }));
 }

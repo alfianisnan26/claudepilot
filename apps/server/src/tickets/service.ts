@@ -1,5 +1,7 @@
 import { AppError } from '@isnanme/core';
+import { can } from '../authz/seam.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
+import { parseBucketRoutes, routeByTags } from './bucketRoutes.js';
 import {
   BUMP_PRIORITY,
   TICKET_ATTACHMENT_LIMITS,
@@ -12,12 +14,28 @@ import {
   TICKET_OPEN_STATUSES,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
+  TICKET_TIMELINE_GRANULARITIES,
+  TICKET_TIMELINE_LIMITS,
+  TICKET_TIMELINE_PAGE,
   TICKET_TYPES,
   isTicketClosed,
   parseTicketBranch,
-  parseTicketId,
+  parseTicketRef,
   parseTicketTrailers,
   ticketIdOf,
+  ticketKeyOf,
+  TICKET_BUCKET_KEY,
+  TICKET_DEFAULT_BUCKET,
+  ticketBucketRef,
+  type Actor,
+  type CreateTicketBucketRequest,
+  type MergeTicketBucketRequest,
+  type MergeTicketBucketResult,
+  type TicketBucketMove,
+  type TicketBucketMoveResult,
+  type TicketBucket,
+  type TicketBucketChoice,
+  type UpdateTicketBucketRequest,
   type BumpRequest,
   type BumpTarget,
   type CloseTicketRequest,
@@ -41,12 +59,21 @@ import {
   type TicketPage,
   CURSOR_MAX_LIMIT,
   TICKET_LIST_TEXT,
+  TICKET_BATCH_BRANCH,
+  TICKET_VERDICT_BATCH_LIMITS,
+  TICKET_MERGE_LIMITS,
+  TICKET_MERGE_STATES,
+  type TicketMergeStatus,
+  type TicketVerdictBatch,
   type TicketOrphan,
   type TicketOrphanWhy,
   type TicketPriority,
   type TicketSession,
   type TicketStatus,
   type TicketTag,
+  type TicketTimeline,
+  type TicketTimelineGranularity,
+  type TicketTimelineRow,
   type TicketType,
   type UpdateTicketRequest,
 } from '@portal/contracts';
@@ -61,7 +88,7 @@ import {
   canAgentAssignUser,
   canAgentTagChecklist,
   OWNER_CHECKLIST_TAG,
-  canWorkerComment,
+  canPeerLeadAct, canPeerWorkerComment, canWorkerComment, parseLeadPeerGroups,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
   type EndedGrantReason,
@@ -71,6 +98,7 @@ import './errors.js';
 import { bumpTicketMessage, openingMessage } from './opening.js';
 import type { TicketSessionInfo, TicketSessions } from './sessions.js';
 import { cleanLine, cleanMarkdown, cleanTags } from './text.js';
+import { clipFlow, ticketFlow, type FlowEvent } from './ticketFlow.js';
 import { putTicketFile, readTicketFile, removeTicketFile } from './files.js';
 import {
   canRecordVerdict,
@@ -79,6 +107,7 @@ import {
   VERDICT_REFUSAL_TEXT,
   VERDICT_ROLES,
   VERDICTS,
+  verdictLaneWarning,
   type StoredVerdict,
   type Verdict,
   type VerdictEvaluation,
@@ -95,10 +124,15 @@ import {
  * minted for: both verified from the token, never from what a call says.
  */
 export type Caller =
-  | { kind: 'ui' }
+  /** `actor` (T-1857): the person as the seam knows them, when the route passes it; without it the route has checked the bucket itself. */
+  | { kind: 'ui'; actor?: Actor }
   | { kind: 'system' }
-  | { kind: 'token'; tokenId: string; label: string; scope: PortalScope }
-  | { kind: 'agent'; tokenId: string; label: string; workspaceId: string; sessionId: string }
+  /**
+   * `manager`: the General Manager's `cpmt_` token (T-968): it may not close a ticket nor record a verdict (#11136 b, PRD §9.4).
+   * `actor` (T-1857): the seam's actor for the token (the tools pass `actorOfPrincipal`); left out, the token's own as the seam reads it.
+   */
+  | { kind: 'token'; tokenId: string; label: string; scope: PortalScope; manager?: true; actor?: Actor }
+  | { kind: 'agent'; tokenId: string; label: string; workspaceId: string; sessionId: string; actor?: Actor }
   /**
    * A trigger a person made (triggers PRD FR17, owner decision O8): no more rights than `system` plus starting a session; recorded as
    * actor `trigger:<id>`, and its text (an event's words) is untrusted. The session it starts carries `portal:trigger-<id>`.
@@ -163,6 +197,22 @@ interface Row {
   created_at: string;
   updated_at: string;
   closed_at: string | null;
+  /** T-1098: its bucket and its number there (null only for a row inserted into a bucket that did not exist). */
+  bucket_key: string;
+  bucket_number: number | null;
+}
+
+interface BucketRow {
+  key: string;
+  name: string;
+  description: string;
+  default_workspace_id: string | null;
+  default_tags: string;
+  vault_id: string | null;
+  next_number: number;
+  owner_id: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface EventRow {
@@ -174,6 +224,17 @@ interface EventRow {
   actor_label: string;
   body: string | null;
   data: string | null;
+}
+
+/** T-119: how long a timeline answer may be served from memory, and how many answers are kept. */
+const TIMELINE_CACHE_MS = 5_000;
+const TIMELINE_CACHE_MAX = 64;
+
+/** A timeline page size: 50 when absent or not a number, clamped to 1..200. */
+function timelineLimit(limit: unknown): number {
+  const n = typeof limit === 'string' && limit.trim() !== '' ? Number(limit) : typeof limit === 'number' ? limit : NaN;
+  if (!Number.isFinite(n)) return TICKET_TIMELINE_PAGE.defaultLimit;
+  return Math.min(Math.max(Math.trunc(n), 1), TICKET_TIMELINE_PAGE.maxLimit);
 }
 
 const RANK: Record<TicketPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -194,14 +255,40 @@ const reporterRef = (c: { sessionId: string }) => `session:${c.sessionId}`;
 const LIST_MAX = 500;
 const USER_LABEL_MAX = 40;
 const OPEN_SQL = TICKET_OPEN_STATUSES.map((s) => `'${s}'`).join(', ');
-const CLOSED_SQL = TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
+/** The refusal for a General Manager token that would close or reopen a ticket (close() and update(); #11136 b). */
+const MANAGER_NO_CLOSE = 'The General Manager does not close tickets: QA closes a ticket on its pass.';
+const CLOSED_SQL =TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
 
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const notFound = () => new AppError('NOT_FOUND', 'No such ticket.');
+const noBucket = () => new AppError('NOT_FOUND', 'No such bucket.');
 const oneOf = <T extends string>(v: unknown, all: readonly T[], field: string): T => {
   if (typeof v !== 'string' || !(all as readonly string[]).includes(v)) throw invalid(field, `Use one of: ${all.join(', ')}.`);
   return v as T;
 };
+/**
+ * FR36d (T-1987): a QA batch's shared evidence, checked like any ticket text (hidden characters out, no credential-shaped value), or null
+ * when none was given. A job id and a branch are plain names; a note is one line.
+ */
+export function verdictBatchOf(v: unknown): TicketVerdictBatch | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) throw invalid('evidence', 'Evidence is { jobId, branch, note }.');
+  const o = v as Record<string, unknown>;
+  const name = (raw: unknown, field: 'jobId' | 'branch', re: RegExp, what: string) => {
+    const t = cleanLine(raw, field, TICKET_VERDICT_BATCH_LIMITS[field], { required: false });
+    if (t && !re.test(t)) throw invalid(field, what);
+    return t || null;
+  };
+  return {
+    jobId: name(o.jobId, 'jobId', /^[A-Za-z0-9][A-Za-z0-9._:\/-]*$/, 'A job id is a plain name (letters, digits, . _ : / -).'),
+    branch: name(o.branch, 'branch', /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/, 'A branch is a plain git branch name.'),
+    note: cleanLine(o.note, 'note', TICKET_VERDICT_BATCH_LIMITS.note, { required: false }) || null,
+  };
+}
+
+/** One item of {@link Tickets.recordVerdicts}: the verdict recorded, or why not (the same code and words `ticket_verdict` answers). */
+export type VerdictBatchResult = { id: string; ok: true; verdict: StoredVerdict } | { id: string; ok: false; error: { code: string; message: string } };
+
 const workspaceIdOf = (v: unknown): string | null => {
   if (v === undefined || v === null || v === '') return null;
   if (typeof v !== 'string' || !/^[a-z0-9-]+\/[A-Za-z0-9._-]+$/.test(v.trim()))
@@ -226,6 +313,15 @@ export interface TicketsOptions {
   agentOpenPerWorkspace?: () => number;
   /** FR9c (D-62, T-483): the tags that let an agent put a ticket on a person (`tickets.agentAssignUserTags`). Default `production`. */
   agentAssignUserTags?: () => string;
+  /** FR9g (D-85): `tickets.leadPeerGroups`, the owner's list of peer lead sessions. */
+  leadPeerGroups?: () => unknown;
+  /**
+   * FR36e (T-2014): the merge gates of the flow programs that are on: per program tag, the configured lead ids that gate its merges
+   * (flow/programs.ts `mergeGatesOf`). Absent or empty: nobody may record a merge status.
+   */
+  mergeGates?: () => { tag: string; gates: string[] }[];
+  /** T-2881: `tickets.bucketRoutes`, the tag rules for a ticket filed without a bucket. Absent: no rules (tests); index.ts wires the setting. */
+  bucketRoutes?: () => unknown;
 }
 
 /** One move the orphan sweep made (T-270 layer 3): where the ticket went and why. `to` null: back in the agents' queue. */
@@ -295,6 +391,9 @@ export class Tickets {
   readonly #orphanAfterMin: () => number;
   readonly #agentOpenPerWorkspace: () => number;
   readonly #agentAssignUserTags: () => string;
+  readonly #leadPeerGroups: () => unknown;
+  readonly #mergeGates: () => { tag: string; gates: string[] }[];
+  readonly #bucketRoutes: () => unknown;
   #orphans: { lastRunAt: string | null; dead: Record<string, string> } | null = null;
 
   constructor(
@@ -308,6 +407,9 @@ export class Tickets {
     this.#orphanAfterMin = opts.orphanAfterMin ?? (() => ORPHAN_DEFAULT_MIN);
     this.#agentOpenPerWorkspace = opts.agentOpenPerWorkspace ?? (() => OPEN_PER_WORKSPACE);
     this.#agentAssignUserTags = opts.agentAssignUserTags ?? (() => AGENT_ASSIGN_USER_TAGS_DEFAULT);
+    this.#leadPeerGroups = opts.leadPeerGroups ?? (() => '');
+    this.#mergeGates = opts.mergeGates ?? (() => []);
+    this.#bucketRoutes = opts.bucketRoutes ?? (() => '');
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -450,10 +552,45 @@ export class Tickets {
     return this.#needSession(this.#writer(caller, sessionId), 'To say “me”').id;
   }
 
-  /** Whether the caller may see a ticket: an agent sees its workspace's tickets and the shared queue. */
+  /**
+   * Whether the caller may see a ticket: its bucket passes `view` (T-1857: for agents, tokens and a person whose route passes the actor), and an
+   * agent sees only its workspace's tickets and the shared queue. Every read by id (`#need`) and every list (`#where`) goes through it.
+   */
   #visible(caller: Caller, row: Row): boolean {
+    const buckets = this.#viewableBuckets(caller);
+    if (buckets && !buckets.has(row.bucket_key)) return false;
     if (caller.kind !== 'agent') return true;
     return row.workspace_id === null || this.#isIn(row, caller.workspaceId);
+  }
+
+  /** The seam's actor for a caller (T-1857), or null when no bucket rule applies to it (the portal, a trigger, a person's route that checks it). */
+  #actorOf(caller: Caller): Actor | null {
+    if (caller.kind === 'agent')
+      return caller.actor ?? { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: caller.tokenId, sessionId: caller.sessionId, workspaceId: caller.workspaceId };
+    if (caller.kind === 'token') return caller.actor ?? { kind: 'token', userId: FOUNDING_USER_ID, tokenId: caller.tokenId, scope: caller.scope };
+    if (caller.kind === 'ui') return caller.actor ?? null;
+    return null;
+  }
+
+  /**
+   * T-1857: the buckets the caller may view (`can(view, ticket_bucket)`, asked once per bucket), or null when it may view every one (the
+   * owner: nothing is filtered and the SQL stays as it was). A bucket key no bucket row has is not in the set, so its tickets are hidden too,
+   * as the REST guard hides them.
+   */
+  #viewableBuckets(caller: Caller): Set<string> | null {
+    const actor = this.#actorOf(caller);
+    if (!actor) return null;
+    const keys = (this.#db.prepare('SELECT key FROM ticket_buckets').all() as { key: string }[]).map((r) => r.key);
+    const ok = keys.filter((k) => can(actor, 'view', ticketBucketRef(k)).allow);
+    return ok.length === keys.length ? null : new Set(ok);
+  }
+
+  /** The SQL that keeps a list to the buckets the caller may view (T-1857); empty when it may view them all. */
+  #bucketSql(caller: Caller): { sql: string; args: string[] } | null {
+    const buckets = this.#viewableBuckets(caller);
+    if (!buckets) return null;
+    if (!buckets.size) return { sql: '0', args: [] };
+    return { sql: `t.bucket_key IN (${[...buckets].map(() => '?').join(',')})`, args: [...buckets] };
   }
 
   /**
@@ -483,6 +620,31 @@ export class Tickets {
           : `${id} is not assigned to you. Claim it with ticket_claim_next first.`,
       );
     return null;
+  }
+
+  /**
+   * A crew LEAD (a live agent session with at least one live worker of its own) may hand a ticket of its own workspace to one of its workers,
+   * take it itself, or put it back in the queue: the ticket is open and held by nobody, by the lead, or by one of its workers; the new holder is
+   * the lead or one of its live, unarchived workers; and only assignee, status and priority change. An ended holder's ticket keeps FR9a (adopt).
+   * Anything else keeps the usual refusal. The hand-off is audited (`ticket.lead_assigned`) by update() once the change is stored.
+   */
+  #leadMayAssign(caller: Caller, row: Row, w: Writer, req: Partial<UpdateTicketRequest>): { lead: string; from: string | null; to: string | null } | null {
+    if (caller.kind !== 'agent' || !w.session || isTicketClosed(row.status) || req.assignee === undefined) return null;
+    const extra = Object.keys(req).filter((k) => (req as Record<string, unknown>)[k] !== undefined && !['assignee', 'status', 'priority'].includes(k));
+    if (extra.length) return null;
+    const lead = w.session;
+    const live = (x: TicketSessionInfo | null) => !!x && x.state !== 'ended' && !x.archivedAt;
+    const workers = this.sessions.list({ workspaceId: lead.workspaceId }).filter((x) => x.parentId === lead.id && live(x));
+    if (!workers.length) return null; // not a lead
+    if (!this.#isIn(row, lead.workspaceId)) return null;
+    if (row.assignee_kind === 'user') return null;
+    if (row.assignee_kind === 'session' && row.assignee_ref && row.assignee_ref !== lead.id && !workers.some((x) => x.id === row.assignee_ref)) return null;
+    const to = req.assignee;
+    if (to !== null) {
+      if (to.kind !== 'session' || typeof to.sessionId !== 'string') return null;
+      if (to.sessionId !== lead.id && !workers.some((x) => x.id === to.sessionId)) return null;
+    }
+    return { lead: lead.id, from: row.assignee_ref ?? null, to: to ? to.sessionId : null };
   }
 
   /** The actor's predecessors, nearest first (`continued_from` back; bounded, cycle safe). */
@@ -541,7 +703,7 @@ export class Tickets {
    * FR29: commenting is what FR9 allows, and also the answer of a session a person asked about the ticket (Ask) in the last day. FR9b
    * (T-294, T-397): a crew worker's comment on its spawn's ticket or its lead's (authz.ts `canWorkerComment`). A refusal keeps FR9's text.
    */
-  #assertCanComment(caller: Caller, row: Row, w: Writer): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
+  #assertCanComment(caller: Caller, row: Row, w: Writer, opts: { attach?: boolean } = {}): { ended: EndedGrant | null; worker: WorkerCommentReason | null } {
     try {
       return { ended: this.#assertCanModify(caller, row, w), worker: null };
     } catch (e) {
@@ -549,7 +711,8 @@ export class Tickets {
         return { ended: null, worker: null };
       if (caller.kind === 'agent' && !isTicketClosed(row.status)) {
         const why = this.#workerComment(w.session!, row);
-        if (why) return { ended: null, worker: why };
+        // crew_queue is the widest grant (any unassigned ticket of the workspace): a comment only, never an attachment (review 2026-10-18).
+        if (why && !(opts.attach && (why === 'crew_queue' || why === 'lead_peer' || why === 'peer_worker'))) return { ended: null, worker: why };
       }
       throw e;
     }
@@ -565,8 +728,81 @@ export class Tickets {
       holderId: row.assignee_ref,
       holderAncestors: holder ? this.#ancestors(holder) : [],
       holderLead: holder?.parentId ?? null,
+      ticketWorkspace: row.workspace_id,
     });
-    return d.allow ? d.why : null;
+    if (d.allow) return d.why;
+    if (this.#peerLead(s, row)) return 'lead_peer';
+    return this.#peerWorker(s, row) ? 'peer_worker' : null;
+  }
+
+  /** The top of `s`'s `parentId` chain (itself when it has no lead), or null when a session is missing, a cycle or deeper than 20 (fail closed). */
+  #crewRoot(s: TicketSessionInfo): TicketSessionInfo | null {
+    let root: TicketSessionInfo | null = s;
+    const seen = new Set<string>();
+    while (root?.parentId) {
+      if (seen.has(root.id) || seen.size >= 20) root = null;
+      else (seen.add(root.id), (root = this.sessions.get(root.parentId)));
+    }
+    return root;
+  }
+
+  /** A root's lineage for the peer rules: itself, its predecessors and its continuations. */
+  #rootLineage(root: TicketSessionInfo): string[] {
+    return [root.id, ...this.#ancestors(root), ...this.#successors(root)];
+  }
+
+  /** T-2011: whether the QA or review worker `s`, under a peer-group lead, may comment on `row` (authz.ts `canPeerWorkerComment`). */
+  #peerWorker(s: TicketSessionInfo, row: Row): boolean {
+    if (!s.parentId) return false;
+    const groups = parseLeadPeerGroups(this.#leadPeerGroups());
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    if (!groups.length || !holder) return false;
+    const workerRoot = this.#crewRoot(s);
+    const holderRoot = this.#crewRoot(holder);
+    return canPeerWorkerComment({
+      worker: s,
+      holder,
+      workerRoot,
+      holderRoot,
+      workerRootLineage: workerRoot ? this.#rootLineage(workerRoot) : [],
+      holderRootLineage: holderRoot ? this.#rootLineage(holderRoot) : [],
+      groups,
+    });
+  }
+
+  /**
+   * D-85, T-1839: the crew root (top-level lead) of the session holding `row` when `s` is its peer lead (authz.ts `canPeerLeadAct`), or null.
+   * The root is found up the holder's `parentId` chain; a missing session, a cycle or a chain deeper than 20 gives no root (fail closed).
+   */
+  #peerLead(s: TicketSessionInfo, row: Row): string | null {
+    const groups = parseLeadPeerGroups(this.#leadPeerGroups());
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    if (!groups.length || !holder) return null;
+    const root = this.#crewRoot(holder);
+    if (!root) return null;
+    const ok = canPeerLeadAct({
+      actor: s,
+      holder,
+      root,
+      actorLineage: [s.id, ...this.#ancestors(s)],
+      rootLineage: this.#rootLineage(root),
+      groups,
+    });
+    return ok ? root.id : null;
+  }
+
+  /** The sessions continuing `s`, directly or down its chain, in its workspace (bounded, cycle safe). */
+  #successors(s: TicketSessionInfo): string[] {
+    const all = this.sessions.list({ workspaceId: s.workspaceId });
+    const seen = new Set<string>([s.id]);
+    let frontier = [s.id];
+    while (frontier.length && seen.size < 500) {
+      const next = all.filter((x) => x.continuedFrom && frontier.includes(x.continuedFrom) && !seen.has(x.id));
+      for (const x of next) seen.add(x.id);
+      frontier = next.map((x) => x.id);
+    }
+    seen.delete(s.id);
+    return [...seen];
   }
 
   /** The audit row of a worker's comment under FR9b: the worker that wrote it, its lead and why. */
@@ -599,16 +835,55 @@ export class Tickets {
     return this.#keyed(this.#db.prepare('SELECT * FROM tickets WHERE number = ?').get(number) as unknown as Row | undefined);
   }
 
+  /**
+   * T-1098: the ticket number a reference names, either form: the stable id (`T-12`, `#12`, `12`: a permanent alias) or its bucket key
+   * (`KONF-12`). Null when it names none.
+   */
+  #numberOf(ref: string): number | null {
+    const r = parseTicketRef(String(ref));
+    if (!r) return null;
+    if ('number' in r) return r.number;
+    const hit = this.#db.prepare('SELECT number FROM tickets WHERE bucket_key = ? AND bucket_number = ?').get(r.bucket, r.n) as
+      | { number: number }
+      | undefined;
+    if (hit) return hit.number;
+    // T-1967: a key it had before it moved (an alias for ever).
+    const was = this.#db.prepare('SELECT ticket_number AS number FROM ticket_key_aliases WHERE bucket_key = ? AND bucket_number = ?').get(r.bucket, r.n) as
+      | { number: number }
+      | undefined;
+    return was ? was.number : null;
+  }
+
   #need(caller: Caller, idOrNumber: string | number): Row {
-    const n = typeof idOrNumber === 'number' ? idOrNumber : parseTicketId(idOrNumber);
+    const n = typeof idOrNumber === 'number' ? idOrNumber : this.#numberOf(idOrNumber);
     const row = n === null ? undefined : this.#row(n);
     if (!row || !this.#visible(caller, row)) throw notFound();
     return row;
   }
 
   exists(id: string): boolean {
-    const n = parseTicketId(id);
-    return n !== null && !!this.#row(n);
+    return this.resolve(id) !== null;
+  }
+
+  /** T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it. */
+  resolve(ref: string): string | null {
+    const n = this.#numberOf(ref);
+    return n !== null && this.#row(n) ? ticketIdOf(n) : null;
+  }
+
+  /** T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none. */
+  keyOf(ref: string): string | null {
+    const n = this.#numberOf(ref);
+    if (n === null) return null;
+    const r = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(n) as { bucket_key: string; bucket_number: number | null } | undefined;
+    return r ? (r.bucket_number === null ? ticketIdOf(n) : ticketKeyOf(r.bucket_key, r.bucket_number)) : null;
+  }
+
+  /** T-1098: the bucket of a ticket named either way (for the routes' bucket check), or null when there is no such ticket. */
+  bucketOf(ref: string): string | null {
+    const n = this.#numberOf(ref);
+    const row = n === null ? undefined : this.#row(n);
+    return row ? row.bucket_key : null;
   }
 
   #tagsOf(numbers: number[]): Map<number, string[]> {
@@ -644,6 +919,8 @@ export class Tickets {
     const ticket: Ticket = {
       id: ticketIdOf(r.number),
       number: r.number,
+      bucket: r.bucket_key,
+      key: r.bucket_number === null ? ticketIdOf(r.number) : ticketKeyOf(r.bucket_key, r.bucket_number),
       type: r.type,
       priority: r.priority,
       status: r.status,
@@ -686,7 +963,11 @@ export class Tickets {
       where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
       args.push(...mine.args);
     }
+    // T-1857: a bucket the caller may not view is not in any list nor any count.
+    const inBuckets = this.#bucketSql(caller);
+    if (inBuckets) (where.push(inBuckets.sql), args.push(...inBuckets.args));
     if (forCounts) return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
+    if (f.bucket) (where.push('t.bucket_key = ?'), args.push(f.bucket.trim().toUpperCase()));
     const statuses = f.status?.filter((s) => (TICKET_STATUSES as readonly string[]).includes(s));
     if (statuses?.length) (where.push(`t.status IN (${statuses.map(() => '?').join(',')})`), args.push(...statuses));
     else if (!f.includeClosed) where.push(`t.status NOT IN (${CLOSED_SQL})`);
@@ -712,10 +993,18 @@ export class Tickets {
     }
     if (f.query?.trim()) {
       const q = like(f.query.trim().slice(0, 100));
+      // T-1098: a query that is a ticket reference (T-12 or KONF-12) finds that ticket too.
+      const ref = parseTicketRef(f.query.trim());
+      // T-1967: a key a moved ticket had (an alias) finds it too.
+      const byRef = ref
+        ? 'number' in ref
+          ? ' OR t.number = ?'
+          : ' OR (t.bucket_key = ? AND t.bucket_number = ?) OR t.number IN (SELECT ticket_number FROM ticket_key_aliases WHERE bucket_key = ? AND bucket_number = ?)'
+        : '';
       where.push(
-        "(t.summary LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag LIKE ? ESCAPE '\\'))",
+        `(t.summary LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag LIKE ? ESCAPE '\\')${byRef})`,
       );
-      args.push(q, q, q);
+      args.push(q, q, q, ...(ref ? ('number' in ref ? [ref.number] : [ref.bucket, ref.n, ref.bucket, ref.n]) : []));
     }
     return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
   }
@@ -741,7 +1030,12 @@ export class Tickets {
     ).n;
     const o = this.#orphanSql();
     const orphans = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${and} ${o.sql}`).get(...args, ...o.args) as { n: number }).n;
-    return { byStatus, needsYou, unassigned, orphans, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
+    const byBucket: Record<string, number> = {};
+    for (const r of this.#db
+      .prepare(`SELECT t.bucket_key AS b, count(*) AS n FROM tickets t ${and} t.status IN (${OPEN_SQL}) GROUP BY t.bucket_key ORDER BY t.bucket_key`)
+      .all(...args) as { b: string; n: number }[])
+      byBucket[r.b] = r.n;
+    return { byStatus, byBucket, needsYou, unassigned, orphans, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
   }
 
   list(caller: Caller, filter: TicketFilter = {}): TicketList {
@@ -779,7 +1073,7 @@ export class Tickets {
     const limit = clampLimit(args.limit);
     const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
     const kind = closedOnly ? 'closed' : filter.sort === 'newest' ? 'newest' : 'priority';
-    const scope = `tickets|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, kind, filter.status ?? null, filter.priority ?? null, filter.type ?? null, filter.tag ?? null, filter.assignee ?? null, filter.workspaceId ?? null, filter.query?.trim() ?? null, !!filter.includeClosed, !!filter.orphan])}`;
+    const scope = `tickets|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, kind, filter.bucket ?? null, filter.status ?? null, filter.priority ?? null, filter.type ?? null, filter.tag ?? null, filter.assignee ?? null, filter.workspaceId ?? null, filter.query?.trim() ?? null, !!filter.includeClosed, !!filter.orphan])}`;
     // The sort key of a row, as the cursor carries it, and the SQL that says "after the cursor" in the list's order.
     const keyOf = (r: Row): string =>
       kind === 'closed' ? (r.closed_at ?? '') : kind === 'newest' ? r.created_at : `${r.priority_rank}|${r.updated_at}`;
@@ -849,6 +1143,157 @@ export class Tickets {
     return out;
   }
 
+  /**
+   * T-119: the tickets whose life overlaps a window, each with its flow ({@link ticketFlow}, computed on read from the stored events: nothing is
+   * stored twice), its spans and markers cut to the ones that touch the window ({@link clipFlow}). Oldest number first, by keyset on the number,
+   * a page at a time (50 by default, 200 at most). The window is bounded by the granularity: a window over the scale's limit (named in
+   * the message), an unknown scale, a bad time or filter is a 422 VALIDATION_FAILED, a bad or foreign cursor a 400 BAD_REQUEST; `from` defaults to the granularity's default window before `to`, `to` to now. `filter` is the list's (bucket, status,
+   * priority, type, tag, assignee, workspace, query); closed tickets are in unless `status` says otherwise. `keep` is the caller's `view` check,
+   * as in {@link listPage}: a hidden ticket is not shown, and the cursor (sealed, bound to the caller, the filter and the window) points at the
+   * last row shown, or at the last scanned when the scan bound ends the page. The events of a page are read in ONE query (index
+   * `ticket_events_ticket_at`, migration 794). `cacheKey` (the viewer, from the route) turns on a short cache: the same question within
+   * {@link TIMELINE_CACHE_MS} and with no ticket written since is answered from memory.
+   */
+  timeline(
+    caller: Caller,
+    q: { from?: unknown; to?: unknown; granularity?: unknown; filter?: TicketFilter },
+    args: { cursor?: string | undefined; limit?: unknown; keep?: (t: TicketItem) => boolean; cacheKey?: string } = {},
+  ): TicketTimeline {
+    const nowMs = this.#now().getTime();
+    const granularity = q.granularity === undefined || q.granularity === '' ? 'hour' : q.granularity;
+    if (typeof granularity !== 'string' || !(TICKET_TIMELINE_GRANULARITIES as readonly string[]).includes(granularity))
+      throw new AppError('VALIDATION_FAILED', 'Unknown granularity.', { details: { granularity: `Use: ${TICKET_TIMELINE_GRANULARITIES.join(', ')}.` } });
+    const scale = granularity as TicketTimelineGranularity;
+    const limits = TICKET_TIMELINE_LIMITS[scale];
+    const time = (v: unknown, field: string): number | null => {
+      if (v === undefined || v === '') return null;
+      const ms = typeof v === 'string' && v.length <= 40 ? Date.parse(v) : NaN;
+      if (!Number.isFinite(ms)) throw new AppError('VALIDATION_FAILED', `${field} is not a time.`, { details: { [field]: 'Use an ISO time, e.g. 2026-10-18T00:00:00Z.' } });
+      return ms;
+    };
+    const toMs = time(q.to, 'to') ?? nowMs;
+    const fromMs = time(q.from, 'from') ?? toMs - limits.defaultWindowMs;
+    if (fromMs >= toMs) throw new AppError('VALIDATION_FAILED', 'from must be before to.', { details: { from: 'Earlier than to.' } });
+    if (toMs - fromMs > limits.maxWindowMs) {
+      const max = limits.maxWindowMs >= 2 * 86_400_000 ? `${Math.round(limits.maxWindowMs / 86_400_000)} days` : `${Math.round(limits.maxWindowMs / 3_600_000)} hours`;
+      throw new AppError('VALIDATION_FAILED', `That window is too long for the ${scale} scale: at most ${max}.`, {
+        details: { granularity: `At most ${max} at the ${scale} scale; use a coarser scale or a shorter window.` },
+      });
+    }
+    const from = new Date(fromMs).toISOString();
+    const to = new Date(toMs).toISOString();
+    const f: TicketFilter = q.filter ?? {};
+    const limit = timelineLimit(args.limit);
+    const scope = `tickets-timeline|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, scale, from, to, f.bucket ?? null, f.status ?? null, f.priority ?? null, f.type ?? null, f.tag ?? null, f.assignee ?? null, f.workspaceId ?? null, f.query?.trim() ?? null])}`;
+
+    // The short cache: keyed by the question as asked (an absent `to` is "now" for the few seconds a hit may be old), stamped with the
+    // tickets' write state so a change is never hidden by it.
+    const cacheKey = args.cacheKey ? `${args.cacheKey}|${scope}|${String(q.from ?? '')}|${String(q.to ?? '')}|${args.cursor ?? ''}|${limit}` : null;
+    const stamp = cacheKey ? this.#timelineStamp() : '';
+    if (cacheKey) {
+      const hit = this.#timelineCache.get(cacheKey);
+      if (hit && hit.stamp === stamp && performance.now() - hit.at < TIMELINE_CACHE_MS && Math.abs(nowMs - hit.nowMs) < TIMELINE_CACHE_MS) return hit.value;
+    }
+
+    const base = this.#where(caller, { ...f, includeClosed: true });
+    const overlap = 't.created_at <= ? AND (t.closed_at IS NULL OR t.closed_at >= ?)';
+    const sql = `${base.sql ? `${base.sql} AND` : 'WHERE'} ${overlap}`;
+    const sqlArgs = [...base.args, to, from];
+    let resume = 0;
+    if (args.cursor) {
+      const at = decodeCursor(args.cursor, scope);
+      if (typeof at.id !== 'number') throw new AppError('BAD_REQUEST', 'That cursor is not valid for this list. Load the list again.');
+      resume = at.id;
+    }
+    // Bounded scan, as in listPage: at most SCAN_FACTOR x limit rows read per request, however many `keep` hides.
+    const shown: { item: TicketItem; num: number }[] = [];
+    const maxScan = limit * SCAN_FACTOR;
+    let scanned = 0;
+    let more: number | null = null;
+    while (scanned < maxScan) {
+      const room = Math.min(TICKET_TIMELINE_PAGE.maxLimit, maxScan - scanned);
+      const got = (
+        this.#db
+          .prepare(`SELECT t.* FROM tickets t ${sql} AND t.number > ? ORDER BY t.number ASC LIMIT ?`)
+          .all(...sqlArgs, resume, room + 1) as unknown as Row[]
+      ).map((r) => this.#keyed(r));
+      const batch = got.slice(0, room);
+      const items = this.#items(batch);
+      batch.forEach((r, i) => {
+        const item = items[i]!;
+        if (!args.keep || args.keep(item)) shown.push({ item, num: r.number });
+      });
+      scanned += batch.length;
+      const last = batch[batch.length - 1];
+      more = got.length > room && last ? last.number : null;
+      if (shown.length > limit || more === null) break;
+      resume = more;
+    }
+    const page = shown.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextNum = shown.length > limit && last ? last.num : shown.length > limit ? null : more;
+    const events = this.#flowEvents(page.map((p) => p.num));
+    const items: TicketTimelineRow[] = page.map(({ item, num }) => {
+      const flow = ticketFlow({ createdAt: item.createdAt, status: item.status, closedAt: item.closedAt, events: events.get(num) ?? [] }, nowMs);
+      const a = item.assignee;
+      return {
+        id: item.id,
+        key: item.key ?? item.id,
+        bucket: item.bucket ?? TICKET_DEFAULT_BUCKET,
+        summary: item.summary,
+        status: item.status,
+        priority: item.priority,
+        type: item.type,
+        assignee: !a
+          ? null
+          : a.kind === 'user'
+            ? { kind: 'user', label: a.name || 'A person', sessionId: null }
+            : { kind: 'session', label: item.assigneeSession?.title || 'Agent gone', sessionId: a.sessionId },
+        createdAt: item.createdAt,
+        closedAt: item.closedAt,
+        flow: clipFlow(flow, fromMs, toMs, nowMs),
+      };
+    });
+    const value: TicketTimeline = { from, to, granularity: scale, now: new Date(nowMs).toISOString(), items, next: nextNum === null ? null : cursorAfter(scope, nextNum, nextNum) };
+    if (cacheKey) {
+      if (this.#timelineCache.size >= TIMELINE_CACHE_MAX) this.#timelineCache.delete(this.#timelineCache.keys().next().value!);
+      this.#timelineCache.set(cacheKey, { stamp, at: performance.now(), nowMs, value });
+    }
+    return value;
+  }
+
+  #timelineCache = new Map<string, { stamp: string; at: number; nowMs: number; value: TicketTimeline }>();
+
+  /** What changes whenever a ticket or its events are written (a new event, a ticket made, changed or deleted): the timeline cache's stamp. */
+  #timelineStamp(): string {
+    const e = this.#db.prepare('SELECT max(id) AS id FROM ticket_events').get() as { id: number | null };
+    const t = this.#db.prepare('SELECT count(*) AS n, max(updated_at) AS u FROM tickets').get() as { n: number; u: string | null };
+    return `${e.id ?? 0}|${t.n}|${t.u ?? ''}`;
+  }
+
+  /** The events of many tickets in one query, oldest first per ticket, as the flow reads them. */
+  #flowEvents(numbers: number[]): Map<number, FlowEvent[]> {
+    const out = new Map<number, FlowEvent[]>();
+    if (!numbers.length) return out;
+    const rows = this.#db
+      .prepare(
+        `SELECT ticket_number, at, kind, actor, actor_label, body, data FROM ticket_events WHERE ticket_number IN (${numbers.map(() => '?').join(',')}) ORDER BY ticket_number, at, id`,
+      )
+      .all(...numbers) as unknown as Omit<EventRow, 'id'>[];
+    for (const e of rows) {
+      let data: Record<string, unknown> | null = null;
+      try {
+        data = e.data ? (JSON.parse(e.data) as Record<string, unknown>) : null;
+      } catch {
+        // an unreadable entry is read without its data
+      }
+      const list = out.get(e.ticket_number) ?? [];
+      list.push({ at: e.at, kind: e.kind, actor: e.actor, actorLabel: e.actor_label, body: e.body, data, fromAgent: /^(portal-mcp|session|ci|trigger):/.test(e.actor) });
+      out.set(e.ticket_number, list);
+    }
+    return out;
+  }
+
   /** A list row: the long texts cut (D-58). The detail read has the whole. */
   #summary(t: TicketItem): TicketItem {
     const cut = (s: string | null): string | null => {
@@ -906,6 +1351,7 @@ export class Tickets {
       sessions,
       checks: this.#checks(row.number),
       attachments: this.#attachments(row.number),
+      merge: this.#mergeStatusOf(row.number),
     };
   }
 
@@ -957,7 +1403,7 @@ export class Tickets {
   ): TicketAttachment {
     const row = this.#need(caller, id);
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanComment(caller, row, w);
+    const grant = this.#assertCanComment(caller, row, w, { attach: true });
     if (isTicketClosed(row.status) && caller.kind === 'agent')
       throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is closed. A person can reopen it.`);
     const raw = typeof file.name === 'string' ? file.name : '';
@@ -1066,10 +1512,12 @@ export class Tickets {
   }
 
   /** A ticket's id and summary, for a link to it. */
-  brief(id: string): { id: string; summary: string; status: TicketStatus; type: TicketType } | null {
-    const n = parseTicketId(id);
+  brief(id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
+    const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
-    return row ? { id: ticketIdOf(row.number), summary: row.summary, status: row.status, type: row.type } : null;
+    if (!row) return null;
+    const key = row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
+    return { id: ticketIdOf(row.number), key, summary: row.summary, status: row.status, type: row.type };
   }
 
   /** The message a session started for this ticket would open with, for the dialog's preview (its session id is not known yet). */
@@ -1118,6 +1566,17 @@ export class Tickets {
     this.#db
       .prepare('INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body, data) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(number, this.#now().toISOString(), kind, w.actor, w.label, body, data ? JSON.stringify(data) : null);
+  }
+
+  /** FR36c (T-1608): an agent put the ticket on a QA or review session: one Portal note on the timeline, so the lead sees the consequence. */
+  #laneNote(number: number, caller: Caller, session: TicketSessionInfo) {
+    const warning = caller.kind === 'agent' ? verdictLaneWarning(session) : null;
+    if (warning) this.#addEvent(number, 'comment', { actor: 'system', label: 'Portal' }, warning, { verdictLane: session.id });
+  }
+
+  /** FR36c (T-1608): the warning a tool result carries when the ticket's holder is a QA or review session; null otherwise. */
+  holderWarning(t: TicketItem): string | null {
+    return t.assignee?.kind === 'session' ? verdictLaneWarning(this.sessions.get(t.assignee.sessionId)) : null;
   }
 
   #setTags(number: number, tags: string[]) {
@@ -1316,14 +1775,26 @@ export class Tickets {
   }
 
   create(caller: Caller, req: Partial<CreateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
+    return this.createExplained(caller, req, opts).ticket;
+  }
+
+  /** {@link create}, and which bucket it went to and why (T-2881: `ticket_create` says so). */
+  createExplained(caller: Caller, req: Partial<CreateTicketRequest>, opts: { sessionId?: string | null } = {}): { ticket: TicketItem; bucket: TicketBucketChoice } {
     this.#assertWrites(caller);
     const w = this.#writer(caller, opts.sessionId);
     const summary = cleanLine(req.summary, 'summary', TICKET_LIMITS.summary);
     const description = cleanMarkdown(req.description, 'description', TICKET_LIMITS.description);
     const type = req.type === undefined ? 'task' : oneOf(req.type, TICKET_TYPES, 'type');
     const priority = req.priority === undefined ? 'normal' : oneOf(req.priority, TICKET_PRIORITIES, 'priority');
-    const tags = cleanTags(req.tags);
+    const given = cleanTags(req.tags);
     const assignee = this.#assignee(caller, req.assignee);
+    // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
+    let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
+    if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
+    // T-1098: the bucket, named or found; its default workspace when nothing named one, and its default tags.
+    const { row: bucket, choice } = this.#bucketFor(caller, w, req.bucket, workspaceId, given, req.parent);
+    if (workspaceId === null && req.workspaceId === undefined && bucket.default_workspace_id) workspaceId = this.#bucketWorkspace(bucket);
+    const tags = cleanTags([...new Set([...given, ...(JSON.parse(bucket.default_tags) as string[])])].slice(0, TICKET_LIMITS.tags));
     const assignedAudit = this.#assertAgentAssign(caller, w, {
       ticketId: null,
       action: 'create',
@@ -1333,9 +1804,6 @@ export class Tickets {
       tagsAfter: tags,
     });
     const checklistAudit = this.#assertAgentChecklist(caller, w, { ticketId: null, action: 'create', tagsBefore: [], tagsAfter: tags });
-    // An agent's ticket concerns its own workspace; a session assignee's workspace is where the work is.
-    let workspaceId = caller.kind === 'agent' ? caller.workspaceId : workspaceIdOf(req.workspaceId);
-    if (assignee?.kind === 'session') workspaceId = assignee.session.workspaceId;
     const source = caller.kind === 'ui' ? 'human' : caller.kind === 'system' || caller.kind === 'trigger' ? 'system' : 'agent';
     const reporter =
       caller.kind === 'ui'
@@ -1353,8 +1821,8 @@ export class Tickets {
       const r = this.#db
         .prepare(
           `INSERT INTO tickets (type, priority, priority_rank, status, summary, description, source, reporter_kind, reporter_ref, reporter_label, reporter_workspace,
-             assignee_kind, assignee_ref, workspace_id, created_at, updated_at)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             assignee_kind, assignee_ref, workspace_id, created_at, updated_at, bucket_key)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           type,
@@ -1372,27 +1840,38 @@ export class Tickets {
           this.#stored(workspaceId),
           at,
           at,
+          bucket.key,
         );
       const n = Number(r.lastInsertRowid);
       this.#setTags(n, tags);
-      this.#addEvent(n, 'created', w, null, { type, priority, tags, workspaceId, source });
+      this.#addEvent(n, 'created', w, null, { type, priority, tags, workspaceId, source, bucket: bucket.key, bucketReason: choice.reason });
       if (assignee)
         this.#addEvent(n, 'assigned', w, null, {
           from: null,
           to: assignee.kind === 'session' ? { kind: 'session', sessionId: assignee.session.id } : { kind: 'user', name: assignee.name },
         });
+      if (assignee?.kind === 'session') this.#laneNote(n, caller, assignee.session);
       return n;
     });
     this.#auditAssignedPerson(assignedAudit, ticketIdOf(number));
     this.#auditChecklistTagged(checklistAudit, ticketIdOf(number));
     this.onChange?.();
-    return this.#items([this.#row(number)!])[0]!;
+    return { ticket: this.#items([this.#row(number)!])[0]!, bucket: choice };
   }
 
   update(caller: Caller, id: string, req: Partial<UpdateTicketRequest>, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id); // visibility first: a ticket it can't see doesn't exist for it
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanModify(caller, row, w);
+    let grant: EndedGrant | null;
+    let handoff: { lead: string; from: string | null; to: string | null } | null = null;
+    try {
+      grant = this.#assertCanModify(caller, row, w);
+    } catch (e) {
+      // 2026-10-18: a lead routes its crew's work (T-84 c11534: every hand-off of an unassigned ticket went through the coordinator).
+      handoff = this.#leadMayAssign(caller, row, w, req);
+      if (!handoff) throw e;
+      grant = null;
+    }
     const agent = caller.kind === 'agent';
     const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
     const sets: Record<string, string | number | null> = {};
@@ -1434,6 +1913,7 @@ export class Tickets {
     let status = row.status;
     let assigneeAfter = row.assignee_kind;
     let assignsUser = false;
+    let laneTo: TicketSessionInfo | null = null;
     if (req.assignee !== undefined) {
       const a = this.#assignee(caller, req.assignee);
       const before = row.assignee_kind ? `${row.assignee_kind}:${row.assignee_ref}` : null;
@@ -1459,6 +1939,7 @@ export class Tickets {
           ((sets.workspace_id = a.session.workspaceId),
             entries.push({ kind: 'workspace', data: { from: row.workspace_id, to: a.session.workspaceId } }));
         if (!a && status === 'in_progress') status = 'open';
+        if (a?.kind === 'session') laneTo = a.session;
       }
     }
     const assignedAudit = this.#assertAgentAssign(caller, w, {
@@ -1482,6 +1963,9 @@ export class Tickets {
     }
     if (req.status !== undefined) {
       const v = oneOf(req.status, TICKET_STATUSES, 'status');
+      // The manager neither closes (done, wont_do) nor reopens through update: the same rule as close() (#11136 b, QA c691df71).
+      if (caller.kind === 'token' && caller.manager && v !== row.status && (isTicketClosed(v) || isTicketClosed(row.status)))
+        throw new AppError('FORBIDDEN', MANAGER_NO_CLOSE);
       if (isTicketClosed(v) && agent) throw invalid('status', 'Close a ticket with ticket_close, which records what was done.');
       if (isTicketClosed(row.status) && agent)
         throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is closed. A person can reopen it.`);
@@ -1501,8 +1985,22 @@ export class Tickets {
       } else entries.push({ kind: 'status', data: { from: row.status, to: status } });
     }
 
-    if (!entries.length) return this.#items([row])[0]!;
+    // T-1967: a move to another bucket (the caller may change the ticket, and file in the target: an agent only in its workspace's).
+    let moveTo: BucketRow | null = null;
+    if (req.bucket !== undefined && req.bucket !== null && req.bucket !== '') {
+      if (handoff) throw new AppError('FORBIDDEN', 'A crew lead hands a ticket on (assignee, status, priority); moving it to another bucket needs its holder.');
+      if (typeof req.bucket !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
+      const b = this.#bucketRow(req.bucket.trim().toUpperCase());
+      if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+      if (b.key !== row.bucket_key) moveTo = b;
+    }
+    if (!entries.length && !moveTo) return this.#items([row])[0]!;
+    let moved: TicketBucketMove | null = null;
     this.#tx(() => {
+      if (moveTo) {
+        moved = this.#moveIn(row.number, moveTo);
+        entries.push({ kind: 'bucket', data: { from: moved.from, to: moved.to } });
+      }
       sets.updated_at = this.#now().toISOString();
       if ('workspace_id' in sets) sets.workspace_id = this.#stored(sets.workspace_id as string | null);
       const cols = Object.keys(sets);
@@ -1511,8 +2009,20 @@ export class Tickets {
         .run(...cols.map((c) => sets[c]!), row.number);
       if (newTags) this.#setTags(row.number, newTags);
       for (const e of entries) this.#addEvent(row.number, e.kind, w, e.body ?? null, e.data);
+      if (laneTo) this.#laneNote(row.number, caller, laneTo);
     });
     this.#auditForEnded(grant, w, row, 'update');
+    const m = moved as TicketBucketMove | null;
+    if (m) this.#moveAudit(w, 'ticket.bucket_moved', { ticketId: m.id, from: m.from, to: m.to });
+    if (handoff)
+      this.onAudit?.({
+        kind: 'ticket.lead_assigned',
+        actor: w.actor,
+        actorLabel: null,
+        userId: FOUNDING_USER_ID,
+        subject: `ticket:${ticketIdOf(row.number)}`,
+        detail: { ticketId: ticketIdOf(row.number), ...handoff },
+      });
     this.#auditAssignedPerson(assignedAudit, ticketIdOf(row.number));
     this.#auditChecklistTagged(checklistAudit, ticketIdOf(row.number));
     this.onChange?.();
@@ -1537,8 +2047,18 @@ export class Tickets {
 
   close(caller: Caller, id: string, req: Partial<CloseTicketRequest> = {}, opts: { sessionId?: string | null } = {}): TicketItem {
     const row = this.#need(caller, id);
+    // A manager is not a QA session: QA closes on its pass (general-manager PRD §9.4, #11136 b). After #need, so a missing ticket stays NOT_FOUND.
+    if (caller.kind === 'token' && caller.manager) throw new AppError('FORBIDDEN', MANAGER_NO_CLOSE);
     const w = this.#writer(caller, opts.sessionId);
-    const grant = this.#assertCanModify(caller, row, w);
+    let grant: EndedGrant | null = null;
+    let peerRoot: string | null = null;
+    try {
+      grant = this.#assertCanModify(caller, row, w);
+    } catch (e) {
+      // T-1839: a peer lead (D-85) closes a ticket another lead of its group, or a worker of one, holds; audited as `ticket.lead_peer_closed`.
+      if (caller.kind === 'agent' && w.session && !isTicketClosed(row.status)) peerRoot = this.#peerLead(w.session, row);
+      if (!peerRoot) throw e;
+    }
     if (isTicketClosed(row.status)) throw new AppError('CONFLICT', `${ticketIdOf(row.number)} is already closed.`);
     const outcome = req.outcome === undefined ? 'done' : oneOf(req.outcome, TICKET_CLOSED_STATUSES, 'outcome');
     const summary = cleanMarkdown(req.summary, 'summary', TICKET_LIMITS.closing, {
@@ -1556,6 +2076,15 @@ export class Tickets {
       });
     });
     this.#auditForEnded(grant, w, row, 'close');
+    if (peerRoot)
+      this.onAudit?.({
+        kind: 'ticket.lead_peer_closed',
+        actor: w.actor,
+        actorLabel: null,
+        userId: FOUNDING_USER_ID,
+        subject: `ticket:${ticketIdOf(row.number)}`,
+        detail: { ticketId: ticketIdOf(row.number), sessionId: w.session?.id ?? null, holder: row.assignee_ref ?? null, holderLead: peerRoot, outcome, why: 'lead_peer' },
+      });
     this.onChange?.();
     return this.#items([this.#row(row.number)!])[0]!;
   }
@@ -1576,8 +2105,9 @@ export class Tickets {
     const types = Array.isArray(req.types) ? req.types.map((t) => oneOf(t, TICKET_TYPES, 'types')) : [];
     let wantedNumber: number | null = null;
     if (req.id !== undefined) {
-      wantedNumber = parseTicketId(String(req.id));
-      if (wantedNumber === null) throw invalid('id', 'Not a ticket id.');
+      if (!parseTicketRef(String(req.id))) throw invalid('id', 'Not a ticket id.');
+      // A well-formed key that names no ticket claims nothing (-1 matches no row).
+      wantedNumber = this.#numberOf(String(req.id)) ?? -1;
     }
     const claimed = this.#tx(() => {
       const where = [
@@ -1589,6 +2119,9 @@ export class Tickets {
       const mine = this.#inWorkspace('t.workspace_id', session.workspaceId);
       where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
       args.push(...mine.args);
+      // T-1857: a ticket in a bucket the caller may not view is never claimed, by id or by the queue.
+      const inBuckets = this.#bucketSql(caller);
+      if (inBuckets) (where.push(inBuckets.sql), args.push(...inBuckets.args));
       if (wantedNumber !== null) (where.push('t.number = ?'), args.push(wantedNumber));
       for (const tag of tags)
         (where.push('EXISTS (SELECT 1 FROM ticket_tags g WHERE g.ticket_number = t.number AND g.tag = ?)'), args.push(tag));
@@ -1607,6 +2140,7 @@ export class Tickets {
         .prepare('UPDATE tickets SET assignee_kind = ?, assignee_ref = ?, status = ?, workspace_id = ?, updated_at = ? WHERE number = ?')
         .run('session', session.id, status, this.#stored(session.workspaceId), at, row.number);
       this.#addEvent(row.number, 'assigned', w, null, { from: null, to: { kind: 'session', sessionId: session.id }, claimed: true });
+      this.#laneNote(row.number, caller, session);
       if (status !== row.status) this.#addEvent(row.number, 'status', w, null, { from: row.status, to: status });
       if (!this.#isIn(row, session.workspaceId))
         this.#addEvent(row.number, 'workspace', w, null, { from: row.workspace_id, to: session.workspaceId });
@@ -1624,6 +2158,311 @@ export class Tickets {
     this.onChange?.();
   }
 
+  /* ---------- Buckets (T-1098): a project of tickets with its own id prefix and number counter ---------- */
+
+  #bucketRow(key: string): BucketRow | undefined {
+    return this.#db.prepare('SELECT * FROM ticket_buckets WHERE key = ?').get(key) as unknown as BucketRow | undefined;
+  }
+
+  /** A bucket's default workspace as the key the portal speaks (stored as the stable id, like a ticket's). */
+  #bucketWorkspace(b: BucketRow): string | null {
+    if (b.default_workspace_id === null) return null;
+    return this.#refs ? this.#refs.keyOf(b.default_workspace_id) : b.default_workspace_id;
+  }
+
+  /** FR9 for buckets: an agent files in, lists and reads only the buckets of its own workspace and those with no default workspace. */
+  #bucketOpenTo(caller: Caller, b: BucketRow): boolean {
+    if (caller.kind !== 'agent' || b.default_workspace_id === null) return true;
+    return this.#refs ? this.#refs.storedForms(caller.workspaceId).includes(b.default_workspace_id) : b.default_workspace_id === caller.workspaceId;
+  }
+
+  /**
+   * The bucket a new ticket goes in, and why (T-2881): the one named (refused as not found when it does not exist or is not the agent's); else
+   * the one bucket a `tickets.bucketRoutes` rule gives the ticket's own tags; else the parent ticket's bucket (one the caller can see); else the
+   * one bucket whose default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on;
+   * else PILOT. The tag, parent and session/lead ticket guesses skip a bucket the caller may not file in (`#bucketOpenTo`); the workspace guess
+   * finds only a bucket whose default workspace is the ticket's own, and PILOT is not checked.
+   */
+  #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null, tags: string[], parent: unknown): { row: BucketRow; choice: TicketBucketChoice } {
+    const pick = (row: BucketRow, reason: TicketBucketChoice['reason'], why: string) => ({ row, choice: { bucket: row.key, reason, why } });
+    if (raw !== undefined && raw !== null && raw !== '') {
+      if (typeof raw !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
+      const b = this.#bucketRow(raw.trim().toUpperCase());
+      if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+      return pick(b, 'named', `${b.key}: named in the request.`);
+    }
+    const usable = (key: string) => {
+      const b = this.#bucketRow(key);
+      return b && this.#bucketOpenTo(caller, b) ? b : undefined;
+    };
+    let routes: ReturnType<typeof parseBucketRoutes> = [];
+    try {
+      routes = parseBucketRoutes(this.#bucketRoutes());
+    } catch {
+      // the setting could not be read: no tag rules
+    }
+    const hit = routeByTags(routes, tags, (k) => !!usable(k));
+    if (hit) return pick(usable(hit.bucket)!, 'tags', `${hit.bucket}: tag ${hit.tag} matches its rule ${hit.rule} (tickets.bucketRoutes).`);
+    if (typeof parent === 'string' && parent.trim()) {
+      const n = this.#numberOf(parent.trim());
+      const row = n === null ? undefined : this.#row(n);
+      const b = row && this.#visible(caller, row) ? usable(row.bucket_key) : undefined;
+      if (b && row) return pick(b, 'parent', `${b.key}: the bucket of the parent ${ticketIdOf(row.number)}.`);
+    }
+    if (workspaceId) {
+      const one = this.#inWorkspace('default_workspace_id', workspaceId);
+      const rows = this.#db.prepare(`SELECT * FROM ticket_buckets WHERE ${one.sql} ORDER BY key LIMIT 2`).all(...one.args) as unknown as BucketRow[];
+      if (rows.length === 1) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
+    }
+    const s = w.session;
+    const lead = s?.parentId ? this.sessions.get(s.parentId) : null;
+    for (const [x, reason] of [
+      [s, 'session_ticket'],
+      [lead, 'lead_ticket'],
+    ] as const) {
+      const n = x?.ticketId ? this.#numberOf(x.ticketId) : null;
+      const row = n === null ? undefined : this.#row(n);
+      const b = row ? this.#bucketRow(row.bucket_key) : undefined;
+      if (b && row && this.#bucketOpenTo(caller, b))
+        return pick(b, reason, `${b.key}: the bucket of ${ticketIdOf(row.number)}, the ticket ${reason === 'session_ticket' ? 'this session' : 'its lead'} works on.`);
+    }
+    const fallback = this.#bucketRow(TICKET_DEFAULT_BUCKET);
+    if (!fallback) throw noBucket();
+    return pick(fallback, 'default', `${fallback.key}: nothing else decided (no bucket, tag rule, parent, workspace or session ticket).`);
+  }
+
+  #bucketView(b: BucketRow, open: number, total?: number): TicketBucket {
+    let defaultTags: string[] = [];
+    try {
+      defaultTags = JSON.parse(b.default_tags) as string[];
+    } catch {
+      // an unreadable list reads as none
+    }
+    return {
+      key: b.key,
+      name: b.name,
+      description: b.description,
+      defaultWorkspaceId: this.#bucketWorkspace(b),
+      defaultTags,
+      vaultId: b.vault_id,
+      nextNumber: b.next_number,
+      open,
+      ...(total !== undefined ? { total } : {}),
+      createdAt: b.created_at,
+      updatedAt: b.updated_at,
+    };
+  }
+
+  #openIn(key: string): number {
+    return (this.#db.prepare(`SELECT count(*) AS n FROM tickets WHERE bucket_key = ? AND status IN (${OPEN_SQL})`).get(key) as { n: number }).n;
+  }
+
+  /** Every bucket the caller may file in (an agent: its workspace's and the open ones), by key. The routes filter by `view` on top. */
+  buckets(caller: Caller): TicketBucket[] {
+    const open = new Map(
+      (this.#db.prepare(`SELECT bucket_key AS k, count(*) AS n FROM tickets WHERE status IN (${OPEN_SQL}) GROUP BY bucket_key`).all() as { k: string; n: number }[]).map(
+        (r) => [r.k, r.n],
+      ),
+    );
+    const total = new Map((this.#db.prepare('SELECT bucket_key AS k, count(*) AS n FROM tickets GROUP BY bucket_key').all() as { k: string; n: number }[]).map((r) => [r.k, r.n]));
+    return (this.#db.prepare('SELECT * FROM ticket_buckets ORDER BY key').all() as unknown as BucketRow[])
+      .filter((b) => this.#bucketOpenTo(caller, b))
+      .map((b) => this.#bucketView(b, open.get(b.key) ?? 0, total.get(b.key) ?? 0));
+  }
+
+  bucket(caller: Caller, key: string): TicketBucket {
+    const b = this.#bucketRow(String(key).trim().toUpperCase());
+    if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+    return this.#bucketView(b, this.#openIn(b.key));
+  }
+
+  /** The owner of a bucket, for the authorization seam's resolver; null when there is none. */
+  bucketOwner(key: string): string | null {
+    const r = this.#db.prepare('SELECT owner_id FROM ticket_buckets WHERE key = ?').get(String(key).trim().toUpperCase()) as { owner_id: string } | undefined;
+    return r ? r.owner_id : null;
+  }
+
+  /** Making and changing buckets: a person or an admin token, never an agent (its tickets would pick their own project). */
+  #assertBucketAdmin(caller: Caller) {
+    if (caller.kind === 'ui' || caller.kind === 'system') return;
+    if (caller.kind === 'token' && caller.scope === 'admin' && !caller.manager) return;
+    throw new AppError('FORBIDDEN', 'Only a person or an admin token makes or changes a bucket.');
+  }
+
+  #bucketFields(req: UpdateTicketBucketRequest) {
+    const out: { name?: string; description?: string; workspace?: string | null; tags?: string[]; vault?: string | null } = {};
+    if (req.name !== undefined) out.name = cleanLine(req.name, 'name', 60);
+    if (req.description !== undefined) out.description = cleanMarkdown(req.description, 'description', 2_000);
+    if (req.defaultWorkspaceId !== undefined) out.workspace = workspaceIdOf(req.defaultWorkspaceId);
+    if (req.defaultTags !== undefined) out.tags = cleanTags(req.defaultTags);
+    if (req.vaultId !== undefined) {
+      const v = req.vaultId;
+      if (v !== null && v !== '' && (typeof v !== 'string' || !/^[A-Za-z0-9._:-]{1,80}$/.test(v))) throw invalid('vaultId', 'A vault id, or empty for none.');
+      out.vault = v ? v : null;
+    }
+    return out;
+  }
+
+  createBucket(caller: Caller, req: Partial<CreateTicketBucketRequest>, opts: { ownerId?: string } = {}): TicketBucket {
+    this.#assertBucketAdmin(caller);
+    const key = typeof req.key === 'string' ? req.key.trim().toUpperCase() : '';
+    if (!TICKET_BUCKET_KEY.test(key)) throw invalid('key', 'A key is 2 to 6 capital letters, like KONF.');
+    const f = this.#bucketFields({ ...req, name: req.name ?? undefined });
+    if (f.name === undefined) throw invalid('name', 'Required.');
+    const at = this.#now().toISOString();
+    this.#tx(() => {
+      if (this.#bucketRow(key)) throw new AppError('CONFLICT', `There is a bucket ${key} already.`);
+      // T-1967: a key a merged bucket had: its old keys still name their tickets, so the new bucket counts on after them.
+      // And after every number a merged bucket of that key handed out (its kept counter), a deleted ticket's included.
+      const after = (
+        this.#db
+          .prepare(
+            `SELECT max(COALESCE((SELECT max(bucket_number) FROM ticket_key_aliases WHERE bucket_key = ?), 0),
+                        COALESCE((SELECT next_number - 1 FROM ticket_buckets_retired WHERE key = ?), 0)) AS n`,
+          )
+          .get(key, key) as { n: number }
+      ).n;
+      this.#db
+        .prepare(
+          `INSERT INTO ticket_buckets (key, name, description, default_workspace_id, default_tags, vault_id, owner_id, created_by, created_at, updated_at, next_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(key, f.name!, f.description ?? '', this.#stored(f.workspace ?? null), JSON.stringify(f.tags ?? []), f.vault ?? null, opts.ownerId ?? FOUNDING_USER_ID, opts.ownerId ?? FOUNDING_USER_ID, at, at, after + 1);
+    });
+    this.onChange?.();
+    return this.bucket(caller, key);
+  }
+
+  updateBucket(caller: Caller, key: string, req: UpdateTicketBucketRequest): TicketBucket {
+    this.#assertBucketAdmin(caller);
+    const b = this.#bucketRow(String(key).trim().toUpperCase());
+    if (!b) throw noBucket();
+    const f = this.#bucketFields(req);
+    this.#tx(() => {
+      this.#db
+        .prepare(
+          `UPDATE ticket_buckets SET name = ?, description = ?, default_workspace_id = ?, default_tags = ?, vault_id = ?, updated_at = ? WHERE key = ?`,
+        )
+        .run(
+          f.name ?? b.name,
+          f.description ?? b.description,
+          f.workspace !== undefined ? this.#stored(f.workspace) : b.default_workspace_id,
+          f.tags !== undefined ? JSON.stringify(f.tags) : b.default_tags,
+          f.vault !== undefined ? f.vault : b.vault_id,
+          this.#now().toISOString(),
+          b.key,
+        );
+    });
+    this.onChange?.();
+    return this.bucket(caller, b.key);
+  }
+
+  /* ---------- Moving tickets between buckets (T-1967) ---------- */
+
+  /**
+   * Inside a transaction: the ticket leaves its bucket for `to`, taking `to`'s next number; the key it had stays an alias (ticket_key_aliases).
+   * The counter and the ticket change in this transaction, under SQLite's one writer, so a create racing it can never get the same number.
+   */
+  #moveIn(number: number, to: BucketRow): TicketBucketMove {
+    const cur = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(number) as { bucket_key: string; bucket_number: number | null };
+    const from = cur.bucket_number === null ? ticketIdOf(number) : ticketKeyOf(cur.bucket_key, cur.bucket_number);
+    if (cur.bucket_key === to.key) return { id: ticketIdOf(number), from, to: from };
+    const at = this.#now().toISOString();
+    if (cur.bucket_number !== null)
+      this.#db
+        .prepare('INSERT OR IGNORE INTO ticket_key_aliases (bucket_key, bucket_number, ticket_number, moved_at) VALUES (?, ?, ?, ?)')
+        .run(cur.bucket_key, cur.bucket_number, number, at);
+    const n = (this.#db.prepare('UPDATE ticket_buckets SET next_number = next_number + 1 WHERE key = ? RETURNING next_number - 1 AS n').get(to.key) as { n: number }).n;
+    this.#db.prepare('UPDATE tickets SET bucket_key = ?, bucket_number = ?, updated_at = ? WHERE number = ?').run(to.key, n, at, number);
+    return { id: ticketIdOf(number), from, to: ticketKeyOf(to.key, n) };
+  }
+
+  /** Merging buckets and moving many tickets at once: the owner (a person in the portal, or the portal itself), never a token or an agent. */
+  #assertOwner(caller: Caller) {
+    if (caller.kind !== 'ui' && caller.kind !== 'system') throw new AppError('FORBIDDEN', 'Only the owner merges buckets or moves tickets in bulk.');
+  }
+
+  #moveAudit(w: Writer, kind: string, detail: Record<string, unknown>) {
+    this.onAudit?.({ kind, actor: w.actor, actorLabel: null, userId: FOUNDING_USER_ID, subject: typeof detail.ticketId === 'string' ? `ticket:${detail.ticketId}` : null, detail });
+  }
+
+  /**
+   * Bulk move (the coordinator's consolidation): each move on its own transaction, so one refused move (no such ticket or bucket) leaves the
+   * others done. Returns each ticket's new key; a ticket already in the bucket answers `from === to`.
+   */
+  moveBuckets(caller: Caller, moves: unknown, opts: { allow?: (from: string, to: string) => boolean } = {}): TicketBucketMoveResult[] {
+    this.#assertOwner(caller);
+    if (!Array.isArray(moves) || moves.length === 0 || moves.length > 500) throw invalid('moves', 'Give 1 to 500 moves of { id, bucket }.');
+    const w = this.#writer(caller);
+    const out: TicketBucketMoveResult[] = [];
+    for (const m of moves as { id?: unknown; bucket?: unknown }[]) {
+      const ref = typeof m?.id === 'string' ? m.id : '';
+      const n = ref ? this.#numberOf(ref) : null;
+      const b = typeof m?.bucket === 'string' ? this.#bucketRow(m.bucket.trim().toUpperCase()) : undefined;
+      if (n === null || !this.#row(n)) {
+        out.push({ id: ref, ok: false, error: 'No such ticket.' });
+        continue;
+      }
+      if (!b) {
+        out.push({ id: ticketIdOf(n), ok: false, error: 'No such bucket.' });
+        continue;
+      }
+      // The route's authz (operate on both buckets): a bucket the caller may not reach reads as a missing ticket.
+      if (opts.allow && !opts.allow(this.#row(n)!.bucket_key, b.key)) {
+        out.push({ id: ref, ok: false, error: 'No such ticket.' });
+        continue;
+      }
+      const moved = this.#tx(() => {
+        const r = this.#moveIn(n, b);
+        if (r.from !== r.to) this.#addEvent(n, 'bucket', w, null, { from: r.from, to: r.to });
+        return r;
+      });
+      if (moved.from !== moved.to) this.#moveAudit(w, 'ticket.bucket_moved', { ticketId: moved.id, from: moved.from, to: moved.to, via: 'bulk' });
+      out.push({ ...moved, ok: true });
+    }
+    this.onChange?.();
+    return out;
+  }
+
+  /**
+   * Merges bucket `fromKey` into `req.into` (owner only): its tickets move in creation order, taking the target's next numbers, their old keys
+   * stay aliases, and the bucket is deleted, all in one transaction. `name` and `description` rename the target; merging CP into PILOT names it
+   * "Pilot", "ClaudePilot" unless they are given (T-1967, the owner's consolidation).
+   */
+  mergeBucket(caller: Caller, fromKey: string, req: Partial<MergeTicketBucketRequest>): MergeTicketBucketResult {
+    this.#assertOwner(caller);
+    const from = this.#bucketRow(String(fromKey).trim().toUpperCase());
+    const into = typeof req.into === 'string' ? this.#bucketRow(req.into.trim().toUpperCase()) : undefined;
+    if (!from || !into) throw noBucket();
+    if (from.key === into.key) throw invalid('into', 'Pick another bucket to merge into.');
+    const consolidation = from.key === 'CP' && into.key === TICKET_DEFAULT_BUCKET;
+    const name = req.name !== undefined ? cleanLine(req.name, 'name', 60) : consolidation ? 'Pilot' : null;
+    const description = req.description !== undefined ? cleanMarkdown(req.description, 'description', 2_000) : consolidation ? 'ClaudePilot' : null;
+    const w = this.#writer(caller);
+    const moved = this.#tx(() => {
+      const numbers = (this.#db.prepare('SELECT number FROM tickets WHERE bucket_key = ? ORDER BY created_at, number').all(from.key) as { number: number }[]).map((r) => r.number);
+      const done = numbers.map((n) => {
+        const r = this.#moveIn(n, into);
+        this.#addEvent(n, 'bucket', w, null, { from: r.from, to: r.to, merged: true });
+        return r;
+      });
+      if (name !== null || description !== null)
+        this.#db.prepare('UPDATE ticket_buckets SET name = ?, description = ?, updated_at = ? WHERE key = ?').run(name ?? into.name, description ?? into.description, this.#now().toISOString(), into.key);
+      // Its counter outlives it, so a bucket made again under this key never hands out a number it already gave (a deleted ticket's too).
+      this.#db
+        .prepare(
+          `INSERT INTO ticket_buckets_retired (key, next_number, retired_at) VALUES (?, (SELECT next_number FROM ticket_buckets WHERE key = ?), ?)
+           ON CONFLICT (key) DO UPDATE SET next_number = max(next_number, excluded.next_number), retired_at = excluded.retired_at`,
+        )
+        .run(from.key, from.key, this.#now().toISOString());
+      this.#db.prepare('DELETE FROM ticket_buckets WHERE key = ?').run(from.key);
+      return done;
+    });
+    this.#moveAudit(w, 'ticket.bucket_merged', { from: from.key, into: into.key, tickets: moved.length });
+    this.onChange?.();
+    return { bucket: this.bucket(caller, into.key), moved };
+  }
+
   /* ---------- CI (interface I10) ---------- */
 
   /**
@@ -1634,12 +2473,13 @@ export class Tickets {
     const ids = [refs.branch ? parseTicketBranch(refs.branch) : null, ...(refs.message ? parseTicketTrailers(refs.message) : [])].filter(
       (x): x is string => !!x,
     );
-    return [...new Set(ids)].filter((id) => this.exists(id));
+    // T-1098: a bucket key (`ticket/KONF-12-…`, `Ticket: KONF-12`) resolves to the stable id, so CI keeps speaking T-<n>.
+    return [...new Set(ids.map((id) => this.resolve(id)).filter((id): id is string => !!id))];
   }
 
   /** The checks CI attached to a ticket. */
   checks(id: string): TicketCheck[] {
-    const n = parseTicketId(id);
+    const n = this.#numberOf(id);
     return n !== null && this.#row(n) ? this.#checks(n) : [];
   }
 
@@ -1653,7 +2493,7 @@ export class Tickets {
     check: { name: string; state: TicketCheckState; runId?: string | null; commit?: string | null; link?: string | null },
     by: { actor: string; label?: string },
   ): TicketCheck | null {
-    const n = parseTicketId(id);
+    const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
     if (!row) return null;
     if (!/^[a-z][a-z0-9-]{1,24}:[A-Za-z0-9._~:-]{1,80}$/.test(by.actor)) throw invalid('actor', 'An actor is like ci:<run id>.');
@@ -1704,7 +2544,7 @@ export class Tickets {
 
   /** A note on a ticket's timeline from another module (a run's summary, say). False when there is no such ticket. */
   note(id: string, text: string, by: { actor: string; label?: string }): boolean {
-    const n = parseTicketId(id);
+    const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
     if (!row) return false;
     if (!/^[a-z][a-z0-9-]{1,24}:[A-Za-z0-9._~:-]{1,80}$/.test(by.actor)) throw invalid('actor', 'An actor is like ci:<run id>.');
@@ -1736,17 +2576,56 @@ export class Tickets {
     const assigned = this.#db
       .prepare("SELECT DISTINCT json_extract(data, '$.to.sessionId') AS s FROM ticket_events WHERE ticket_number = ? AND kind = 'assigned'")
       .all(row.number) as { s: string | null }[];
-    for (const r of assigned) if (r.s) authors.add(r.s);
+    const pastHolders = new Set<string>();
+    for (const r of assigned) if (r.s) {
+      authors.add(r.s);
+      pastHolders.add(r.s);
+    }
     for (const s of this.sessions.list({ ticketId: ticketIdOf(row.number) })) authors.add(s.id);
     const leads = new Set<string>();
     for (const id of authors) {
       const p = this.sessions.get(id)?.parentId;
       if (p) leads.add(p);
     }
-    // T-325 S1b: the holder (with its lineage) may be a verifier's ancestor only when it leads the work: it is the parent of another author
-    // and was not itself started on this ticket. An implementer holding the ticket leads nobody, so a QA it spawns is refused.
-    const leadsWork = !!row.assignee_ref && leads.has(row.assignee_ref) && holder?.ticketId !== ticketIdOf(row.number);
-    return { authors, leads, leadHolders: new Set(leadsWork ? holderLine : []) };
+    // T-325 S1b: the holder (with its lineage) may be a verifier's ancestor only when it leads the work: it, or a session it continues, is
+    // the parent of another author, and none of them was started on this ticket. An implementer holding the ticket leads nobody, so a QA it
+    // spawns is refused. T-1603: a lead's continuation leads the workers its predecessor started (Konfersi, 2026-10-18: every Lab QA verdict
+    // was refused after the lead was continued, because the builders' parent was the ended session).
+    const ticket = ticketIdOf(row.number);
+    const leadsWork =
+      !!row.assignee_ref &&
+      holderLine.some((id) => leads.has(id)) &&
+      holderLine.every((id) => {
+        // A line member that can't be looked up counts as started on the ticket (fail closed; blind review of T-1603).
+        const info = id === row.assignee_ref ? holder : this.sessions.get(id);
+        return !!info && info.ticketId !== ticket;
+      });
+    const leadHolders = new Set<string>(leadsWork ? holderLine : []);
+    // T-1652: a lead that held the ticket and handed it to its own worker (lead -> worker) is a past holder, so an author; T-1603 covers the
+    // current holder line only, and every QA that lead spawned was refused (Konfersi T-993, T-1647, 2026-10-19). A past holder that is an
+    // ancestor of the current holder by `parentId` and was not started on the ticket (nor any session it continues) leads the work too. The
+    // builder (the holder, started on the ticket) and a past holder started on it stay authors; a missing session fails closed.
+    if (holder) {
+      const lineup = new Set(holderLine);
+      const seen = new Set<string>(holderLine);
+      let cur: TicketSessionInfo | null = holder;
+      while (cur?.parentId && seen.size < 200 && !seen.has(cur.parentId)) {
+        const up = cur.parentId;
+        seen.add(up);
+        const info = this.sessions.get(up);
+        if (!info) break;
+        if (pastHolders.has(up) && !lineup.has(up)) {
+          const line = [up, ...this.#ancestors(info)];
+          const notStarted = line.every((id) => {
+            const s = id === up ? info : this.sessions.get(id);
+            return !!s && s.ticketId !== ticket;
+          });
+          if (notStarted) for (const id of line) leadHolders.add(id);
+        }
+        cur = info;
+      }
+    }
+    return { authors, leads, leadHolders };
   }
 
   /** A session's spawn chain, nearest first: its parent and the session it continues, then theirs (bounded, cycle safe). Not the session itself. */
@@ -1773,16 +2652,19 @@ export class Tickets {
   /**
    * Records a QA or review verdict on ONE full commit. Refused by `canRecordVerdict` (the author, the lead, anything but a QA/review session
    * or a person); a ticket the caller cannot see is the same not found. Rows are never edited: the latest verdict of a role on a commit wins.
-   * Writes a timeline entry and an audit row `ticket.verdict`.
+   * Writes a timeline entry and an audit row `ticket.verdict`. `req.batch` (FR36d, T-1987): the shared evidence of a QA batch, kept with the
+   * row, in the timeline entry and in the audit row; checked like any ticket text (see {@link verdictBatchOf}). A batch entry's sentence
+   * names a short sha and no branch: the page shows the branch and the job as chips, and `data.commit` keeps the full sha.
    */
   recordVerdict(
     caller: Caller,
     id: string,
-    req: { role?: unknown; verdict?: unknown; commit?: unknown },
+    req: { role?: unknown; verdict?: unknown; commit?: unknown; batch?: unknown },
     opts: { sessionId?: string | null } = {},
   ): StoredVerdict {
     this.#assertWrites(caller);
     const row = this.#need(caller, id);
+    const batch = verdictBatchOf(req.batch);
     const role = oneOf(req.role, VERDICT_ROLES, 'role');
     const verdict = oneOf(req.verdict, VERDICTS, 'verdict');
     const commit = normalizeSha(req.commit);
@@ -1820,19 +2702,19 @@ export class Tickets {
     const stored = this.#tx(() => {
       this.#db
         .prepare(
-          'INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO ticket_verdicts (ticket_number, role, verdict, commit_sha, actor, actor_label, at, batch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         )
-        .run(row.number, role, verdict, commit!, w.actor, w.label, at);
+        .run(row.number, role, verdict, commit!, w.actor, w.label, at, batch ? JSON.stringify(batch) : null);
       const vid = Number((this.#db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id);
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(at, row.number);
       this.#addEvent(
         row.number,
         'comment',
         w,
-        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${commit}.`,
-        { verdict, role, commit, verdictId: vid },
+        `${role === 'qa' ? 'QA' : 'Review'} ${verdict.toUpperCase()} recorded on commit ${batch?.branch ? `${commit!.slice(0, 12)} in a batch` : commit}.`,
+        { verdict, role, commit, verdictId: vid, ...(batch ? { batch } : {}) },
       );
-      return { id: vid, role, verdict, commit: commit!, actor: w.actor, at } satisfies StoredVerdict;
+      return { id: vid, role, verdict, commit: commit!, actor: w.actor, at, batch } satisfies StoredVerdict;
     });
     this.onAudit?.({
       kind: 'ticket.verdict',
@@ -1840,10 +2722,58 @@ export class Tickets {
       actorLabel: null,
       userId: FOUNDING_USER_ID,
       subject: `ticket:${ticketId}`,
-      detail: { ticketId, role, verdict, commit, sessionId: w.session?.id ?? null },
+      detail: { ticketId, role, verdict, commit, sessionId: w.session?.id ?? null, ...(batch ? { batch } : {}) },
     });
     this.onChange?.();
     return stored;
+  }
+
+  /**
+   * FR36d (T-1987, D-93): one QA pass over a batch branch, a verdict per ticket. Each item goes through {@link recordVerdict} exactly as
+   * `ticket_verdict` does (the same rule, the same not found for a ticket the caller cannot see, one audit row per ticket); one refused item
+   * does not stop the others. The evidence is checked once, before any item, and kept with every verdict it records.
+   */
+  recordVerdicts(
+    caller: Caller,
+    items: readonly { id: string; role?: unknown; verdict?: unknown; commit?: unknown }[],
+    evidence: unknown,
+    opts: { sessionId?: string | null } = {},
+  ): VerdictBatchResult[] {
+    this.#assertWrites(caller);
+    if (!Array.isArray(items) || items.length < 1 || items.length > TICKET_VERDICT_BATCH_LIMITS.items)
+      throw invalid('verdicts', `One to ${TICKET_VERDICT_BATCH_LIMITS.items} verdicts.`);
+    const batch = verdictBatchOf(evidence ?? {})!;
+    const out: VerdictBatchResult[] = [];
+    for (const it of items) {
+      try {
+        out.push({ id: it.id, ok: true, verdict: this.recordVerdict(caller, it.id, { role: it.role, verdict: it.verdict, commit: it.commit, batch }, opts) });
+      } catch (e) {
+        if (!(e instanceof AppError)) throw e;
+        out.push({ id: it.id, ok: false, error: { code: e.code, message: e.message } });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * T-1987 (flow watchdog, D-93): the batch branch a ticket is in now, or null: the newest comment or CI entry AFTER its newest verdict that
+   * names a batch branch ({@link TICKET_BATCH_BRANCH}). Bounded (the newest 20 such entries); a fact for the portal itself, not a caller read.
+   */
+  liveBatchOf(id: string): { branch: string; at: string } | null {
+    const n = this.#numberOf(id);
+    if (n === null) return null;
+    const rows = this.#db
+      .prepare(
+        `SELECT body, data, at FROM ticket_events WHERE ticket_number = ? AND kind IN ('comment', 'ci')
+           AND id > coalesce((SELECT max(id) FROM ticket_events WHERE ticket_number = ? AND json_extract(data, '$.verdictId') IS NOT NULL), 0)
+         ORDER BY id DESC LIMIT 20`,
+      )
+      .all(n, n) as { body: string | null; data: string | null; at: string }[];
+    for (const r of rows) {
+      const m = TICKET_BATCH_BRANCH.exec(`${r.body ?? ''} ${r.data ?? ''}`);
+      if (m) return { branch: m[1]!, at: r.at };
+    }
+    return null;
   }
 
   /** Every verdict on a ticket, oldest first. A ticket the caller cannot see: not found. */
@@ -1851,9 +2781,9 @@ export class Tickets {
     const row = this.#need(caller, id);
     return (
       this.#db
-        .prepare('SELECT id, role, verdict, commit_sha, actor, at FROM ticket_verdicts WHERE ticket_number = ? ORDER BY id')
-        .all(row.number) as { id: number; role: VerdictRole; verdict: Verdict; commit_sha: string; actor: string; at: string }[]
-    ).map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit_sha, actor: v.actor, at: v.at }));
+        .prepare('SELECT id, role, verdict, commit_sha, actor, at, batch FROM ticket_verdicts WHERE ticket_number = ? ORDER BY id')
+        .all(row.number) as { id: number; role: VerdictRole; verdict: Verdict; commit_sha: string; actor: string; at: string; batch: string | null }[]
+    ).map((v) => ({ id: v.id, role: v.role, verdict: v.verdict, commit: v.commit_sha, actor: v.actor, at: v.at, batch: v.batch ? (JSON.parse(v.batch) as TicketVerdictBatch) : null }));
   }
 
   /** Whether `head` (a full sha) is passing now: each needed role's latest verdict ON THAT COMMIT is a pass. An older commit's verdict never counts. */
@@ -1861,6 +2791,107 @@ export class Tickets {
     const sha = normalizeSha(head);
     if (!sha) throw invalid('commit', VERDICT_REFUSAL_TEXT.bad_commit);
     return evaluateVerdicts(this.verdicts(caller, id), sha, need);
+  }
+
+  /* ---------- Merge status (FR36e, T-2014) ---------- */
+
+  /**
+   * Why the agent session `s` may record a merge status on `row`, or null: `gate` when it is the merge-gate lead of a flow program whose tag
+   * the ticket carries (the configured id, a session it continues or one that continues it, top-level), `gate_worker` when it is a live
+   * worker that lead started directly. Anything else (another lead, a peer, a worker's worker, a person's token) is refused.
+   */
+  #mergeGateWhy(s: TicketSessionInfo, row: Row): 'gate' | 'gate_worker' | null {
+    if (s.state === 'ended' || s.archivedAt) return null;
+    const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
+    let programs: { tag: string; gates: string[] }[];
+    try {
+      programs = this.#mergeGates();
+    } catch {
+      return null; // unreadable: nobody (fail closed)
+    }
+    const lineOf = (id: string): string[] => {
+      const g = this.sessions.get(id);
+      return g ? this.#rootLineage(g) : [id];
+    };
+    for (const p of programs) {
+      if (!tags.includes(p.tag)) continue;
+      for (const gate of p.gates) {
+        const line = lineOf(gate);
+        if (!s.parentId && line.includes(s.id)) return 'gate';
+        if (s.parentId && line.includes(s.parentId)) return 'gate_worker';
+      }
+    }
+    return null;
+  }
+
+  /**
+   * FR36e (T-2014): the merge gate records what it knows of a ticket's pull request in one repo (`ticket_merge_status`). Only an agent's
+   * own token, and only the merge-gate lead of a flow program the ticket belongs to or a worker it started ({@link #mergeGateWhy}); a ticket
+   * the caller cannot see is the same not found. A row is added, never edited; audited `ticket.merge_status` (or `_refused`).
+   */
+  recordMergeStatus(
+    caller: Caller,
+    id: string,
+    req: { repo?: unknown; pr?: unknown; prHead?: unknown; state?: unknown; reason?: unknown },
+    opts: { sessionId?: string | null } = {},
+  ): TicketMergeStatus {
+    this.#assertWrites(caller);
+    const row = this.#need(caller, id);
+    const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
+    const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
+    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){0,3}$/.test(repo)) throw invalid('repo', 'A repo is owner/name.');
+    const pr = req.pr === undefined || req.pr === null ? null : req.pr;
+    if (pr !== null && !(typeof pr === 'number' && Number.isInteger(pr) && pr > 0 && pr < TICKET_MERGE_LIMITS.pr)) throw invalid('pr', 'A pull request number.');
+    const prHead = req.prHead === undefined || req.prHead === null ? null : normalizeSha(req.prHead);
+    if (req.prHead !== undefined && req.prHead !== null && !prHead) throw invalid('pr_head', VERDICT_REFUSAL_TEXT.bad_commit);
+    if (state !== 'no_pr' && (pr === null || prHead === null)) throw invalid(pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head.');
+    const reason = req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
+    const w = this.#writer(caller, opts.sessionId);
+    const ticketId = ticketIdOf(row.number);
+    const why = caller.kind === 'agent' && w.session ? this.#mergeGateWhy(w.session, row) : null;
+    if (!why) {
+      this.onAudit?.({
+        kind: 'ticket.merge_status_refused',
+        actor: w.actor,
+        actorLabel: null,
+        userId: FOUNDING_USER_ID,
+        subject: `ticket:${ticketId}`,
+        detail: { ticketId, repo, state, sessionId: w.session?.id ?? null },
+      });
+      throw new AppError('FORBIDDEN', 'Only a lead of a flow program this ticket belongs to, or a worker it started, records a merge status.');
+    }
+    const at = this.#now().toISOString();
+    const stored = this.#tx(() => {
+      this.#db
+        .prepare('INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, reason, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(row.number, repo, pr as number | null, prHead, state, reason, w.actor, w.label, at);
+      return { repo, pr: pr as number | null, prHead, state, reason, actor: w.actor, at } satisfies TicketMergeStatus;
+    });
+    this.onAudit?.({
+      kind: 'ticket.merge_status',
+      actor: w.actor,
+      actorLabel: null,
+      userId: FOUNDING_USER_ID,
+      subject: `ticket:${ticketId}`,
+      detail: { ticketId, repo, pr, prHead, state, why, sessionId: w.session?.id ?? null },
+    });
+    this.onChange?.();
+    return stored;
+  }
+
+  /** The merge gate's latest word per repo, newest first (FR36e). A ticket the caller cannot see: not found. */
+  mergeStatus(caller: Caller, id: string): TicketMergeStatus[] {
+    return this.#mergeStatusOf(this.#need(caller, id).number);
+  }
+
+  #mergeStatusOf(number: number): TicketMergeStatus[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT repo, pr, pr_head, state, reason, actor, at FROM ticket_merge_status
+          WHERE id IN (SELECT max(id) FROM ticket_merge_status WHERE ticket_number = ? GROUP BY repo) ORDER BY id DESC`,
+      )
+      .all(number) as { repo: string; pr: number | null; pr_head: string | null; state: TicketMergeStatus['state']; reason: string | null; actor: string; at: string }[];
+    return rows.map((r) => ({ repo: r.repo, pr: r.pr, prHead: r.pr_head, state: r.state, reason: r.reason, actor: r.actor, at: r.at }));
   }
 
   /* ---------- Sessions ---------- */
@@ -2092,6 +3123,40 @@ export class Tickets {
     return r ? { ticket: ticketIdOf(r.number), comment: r.id } : null;
   }
 
+  /**
+   * T-1613: the verdicts recorded at or after `sinceMs` on the open tickets `sessionId` holds, oldest first (at most the newest 50): what the
+   * portal's crew wake tells an idle lead. A fact for the portal's own message, not a read for a caller: ids, roles and verdicts only.
+   */
+  verdictsHeldBy(sessionId: string, sinceMs: number): { id: number; ticket: string; role: string; verdict: string }[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT v.id AS id, v.ticket_number AS number, v.role AS role, v.verdict AS verdict, v.at AS at, t.status AS status
+         FROM ticket_verdicts v JOIN tickets t ON t.number = v.ticket_number
+         WHERE t.assignee_kind = 'session' AND t.assignee_ref = ? ORDER BY v.id DESC LIMIT 50`,
+      )
+      .all(sessionId) as { id: number; number: number; role: string; verdict: string; at: string; status: string }[];
+    return rows
+      .filter((r) => !isTicketClosed(r.status as TicketItem['status']) && Date.parse(r.at) >= sinceMs)
+      .reverse()
+      .map((r) => ({ id: r.id, ticket: ticketIdOf(r.number), role: r.role, verdict: r.verdict }));
+  }
+
+  /**
+   * T-1616: the tickets `sessionId` holds that are in review and whose LATEST verdict (any role, any commit) is a pass, lowest number first
+   * (at most 100): what the crew wake lists as ready to close or merge. A later fail of any role takes a ticket off. `evaluateVerdicts` does
+   * not fit here: it needs the head commit, which the portal does not know for a ticket. A PASS WITH GAPS is recorded as a pass.
+   */
+  readyToCloseHeldBy(sessionId: string): { ticket: string; role: string }[] {
+    const rows = this.#db
+      .prepare(
+        `SELECT t.number AS number, v.role AS role, v.verdict AS verdict FROM tickets t
+         JOIN ticket_verdicts v ON v.id = (SELECT max(id) FROM ticket_verdicts WHERE ticket_number = t.number)
+         WHERE t.assignee_kind = 'session' AND t.assignee_ref = ? AND t.status = 'in_review' ORDER BY t.number LIMIT 100`,
+      )
+      .all(sessionId) as { number: number; role: string; verdict: string }[];
+    return rows.filter((r) => r.verdict === 'pass').map((r) => ({ ticket: ticketIdOf(r.number), role: r.role }));
+  }
+
   /** FR31: the tickets bumped into a session, the latest bump of each, newest first (the session page's chips). */
   bumpedInto(caller: Caller, sessionId: string): TicketBumped[] {
     const rows = this.#db
@@ -2186,7 +3251,7 @@ export class Tickets {
     const grant = this.#forEnded(me, from.id);
     if (!grant) throw new AppError('FORBIDDEN', 'A live session continues that one: its tickets are that session’s to take.');
     const tickets = this.#heldBy(from.id)
-      .filter((r) => r.workspace_id === null || this.#isIn(r, me.workspaceId))
+      .filter((r) => (r.workspace_id === null || this.#isIn(r, me.workspaceId)) && this.#visible(caller, r))
       .map((r) => ticketIdOf(r.number));
     return { me, from: from.id, why: grant.why, tickets };
   }
@@ -2206,7 +3271,7 @@ export class Tickets {
       const out: string[] = [];
       const at = this.#now().toISOString();
       for (const r of this.#heldBy(plan.from)) {
-        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId))) continue;
+        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId)) || !this.#visible(caller, r)) continue;
         this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(plan.me.id, at, r.number);
         this.#addEvent(r.number, 'assigned', w, null, {
           from: { kind: 'session', sessionId: plan.from },

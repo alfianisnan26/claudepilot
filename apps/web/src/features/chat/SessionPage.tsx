@@ -8,6 +8,7 @@ import { useNotifyWhenDone } from '@/features/notify/sessionFlag';
 import { usePersonaOf } from '@/features/personas/identities';
 import { errorText } from '@/lib/api';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
+import { SessionsSidebar } from './SessionsSidebar';
 import { AgentsPanel, AgentsSheet } from './AgentsPanel';
 import { chatApi } from './api';
 import { DividerMark } from '@/features/autotransfer/DividerMark';
@@ -79,8 +80,10 @@ function savedDetails(): boolean {
  * socket for as long as it's mounted. A send, resume or change refused because the session's folder
  * needs trust asks first ("Trust this folder?") and runs again once trusted.
  */
-export function SessionPage() {
-  const { id = '' } = useParams();
+export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?: () => void } = {}) {
+  // Home's Manager mode (T-968 S3) shows a session in place: its id comes in, and Back goes to the dashboard.
+  const params = useParams();
+  const id = sessionId ?? params.id ?? '';
   const navigate = useNavigate();
   const toast = useToast();
   const { connected, events, paging, loadOlder, loadWhole, delta, agentLive, session, removed, inputs, outbox, tasks, btw, btwAsk, btwCancel, btwClose, btwPin, send, respond, control, stop, end } =
@@ -96,7 +99,7 @@ export function SessionPage() {
   useEffect(() => {
     if (!removed || leaving.current) return;
     leaving.current = true;
-    toast('That session was deleted');
+    toast('That agent was deleted');
     navigate('/admin/sessions', { replace: true });
   }, [removed, navigate, toast]);
   const [usageOpen, setUsageOpen] = useState(false);
@@ -114,7 +117,7 @@ export function SessionPage() {
   const unarchive = async () => {
     try {
       await chatApi.unarchive(id);
-      toast('Back in Sessions');
+      toast('Back in Agents');
     } catch (e) {
       toast(errorText(e, 'Could not unarchive it.'), 'error');
     }
@@ -296,7 +299,7 @@ export function SessionPage() {
   }
 
   useEffect(() => {
-    document.title = `${session?.title || 'Session'} · chat`;
+    document.title = `${session?.title || 'Agent'} · chat`;
     return () => void (document.title = BRAND_NAME);
   }, [session?.title]);
 
@@ -437,7 +440,7 @@ export function SessionPage() {
           onSelect: fromMenu(() => (session?.state === 'working' || session?.state === 'waiting' || session?.worktree ? setArchiving(true) : void archive())),
           disabled: !session,
         },
-    { label: 'End session', icon: <CircleStop className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
+    { label: 'End agent', icon: <CircleStop className="size-4" />, onSelect: fromMenu(() => setEnding(true)), danger: true, disabled: ended },
     { label: 'Delete…', icon: <Trash2 className="size-4" />, onSelect: fromMenu(() => setDeleting(true)), danger: true, disabled: !session },
   ];
 
@@ -471,19 +474,30 @@ export function SessionPage() {
             >
               {/* Bypass is on: the whole bar is tinted until it's off. */}
               {bypass && <span aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10 rounded-full bg-danger/10" />}
-              <Link
-                to="/admin/sessions"
-                aria-label="Back to sessions"
-                className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
-              >
-                <ArrowLeft className="size-[18px]" />
-              </Link>
+              {onBack ? (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  aria-label="Back to the dashboard"
+                  className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
+                >
+                  <ArrowLeft className="size-[18px]" />
+                </button>
+              ) : (
+                <Link
+                  to="/admin/sessions"
+                  aria-label="Back to agents"
+                  className="press flex size-11 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-ink/[0.07] hover:text-ink"
+                >
+                  <ArrowLeft className="size-[18px]" />
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={() => setInfoOpen(true)}
                 disabled={!session}
                 aria-haspopup="dialog"
-                aria-label={`${session?.title || 'Untitled'}, session info`}
+                aria-label={`${session?.title || 'Untitled'}, agent info`}
                 className="press flex h-11 min-w-0 flex-1 items-center rounded-full px-1.5 text-left"
               >
                 <span className="truncate text-[15.5px] font-semibold text-ink">{session?.title || 'Untitled'}</span>
@@ -572,7 +586,7 @@ export function SessionPage() {
               {/* The kit's ⋯ is 36 px; on this bar every target is 44 (and its items too, for a thumb). */}
               <div ref={menuRef} className="shrink-0 [&_[aria-haspopup=menu]]:size-11 [&_[role=menuitem]]:min-h-11">
                 <Menu
-                  label={!roomy && running ? `Session actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Session actions'}
+                  label={!roomy && running ? `Agent actions, ${running} ${running === 1 ? 'agent' : 'agents'} running` : 'Agent actions'}
                   trigger={
                     // The count sits at the corner of the 44 px button, clear of the dots (T-102: '14' used to cover them).
                     <span className="relative flex size-11 items-center justify-center">
@@ -752,6 +766,12 @@ export function SessionPage() {
         {wide && !gone && panel === 'files' && btwLayout.mode !== 'panel' && (
           <aside id="files-panel" aria-label="Files" className="flex w-[360px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)]">
             <FilesPanel key={id} sessionId={id} view={filesView} onView={setFilesView} onClose={toggleFiles} closeLabel="Hide files" />
+          </aside>
+        )}
+        {/* T-947: the other sessions, when no panel takes the right side, on wide screens (1280 px and up). */}
+        {!panel && btwLayout.mode !== 'panel' && (
+          <aside aria-label="Agents" className="hidden w-[280px] shrink-0 flex-col border-l border-line bg-bg pt-[var(--safe-top)] xl:flex">
+            <SessionsSidebar currentId={id} />
           </aside>
         )}
       </div>

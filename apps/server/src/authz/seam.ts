@@ -348,8 +348,16 @@ export function actorOfSocket(req: IncomingMessage, authorized: (req: IncomingMe
   return authorized(req) ? owner() : ANONYMOUS;
 }
 
-/** Who a Portal MCP principal is: an admin's token (`cpat_`) or an agent's per-session token (`cpst_`). The real layer reads the user from the token's owner. */
-export function actorOfPrincipal(p: { kind: 'user' | 'agent'; tokenId: string; scope: string; workspaceId: string | null; sessionId: string | null }): Actor {
+/**
+ * Who a Portal MCP principal is: an admin's token (`cpat_`), an agent's per-session token (`cpst_`), or the General Manager's (`cpmt_`). The
+ * real layer reads the user from the token's owner.
+ *
+ * T-968 S1 (general-manager PRD §4): a manager IS its person for can(), resolved on every call: the same user actor the person's browser
+ * session produces (`owner()` for the founding user), so a grant the person loses is lost by the manager on the next call, and there is no
+ * manager branch in can(). `manager:<session id>` is an audit label in the MCP server only. A manager without a person is nobody.
+ */
+export function actorOfPrincipal(p: { kind: 'user' | 'agent' | 'manager'; userId?: string; tokenId: string; scope: string; workspaceId: string | null; sessionId: string | null }): Actor {
+  if (p.kind === 'manager') return p.userId ? { kind: 'user', userId: p.userId, loginSessionId: 'legacy', via: 'ui' } : ANONYMOUS;
   if (p.kind === 'agent' && p.workspaceId && p.sessionId) return { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: p.tokenId, sessionId: p.sessionId, workspaceId: p.workspaceId };
   const scope = p.scope === 'admin' || p.scope === 'operate' ? p.scope : 'read';
   return { kind: 'token', userId: FOUNDING_USER_ID, tokenId: p.tokenId, scope };

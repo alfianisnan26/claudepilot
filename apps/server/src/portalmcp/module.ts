@@ -1,20 +1,28 @@
-import type {
-  CreatePortalTokenRequest,
-  CreatedPortalToken,
-  McpMatcher,
-  PortalLockdownResult,
-  PortalMcpState,
-  PortalToolInfo,
+import { AppError } from '@isnanme/core';
+import {
+  workspaceRef,
+  type Actor,
+  type CreatePortalTokenRequest,
+  type CreatedPortalToken,
+  type McpMatcher,
+  type PortalLockdownResult,
+  type PortalMcpState,
+  type PortalToken,
+  type PortalToolInfo,
 } from '@portal/contracts';
+import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
+import { isWorkspaceId } from '../names.js';
 import type { Store } from '../store/store.js';
 import { AgentAccess } from './agents.js';
+import { ManagerTokens } from './managers.js';
 import { PortalAudit } from './audit.js';
 import { connectFor } from './connect.js';
 import type { PortalLimits } from './limits.js';
 import { agentCallable, portalTools, type PortalToolDefinition, type ToolRegistry } from './registry.js';
 import { PortalMcp } from './server.js';
 import { PortalMcpSettingsStore } from './settings.js';
-import { PortalTokens } from './tokens.js';
+import { PortalTokens, type ClientTokenOrigin } from './tokens.js';
+import { loop } from '../platform/loops.js';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
@@ -31,6 +39,10 @@ export interface PortalMcpModuleOptions {
     /** The address already known for a workspace, without asking it (for a lockdown's allowlist). */
     known?: (workspaceId: string) => string | null;
   };
+  /** Whether a General Manager session still runs (T-968); unset, no manager token passes. */
+  managerAlive?: (sessionId: string) => boolean;
+  /** T-968 review M4: whether a person is signed in now (their manager's token passes only while they are). */
+  managerSignedIn?: (userId: string) => boolean;
   /** Rate limits (tests use small ones). */
   limits?: PortalLimits;
   version?: string;
@@ -50,6 +62,8 @@ export class PortalMcpModule {
   readonly audit: PortalAudit;
   /** Agents' per-session tokens and the per-workspace opt-in (interface I8). */
   readonly agents: AgentAccess;
+  /** The General Manager's tokens (cpmt_, T-968 S1). */
+  readonly managers: ManagerTokens;
   readonly mcp: PortalMcp;
   readonly internalUrl: string | null;
   #timer: NodeJS.Timeout | undefined;
@@ -79,12 +93,24 @@ export class PortalMcpModule {
       mcpEnabled: () => this.settings.get().enabled,
       now,
     });
-    this.mcp = new PortalMcp({ registry: this.registry, settings: this.settings, tokens: this.tokens, agents: this.agents, audit: this.audit, extraOrigins: opts.extraOrigins, limits: opts.limits, version: opts.version });
+    this.managers = new ManagerTokens(store, { alive: opts.managerAlive, signedIn: opts.managerSignedIn, now });
+    this.mcp = new PortalMcp({
+      registry: this.registry,
+      settings: this.settings,
+      tokens: this.tokens,
+      agents: this.agents,
+      managers: this.managers,
+      audit: this.audit,
+      extraOrigins: opts.extraOrigins,
+      limits: opts.limits,
+      version: opts.version,
+    });
     const changed = () => this.onChange?.();
     this.settings.onChange = changed;
     this.tokens.onChange = changed;
     this.audit.onChange = changed;
     this.agents.onChange = changed;
+    this.managers.onChange = changed;
     this.agents.onAccessChange = (workspaceId) => this.onAgentAddress?.(workspaceId);
   }
 
@@ -118,7 +144,7 @@ export class PortalMcpModule {
   start(): void {
     if (!this.store.writable || !this.store.deliveryAllowed) return;
     this.#prune();
-    this.#timer = setInterval(() => this.#prune(), SIX_HOURS_MS);
+    this.#timer = setInterval(loop('portalmcp.prune', SIX_HOURS_MS, 'Portal MCP: prune expired tokens and old audit rows').wrap(() => this.#prune()), SIX_HOURS_MS);
     this.#timer.unref();
   }
 
@@ -171,8 +197,8 @@ export class PortalMcpModule {
    * Mints an admin's token. `by` is who asked (`actorString`), written in every audit row: the mint, and one `token_revoked` row per token a
    * `replace` revoked. The label rules and the cap are the admin tokens' only (T-258); agents' per-session tokens are minted by `agents.mint`.
    */
-  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by = 'ui'): CreatedPortalToken {
-    const { token, secret, replaced } = this.tokens.create(req, { maxAdminPerLabel: this.#maxActivePerLabel() });
+  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by = 'ui', origin?: ClientTokenOrigin): CreatedPortalToken {
+    const { token, secret, replaced } = this.tokens.create(req, { maxAdminPerLabel: this.#maxActivePerLabel() }, origin);
     for (const id of replaced) {
       this.mcp.confirmations.forget(id);
       this.audit.event('token_revoked', id, { reason: 'replaced by a new token with this label', by, replacedBy: token.id });
@@ -190,6 +216,30 @@ export class PortalMcpModule {
     return done;
   }
 
+  /**
+   * T-1105: a person sets (or with null clears) the workspace a token's tickets go to when a call names none. `actor` is the person (the route
+   * checked their manage on the token); `known` is every workspace there is, when the caller can list them. Refused: a token that is not live,
+   * a read token (it makes no tickets), a workspace that is not there, or one the person or the token may not operate.
+   */
+  setTokenDefaultWorkspace(id: string, raw: unknown, actor: Actor, known?: readonly string[], by = 'ui'): PortalToken {
+    const token = this.tokens.get(id);
+    if (!token) throw new AppError('NOT_FOUND', 'No such token.');
+    if (token.revokedAt) throw new AppError('CONFLICT', 'This token has ended.');
+    let workspaceId: string | null = null;
+    if (raw !== null && raw !== '') {
+      if (!isWorkspaceId(raw)) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { defaultWorkspaceId: 'Pick a workspace.' } });
+      if (token.scope === 'read') throw new AppError('VALIDATION_FAILED', 'A read token makes no tickets: give it operate or admin.', { details: { defaultWorkspaceId: 'Not for a read token.' } });
+      requireCan(actor, 'operate', workspaceRef(raw));
+      if (known && !known.includes(raw)) throw new AppError('NOT_FOUND', 'No such workspace.');
+      const self = actorOfPrincipal({ kind: 'user', tokenId: token.id, scope: token.scope, workspaceId: null, sessionId: null });
+      if (!can(self, 'operate', workspaceRef(raw)).allow) throw new AppError('FORBIDDEN', 'This token may not operate that workspace.', { details: { defaultWorkspaceId: 'Not one this token may operate.' } });
+      workspaceId = raw;
+    }
+    if (!this.tokens.setDefaultWorkspace(id, workspaceId)) throw new AppError('CONFLICT', 'This token has ended.');
+    this.audit.event('token_default_workspace', id, { workspace: workspaceId, from: token.defaultWorkspaceId, by });
+    return this.tokens.get(id)!;
+  }
+
   /** Revokes a label's live tokens (all, or all but the newest), one audit row each that says who. */
   revokeLabel(label: string, keepNewest: boolean, by = 'ui'): number {
     const reason = keepNewest ? 'older token with this label, revoked in the portal' : 'every token with this label, revoked in the portal';
@@ -203,7 +253,7 @@ export class PortalMcpModule {
 
   /** Revokes every live token, agents' included; with `turnOff`, MCP answers 404 until an admin turns it back on (`mcp_lockdown`). */
   lockdown(reason: string, opts: { turnOff?: boolean } = {}): PortalLockdownResult {
-    const revoked = this.tokens.revokeAll(reason) + this.agents.revokeAll(reason);
+    const revoked = this.tokens.revokeAll(reason) + this.agents.revokeAll(reason) + this.managers.revokeAll(reason);
     if (opts.turnOff) this.settings.update({ enabled: false });
     this.audit.event(opts.turnOff ? 'lockdown' : 'revoke_all', null, { reason, revoked });
     return { revoked, enabled: this.settings.get().enabled };

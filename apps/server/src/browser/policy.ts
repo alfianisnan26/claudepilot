@@ -1,5 +1,5 @@
+import { isIPv6 } from 'node:net';
 import type { BrowserPoolContent } from '@portal/contracts';
-import { extensionId } from './headers.js';
 import { DOWNLOADS_DIR } from './spec.js';
 
 /**
@@ -14,8 +14,36 @@ export const METADATA_HOSTS = ['metadata.google.internal', '169.254.169.254', '1
 /** A pattern the policy accepts: a host, `host:port`, a scheme, or a wildcard of those. No whitespace, no controls. */
 export const SITE_PATTERN = /^[A-Za-z0-9*._~:/\-[\]]{1,200}$/;
 
+/** The Chrome Web Store's update URL (every store extension carries it) and its pages: shut when the headers extension opens the default. */
+export const WEB_STORE_UPDATE_URL = 'https://clients2.google.com/service/update2/crx';
+export const WEB_STORE_HOSTS = ['chromewebstore.google.com', 'chrome.google.com/webstore'];
+/**
+ * Local files, blocked while the pool has headers: the extension's ruleset in `/dev/shm` holds the header values, and a path prefix can be
+ * walked around (`file:///dev//shm/...`, `file:///proc/self/root/dev/shm/...`; T-1660 re-review), so every `file://` URL is blocked.
+ */
+export const EXT_FILES = 'file://*';
+
+/**
+ * A site as Chrome's URLBlocklist / URLAllowlist pattern (`[scheme://][.]host[:port][/path]`). Chrome logs "Invalid pattern" and skips an
+ * entry it can't parse, so a blocked host that is written wrong is silently open (T-1715) and an allowed one silently shut (T-1716):
+ * - an IPv6 literal is bracketed: `fd00:ec2::254` -> `[fd00:ec2::254]`;
+ * - a leading `*.` is dropped: `*.example.com` -> `example.com`. Chrome has no `*.` host syntax: a plain host already matches the host
+ *   and every subdomain, and a leading dot (`.example.com`) matches that host only. So `*.example.com` also matches `example.com`.
+ * Everything else (IPv4, hostnames, `*`, `localhost:5173`, `about:blank`, scheme-only entries) is returned as written.
+ */
+export function chromeUrlPattern(entry: string): string {
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)?([^/]*)(.*)$/i.exec(entry.trim());
+  if (!m) return entry;
+  const [, scheme = '', host = '', rest = ''] = m;
+  if (isIPv6(host)) return `${scheme}[${host}]${rest}`;
+  if (host.startsWith('*.') && host.length > 2) return `${scheme}${host.slice(2)}${rest}`;
+  return entry.trim();
+}
+
+const chromeUrlPatterns = (entries: string[]): string[] => [...new Set(entries.map(chromeUrlPattern))];
+
 export function chromePolicy(content: BrowserPoolContent, ctx: { portalHosts: string[] }): Record<string, unknown> {
-  const blocked = [...METADATA_HOSTS, ...ctx.portalHosts, ...content.blockedSites];
+  const blocked = chromeUrlPatterns([...METADATA_HOSTS, ...ctx.portalHosts, ...content.blockedSites]);
   const policy: Record<string, unknown> = {
     BrowserSignin: 0,
     SyncDisabled: true,
@@ -36,12 +64,21 @@ export function chromePolicy(content: BrowserPoolContent, ctx: { portalHosts: st
     // agent session that picks one of them drives a tab that isn't in front (PRD Q7 stays open).
     URLBlocklist: content.allowlistMode ? ['*', ...blocked] : blocked,
   };
-  // The headers extension (PRD §24): only its id may load, and no page may open its files (`chrome-extension://` carries the rules).
+  // The headers extension (PRD §24) loads from the command line, and Chromium refuses any unpacked extension while the default is
+  // blocked (`ExtensionInstallBlocklist: ["*"]`, whatever the allowlist says): a headed browser then holds a modal "Error Loading
+  // Extension" dialog before CDP listens (T-1660). So with headers the default stays open and every other way in is shut: the Web
+  // Store by its update URL, external and non-extension types, developer mode, the extensions page; `--disable-extensions-except`
+  // keeps everything else off (and `--disable-extensions` when the init built none for a start), and no page may open the extension's
+  // files, which hold the values: neither as `chrome-extension://` nor as `file:///dev/shm/cpb-ext/rules.json`.
   if ((content.headers ?? []).length > 0) {
-    policy.ExtensionInstallAllowlist = [extensionId()];
-    policy.URLBlocklist = [...(policy.URLBlocklist as string[]), 'chrome-extension://*'];
+    delete policy.ExtensionInstallBlocklist;
+    policy.ExtensionSettings = { [`update_url:${WEB_STORE_UPDATE_URL}`]: { installation_mode: 'blocked' } };
+    policy.ExtensionAllowedTypes = ['extension'];
+    policy.BlockExternalExtensions = true;
+    policy.ExtensionDeveloperModeSettings = 1;
+    policy.URLBlocklist = [...(policy.URLBlocklist as string[]), 'chrome-extension://*', EXT_FILES, 'chrome://extensions', ...WEB_STORE_HOSTS];
   }
-  if (content.allowlistMode) policy.URLAllowlist = ['about:blank', ...content.allowedSites];
+  if (content.allowlistMode) policy.URLAllowlist = chromeUrlPatterns(['about:blank', ...content.allowedSites]);
   return policy;
 }
 

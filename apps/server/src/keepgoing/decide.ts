@@ -3,8 +3,9 @@
 // turn the policy off; an integrity ending is first recovered in place (T-136), and when the portal refuses that, or for any other ending, a
 // new chat continues it, capped per root cause over its lineage (T-257 item 2) and at least 5 minutes apart; left down (the cap) or still
 // ended 15 minutes after the sweep first saw it, it is reported once (`down`). A move, a restart or a start under way is left alone; a
-// QUESTION is answered "decide yourself"; a TOOL APPROVAL is never answered: once it has waited 10 minutes it is reported; a chat out of
-// Bypass on a bypass-capable session is reported (never re-entered: the lease is the owner's open decision); an interrupted chat, or a
+// QUESTION is answered "decide yourself"; a TOOL APPROVAL is never answered: once it has waited 10 minutes it is reported; a live chat out
+// of Bypass on a bypass-capable session is put back in Bypass when it was in it within 24 hours (PILOT-996, D-103: the portal's gated keep
+// path, which allows the tool cards raised meanwhile), else reported; an interrupted chat, or a
 // sleeping one that is due a nudge, is woken; an idle chat (T-41: no turn, no task, nothing waiting) is told to continue once per idle
 // period, after `nudgeAfterMin`, at most `maxNudgesPerDay` times.
 //
@@ -27,7 +28,9 @@ export type Decision =
   | { act: 'restart'; cls: KeepGoingRestartClass }
   | { act: 'wake'; why: 'interrupted' | 'asleep' }
   | { act: 'nudge'; why: 'idle' | 'after_wake'; idleMin: number }
-  | { act: 'capped'; what: 'nudges' | 'wakes' };
+  | { act: 'capped'; what: 'nudges' | 'wakes' }
+  /** PILOT-996 (D-103): put Bypass back on a capable chat that was in it within `bypassBackHours` (the portal's gated keep path). */
+  | { act: 'rebypass' };
 
 export interface DecideInput {
   nowMs: number;
@@ -45,6 +48,8 @@ export interface DecideInput {
   recoverRefused?: boolean;
   /** The chat's ticket is closed: its work is done, an ending is not started again. */
   ticketClosed?: boolean;
+  /** PILOT-996: when the chat was last in Bypass (now while it is; its last `bypass.left` otherwise), or null. */
+  bypassSeenAt?: string | null;
 }
 
 export interface DecideOutput {
@@ -112,9 +117,12 @@ export function decide(x: DecideInput): DecideOutput {
   const wakesCapped = x.wakes24h >= p.maxWakesPerDay;
   if (stands('cap') && (nudgesCapped || wakesCapped)) causes.add('cap');
 
-  // (d) Out of Bypass on a bypass-capable session: reported, never re-entered here (the lease is slice 2).
+  // (d) Out of Bypass on a bypass-capable session: put back when it was in Bypass within 24 hours (PILOT-996, D-103), tried once while the
+  // report does not stand; otherwise (older, or the portal refused) reported.
   const outOfBypass = s.bypassCapable && s.mode !== 'bypassPermissions';
   if (outOfBypass) causes.add('bypass');
+  const seen = ms(x.bypassSeenAt);
+  const bypassBack = outOfBypass && !stands('bypass') && s.process === 'live' && Number.isFinite(seen) && now - seen < C.bypassBackHours * 60 * MIN;
 
   // (c) What waits: questions are answered, tool approvals are reported after 10 minutes and never answered.
   const approvals = x.requests.filter((r) => APPROVAL_KINDS.has(r.kind));
@@ -124,6 +132,8 @@ export function decide(x: DecideInput): DecideOutput {
 
   // A move, a restart or a launch under way: nothing is done to the chat.
   if (s.switching || s.restarting || s.state === 'starting') return out({ act: 'none', why: 'busy' });
+  // Before the cards: back in Bypass, the tool cards raised while it was out are allowed (all but AskUserQuestion and ExitPlanMode).
+  if (bypassBack) return out({ act: 'rebypass' });
 
   const question = x.requests.find((r) => QUESTION_KINDS.has(r.kind));
   if (question) return out({ act: 'answer', request: question });

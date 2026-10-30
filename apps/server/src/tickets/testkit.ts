@@ -81,7 +81,15 @@ export const token = (id: string, scope: 'read' | 'operate' | 'admin'): Caller =
 export const agent = (workspaceId: string, sessionId: string, tokenId = `agt_${sessionId}`): Caller => ({ kind: 'agent', tokenId, label: `session ${sessionId} in ${workspaceId}`, workspaceId, sessionId });
 
 export async function ticketsHarness(
-  opts: { now?: () => Date; workspaceRefs?: TicketsOptions['workspaceRefs']; orphanAfterMin?: () => number; agentOpenPerWorkspace?: () => number; agentAssignUserTags?: () => string } = {},
+  opts: {
+    now?: () => Date;
+    workspaceRefs?: TicketsOptions['workspaceRefs'];
+    orphanAfterMin?: () => number;
+    agentOpenPerWorkspace?: () => number;
+    agentAssignUserTags?: () => string;
+    mergeGates?: TicketsOptions['mergeGates'];
+    bucketRoutes?: TicketsOptions['bucketRoutes'];
+  } = {},
 ) {
   const dataDir = mkdtempSync(join(tmpdir(), 'cp-tickets-'));
   const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
@@ -92,6 +100,8 @@ export async function ticketsHarness(
     orphanAfterMin: opts.orphanAfterMin,
     agentOpenPerWorkspace: opts.agentOpenPerWorkspace,
     agentAssignUserTags: opts.agentAssignUserTags,
+    mergeGates: opts.mergeGates,
+    bucketRoutes: opts.bucketRoutes,
   });
   tickets.start();
   let changes = 0;

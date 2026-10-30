@@ -13,20 +13,73 @@ export type ChatOrigin = 'ui' | 'mcp' | 'persona_test';
 
 /**
  * Claude Code permission modes. `default` asks for everything (Manual); `acceptEdits` edits without asking (Edit); `auto` lets Claude
- * Code's classifier approve routine actions and block risky ones (Auto: only sessions a person started in the app, see
- * {@link autoModeAllowed}); `plan` changes nothing until approved; `dontAsk` (not offered, kept for stored rows) denies what isn't
+ * Code's classifier approve routine actions and block risky ones (Auto: see {@link autoModeAllowed}); `plan` changes nothing until approved; `dontAsk` (not offered, kept for stored rows) denies what isn't
  * pre-approved; Bypass only through its own confirmation (FR20).
  */
 export type ChatPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions';
 
 /**
- * Whether a session may use Auto (chat-sessions PRD, Auto mode): only one a person started in the app. A session a trigger, a ticket,
- * Portal MCP or another session started read text nobody vetted (a webhook body, a ticket, an agent's words), so its ceiling stays
- * where it was (Edit). The server checks this on every change to Auto; the app uses it to show Auto as unavailable.
+ * Whether a session may use Auto (chat-sessions PRD, Auto mode). A session a person started in the app always may. Since PILOT-996
+ * (owner, 2026-10-28) a session with no person behind it (a trigger's, a ticket's, Portal MCP's, another session's) may too when its
+ * parent runs in Auto or Bypass, or when the policy `sessions.autonomousAuto` is on (the default; T-2997: then a worker may run in
+ * Auto whatever its parent's mode). The server checks this on every change to Auto and audits it (`mode.auto`, `mode.refused`).
  */
-export function autoModeAllowed(s: { startedBy: string | null; origin: ChatOrigin; parentId: string | null }): boolean {
-  if (s.parentId) return false;
-  return s.startedBy === CHAT_ACTOR_UI || (s.startedBy === null && s.origin === 'ui');
+export function autoModeAllowed(
+  s: { startedBy: string | null; origin: ChatOrigin; parentId: string | null },
+  ctx: { parentMode?: ChatPermissionMode | null; autonomousAuto?: boolean } = {},
+): boolean {
+  if (!s.parentId && (s.startedBy === CHAT_ACTOR_UI || (s.startedBy === null && s.origin === 'ui'))) return true;
+  if (s.parentId && (ctx.parentMode === 'auto' || ctx.parentMode === 'bypassPermissions')) return true;
+  return ctx.autonomousAuto === true;
+}
+
+/**
+ * How wide a mode is, for a worker's cap (PILOT-996): a worker is never wider than its parent. `plan` changes nothing; `dontAsk` runs
+ * only what the folder allows; `default` adds what a person approves; `acceptEdits` edits unasked; `auto` lets the classifier approve;
+ * Bypass runs everything.
+ */
+export const MODE_WIDTH: Readonly<Record<ChatPermissionMode, number>> = {
+  plan: 0,
+  dontAsk: 1,
+  default: 2,
+  acceptEdits: 3,
+  auto: 4,
+  bypassPermissions: 5,
+};
+
+/** Whether `mode` is no wider than `cap` (PILOT-996: a worker's mode against its parent's). */
+export function modeWithin(mode: ChatPermissionMode, cap: ChatPermissionMode): boolean {
+  return MODE_WIDTH[mode] <= MODE_WIDTH[cap];
+}
+
+/**
+ * The mode a worker starts in (PILOT-996, D-103; T-2997, PILOT-1025). The one asked wins (whether it may be asked is
+ * {@link workerModeAllowed}'s). Unasked: Bypass only when the parent is in Bypass NOW (`parentInBypass`: the portal's live check of the
+ * parent, its policy and capability, never the stored mode alone), entered through the portal's gated inherit path; a parent whose stored
+ * mode says Bypass without that gives Auto. Otherwise Auto while `sessions.autonomousAuto` is on; off, the parent's mode, else Auto, where a
+ * parent in `default` (a person answers its cards) hands on dontAsk: a worker never waits on a person nobody asked for (D-62).
+ */
+export function workerMode(
+  asked: ChatPermissionMode | null | undefined,
+  parent: ChatPermissionMode | null | undefined,
+  ctx: { parentInBypass?: boolean; autonomousAuto?: boolean } = {},
+): ChatPermissionMode {
+  if (asked) return asked;
+  if (ctx.parentInBypass === true) return 'bypassPermissions';
+  if (parent === 'bypassPermissions') return 'auto';
+  if (ctx.autonomousAuto === true) return 'auto';
+  if (parent === 'default') return 'dontAsk';
+  return parent ?? 'auto';
+}
+
+/**
+ * Whether a worker may be asked into `asked` by its parent (T-2997): never Bypass by name; Auto whatever the parent's mode while
+ * `sessions.autonomousAuto` is on; any other mode, and Auto with the policy off, never wider than the parent's ({@link modeWithin}).
+ */
+export function workerModeAllowed(asked: ChatPermissionMode, parent: ChatPermissionMode, ctx: { autonomousAuto?: boolean } = {}): boolean {
+  if (asked === 'bypassPermissions') return false;
+  if (asked === 'auto' && ctx.autonomousAuto === true) return true;
+  return modeWithin(asked, parent);
 }
 
 export interface ChatSession {
@@ -102,8 +155,10 @@ export interface ChatSession {
   archivedAt: string | null;
   /** When the person pinned it (FR2: the Pinned chip, first in its group), or null. Archiving unpins. */
   pinnedAt: string | null;
-  /** The ticket this session works on (Tickets), or null. Set when it's created, or with `setTicket`. */
+  /** The ticket this session works on (Tickets), or null. Set when it's created, or with `setTicket`. Always the stable `T-<n>`. */
   ticketId: string | null;
+  /** T-1098: that ticket's bucket key (`KONF-12`), what the portal shows; absent from an older server or for a ticket gone. */
+  ticketKey?: string | null;
   /** The session that started this one (multi-agent), or null for one a person or a ticket started. */
   parentId: string | null;
   /** The git worktree it runs in, which is also its `cwd`, or null when it runs in a plain folder. */
@@ -190,7 +245,7 @@ export interface ChatSession {
   keepGoing?: ChatKeepGoing | null;
   /**
    * T-417: its start or wake waits for a slot under the live cap (FR39): why, in words ("Waiting for a slot · 12 of 12 running in
-   * kubernetes/x (Settings › Sessions)"). Absent or null when it doesn't wait.
+   * kubernetes/x (Settings › Running agents)"). Absent or null when it doesn't wait.
    */
   slotWait?: string | null;
 }
@@ -297,10 +352,11 @@ export const WORKTREE_DIRTY = 'WORKTREE_DIRTY';
  * its own after a person's click (`portal:handoff`: the request for a handoff when a chat moves to another Claude); a person
  * typing in the app is `ui`. Anything else is refused, so an actor can't be made up with characters that
  * would read as something else. `account:<user id>` is a person signed in with an account the session was shared with
- * (session delegation): not the owner, so it is framed like any other sender.
+ * (session delegation): not the owner, so it is framed like any other sender. `manager:<session id>` is the person's General Manager
+ * (T-968): it speaks for the person, and is framed as such.
  */
 export const CHAT_ACTOR_UI = 'ui';
-export const CHAT_ACTOR_PATTERN = /^(?:ticket|session|portal-mcp|portal|ci|account):[A-Za-z0-9._:-]{1,64}$/;
+export const CHAT_ACTOR_PATTERN = /^(?:ticket|session|portal-mcp|portal|ci|account|manager):[A-Za-z0-9._:-]{1,64}$/;
 export const isChatActor = (v: unknown): v is string => typeof v === 'string' && (v === CHAT_ACTOR_UI || CHAT_ACTOR_PATTERN.test(v));
 /** A portal actor: anything an actor string can be except the person at the keyboard. */
 export const isPortalActor = (v: unknown): v is string => typeof v === 'string' && CHAT_ACTOR_PATTERN.test(v);
@@ -633,8 +689,10 @@ export interface CreateChatSessionRequest {
    */
   worktree?: ChatWorktreeRequest;
   /**
-   * T-561: marks it a crew lead (the dev supervisor's leads). It only ever makes a session stricter: with the policy `sessions.leadRules`
-   * on, a lead launches with the lead rules (`ChatSession.leadRules`). A session that starts workers is a lead without it.
+   * T-561: marks it a crew lead (the dev supervisor's leads). With the policy `sessions.leadRules` on, a lead launches with the lead rules
+   * (`ChatSession.leadRules`): stricter. Not only stricter: a top-level lead's Bypass is paused, not dropped, over a sleep or a vanishing,
+   * and comes back at its wake or a Move through every Bypass gate (T-1646, T-1692; chat-sessions FR20). A session that starts workers is a
+   * lead without it.
    */
   lead?: boolean;
 }
@@ -671,6 +729,8 @@ export interface ChatBypassState {
   facts: ChatBypassFacts;
   /** The sign-in passed the re-check of the server code in the last 10 minutes. */
   reauthed: boolean;
+  /** PILOT-996: whether this session may switch to Auto now (`autoModeAllowed` with its parent's mode and the policy). */
+  autoAllowed?: boolean;
 }
 
 /** `POST CHAT_API.bypass(id)`: the person's confirmation. The server code check comes first (`REAUTH_REQUIRED`). */

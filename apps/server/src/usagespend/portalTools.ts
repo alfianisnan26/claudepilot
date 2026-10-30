@@ -23,6 +23,12 @@ import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, PortalToolError, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { OWNER_ACTOR, type Who } from './actor.js';
 import type { UsageSpend } from './service.js';
+import { ticketKeyOf } from '../tickets/keys.js';
+
+const keyOf = (id: string): { key?: string } => {
+  const k = ticketKeyOf(id);
+  return k ? { key: k } : {};
+};
 
 const BASIS = { cost_usd: 'estimate', tokens: 'measured', requests: 'measured', note: 'Dollars are Claude Code’s own price estimate: for a plan, what the same use would cost on the API, not a bill.' } as const;
 
@@ -68,6 +74,7 @@ function rowView(ctx: PortalToolContext, r: AttributionRow) {
             claude_id: s.claudeId,
             claude: s.claudeName,
             ticket_id: s.ticketId,
+            ...(s.ticketKey ? { ticket_key: s.ticketKey } : {}),
             parent_id: s.parentId,
             depth: s.depth,
             children: s.children,
@@ -91,7 +98,7 @@ function rowShort(ctx: PortalToolContext, r: AttributionRow) {
     own: money(r.own),
     total: money(r.total),
     share_pct: figure(r.share),
-    ...(s ? { session: { session_id: s.sessionId, ticket_id: s.ticketId, parent_id: s.parentId, depth: s.depth, state: s.state } } : {}),
+    ...(s ? { session: { session_id: s.sessionId, ticket_id: s.ticketId, ...(s.ticketKey ? { ticket_key: s.ticketKey } : {}), parent_id: s.parentId, depth: s.depth, state: s.state } } : {}),
     ...ticketView(r),
   };
 }
@@ -99,7 +106,8 @@ function rowShort(ctx: PortalToolContext, r: AttributionRow) {
 /** By ticket (T-449): type, status, done time and the dollars apportioned from leads (the row's `total` holds them; `own` does not). */
 function ticketView(r: AttributionRow) {
   const t = r.ticket;
-  return t ? { ticket: { type: t.type, status: t.status, done_at: t.doneAt, via_lead_usd: t.viaLeadUsd, via_lead_workers: t.viaLeadWorkers } } : {};
+  // T-1098: a by-ticket row's key is the stable id; its bucket key goes beside it.
+  return t ? { ticket: { ...(r.by === 'ticket' ? { id: r.key, ...keyOf(r.key) } : {}), type: t.type, status: t.status, done_at: t.doneAt, via_lead_usd: t.viaLeadUsd, via_lead_workers: t.viaLeadWorkers } } : {};
 }
 
 function budgetView(s: BudgetState) {
@@ -216,7 +224,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
     name: 'usage_attribution',
     title: 'Spend by',
     description:
-      'The window’s requests grouped by session (a tree: a session’s total includes the sessions it started), workspace, ticket, persona or Claude, with each row’s own and total dollars (estimates) and requests and its share; full true adds the tokens and the times. A persona is recorded when a session’s process starts, so older requests read as unknown (not_recorded), never guessed; a child session with no ticket counts under its parent’s. By ticket, a lead’s own dollars (a session with no ticket that started workers on tickets) are split over those tickets by its workers per ticket and shown as via_lead_usd (part of the row’s total, not of own), with the type and status of each ticket; done true keeps only tickets closed as done in the window. An agent’s token reads its own session and the ones it started only; an admin’s token reads everything, or a tree with session_id.',
+      'The window’s requests grouped by session (a tree: a session’s total includes the sessions it started), workspace, ticket, persona or Claude, with each row’s own and total dollars (estimates) and requests and its share; full true adds the tokens and the times. A persona is recorded when a session’s process starts, so older requests read as unknown (not_recorded), never guessed; a child session with no ticket counts under its parent’s. By ticket, a lead’s own dollars (a session with no ticket that started workers on tickets) are split over those tickets by its workers per ticket and shown as via_lead_usd (part of the row’s total, not of own), with the type and status of each ticket; done true keeps only tickets closed as done in the window. An agent’s token reads its own session and the ones it started only; an admin’s token reads everything, or a tree with session_id. Tickets show as id and key.',
     scope: 'agent',
     hints: { readOnly: true, idempotent: true },
     input: z.object({

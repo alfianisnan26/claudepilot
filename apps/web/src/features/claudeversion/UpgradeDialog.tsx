@@ -222,7 +222,7 @@ export function UpgradeDialog({ open, workspaceId, info, onClose, onStarted }: {
             <span>Recreates the workspace from the new image. Its home folder is kept.</span>
             {plan && plan.sessions.length > 0 && (
               <span className="font-medium text-ink">
-                Interrupts {plan.sessions.length === 1 ? 'a running session' : `${plan.sessions.length + (plan.hiddenSessions ?? 0)} running sessions`}: <Bounded label="More sessions" items={plan.sessions.map((s) => s.title || s.id)} />{plan.hiddenSessions ? ` and ${plan.hiddenSessions} you cannot see` : ''}.
+                Interrupts {plan.sessions.length === 1 ? 'a running agent' : `${plan.sessions.length + (plan.hiddenSessions ?? 0)} running agents`}: <Bounded label="More agents" items={plan.sessions.map((s) => s.title || s.id)} />{plan.hiddenSessions ? ` and ${plan.hiddenSessions} you cannot see` : ''}.
               </span>
             )}
             {plan && plan.terminals > 0 && <span className="font-medium text-ink">Closes {plan.terminals} terminal{plan.terminals === 1 ? '' : 's'}.</span>}

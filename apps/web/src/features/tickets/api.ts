@@ -6,7 +6,13 @@ import {
   type BumpTarget,
   type CloseTicketRequest,
   type CommentTicketRequest,
+  type CreateTicketBucketRequest,
   type CreateTicketRequest,
+  type MergeTicketBucketRequest,
+  type MergeTicketBucketResult,
+  type TicketBucketMoveResult,
+  type TicketBucket,
+  type UpdateTicketBucketRequest,
   type StartTicketSessionRequest,
   type StartTicketSessionResult,
   type TicketBumped,
@@ -17,6 +23,8 @@ import {
   type TicketItem,
   type TicketPage,
   type TicketTag,
+  type TicketTimeline,
+  type TicketTimelineGranularity,
   type TicketAttachment,
   type UpdateTicketRequest,
 } from '@portal/contracts';
@@ -47,6 +55,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 /** `TicketFilter` as a query string. */
 function query(f: TicketFilter): string {
   const q = new URLSearchParams();
+  if (f.bucket) q.set('bucket', f.bucket);
   if (f.status?.length) q.set('status', f.status.join(','));
   if (f.priority?.length) q.set('priority', f.priority.join(','));
   if (f.type?.length) q.set('type', f.type.join(','));
@@ -62,6 +71,18 @@ function query(f: TicketFilter): string {
   return q.size ? `?${q}` : '';
 }
 
+/** T-119: a timeline window with the list's filters (the closed-ticket, orphan and sort switches are the list's own and are not sent). */
+export function timelineQuery(f: TicketFilter, w: { from: string; to: string; granularity: TicketTimelineGranularity; limit?: number; cursor?: string }): string {
+  const { includeClosed: _i, orphan: _o, sort: _s, limit: _l, cursor: _c, offset: _f, ...rest } = f;
+  const q = new URLSearchParams(query(rest).slice(1));
+  q.set('from', w.from);
+  q.set('to', w.to);
+  q.set('granularity', w.granularity);
+  if (w.limit) q.set('limit', String(w.limit));
+  if (w.cursor) q.set('cursor', w.cursor);
+  return `?${q}`;
+}
+
 export const ticketsApi = {
   /** One page of summary rows (D-58): `next` goes back as `filter.cursor`; `total` and `counts` come with the first page only. */
   list: (filter: TicketFilter = {}) => request<TicketPage>('GET', `${TICKET_API.list}${query(filter)}`),
@@ -75,7 +96,13 @@ export const ticketsApi = {
   startSession: (id: string, body: StartTicketSessionRequest) => request<StartTicketSessionResult>('POST', TICKET_API.session(id), body),
   opening: (id: string) => request<{ text: string }>('GET', TICKET_API.opening(id)),
   tags: () => request<TicketTag[]>('GET', TICKET_API.tags),
-  brief: (id: string) => request<{ id: string; summary: string; status: string }>('GET', TICKET_API.brief(id)),
+  timeline: (f: TicketFilter, w: Parameters<typeof timelineQuery>[1]) => request<TicketTimeline>('GET', `${TICKET_API.timeline}${timelineQuery(f, w)}`),
+  buckets: () => request<TicketBucket[]>('GET', TICKET_API.buckets),
+  createBucket: (body: CreateTicketBucketRequest) => request<TicketBucket>('POST', TICKET_API.buckets, body),
+  updateBucket: (key: string, body: UpdateTicketBucketRequest) => request<TicketBucket>('PATCH', TICKET_API.bucket(key), body),
+  mergeBucket: (key: string, body: MergeTicketBucketRequest) => request<MergeTicketBucketResult>('POST', TICKET_API.bucketMerge(key), body),
+  moveBuckets: (moves: { id: string; bucket: string }[]) => request<TicketBucketMoveResult[]>('POST', TICKET_API.bucketMoves, { moves }),
+  brief: (id: string) => request<{ id: string; key?: string; summary: string; status: string }>('GET', TICKET_API.brief(id)),
   bumpTargets: (id: string) => request<BumpTarget[]>('GET', TICKET_API.bump(id)),
   bump: (id: string, body: BumpRequest) => request<TicketBumpResult>('POST', TICKET_API.bump(id), body),
   bumped: (sessionId: string) => request<TicketBumped[]>('GET', TICKET_API.bumped(sessionId)),

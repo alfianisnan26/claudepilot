@@ -4,6 +4,7 @@
 import { AppError, success } from '@isnanme/core';
 import {
   sessionRef,
+  ticketBucketRef,
   ticketRef,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
@@ -13,6 +14,10 @@ import {
   type BumpRequest,
   type CloseTicketRequest,
   type CommentTicketRequest,
+  type CreateTicketBucketRequest,
+  type MergeTicketBucketRequest,
+  type TicketBucketMovesRequest,
+  platformRef,
   type CreateTicketRequest,
   type StartTicketSessionRequest,
   type TicketAssigneeFilter,
@@ -20,11 +25,13 @@ import {
   type TicketPriority,
   type TicketStatus,
   type TicketType,
+  type UpdateTicketBucketRequest,
   type UpdateTicketRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, can, requireCan, visible } from '../authz/seam.js';
-import { declareTicketPolicies } from './authz.js';
+import { actorOf, actorUserId, can, refusal, requireCan, visible } from '../authz/seam.js';
+import { declareTicketPolicies, registerTicketBucketAuthz } from './authz.js';
+import { setTicketKeyLookup } from './keys.js';
 import type { Caller, Tickets } from './service.js';
 
 async function body<T>(c: Context): Promise<Partial<T>> {
@@ -42,6 +49,8 @@ const optionalBody = async <T>(c: Context): Promise<Partial<T>> => {
 };
 
 const UI: Caller = { kind: 'ui' };
+/** T-1857: a person's list, with the seam's actor, so its total and counts leave out the buckets they may not view. */
+const viewer = (c: Context): Caller => ({ kind: 'ui', actor: actorOf(c) });
 
 const attachmentNumber = (c: Context): number => {
   const n = Number(c.req.param('attachmentId'));
@@ -64,17 +73,39 @@ const names = <T extends string>(raw: string | undefined, all: readonly T[], fie
 
 export function createTicketRoutes(tickets: Tickets): Hono {
   declareTicketPolicies();
+  registerTicketBucketAuthz(tickets);
+  setTicketKeyLookup((id) => tickets.keyOf(id));
   const app = new Hono();
   const id = (c: Context) => c.req.param('id') ?? '';
 
-  app.get('/', (c) => {
-    const q = c.req.query();
+  // T-1098: a ticket is reached through its bucket: view to read it, operate to change it. A bucket the person may not see answers like a
+  // missing ticket (the same 404). Paths that are not a ticket id are left to their own routes.
+  const NOT_IDS = new Set(['tags', 'bumped', 'buckets', 'bucket-moves', 'timeline']);
+  const guard = async (c: Context, next: () => Promise<void>) => {
+    const ref = c.req.param('id') ?? '';
+    if (!NOT_IDS.has(ref)) {
+      const bucket = tickets.bucketOf(ref);
+      const verb = c.req.method === 'GET' ? 'view' : 'operate';
+      const d = bucket ? can(actorOf(c), verb, ticketBucketRef(bucket)) : null;
+      if (d && !d.allow) {
+        const e = refusal(d, verb, ticketBucketRef(bucket!));
+        throw e.code === 'NOT_FOUND' ? new AppError('NOT_FOUND', 'No such ticket.') : e;
+      }
+    }
+    await next();
+  };
+  app.use('/:id', guard);
+  app.use('/:id/*', guard);
+
+  /** The list's filter from a query string (the list and the timeline read the same one); an unknown assignee is a 400. */
+  const filterOf = (q: Record<string, string>): TicketFilter => {
     const assignee = q.assignee;
     if (assignee && !['any', 'unassigned', 'user'].includes(assignee) && !assignee.startsWith('session:'))
       throw new AppError('VALIDATION_FAILED', 'Unknown assignee filter.', {
         details: { assignee: 'Use any, unassigned, user or session:<id>.' },
       });
-    const filter: TicketFilter = {
+    return {
+      bucket: q.bucket || undefined,
       status: names<TicketStatus>(q.status, TICKET_STATUSES, 'status'),
       priority: names<TicketPriority>(q.priority, TICKET_PRIORITIES, 'priority'),
       type: names<TicketType>(q.type, TICKET_TYPES, 'type'),
@@ -86,17 +117,93 @@ export function createTicketRoutes(tickets: Tickets): Hono {
       orphan: q.orphan === '1' || q.orphan === 'true' || undefined,
       sort: q.sort === 'newest' ? 'newest' : undefined,
     };
+  };
+  /**
+   * Who may see a row: a bucket filter the caller may not view is the same 404 as a bucket that does not exist; each row's bucket passes
+   * `view` (T-1098, asked once per bucket per request) and the ticket itself passes `view`.
+   */
+  const viewerOf = (actor: ReturnType<typeof actorOf>, filter: TicketFilter) => {
+    if (filter.bucket) requireCan(actor, 'view', ticketBucketRef(filter.bucket.toUpperCase()));
+    const seen = new Map<string, boolean>();
+    const inBucket = (b: string | undefined) => {
+      if (!b) return true;
+      if (!seen.has(b)) seen.set(b, can(actor, 'view', ticketBucketRef(b)).allow);
+      return seen.get(b)!;
+    };
+    return (t: { id: string; bucket?: string }) => inBucket(t.bucket) && visible(actor, 'ticket', [t], (x) => x.id).length > 0;
+  };
+
+  app.get('/', (c) => {
+    const q = c.req.query();
+    const filter = filterOf(q);
     // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
     // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
-    const actor = actorOf(c);
-    const keep = (t: { id: string }) => visible(actor, 'ticket', [t], (x) => x.id).length > 0;
-    return c.json(success(tickets.listPage(UI, filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
+    const keep = viewerOf(actorOf(c), filter);
+    return c.json(success(tickets.listPage(viewer(c), filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
 
-  app.post('/', async (c) => c.json(success(tickets.create(UI, await body<CreateTicketRequest>(c))), 201));
+  app.post('/', async (c) => {
+    const req = await body<CreateTicketRequest>(c);
+    if (typeof req.bucket === 'string' && req.bucket.trim()) requireCan(actorOf(c), 'operate', ticketBucketRef(req.bucket.trim().toUpperCase()));
+    return c.json(success(tickets.create(UI, req)), 201);
+  });
+
+  // Buckets (T-1098). Registered before `/:id`.
+  app.get('/buckets', (c) => {
+    const actor = actorOf(c);
+    return c.json(success(visible(actor, 'ticket_bucket', tickets.buckets(UI), (b) => b.key)));
+  });
+  app.post('/buckets', async (c) => {
+    const actor = actorOf(c);
+    return c.json(success(tickets.createBucket(UI, await body<CreateTicketBucketRequest>(c), { ownerId: actorUserId(actor) ?? undefined })), 201);
+  });
+  app.get('/buckets/:key', (c) => {
+    const key = (c.req.param('key') ?? '').toUpperCase();
+    requireCan(actorOf(c), 'view', ticketBucketRef(key));
+    return c.json(success(tickets.bucket(UI, key)));
+  });
+  // T-1967: merge a bucket into another, and move many tickets at once: the owner only (manage on the platform's settings).
+  app.post('/buckets/:key/merge', async (c) => {
+    const actor = actorOf(c);
+    const key = (c.req.param('key') ?? '').toUpperCase();
+    const req = await body<MergeTicketBucketRequest>(c);
+    requireCan(actor, 'manage', platformRef('settings'));
+    requireCan(actor, 'manage', ticketBucketRef(key));
+    requireCan(actor, 'manage', ticketBucketRef(typeof req.into === 'string' ? req.into.trim().toUpperCase() : ''));
+    return c.json(success(tickets.mergeBucket(UI, key, req)));
+  });
+  app.post('/bucket-moves', async (c) => {
+    const actor = actorOf(c);
+    requireCan(actor, 'manage', platformRef('settings'));
+    const { moves } = await body<TicketBucketMovesRequest>(c);
+    const allow = (from: string, to: string) => can(actor, 'operate', ticketBucketRef(from)).allow && can(actor, 'operate', ticketBucketRef(to)).allow;
+    return c.json(success(tickets.moveBuckets(UI, moves, { allow })));
+  });
+  app.patch('/buckets/:key', async (c) => {
+    const key = (c.req.param('key') ?? '').toUpperCase();
+    requireCan(actorOf(c), 'manage', ticketBucketRef(key));
+    return c.json(success(tickets.updateBucket(UI, key, await body<UpdateTicketBucketRequest>(c))));
+  });
 
   // Registered before `/:id`, which would read "tags" as an id.
-  app.get('/tags', (c) => c.json(success(tickets.tags(UI))));
+  app.get('/tags', (c) => c.json(success(tickets.tags(viewer(c)))));
+  // T-119: the tickets of a window with their flow, filtered like the list. Like the list: each row (and its bucket) passes `view` before it is
+  // shown; a bad window, scale or filter is a 422, a bad cursor a 400. The answer is cached for a few seconds per viewer (the service drops it on any ticket write).
+  app.get('/timeline', (c) => {
+    const q = c.req.query();
+    const { includeClosed: _i, orphan: _o, sort: _s, ...filter } = filterOf(q);
+    const actor = actorOf(c);
+    const keep = viewerOf(actor, filter);
+    return c.json(
+      success(
+        tickets.timeline(
+          viewer(c),
+          { from: q.from, to: q.to, granularity: q.granularity, filter },
+          { cursor: q.cursor || undefined, limit: q.limit, keep, cacheKey: JSON.stringify(actor) },
+        ),
+      ),
+    );
+  });
   // The tickets bumped into a session (FR31), for its page: whoever may view the session.
   app.get('/bumped', (c) => {
     const session = c.req.query('session') ?? '';
@@ -111,8 +218,18 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     if (!brief) throw new AppError('NOT_FOUND', 'No such ticket.');
     return c.json(success(brief));
   });
+  // T-2014 (FR36e): the merge gate's latest word per repo. Declared view on the ticket (authz.ts); the guard above checked its bucket.
+  app.get('/:id/merge', (c) => {
+    requireCan(actorOf(c), 'view', ticketRef(id(c)));
+    return c.json(success(tickets.mergeStatus(UI, id(c))));
+  });
   app.get('/:id/opening', (c) => c.json(success({ text: tickets.opening(UI, id(c)) })));
-  app.patch('/:id', async (c) => c.json(success(tickets.update(UI, id(c), await body<UpdateTicketRequest>(c)))));
+  app.patch('/:id', async (c) => {
+    const req = await body<UpdateTicketRequest>(c);
+    // T-1967: a move needs operate on the bucket it goes to as well (the guard checked the one it is in).
+    if (typeof req.bucket === 'string' && req.bucket.trim()) requireCan(actorOf(c), 'operate', ticketBucketRef(req.bucket.trim().toUpperCase()));
+    return c.json(success(tickets.update(UI, id(c), req)));
+  });
   app.delete('/:id', (c) => {
     tickets.remove(UI, id(c));
     return c.json(success({ ok: true }));

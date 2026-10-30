@@ -15,20 +15,20 @@ test('the chip counts the running sessions; its dot is amber when one waits for 
   assert.deepEqual(sessionsCompact({ data: snapshot({ running: 3, waiting: 1, open: 8 }), ...ok }), {
     value: '3',
     level: 'warn',
-    title: 'Sessions: 3 running and 1 waiting for you, 8 open',
+    title: 'Agents: 3 running and 1 waiting for you, 8 open',
     stale: false,
   });
-  assert.deepEqual(sessionsCompact({ data: snapshot({ running: 2, open: 2 }), ...ok }), { value: '2', level: 'ok', title: 'Sessions: 2 running, 2 open', stale: false });
-  assert.deepEqual(sessionsCompact({ data: snapshot({ running: 0, open: 5 }), ...ok }), { value: '0', level: 'idle', title: 'Sessions: none running, 5 open', stale: false });
+  assert.deepEqual(sessionsCompact({ data: snapshot({ running: 2, open: 2 }), ...ok }), { value: '2', level: 'ok', title: 'Agents: 2 running, 2 open', stale: false });
+  assert.deepEqual(sessionsCompact({ data: snapshot({ running: 0, open: 5 }), ...ok }), { value: '0', level: 'idle', title: 'Agents: none running, 5 open', stale: false });
   // a waiting session with none running still warns: the number is running sessions, the dot is what needs a person
   assert.equal(sessionsCompact({ data: snapshot({ running: 0, waiting: 1, open: 1 }), ...ok }).level, 'warn');
   assert.equal(sessionsCompact({ data: snapshot({ running: 120, open: 120 }), ...ok }).value, '99+');
 });
 
 test('before the data arrives it is loading; with nothing to show it is "-" and not a number; an unreadable source is not zero', () => {
-  assert.deepEqual(sessionsCompact({ data: null, failed: false, stale: false }), { value: null, level: 'unknown', title: 'Sessions: loading', loading: true });
-  assert.deepEqual(sessionsCompact({ data: null, failed: true, stale: false }), { value: '-', level: 'unknown', title: 'Sessions: not available', stale: true });
-  assert.deepEqual(sessionsCompact({ data: snapshot({ ok: false }), failed: false, stale: true }), { value: '-', level: 'unknown', title: 'Sessions: could not be read', stale: true });
+  assert.deepEqual(sessionsCompact({ data: null, failed: false, stale: false }), { value: null, level: 'unknown', title: 'Agents: loading', loading: true });
+  assert.deepEqual(sessionsCompact({ data: null, failed: true, stale: false }), { value: '-', level: 'unknown', title: 'Agents: not available', stale: true });
+  assert.deepEqual(sessionsCompact({ data: snapshot({ ok: false }), failed: false, stale: true }), { value: '-', level: 'unknown', title: 'Agents: could not be read', stale: true });
   assert.equal(sessionsCompact({ data: snapshot({ running: 1, open: 1 }), failed: false, stale: true }).stale, true, 'old data is dimmed, not hidden');
 });
 

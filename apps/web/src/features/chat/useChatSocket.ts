@@ -450,7 +450,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
         const uuid = crypto.randomUUID();
         const waiters = waitersRef.current;
         const timer = window.setTimeout(() => {
-          if (waiters.delete(uuid)) reject(new Error('The session didn’t answer. Try again.'));
+          if (waiters.delete(uuid)) reject(new Error('The agent didn’t answer. Try again.'));
         }, ACK_TIMEOUT_MS);
         waiters.set(uuid, { kind: 'control', op, resolve, reject, timer });
         const msg: ChatControl = { type: 'control', session: sessionId, op, uuid };

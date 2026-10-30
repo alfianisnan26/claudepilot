@@ -86,7 +86,7 @@ export function FilesPanel({ sessionId, view, onView, onClose, closeLabel, title
           <h2 id={titleId} className="text-sm font-semibold">
             Files
           </h2>
-          <p className="truncate font-mono text-[11px] text-muted">{view.root ? tildify(view.root) : 'The session’s folder'}</p>
+          <p className="truncate font-mono text-[11px] text-muted">{view.root ? tildify(view.root) : 'The agent’s folder'}</p>
         </div>
         <button
           type="button"

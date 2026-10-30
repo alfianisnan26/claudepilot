@@ -178,7 +178,7 @@ export function RepoSheet({
               </Info>
             )}
             {s && s.remotes.length > 0 && (
-              <Info label="Fetched" tip="The portal never fetches by itself, so ahead and behind are as of the last fetch (by a person, a session, Sync or a worktree kept synced).">
+              <Info label="Fetched" tip="The portal never fetches by itself, so ahead and behind are as of the last fetch (by a person, an agent, Sync or a worktree kept synced).">
                 {s.fetchedAt ? <span title={formatDateTime(s.fetchedAt)}>{timeAgo(s.fetchedAt)}</span> : 'Never'}
               </Info>
             )}
@@ -216,7 +216,7 @@ export function RepoSheet({
             <button
               type="button"
               disabled={off || node.sessions.some((c) => c.live) || !!actions.denied.worktree}
-              title={actions.denied.worktree ?? (node.sessions.some((c) => c.live) ? 'A session is running in it.' : undefined)}
+              title={actions.denied.worktree ?? (node.sessions.some((c) => c.live) ? 'An agent is running in it.' : undefined)}
               onClick={() => actions.removeWorktree(node)}
               // The kit's small button, in the danger colours (its own variants carry colours that would clash with these).
               className="press inline-flex h-11 shrink-0 items-center gap-1.5 self-start rounded-full px-3.5 text-[13px] font-semibold whitespace-nowrap text-danger select-none hover:bg-danger-soft disabled:pointer-events-none disabled:opacity-50"
@@ -258,8 +258,8 @@ export function RepoSheet({
           )}
 
           {node.sessions.length > 0 && (
-            <section aria-label="Sessions" className="flex flex-col gap-1.5">
-              <h3 className="text-[13px] font-semibold text-muted">Sessions</h3>
+            <section aria-label="Agents" className="flex flex-col gap-1.5">
+              <h3 className="text-[13px] font-semibold text-muted">Agents</h3>
               <ul className="flex flex-col">
                 {node.sessions.map((c) => (
                   <li key={c.id} data-clamp-owner="" onPointerEnter={tipProps.onPointerEnter} onPointerLeave={tipProps.onPointerLeave}>
@@ -271,7 +271,7 @@ export function RepoSheet({
                       className="press flex min-h-11 items-center gap-2.5 rounded-xl px-2 py-2 hover:bg-surface-2"
                     >
                       <span className={cn('size-2 shrink-0 rounded-full', c.live ? 'bg-accent' : 'bg-line-strong')} aria-hidden="true" />
-                      <Clamp className="flex-1 text-sm font-medium">{c.title || 'Session'}</Clamp>
+                      <Clamp className="flex-1 text-sm font-medium">{c.title || 'Agent'}</Clamp>
                       <span className="shrink-0 text-[12.5px] text-muted">{SESSION_STATE[c.state as ChatSessionState]?.label ?? c.state}</span>
                     </Link>
                   </li>
