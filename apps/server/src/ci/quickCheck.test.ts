@@ -213,7 +213,7 @@ test('T-2975: *.check.mjs and scripts/** tests run with node --test, never vites
   assert.match(r.stdout, /^::: test:pkg\/tools\/y\.check\.mjs \(node --test\) ok$/m);
   assert.equal(last(r.stdout), 'QUICK CHECK: all passed');
   const tools = readFileSync(f.log, 'utf8');
-  assert.doesNotMatch(tools, /check\.mjs|util\.test\.mjs/, 'vitest never got a script check');
+  assert.doesNotMatch(tools, /^vitest .*(check\.mjs|util\.test\.mjs)/m, 'vitest never got a script check');
   assert.match(tools, /^vitest run x\.test\.mjs in pkg$/m, 'an ordinary test file still goes to vitest');
   // The runner really ran it: a failing check is a failure.
   const g = fixture(0);
