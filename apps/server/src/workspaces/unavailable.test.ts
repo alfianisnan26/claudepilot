@@ -74,8 +74,14 @@ test('a Kubernetes API that stops answering keeps its workspaces listed as unava
     const ws = new Workspaces([kubeRuntimeOn(fake, undefined, { targetId: 'kubernetes' }), docker], pendingFile, timing, undefined, lastKnown);
     const { get } = portalOn(ws, claudes);
 
-    // A good answer: both targets, kohi running; its last good list is on disk.
-    const before = await get<Workspace[]>('/api/workspaces');
+    // A good answer: both targets, kohi running; its last good list is on disk. The first ask of a new manager has one 150 ms deadline for
+    // the cold check and list together: on a starved CPU (the full suite, a busy node) it can time out, and with no last good list yet kohi
+    // is simply not listed (T-3089, 4 of 30 under load). The good answer is the precondition, not the subject: wait for it, bounded.
+    let before = await get<Workspace[]>('/api/workspaces');
+    for (let i = 0; i < 20 && byId(before.data).get('kubernetes/kohi')?.status !== 'running'; i++) {
+      await sleep(25);
+      before = await get<Workspace[]>('/api/workspaces');
+    }
     assert.equal(before.status, 200);
     assert.equal(byId(before.data).get('kubernetes/kohi')?.status, 'running');
     assert.equal(byId(before.data).get('docker/dev')?.status, 'running');
