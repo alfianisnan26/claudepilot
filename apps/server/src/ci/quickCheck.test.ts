@@ -223,14 +223,17 @@ test('T-857: a file the package test:scripts glob matches runs with node --test,
   assert.doesNotMatch(tools, /a\.check\.mjs/, 'the node:test file never reached vitest');
   assert.match(tools, /^vitest run src\/b\.test\.mjs$/m);
   // A failing node:test file fails the check.
-  writeFileSync(join(f.work, 'be/scripts/a.check.mjs'), "import { test } from 'node:test';\ntest('bad', () => { throw new Error('x'); });\n");
+  writeFileSync(
+    join(f.work, 'be/scripts/a.check.mjs'),
+    "import { test } from 'node:test';\ntest('bad', () => { throw new Error('x'); });\n",
+  );
   sh(f.work, 'git commit -qam bad');
   const bad = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'be/scripts/a.check.mjs']);
   assert.equal(bad.status, 1);
   assert.equal(last(bad.stdout), 'QUICK CHECK FAILED: test:be/scripts/a.check.mjs (node --test)');
 });
 
-test("T-3101: a package with its own scripts/test.mjs entry runs the file through it (extensionless imports need its bundle)", () => {
+test('T-3101: a package with its own scripts/test.mjs entry runs the file through it (extensionless imports need its bundle)', () => {
   const f = fixture(0);
   pkg(f, 'lab', '{}\n', {
     'scripts/test.mjs': `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(f.log)}, 'entry ' + process.argv.slice(2).join(' ') + '\\n');\n`,
