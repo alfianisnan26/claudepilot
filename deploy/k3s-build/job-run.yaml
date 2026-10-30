@@ -51,6 +51,7 @@ spec:
         # T-1643 (owner, 2026-10-19: "bantu distribusi worker node nya di node 1, 2, dan 3"): every node is control-plane now, so the
         # preference for the worker pool is gone (it piled Jobs on k3s-node2, whose CPU the workspace's agents already fill) and the spread
         # below shares the Jobs out across the three nodes. The marker (the master's memory guard) stays.
+        # T-3071: with --node <name> the marker also holds hostname In [name] AND isnan.me/pool In [worker] (a pinned perf Job).
         nodeAffinity:
           __MASTER_REQUIRED__
         podAntiAffinity:
@@ -206,9 +207,10 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: fetch-home, mountPath: /fetch-home}
           resources:
-            # As the run container's (the pod requests the larger of the two, not the sum: T-524's sizing holds).
-            requests: {cpu: 500m, memory: __MEMORY__}
-            limits: {cpu: "4", memory: __MEMORY__}
+            # As the run container's (the pod requests the larger of the two, not the sum: T-524's sizing holds). The same CPU too (T-3071):
+            # a pod is Guaranteed only when EVERY container, init ones included, requests what it is limited to.
+            requests: {cpu: "__CPU_REQUEST__", memory: __MEMORY__}
+            limits: {cpu: "__CPU_LIMIT__", memory: __MEMORY__}
       containers:
         # T-401: no git or npm credential here, no envFrom. The one exception (T-426): each --pool-env name scripts/job-run.sh accepted (PILOT-998: delivered by the
         # Secrets pool and not on its deny-list) as a secretKeyRef, written by job-run.sh in place of the __POOL_ENV__ line; never in fetch.
@@ -327,8 +329,9 @@ spec:
             # T-731: 518 measured peaks (p99 2270Mi, max 2536Mi) would fit 3Gi, but on k3s-node2 the 1 CPU requests bind at 3 Jobs: a lower default waits on a CPU-request measurement.
             # CPU 500m, not 1000m (coordinator, 2026-10-17 14:3x UTC): k3s-node2 had 87% of its CPU requested and 20% used, Jobs Pending for 'Insufficient cpu'
             # with 980m free; measured Jobs use 0.5-2.5 cores in bursts, which the 4-core limit allows. Memory request stays = limit (T-524).
-            requests: {cpu: 500m, memory: __MEMORY__}
-            limits: {cpu: "4", memory: __MEMORY__}
+            # T-3071: job-run.sh fills in 500m and 4, or n and n with --cpu <n> (a perf or Lighthouse Job: Guaranteed, no CPU contention).
+            requests: {cpu: "__CPU_REQUEST__", memory: __MEMORY__}
+            limits: {cpu: "__CPU_LIMIT__", memory: __MEMORY__}
       volumes:
         - name: tmp
           emptyDir: {medium: Memory, sizeLimit: __TMP_SIZE__}
