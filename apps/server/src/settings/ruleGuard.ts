@@ -6,7 +6,9 @@ import { ROOT, type DeliveredFile } from '../delivery/types.js';
  * workspace, Bypass included (hooks run in every permission mode, and exit 2 stops the tool call). It refuses a tool call
  * that would write a rule file: `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, a repository's
  * allow-list checker (`check-allowlist.*`) and Claude Code's own `.claude.json`, in any folder, by Edit, Write, MultiEdit,
- * NotebookEdit, an MCP tool's path argument, or a Bash command with a write form that names or could name one. Reads are
+ * NotebookEdit, an MCP tool's path argument, or a Bash command with a write form that names or could name one. Git's own
+ * control files count too (T-2871): a git folder's hooks, its config and config.worktree, and a work tree's .git pointer file;
+ * git itself still writes them (commit, fetch, merge, git config of an allowed key). Reads are
  * allowed. Every refusal appends one line to the outbox (`guard.jsonl`: session, tool, form, path; never content), which the
  * portal turns into a `guard.refused` audit row (`ruleGuardAudit.ts`).
  *
@@ -87,7 +89,73 @@ function ruleLabel(abs) {
   const base = path.basename(abs);
   if (base === '.mcp.json' || base === '.claude.json' || CHECKER_BASE.test(base)) return abs;
   if (SETTINGS_BASE.test(base) && isConfigDir(path.dirname(abs))) return abs;
+  return gitControlLabel(abs);
+}
+
+/* ---------- git's own control files (T-2871) ---------- */
+
+// A git folder's hooks run when a lane commits, merges or fetches there, and its config (and config.worktree) can set
+// core.hooksPath, core.fsmonitor or an alias. Lane worktrees share the main checkout's .git, so a hook written there runs in every
+// lane. Git writes these itself (git commit, fetch, merge, an allowed git config key; the guard reads git by subcommand); a
+// write by any other tool or command is refused, like a rule file's.
+const GIT_CONFIG_BASE = /^config(\.worktree)?$/;
+const GIT_CONTROL_TODO =
+  'git hooks and git config are not changed by agents (T-2871): write the need on your ticket under FOR THE COORDINATOR; git itself still commits, fetches and merges, and git config sets an allowed key';
+// A path whose words reach a .git folder's hooks or config, or a .git pointer file, wherever the folder is.
+const GIT_CONTROL_REL = /(^|\/)\.git(\/+(hooks|config(\.worktree)?)(\/|$)|$)/;
+// A target the guard cannot see in full: the same words, or hooks right after the unseen value ("$GIT_DIR/hooks/x"). A src/hooks
+// folder of an app under a variable is not refused, and neither is "$d/config" (too common a name to refuse unseen).
+const GIT_CONTROL_DYN = /(^|\/)\.git(\/+(hooks|config(\.worktree)?)(\/|$)|$)|^\u0000\/+hooks(\/|$)/;
+
+/** A git folder: one named .git (a work tree's), or one that holds HEAD and objects (a bare or separate one) or commondir (a linked worktree's). */
+function isGitDir(d) {
+  if (path.basename(d) === '.git') return true;
+  return exists(path.join(d, 'HEAD')) && (isDir(path.join(d, 'objects')) || exists(path.join(d, 'commondir')));
+}
+
+/** The git control file an absolute path is: a git folder's hooks (the folder or below it), its config or config.worktree, or a .git pointer file; else null. */
+function gitControlLabel(abs) {
+  const segs = abs.split('/');
+  const last = segs.length - 1;
+  if (segs[last] === '.git') {
+    // A work tree's .git FILE says where its git folder is ("gitdir: <path>"): rewritten, it points git at other hooks and config.
+    try {
+      if (fs.lstatSync(abs).isFile()) return abs;
+    } catch (e) {
+      // not there: a new .git is not a pointer yet
+    }
+    return null;
+  }
+  for (let i = last; i >= 1; i--) {
+    const dir = segs.slice(0, i).join('/') || '/';
+    if (segs[i] === 'hooks' && isGitDir(dir)) return abs;
+    if (i === last && GIT_CONFIG_BASE.test(segs[i]) && isGitDir(dir)) return abs;
+  }
   return null;
+}
+
+/** Whether a glob pattern could reach a git folder's hooks or config (.git/hooks/*, .g*\/config, <gitdir>/hook?/x). */
+function globGitControl(pattern, baseDir, dotglob) {
+  for (const p of braces(pattern)) {
+    const e = expandHome(p);
+    const known = path.isAbsolute(e) || baseDir !== null;
+    const segs = known ? path.resolve(baseDir || '/', e).split('/').filter(Boolean) : e.split('/').filter((s) => s !== '' && s !== '.');
+    for (let i = 0; i < segs.length - 1; i++) {
+      const lit = !/[*?[]/.test(segs.slice(0, i + 1).join('/'));
+      const gitDir = segRegex(segs[i], dotglob).test('.git') || (known && lit && isGitDir('/' + segs.slice(0, i + 1).join('/')));
+      if (!gitDir) continue;
+      const next = segRegex(segs[i + 1], dotglob);
+      if (next.test('hooks')) return true;
+      if (i + 2 === segs.length && (next.test('config') || next.test('config.worktree'))) return true;
+    }
+  }
+  return false;
+}
+
+/** A refusal's path (a rule label, maybe with a suffix) that is a git control file. */
+function isGitControlHit(p) {
+  const s = String(p || '').replace(/ \((through a link|a hard link|a \.claude folder)\)$/, '');
+  return path.isAbsolute(s) && !!gitControlLabel(s);
 }
 
 function isClaudeDir(abs) {
@@ -799,6 +867,8 @@ function analyzeBash(command, cwd) {
 
 // todo (PILOT-998): what the agent can do instead, printed after the reason; never in the audit row (its form stays the grouping key).
 function hit(form, p, todo) {
+  // T-2871: a git hook or config refused anywhere says what to do instead.
+  if (!todo && isGitControlHit(p)) todo = GIT_CONTROL_TODO;
   return todo ? { form: form, path: p, todo: todo } : { form: form, path: p };
 }
 
@@ -812,16 +882,20 @@ function checkTarget(w, st, base, form, opts) {
   if (w.dyn) {
     if (st.fragments || st.decoder) return hit(form + ' to a value the guard cannot see', shown(w));
     if (w.glob && couldMatch(w.text, base, dotglob)) return hit(form + ' to a pattern', shown(w));
+    // T-2871: "$d/.git/hooks/x", "$GIT_DIR/hooks/x", "$wt/.git": the visible part reaches git's hooks, config or a .git pointer.
+    if (GIT_CONTROL_DYN.test(w.text)) return hit(form + ' to a value the guard cannot see, in a git folder’s hooks or config', shown(w), GIT_CONTROL_TODO);
     return null;
   }
   for (const e of braces(w.text)) {
     if (w.glob && /[*?[]/.test(e)) {
       if (couldMatch(e, base, dotglob)) return hit(form + ' to a pattern', shown(w));
+      if (globGitControl(e, base, dotglob)) return hit(form + ' to a pattern in a git folder’s hooks or config', shown(w), GIT_CONTROL_TODO);
       continue;
     }
     if (base === null) {
       const b = path.basename(e);
       if (ANY_RULE_BASE.test(b) || b === '.claude') return hit(form + ' after a change of folder', e);
+      if (!path.isAbsolute(expandHome(e)) && GIT_CONTROL_REL.test(e)) return hit(form + ' after a change of folder, in a git folder’s hooks or config', e, GIT_CONTROL_TODO);
       if (path.isAbsolute(expandHome(e))) {
         const r = ruleTarget(e, '/', true);
         if (r) return hit(form, r);
@@ -1135,7 +1209,14 @@ function treeLandsOnRule(srcAbs, root) {
       if (++seen > 5000) return 'too big';
       const r = rel ? rel + '/' + e.name : e.name;
       if (e.isDirectory()) {
-        if (e.name !== 'node_modules' && e.name !== '.git' && r.split('/').length < 10) queue.push(r);
+        if (e.name === '.git') {
+          // T-2871: a .git folder is not walked, but its hooks and config landing on a git folder that is there already would replace
+          // that repository's. A copy into a new folder (a backup of a repository) makes a new repository: not refused.
+          const land = path.join(rootReal, r);
+          if (isDir(land)) for (const c of ['hooks', 'config']) if (exists(path.join(srcAbs, r, c))) return path.join(land, c);
+          continue;
+        }
+        if (e.name !== 'node_modules' && r.split('/').length < 10) queue.push(r);
         continue;
       }
       const target = path.join(rootReal, r);

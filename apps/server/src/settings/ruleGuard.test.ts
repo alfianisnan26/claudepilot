@@ -1836,3 +1836,148 @@ test('T-2889 the guard lets lanes run the real job-run.sh and approval-passes.sh
   refused(bash('scripts/job-run-passes.sh --list'), 'job-run.sh naming the passes file');
   refused(bash('bash scripts/job-run-passes.sh --list'), 'bash job-run.sh naming the passes file');
 });
+
+// T-2871: lane worktrees share the main checkout's .git, whose hooks run on every lane's commit, merge and fetch. Nothing refused a
+// write into <checkout>/.git/hooks/* or <checkout>/.git/config. Every case refused below was allowed before the fix. The git folders
+// are built by hand here (no git run): a main checkout, a linked worktree whose .git file points at main/.git/worktrees/wt (its
+// commondir is main/.git), and a separate git folder (no .git in its path) that a work tree's .git file points at.
+function gitRig() {
+  const root = mkdtempSync(join(tmpdir(), 'cp-ruleguard-git-'));
+  roots.push(root);
+  const main = join(root, 'main');
+  const gd = join(main, '.git');
+  for (const d of ['hooks', 'objects', 'refs/heads', 'worktrees/wt']) mkdirSync(join(gd, d), { recursive: true });
+  writeFileSync(join(gd, 'HEAD'), 'ref: refs/heads/integration\n');
+  writeFileSync(join(gd, 'config'), '[core]\n\tbare = false\n');
+  writeFileSync(join(gd, 'hooks', 'pre-commit.sample'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  mkdirSync(join(main, 'src', 'hooks'), { recursive: true });
+  const wtd = join(gd, 'worktrees', 'wt');
+  writeFileSync(join(wtd, 'HEAD'), 'ref: refs/heads/ticket/x\n');
+  writeFileSync(join(wtd, 'commondir'), '../..\n');
+  const wt = join(root, 'wt');
+  mkdirSync(wt);
+  writeFileSync(join(wt, '.git'), `gitdir: ${wtd}\n`);
+  const sep = join(root, 'store', 'proj.gitdir');
+  for (const d of ['hooks', 'objects']) mkdirSync(join(sep, d), { recursive: true });
+  writeFileSync(join(sep, 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(sep, 'config'), '[core]\n');
+  const proj = join(root, 'proj');
+  mkdirSync(proj);
+  writeFileSync(join(proj, '.git'), `gitdir: ${sep}\n`);
+  // A folder holding its own .git/hooks (copied over a checkout), a hooks folder to copy in, a script to install as a hook.
+  const tpl = join(root, 'tpl');
+  mkdirSync(join(tpl, '.git', 'hooks'), { recursive: true });
+  writeFileSync(join(tpl, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\n');
+  writeFileSync(join(tpl, 'README.md'), 'x\n');
+  mkdirSync(join(root, 'kit', 'hooks'), { recursive: true });
+  writeFileSync(join(root, 'kit', 'hooks', 'post-merge'), '#!/bin/sh\n');
+  const evil = join(root, 'evil');
+  writeFileSync(evil, '#!/bin/sh\n', { mode: 0o755 });
+  symlinkSync(join(gd, 'hooks'), join(main, 'hl'));
+  return { root, main, gd, wt, wtd, sep, proj, tpl, evil };
+}
+const G = gitRig();
+const GIT_TODO = /What to do: git hooks and git config are not changed by agents/;
+
+const T2871_FILE_TOOLS: [string, string, Record<string, unknown>, string][] = [
+  ['Edit of .git/config', 'Edit', { file_path: join(G.gd, 'config'), old_string: 'a', new_string: 'b' }, G.main],
+  ['Write of .git/hooks/pre-commit', 'Write', { file_path: join(G.gd, 'hooks', 'pre-commit'), content: '#!/bin/sh\n' }, G.main],
+  ['Write of a relative .git/hooks/post-merge', 'Write', { file_path: '.git/hooks/post-merge', content: 'x' }, G.main],
+  ['MultiEdit of .git/config', 'MultiEdit', { file_path: join(G.gd, 'config'), edits: [] }, G.main],
+  ['Write of .git/config.worktree', 'Write', { file_path: join(G.gd, 'config.worktree'), content: 'x' }, G.main],
+  ['Write from a linked worktree into the common .git/hooks', 'Write', { file_path: join(G.gd, 'hooks', 'pre-push'), content: 'x' }, G.wt],
+  ['Write of a linked worktree’s config.worktree', 'Write', { file_path: join(G.wtd, 'config.worktree'), content: 'x' }, G.wt],
+  ['Write of a worktree’s .git pointer file', 'Write', { file_path: join(G.wt, '.git'), content: 'gitdir: /tmp/x\n' }, G.wt],
+  ['Write into a separate git folder’s hooks', 'Write', { file_path: join(G.sep, 'hooks', 'pre-commit'), content: 'x' }, G.proj],
+  ['Edit of a separate git folder’s config', 'Edit', { file_path: join(G.sep, 'config'), old_string: 'a', new_string: 'b' }, G.proj],
+  ['Write through a symlink to .git/hooks', 'Write', { file_path: join(G.main, 'hl', 'pre-push'), content: 'x' }, G.main],
+  ['an MCP write_file into .git/hooks', 'mcp__fs__write_file', { path: join(G.gd, 'hooks', 'pre-commit'), content: 'x' }, G.main],
+];
+for (const [what, tool, input, cwd] of T2871_FILE_TOOLS) {
+  test(`T-2871 refused with a What to do line: ${what}`, () => {
+    const res = run(R, tool, input, { cwd });
+    refused(res, what);
+    assert.match(res.stderr, GIT_TODO);
+  });
+}
+
+const T2871_BASH: [string, string, string][] = [
+  ['redirect into .git/hooks', 'echo x > .git/hooks/pre-commit', G.main],
+  ['append to .git/config', 'printf "[core]\\n" >> .git/config', G.main],
+  ['tee into .git/hooks', `cat ${G.evil} | tee .git/hooks/pre-push`, G.main],
+  ['tee -a .git/config', 'echo x | tee -a .git/config', G.main],
+  ['cp onto a hook', `cp ${G.evil} .git/hooks/pre-commit`, G.main],
+  ['cp into the hooks folder', `cp ${G.evil} .git/hooks/`, G.main],
+  ['cp -t the hooks folder', `cp -t .git/hooks ${G.evil}`, G.main],
+  ['mv onto a hook', `mv ${G.evil} .git/hooks/commit-msg`, G.main],
+  ['mv a hook away', 'mv .git/hooks/pre-commit.sample /tmp/x', G.main],
+  ['install a hook', `install -m 755 ${G.evil} .git/hooks/post-checkout`, G.main],
+  ['chmod a hook', 'chmod +x .git/hooks/pre-commit.sample', G.main],
+  ['chmod -R the hooks folder', 'chmod -R 777 .git/hooks', G.main],
+  ['ln -sf onto a hook', `ln -sf ${G.evil} .git/hooks/pre-commit`, G.main],
+  ['rm -rf the hooks folder', 'rm -rf .git/hooks', G.main],
+  ['touch a hook', 'touch .git/hooks/pre-rebase', G.main],
+  ['sed -i .git/config', 'sed -i s/a/b/ .git/config', G.main],
+  ['dd of= a hook', `dd if=${G.evil} of=.git/hooks/pre-commit`, G.main],
+  ['chmod of a pattern .git/hooks/*', 'chmod +x .git/hooks/*', G.main],
+  ['cp to a pattern .g*/hook?/pre-commit', `cp ${G.evil} .g*/hook?/pre-commit`, G.main],
+  ['cp -r a hooks folder into .git', `cp -r ${join(G.root, 'kit', 'hooks')} .git/`, G.main],
+  ['cp -r a folder whose .git lands on the checkout’s', `cp -r ${G.tpl}/. ${G.main}/`, G.main],
+  ['redirect from a linked worktree into the common .git/hooks', `echo x > ${join(G.gd, 'hooks', 'pre-commit')}`, G.wt],
+  ['redirect onto a worktree’s .git pointer', "echo 'gitdir: /tmp/x' > .git", G.wt],
+  ['redirect into a separate git folder’s hooks', `echo x > ${join(G.sep, 'hooks', 'pre-commit')}`, G.proj],
+  ['chmod of a pattern in a separate git folder’s hooks', `chmod +x ${join(G.sep, 'hooks')}/*`, G.proj],
+  ['redirect to "$GIT_DIR/hooks/..."', 'echo x > "$GIT_DIR/hooks/pre-commit"', G.main],
+  ['redirect to "$d/.git/config"', 'echo x > "$d/.git/config"', G.main],
+  ['cp into "$r"/.git/hooks/', `cp ${G.evil} "$r"/.git/hooks/`, G.main],
+  ['redirect into .git/hooks after cd to a variable', 'cd "$d" && echo x > .git/hooks/pre-commit', G.main],
+];
+for (const [what, command, cwd] of T2871_BASH) {
+  test(`T-2871 refused with a What to do line: ${what}`, () => {
+    const res = bash(command, { cwd });
+    refused(res, `${what}: ${command}`);
+    assert.match(res.stderr, GIT_TODO);
+  });
+}
+
+// Reads, the writes git makes itself, and files that only look alike (an app's src/hooks, a repository-root file named config) pass.
+test('T-2871 reads of git hooks and config, git’s own commands and look-alike files are allowed', () => {
+  const cases: [string, string][] = [
+    ['cat .git/config', 'cat .git/config'],
+    ['grep .git/config', 'grep -n bare .git/config'],
+    ['ls .git/hooks', 'ls -la .git/hooks'],
+    ['head of a hook', 'head -1 .git/hooks/pre-commit.sample'],
+    ['git log', 'git log --oneline -3'],
+    ['git status', 'git status'],
+    ['git config --get', 'git config --get user.name'],
+    ['git config of an allowed key', 'git config user.name Lane'],
+    ['git commit', 'git commit -m "T-2871: x"'],
+    ['git fetch', 'git fetch origin'],
+    ['git merge --ff-only', 'git merge --ff-only origin/integration'],
+    ['cp a hook out', `cp .git/hooks/pre-commit.sample ${join(G.root, 'sample-copy')}`],
+    ['an app’s src/hooks', 'echo x > src/hooks/useThing.ts'],
+    ['a repository-root file named config', 'echo x > config'],
+    ['src/hooks under a variable', 'echo x > "$ROOT/src/hooks/useThing.ts"'],
+    ['config under a variable', 'echo x > "$OUT/config"'],
+    ['cp -r a repository into a new folder', `cp -r ${G.tpl} ${join(G.root, 'backup')}`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command] of cases) {
+    try {
+      allowed(bash(command, { cwd: G.main }), `${what}: ${command}`);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  for (const [what, file] of [
+    ['Write of an app’s src/hooks file', join(G.main, 'src', 'hooks', 'useThing.ts')],
+    ['Write of a repository-root config', join(G.main, 'config')],
+  ] as const) {
+    try {
+      allowed(run(R, 'Write', { file_path: file, content: 'x' }, { cwd: G.main }), what);
+    } catch (e) {
+      misses.push((e as Error).message.split('\n')[0] ?? 'failed');
+    }
+  }
+  assert.deepEqual(misses, []);
+});

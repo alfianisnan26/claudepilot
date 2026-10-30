@@ -946,6 +946,18 @@ Every file under `/etc/claude-code/` (managed settings and their drop-ins) and `
 files and the other delivered scripts) is a rule file too, and so are those folders themselves. (`sudo` in the workspace is
 a separate tightening, T-422.)
 
+**Git's own control files** count as rule files too (T-2871): a git folder's `hooks` (the folder and everything below it),
+its `config` and `config.worktree`, and a work tree's `.git` pointer file. A git folder is one named `.git`, or one that holds
+`HEAD` and `objects` (a bare repository, or the git folder a `.git` file points to) or `commondir` (a linked worktree's).
+Lane worktrees share the main checkout's `.git`, so a hook written there would run in every lane's `git commit`, `merge`
+and `fetch`. Every write form below is refused for them (Edit, Write, a redirect, `tee`, `cp`, `mv`, `chmod`, `ln`, a
+pattern such as `.git/hooks/*`, a target under a variable whose visible part is `.git/hooks`, `.git/config` or
+`$X/hooks`, and a folder copy whose `.git` lands on a git folder that is already there), with the line "What to do: git
+hooks and git config are not changed by agents ...". Reads pass (`cat`, `grep`, `ls`, `git log`, `git config --get`), and so
+do the writes git makes itself (`git commit`, `fetch`, `merge`, `init`, `clone`, `git config` of an allowed key), since the
+guard reads git by subcommand. Not covered: a hard link to a git config made earlier, and a target under a variable
+ending in `/config`.
+
 **How it is delivered.** The policy owner's fragment (`settings/agentEnv.ts`), which every workspace gets, carries two
 root-owned files outside every workspace folder and one hook in `10-claudepilot-policy.json`:
 
