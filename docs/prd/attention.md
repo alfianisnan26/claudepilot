@@ -34,7 +34,7 @@ module's own route that decides it: a POST path, or `SOCKET` for the chat).
   one for the person's Later, whatever the number of items (a test counts the `prepare` calls).
 - **Unavailable is a state.** A source that throws gives `counts[kind] = null` and its kind in `unavailable`; the page says "Unavailable:
   Tickets", never 0.
-- **Order.** Grouped by class in the order above, then the oldest first.
+- **Order.** Grouped by class in the order above, then the oldest first. Refused calls (`group: 'refusal'`, an approval of kind `guard.refusal`, T-3114) come after every real ask, and the list shows them in one collapsed group, "Agents refused N calls" (N counts each card's repeats), below the class groups (approvals PRD, "Refused calls stay small").
 
 ## 2. The first sources (built)
 

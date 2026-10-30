@@ -6,7 +6,8 @@
 // workspace the line came from; at most OUTBOX_PENDING_MAX of them wait per session; and the payload goes through the service's own checks
 // (schema, size, no secret-shaped value or key). A line that fails any of these makes nothing: the printed id stays unknown.
 
-import { APPROVAL_OUTBOX_KINDS, type ApprovalKind } from '@portal/contracts';
+import { isAppError } from '@isnanme/core';
+import { APPROVAL_OUTBOX_KINDS, type ApprovalKind, type ChatServerMessage } from '@portal/contracts';
 import type { OutboxEvent } from '../delivery/outbox.js';
 import type { Store } from '../store/store.js';
 import { portalSession } from '../settings/ruleGuardAudit.js';
@@ -22,7 +23,8 @@ const isOutboxKind = (k: unknown): k is ApprovalKind => typeof k === 'string' &&
 const SESSION = /^[A-Za-z0-9-]{1,64}$/;
 
 /**
- * Files each `request` line of one workspace's pull. Returns the ids made. `session` is the portal chat id (job-run reads PILOT_SESSION_ID);
+ * Files each `request` line of one workspace's pull. Returns the ids of the cards made or, for a repeat of a waiting refused call (T-3114),
+ * of the card it was folded into. `session` is the portal chat id (job-run reads PILOT_SESSION_ID);
  * `claudeSession` is a Claude Code session id (the guard's hook input), mapped to its portal chat.
  */
 export function fileRefusalRequests(approvals: Approvals, store: Pick<Store, 'db'>, workspaceId: string, events: OutboxEvent[], log?: (what: string, e: unknown) => void): string[] {
@@ -34,16 +36,44 @@ export function fileRefusalRequests(approvals: Approvals, store: Pick<Store, 'db
     // Only a chat of THIS workspace: a line may not name another workspace's session (its card and its message would go there).
     const session = sessionId ? approvals.chat?.get(sessionId) : null;
     if (!session || session.workspaceId !== workspaceId) continue;
-    if (approvals.pendingCount(session.id, APPROVAL_OUTBOX_KINDS) >= OUTBOX_PENDING_MAX) continue;
     try {
-      const a = approvals.create({ kind: e.kind, payload: e.payload, reason: e.kind === 'jobrun.pool_env' ? 'job-run refused a deny-listed name' : 'the rule guard refused this call' }, { sessionId: session.id, workspaceId }, { id: e.id });
+      // T-3114: the service folds a repeat of a waiting refused call into its card (no new card, so it is not capped) and caps the rest.
+      const a = approvals.create(
+        { kind: e.kind, payload: e.payload, reason: e.kind === 'jobrun.pool_env' ? 'job-run refused a deny-listed name' : 'the rule guard refused this call' },
+        { sessionId: session.id, workspaceId },
+        { id: e.id, pendingCap: { max: OUTBOX_PENDING_MAX, kinds: APPROVAL_OUTBOX_KINDS } },
+      );
       made.push(a.id);
     } catch (err) {
-      // A refused payload (schema, size, a secret-shaped value): the words are the service's, never the payload.
+      // Over the cap: dropped quietly, as before. A refused payload (schema, size, a secret-shaped value): the words are the service's, never
+      // the payload.
+      if (isAppError(err) && err.code === 'RATE_LIMITED') continue;
       log?.(`approval request from ${workspaceId}`, err instanceof Error ? new Error(err.message) : err);
     }
   }
   return made;
+}
+
+/**
+ * T-3114: a chat event that ends a session (state `ended`, archived, or deleted) expires the refused calls it filed: nothing waits on them
+ * any more. Any other event does nothing. Returns how many cards expired.
+ */
+export function expireRefusalsOnEnd(approvals: Pick<Approvals, 'expireForSession'>, sessionId: string, msg: ChatServerMessage, log?: (what: string, e: unknown) => void): number {
+  const why =
+    msg.type === 'session' && msg.session.state === 'ended'
+      ? 'The asking session ended.'
+      : msg.type === 'session' && msg.session.archivedAt
+        ? 'The asking session was archived.'
+        : msg.type === 'removed'
+          ? 'The asking session was deleted.'
+          : null;
+  if (!why) return 0;
+  try {
+    return approvals.expireForSession(sessionId, why);
+  } catch (e) {
+    log?.(`expiring the refused calls of ${sessionId}`, e);
+    return 0;
+  }
 }
 
 /**

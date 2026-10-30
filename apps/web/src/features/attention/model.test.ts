@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ATTENTION_KIND_LABEL, type AttentionItem, type AttentionList } from '@portal/contracts';
-import { badgeText, groupByWhy, kindChoices, waited } from './model.js';
+import { badgeText, groupByWhy, kindChoices, refusalsOf, refusedTitle, waited } from './model.js';
 
 const item = (over: Partial<AttentionItem>): AttentionItem => ({
   kind: 'mcp_version',
@@ -32,6 +32,22 @@ test('rows are grouped by why in the class order, the oldest first, with no empt
       ['question', ['q']],
     ],
   );
+});
+
+test('T-3114: refused calls leave the why groups for their own group, which counts the calls (a card refused 3 times is 3)', () => {
+  const t = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+  const items = [
+    item({ id: 'bypass', kind: 'approval', why: 'gate', since: t(1) }),
+    item({ id: 'r1', kind: 'approval', why: 'gate', group: 'refusal', since: t(3) }),
+    item({ id: 'r2', kind: 'approval', why: 'gate', group: 'refusal', count: 3, since: t(9) }),
+  ];
+  assert.deepEqual(groupByWhy(items).map((g) => [g.why, g.items.map((i) => i.id)]), [['gate', ['bypass']]], 'the real ask alone in its group');
+  const refused = refusalsOf(items);
+  assert.deepEqual(refused.items.map((i) => i.id), ['r2', 'r1'], 'oldest first');
+  assert.equal(refused.calls, 4);
+  assert.equal(refusedTitle(refused.calls), 'Agents refused 4 calls');
+  assert.equal(refusedTitle(1), 'Agents refused 1 call');
+  assert.deepEqual(refusalsOf([items[0]!]), { items: [], calls: 0 });
 });
 
 test('the age is one short word, relative to now', () => {
