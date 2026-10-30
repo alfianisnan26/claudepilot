@@ -3636,6 +3636,57 @@ test('T-611 merge: the reuse key hashes job-run.sh AND job-run.yaml; the Secret 
   assert.ok(!p.applied1().includes(secret), 'the value is never in the manifest');
 });
 
+test("T-3006: an --also clone of platform/konfersi-lab-platform is KONFERSI_LAB_PLATFORM_DIR for the command; another --also or none sets nothing; the command's own value wins", () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-labdir-'));
+  roots.push(root);
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  // One bare repository per name, each with one commit on main.
+  const bare = (rel: string) => {
+    const src = join(root, `src-${hex(3)}`);
+    mkdirSync(src);
+    git(['init', '-q', '-b', 'main'], src);
+    writeFileSync(join(src, 'README'), `${rel}\n`);
+    git(['add', '.'], src);
+    git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], src);
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    git(['clone', '-q', '--bare', src, join(root, rel)], root);
+    return `file://${join(root, rel)}`;
+  };
+  const main = bare('claudepilot.git');
+  const lab = bare('platform/konfersi-lab-platform.git');
+  const shared = bare('konfersi/konfersi-shared.git');
+  const pod = (also: string, cmd: string) => {
+    const jr = join(root, `run-${hex(3)}`);
+    const r = runPod(TEMPLATE, {
+      PATH: process.env.PATH,
+      JR_ROOT: jr,
+      JR_REPO_URL: main,
+      JR_REF: 'main',
+      JR_ALSO: also,
+      JR_STEPS: 'none',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from(cmd).toString('base64'),
+      NODE_NAME: 'n',
+    });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return { jr, out: r.stdout };
+  };
+  // The command prints the variable (empty when unset) and, when set, the README of the folder it names.
+  const show = 'echo "LABDIR=$KONFERSI_LAB_PLATFORM_DIR"; [ -z "$KONFERSI_LAB_PLATFORM_DIR" ] || cat "$KONFERSI_LAB_PLATFORM_DIR/README"';
+  // With the lab platform among the --also clones: its absolute path next to the repository, and the clone is there.
+  const withLab = pod(`konfersi-shared=${shared}@main konfersi-lab-platform=${lab}@main`, show);
+  assert.ok(withLab.out.includes(`\nLABDIR=${join(withLab.jr, 'w/konfersi-lab-platform')}\n`), withLab.out);
+  assert.match(withLab.out, /^platform\/konfersi-lab-platform\.git$/m, "the path holds the clone's files");
+  // Another --also, or none: not set.
+  assert.match(pod(`konfersi-shared=${shared}@main`, show).out, /^LABDIR=$/m);
+  assert.match(pod('', show).out, /^LABDIR=$/m);
+  // A value the command sets itself is the one it sees.
+  const own = pod(`konfersi-lab-platform=${lab}@main`, 'KONFERSI_LAB_PLATFORM_DIR=../mine; echo "LABDIR=$KONFERSI_LAB_PLATFORM_DIR"');
+  assert.match(own.out, /^LABDIR=\.\.\/mine$/m);
+});
+
 test('gates first: while a gate pod waits for a node and a Job of ours runs, a Job about to go waits; it goes once the gate is placed; with none running it never waits', async () => {
   const w = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }]);
   // A gate Pending with no node (as kubectl prints name=nodeName per line).

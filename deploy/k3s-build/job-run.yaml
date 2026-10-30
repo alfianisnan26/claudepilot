@@ -267,6 +267,12 @@ spec:
                 for d in $(installs); do installscripts "$root/w/$d" "$d"; done
               fi
               t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
+              # T-3006: an --also clone of platform/konfersi-lab-platform is named to the command as KONFERSI_LAB_PLATFORM_DIR (the lab
+              # plugin's test/vsixEnv reads it), the clone's absolute path next to the repository. A value the command sets itself wins.
+              for a in $JR_ALSO; do
+                u=${a#*=}; u=${u%@*}
+                case $u in */platform/konfersi-lab-platform.git) [ -n "${KONFERSI_LAB_PLATFORM_DIR:-}" ] || export KONFERSI_LAB_PLATFORM_DIR="$root/w/${a%%=*}" ;; esac
+              done
               cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
               pool_on
               bash -o pipefail "$root/cmd.sh"; rc=$?

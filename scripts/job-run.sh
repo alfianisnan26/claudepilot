@@ -17,7 +17,8 @@
 #                                                       differs. Prints "PROOF: passes on <ref>, fails on <against>" (exit 0) or "NO PROOF: <why>"
 #                                                       (exit 1; 2 when <ref> or a kept path is missing). Without it nothing changes.
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
-#     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
+#     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg;
+#                                                       platform/konfersi-lab-platform also sets KONFERSI_LAB_PLATFORM_DIR to its clone (T-3006)
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
 #     --deploy-layout                                   (T-2865, needs --also) the --also clones get no npm ci and no install scripts (no node_modules), as
 #                                                       stg-deploy lays them out; only the main repository installs. Without it nothing changes

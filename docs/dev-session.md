@@ -151,6 +151,7 @@ git push origin HEAD:wip/<name>                                              # t
 scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
 scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
 scripts/job-run.sh --repo konfersi:platform/<app> --ref <commit> --also platform/konfersi-shared@stg --deploy-layout -- '<build>'   # T-2865: the sibling gets no npm ci (no node_modules), as stg-deploy lays it out; only the app installs
+scripts/job-run.sh --repo konfersi:platform/<lab-plugin> --ref <branch> --also platform/konfersi-lab-platform@<ref> -- 'npm test'   # T-3006: the command gets KONFERSI_LAB_PLATFORM_DIR (the clone's absolute path); a value the command sets wins
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 # Scripts that rewrite the checkout (tools/qa/rtk-history.sh, rtk-classes.sh, rtk-measure.sh, and the mutant runner rtk-guard-mutants.sh; T-736) refuse unless the Job's own env var JR_REPO_URL is set and the tree is clean.
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
