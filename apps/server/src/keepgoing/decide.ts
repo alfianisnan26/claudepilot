@@ -17,8 +17,21 @@ import type { PolicyRow, ReportRow } from './store.js';
 
 const MIN = 60_000;
 
+/** Why nothing is done this round. T-3189: `drained`, the chat has nothing to act on (not nudged, not counted). */
+export type NoneWhy =
+  | 'busy'
+  | 'working'
+  | 'waiting'
+  | 'backoff'
+  | 'recent_nudge'
+  | 'not_yet'
+  | 'nudged_period'
+  | 'reported'
+  | 'restart_gap'
+  | 'drained';
+
 export type Decision =
-  | { act: 'none'; why: 'busy' | 'working' | 'waiting' | 'backoff' | 'recent_nudge' | 'not_yet' | 'nudged_period' | 'reported' | 'restart_gap' | 'drained' }
+  | { act: 'none'; why: NoneWhy }
   | { act: 'stand_down'; reason: string }
   | { act: 'answer'; request: ChatRequest }
   /** `why`: for `down`, what keeps it down (written on the ticket). */

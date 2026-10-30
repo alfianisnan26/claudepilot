@@ -116,7 +116,22 @@ export interface SetKeepGoingPauseRequest {
  * T-257 item 4: `escalated` a chat left down was told to the coordinator's chat. T-3189: `drained` a nudge was skipped because the chat has
  * nothing to act on (its tickets wait on others, no worker runs): written once per idle period, not counted toward the cap.
  */
-export const KEEPGOING_ACTIONS = ['nudged', 'woke', 'answered', 'reported', 'failed', 'capped', 'stood_down', 'set', 'recovered', 'recover_refused', 'restarted', 'escalated', 'rebypassed', 'drained'] as const;
+export const KEEPGOING_ACTIONS = [
+  'nudged',
+  'woke',
+  'answered',
+  'reported',
+  'failed',
+  'capped',
+  'stood_down',
+  'set',
+  'recovered',
+  'recover_refused',
+  'restarted',
+  'escalated',
+  'rebypassed',
+  'drained',
+] as const;
 export type KeepGoingActionKind = (typeof KEEPGOING_ACTIONS)[number];
 
 /**

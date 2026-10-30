@@ -32,7 +32,8 @@ test('heldBy: counts per session, active only open and in progress, the newest u
 
     now += 60_000;
     h.tickets.update(UI, blocked, { status: 'in_progress' });
-    assert.deepEqual(h.tickets.heldBy('lead'), { total: 2, active: 1, lastChangeAt: new Date(now).toISOString() }, 'a status change moves it; in progress is active');
+    const after = { total: 2, active: 1, lastChangeAt: new Date(now).toISOString() };
+    assert.deepEqual(h.tickets.heldBy('lead'), after, 'a status change moves it; in progress is active');
 
     h.tickets.close(UI, review, { summary: 'done' });
     assert.equal(h.tickets.heldBy('lead').total, 2, 'a closed ticket still counts as held');
