@@ -3655,3 +3655,86 @@ test('gates first: while a gate pod waits for a node and a Job of ours runs, a J
   assert.equal(r2.code, 0, r2.out);
   assert.doesNotMatch(r2.out, /gates go first/);
 });
+
+// ---- T-3115 (incident T-2548): tokens minted at run time (a Cloudflare Access meta token in a URL Playwright printed) are masked by shape.
+// Every JWT here is built at run time (a JSON header and payload, base64url-encoded, random bytes for the signature): never a literal.
+const b64url = (v: string | Buffer) => Buffer.from(v).toString('base64url');
+const accessJwt = () =>
+  [
+    b64url(JSON.stringify({ alg: 'RS256', kid: hex(8), typ: 'JWT' })),
+    b64url(JSON.stringify({ aud: [hex(16)], email: 'qa@example.test', exp: 1, sub: hex(8) })),
+    b64url(randomBytes(64)),
+  ].join('.');
+
+test('T-3115 the mask hides access tokens by shape: meta, CF_Authorization, cf_clearance, token query values and bare JWTs', { timeout: 60_000 }, () => {
+  const jwt = accessJwt();
+  assert.ok(jwt.startsWith('eyJ'), 'the fixture is JWT-shaped');
+  assert.equal(
+    awkMask([], `waiting for https://stg-admin.example.test/login?meta=${jwt}&next=/home`),
+    'waiting for https://stg-admin.example.test/login?meta=R&next=/home',
+    '?meta=<jwt> is masked, the next parameter stays',
+  );
+  const v = hex(20);
+  assert.equal(awkMask([], `GET /a?x=1&CF_Authorization=${v}`), 'GET /a?x=1&CF_Authorization=R', '&CF_Authorization=');
+  assert.equal(awkMask([], `/b?META=${v}#top`), '/b?META=R#top', 'any case; the value ends at #');
+  assert.equal(awkMask([], `/c?Token=${v} and &cf_clearance=${v}.${v}-1 rest`), '/c?Token=R and &cf_clearance=R rest', 'token, cf_clearance; ends at a space');
+  assert.equal(awkMask([], `href="/d?q=1&token=${v}"`), 'href="/d?q=1&token=R"', 'ends at a quote');
+  assert.equal(awkMask([], `redirect=%2Flogin%3Fmeta%3D${v}`), 'redirect=%2Flogin%3Fmeta%3DR', 'URL-encoded ? and =');
+  assert.equal(awkMask([], `Authorization: Bearer ${jwt}`), 'Authorization: Bearer R', 'a bare JWT');
+  assert.equal(awkMask([], `cookie CF_Authorization=${jwt}; path=/`), 'cookie CF_Authorization=R; path=/', 'a JWT in a cookie');
+  assert.equal(awkMask([], `a ${jwt} b ${accessJwt()} c`), 'a R b R c', 'every JWT on a line');
+  const pool = `pv${hex(10)}`;
+  assert.equal(awkMask([pool], `${pool} ?token=${v} ${jwt}`, '[redacted]'), '[redacted] ?token=[redacted] [redacted]', 'with value masks, one pass');
+  assert.equal(awkMask([], `?token=${jwt}`, `?token=${jwt}`), `?token=?token=${jwt}`, 'a replacement that is itself a hit is not masked again');
+  // Left as they are: normal lines, and URLs without those parameters.
+  for (const line of [
+    'hello from the job',
+    '  ✓ 12 passed (3.4s), version 1.2.3',
+    'https://stg-admin.example.test/a?page=2&q=meta&tokens=3&mytoken=4#token=5',
+    'https://example.test/x?meta=&token=',
+    'eyJ alone, and a.b.c, and eyJabc.def',
+    'npm warn deprecated tokenizer@1.0.0: meta=1 token=2',
+  ])
+    assert.equal(awkMask([], line), line, `unchanged: ${line}`);
+});
+
+test('T-3115 a run whose log prints a URL with ?meta=<jwt>: masked in the output and the log file, noted, not a credential warning', () => {
+  const w = world();
+  const jwt = accessJwt(),
+    clear = hex(24);
+  const url = `https://stg-admin.example.test/login?meta=${jwt}&CF_Authorization=${clear}`;
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: jobLog(w.root, 0, `TimeoutError: page.goto: navigating to "${url}"\n`) }));
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--', 'npx playwright test']);
+  assert.equal(r.code, 0, r.out);
+  for (const t of [jwt, clear]) assert.ok(!r.out.includes(t) && !w.log().includes(t), 'not in the output nor in the log file');
+  assert.match(r.out, /login\?meta=\[redacted\]&CF_Authorization=\[redacted\]"/);
+  assert.match(w.log(), /login\?meta=\[redacted\]&CF_Authorization=\[redacted\]"/);
+  assert.match(r.out, /note: an access token .* was in the Job's log/);
+  assert.doesNotMatch(r.out, /WARNING: a credential was in the Job's log/);
+  assert.match(r.out, /hello from the job/, 'other lines unchanged');
+});
+
+test('T-3115 --out files that hold an access token are kept and counted (never named); clean ones say nothing', () => {
+  const w = world();
+  const jwt = accessJwt();
+  const art = join(w.root, 'art-t3115');
+  mkdirSync(join(art, 'reports'), { recursive: true });
+  writeFileSync(join(art, 'reports', 'trace.txt'), `goto ?meta=${jwt}\n`);
+  writeFileSync(join(art, 'reports', 'clean.txt'), 'nothing here\n');
+  writeFileSync(join(w.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art) }));
+  const out = join(w.root, 'out-t3115');
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--artifacts', 'reports', '--out', out, '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  assert.ok(existsSync(join(out, 'reports', 'trace.txt')), 'kept');
+  assert.match(r.out, /WARNING: 1 artifact file\(s\) in .* hold an access token/);
+  assert.doesNotMatch(r.out, /trace\.txt/, 'never named');
+  assert.ok(!r.out.includes(jwt));
+  const c = world();
+  const art2 = join(c.root, 'art-clean');
+  mkdirSync(join(art2, 'reports'), { recursive: true });
+  writeFileSync(join(art2, 'reports', 'clean.txt'), 'nothing here, a.b.c\n');
+  writeFileSync(join(c.root, 'scenario.json'), JSON.stringify({ rc: 0, log: artifactLog(art2) }));
+  const r2 = c.run(['--repo', 'claudepilot', '--ref', 'main', '--artifacts', 'reports', '--out', join(c.root, 'o'), '--', 'true']);
+  assert.equal(r2.code, 0, r2.out);
+  assert.doesNotMatch(r2.out, /hold an access token|note: an access token/);
+});

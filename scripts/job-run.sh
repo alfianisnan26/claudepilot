@@ -76,7 +76,10 @@
 # `fetch` reads that Secret (T-401): it clones and runs `npm ci --ignore-scripts`, and no code of the repository or a dependency runs there;
 # the install scripts and the command run in the `run` container, which has no git or npm credential in its environment, git config or files, and gets
 # only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is the --pool-env deny-list (PILOT-998: no write, admin, production or master credential, and none of the runner's own tokens, goes in; a delivered name outside it does, the T-2823 read-only Koneviro keys included). The raw
-# log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
+# log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. Besides those values, the streamed copy (and
+# so the log file and a saved --reuse log) masks tokens minted at run time (T-3115): the value of a meta, CF_Authorization, cf_clearance or token
+# query parameter (any case, after ? or &), and any JWT (three base64url segments, the first starting eyJ); --out files are only counted for them
+# (a warning, nothing deleted). The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
 set -eu
 # Under xtrace (bash -x, SHELLOPTS) the trace would print the credentials this script handles: refuse (T-426).
@@ -682,13 +685,25 @@ done
 # value held the replacement text ("REDACTED", "[redacted]"). Every hit of every value (overlapping, nested, any character: index() is a plain
 # substring search, no regex) becomes a span; the spans are sorted and merged; each merged run is replaced once. It always ends: each search
 # starts one character after the last hit. A value under 8 characters is not masked (too short to be a credential, and it would eat the log).
-MASKFN='function mask(line, nt, toks, repl,   k, tok, p, i, s, e, n, a, b, j, m, t1, t2, out, pos) {
+# T-3115 (incident T-2548: Playwright printed a stg-admin URL with the signed Cloudflare Access meta token): tokens minted at RUNTIME have no
+# value to match, so two shapes are masked too, as spans in the same one pass over the original line: (1) the VALUE of a query parameter named
+# meta, cf_authorization, cf_clearance or token (any case) after ? or & (or their URL-encoded %3f, %26; = or %3d), up to & # space tab " quote
+# < >; (2) a JWT: three base64url segments, the first starting eyJ (base64 of {", a JSON header). Each search starts after the last match, so it
+# ends. A hit sets phit (not hit): the filter notes it but it is not a credential leak (the reuse cache still saves the masked log).
+MASKFN='function mask(line, nt, toks, repl,   k, tok, p, i, s, e, n, a, b, j, m, t1, t2, out, pos, low) {
   n = 0
   for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) < 8) continue
     p = 1
     while ((i = index(substr(line, p), tok)) > 0) { s = p + i - 1; n++; a[n] = s; b[n] = s + length(tok) - 1; p = s + 1 } }
+  if (n > 0) hit = 1
+  low = tolower(line); p = 1
+  while (match(substr(low, p), "([?&]|%3f|%26)(meta|cf_authorization|cf_clearance|token)(=|%3d)[^&# \t\"\047<>]+")) {
+    s = p + RSTART - 1; e = s + RLENGTH - 1; p = e + 1
+    match(substr(low, s, RLENGTH), "=|%3d"); n++; a[n] = s + RSTART - 1 + RLENGTH; b[n] = e; phit = 1 }
+  p = 1
+  while (match(substr(line, p), "eyJ[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+[.][A-Za-z0-9_-]+")) {
+    s = p + RSTART - 1; e = s + RLENGTH - 1; p = e + 1; n++; a[n] = s; b[n] = e; phit = 1 }
   if (n == 0) return line
-  hit = 1
   for (j = 2; j <= n; j++) { t1 = a[j]; t2 = b[j]; m = j - 1; while (m >= 1 && a[m] > t1) { a[m + 1] = a[m]; b[m + 1] = b[m]; m-- } a[m + 1] = t1; b[m + 1] = t2 }
   out = ""; pos = 1; j = 1
   while (j <= n) { s = a[j]; e = b[j]; j++
@@ -697,12 +712,12 @@ MASKFN='function mask(line, nt, toks, repl,   k, tok, p, i, s, e, n, a, b, j, m,
   return out substr(line, pos) }'
 FILTER="$MASKFN"'
 BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n"); art = ENVIRON["JR_ART"]; lf = ENVIRON["JR_LOG"] }
-{ hit = 0; line = mask($0, nt, toks, "[redacted]"); if (hit) leak = 1
+{ hit = 0; phit = 0; line = mask($0, nt, toks, "[redacted]"); if (hit) leak = 1; if (phit) access = 1
   if (line == "=== JOB-RUN ARTIFACTS BEGIN") { inart = 1; next }
   if (line == "=== JOB-RUN ARTIFACTS END") { inart = 0; next }
   if (inart) { print line >> art; next }
   print line; print line >> lf; fflush() }
-END { print NR >> ENVIRON["JR_N"]; if (leak) print "leak" >> ENVIRON["JR_N"] }'
+END { print NR >> ENVIRON["JR_N"]; if (leak) print "leak" >> ENVIRON["JR_N"]; if (access) print "access" >> ENVIRON["JR_N"] }'
 filter() { JR_MASK=$mask JR_ART=$work/art.b64 JR_LOG=$log JR_N=$work/n awk "$FILTER"; }
 kubectl -n "$ns" logs -f "job/$job" 2>&1 | filter || true
 st=
@@ -740,11 +755,17 @@ if [ -z "$rc" ]; then
   esac
 fi
 grep -qx leak "$work/n" 2>/dev/null && echo "job-run: WARNING: a credential was in the Job's log (masked in the output and in $log)" >&2
+grep -qx access "$work/n" 2>/dev/null && echo "job-run: note: an access token (a JWT, or a meta/CF_Authorization/cf_clearance/token URL parameter) was in the Job's log (masked in the output and in $log; T-3115)" >&2
 if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
   mkdir -p "$out"
   if base64 -d "$work/art.b64" 2>/dev/null | tar -xzf - -C "$out" --no-same-owner --no-same-permissions 2>/dev/null; then echo "job-run: artifacts in $out"
   else echo "job-run: the artifacts did not unpack" >&2; fi
   rm -f "$work/art.b64" # the packed copy is not needed again (a SIGKILL must not leave it in /tmp)
+  # T-3115: the --out files are not masked (they are the command's own; a HAR or a report may need the token to be read). Same shapes as the log
+  # mask, plain text only (a zip is not read): only a count is said, never a name (a name may hold the token), and nothing is deleted.
+  nacc=$({ grep -rlaiEZ -e '([?&]|%3f|%26)(meta|cf_authorization|cf_clearance|token)(=|%3d)[^&# 	"'\''<>]' -- "$out" 2>/dev/null
+           grep -rlaEZ -e 'eyJ[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+[.][A-Za-z0-9_-]+' -- "$out" 2>/dev/null; } | sort -zu | tr -cd '\0' | wc -c)
+  [ "${nacc:-0}" -eq 0 ] || echo "job-run: WARNING: $nacc artifact file(s) in $out hold an access token (a JWT or a token URL parameter; T-3115): the log is masked, the files are not; do not commit or share them" >&2
   # --pool-env (T-426): the artifacts block is base64, so the log mask never sees it. A trace, a HAR or a report can hold a request header:
   # scan what was unpacked for each value (the values on stdin, never in argv), delete a file that has one, and fail.
   if [ -n "$pool_names" ]; then

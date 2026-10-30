@@ -237,6 +237,14 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   in a HAR or inside the Playwright HTML report's `index.html` (it can embed the report as a base64 zip). Switch the trace off or leave zips and
   the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.
+- **Runtime tokens (T-3115, incident T-2548):** a token minted while the Job runs (a Cloudflare Access `meta` token in a URL Playwright prints)
+  has no value to match, so the mask also replaces, in the same one pass over each line, the value of a query parameter named `meta`,
+  `CF_Authorization`, `cf_clearance` or `token` (any case, after `?` or `&` or their URL-encoded `%3F`/`%26`, up to `&`, `#`, a space, a quote or
+  `<>`) and any JWT (three base64url segments, the first starting `eyJ`). It applies to the streamed output, `/tmp/job-run-*.log` and so the
+  saved `--reuse` log (the key holds the script's hash, so no older unmasked entry is reused). Such a hit prints a note, not the credential
+  WARNING, and does not stop a pass from being saved. `--out` files are not changed: they are scanned for the same shapes (plain text only) and a
+  count is warned, never a name. Not covered: a `cf_clearance` cookie in a `Cookie:` header (not a URL parameter, not a JWT), a JSON-escaped
+  `&` separator (the JWT shape still catches `meta` and `CF_Authorization`), and the raw cluster log until the Job's TTL.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (4 since T-2966; was 2) per chat (`PILOT_SESSION_ID`; a lead's Agent sub-agent lanes share its chat) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
