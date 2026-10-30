@@ -5,7 +5,9 @@
 // place (T-136, as an agent) or continued by a new chat (`continuedFrom`; the policy goes with it), or a report (one notification
 // `keepgoing_attention` and one ticket per chat and cause, not repeated while the cause stands). A tool approval is NEVER answered and Bypass
 // is NEVER entered: a chat started again is not bypass-capable (only a person's opt-in makes one) and the trail says so. Every action is one
-// trail row (`keepgoing_events`) and one platform audit row, with the reason; never message text.
+// trail row (`keepgoing_events`) and one platform audit row, with the reason; never message text. T-3189: a chat that is drained (it holds
+// tickets, all waiting on others, nothing new on them, no worker running) is not nudged and its cap is not spent: one `drained` row per idle
+// period says so.
 //
 // It acts for the chat's OWNER and re-checks, every time, that the owner is an enabled user who may operate the chat. The kill switch
 // `keepgoing.enabled` stops every round at once. A portal restart resumes from the stored state: the next due times, the idle period already
@@ -70,6 +72,8 @@ export interface KeepGoingChatPort {
    * window), allowing its open tool cards but AskUserQuestion and ExitPlanMode. True when the chat is in Bypass after.
    */
   restoreBypass?(id: string): Promise<boolean>;
+  /** T-3189: the sessions this chat started (its workers), any state. Absent: its workers are unknown, so it is never taken as drained. */
+  children?(id: string): ChatSession[];
 }
 
 /** Opening and commenting tickets as the portal itself (tickets' `system` caller). */
@@ -79,6 +83,11 @@ export interface KeepGoingTicketPort {
   isOpen(id: string): boolean;
   /** A ticket that exists and is closed (an unknown one is not). */
   isClosed?(id: string): boolean;
+  /**
+   * T-3189: the tickets assigned to the chat: how many (any status), how many it must work on (open, in progress), and the newest change on
+   * any of them (a comment, a verdict, a check, a status or an assignment). Absent: never drained.
+   */
+  heldBy?(sessionId: string): { total: number; active: number; lastChangeAt: string | null };
 }
 
 export interface KeepGoingDeps {
@@ -245,6 +254,7 @@ export class KeepGoingEngine {
       lastNudgeAt: this.#d.store.lastAt(s.id, 'nudged'),
       standing,
       ...(!ended && s.bypassCapable && this.#d.chat.restoreBypass ? { bypassSeenAt: this.#bypassSeenAt(s.id) } : {}),
+      ...(!ended ? { drained: () => this.#drained(s) } : {}),
       ...(ended
         ? {
             restarts24h: this.#d.store.restarts(this.#lineage(s), since24),
@@ -270,6 +280,32 @@ export class KeepGoingEngine {
     }
   }
 
+  /**
+   * T-3189: the chat has nothing to act on. It holds tickets (a chat that never held one keeps today's behaviour), none open or in progress
+   * (all in review, blocked or closed), none changed since the chat's last activity (a comment, a verdict, a status or an assignment that
+   * landed after it is news it has not seen), no sub-agent or background task runs, and no worker of it has not ended. Anything unknown
+   * (no ticket or worker port, a failing read, no activity time) is not drained: the chat is nudged as before.
+   */
+  #drained(s: ChatSession): boolean {
+    try {
+      if ((s.agentsRunning ?? 0) > 0 || s.tasksOnly || !this.#d.chat.children) return false;
+      const held = this.#d.tickets?.heldBy?.(s.id);
+      if (!held || held.total === 0 || held.active > 0) return false;
+      if (held.lastChangeAt !== null && !(ms(held.lastChangeAt) <= ms(s.lastActivityAt))) return false;
+      return !this.#d.chat.children(s.id).some((c) => c.state !== 'ended');
+    } catch {
+      return false;
+    }
+  }
+
+  /** One `drained` trail row (info) per idle period: none while one was written since the chat's last activity. */
+  #drainedMark(s: ChatSession, ownerId: string): void {
+    const last = this.#d.store.lastAt(s.id, 'drained');
+    if (last && !(ms(last) < ms(s.lastActivityAt))) return;
+    this.#trail(s.id, ownerId, 'drained', null, 'Nothing to act on (its tickets wait on others, no worker runs): not nudged, not counted.');
+    this.#changed(s.id);
+  }
+
   #ticketClosed(id: string): boolean {
     try {
       return this.#d.tickets?.isClosed?.(id) === true;
@@ -282,6 +318,7 @@ export class KeepGoingEngine {
     const now = this.#d.clock.now();
     switch (d.act) {
       case 'none':
+        if (d.why === 'drained') this.#drainedMark(s, ownerId);
         return;
       case 'stand_down':
         this.#d.store.patchState(s.id, { enabled: false });
