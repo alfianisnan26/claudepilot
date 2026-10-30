@@ -176,12 +176,14 @@ test('(5, T-3070) metrics_tickets: a hidden ticket’s row has every field null,
     // Allowed: the owner's ticket with its key and fields.
     assert.deepEqual([visible.ticket_key, visible.type, visible.status, typeof visible.closed], ['CP-1', 'bug', 'done', 'string']);
     // Denied: Alice's row is there (the count is the flow figure's) but says nothing: not its id, type, status, close time or hours.
-    const hidden = res.rows.filter((r: any) => r !== visible);
-    assert.deepEqual(hidden, [HIDDEN_TICKET_ROW]);
+    const hidden: Record<string, unknown>[] = res.rows.filter((r: any) => r !== visible);
+    assert.equal(hidden.length, 1);
+    const one = hidden[0]!;
+    assert.deepEqual(one, { ...HIDDEN_TICKET_ROW });
     // Same shape: the fields of a visible row (but the key, which a hidden ticket never has), each null.
     const { ticket_key: _k, ...fields } = visible;
-    assert.deepEqual(Object.keys(hidden[0]).sort(), Object.keys(fields).sort());
-    assert.ok(Object.values(hidden[0]).every((v) => v === null));
+    assert.deepEqual(Object.keys(one).sort(), Object.keys(fields).sort());
+    assert.ok(Object.values(one).every((v) => v === null));
     assert.ok(!JSON.stringify(res).includes(s.theirs.id) && !JSON.stringify(res).includes('PRIV'), 'nothing names the hidden ticket');
     // A filter by the hidden ticket's type does not name it either (its id there would tell its type).
     const byType = (await s.mcp.call(s.t.secret, 'metrics_tickets', { window: '24h', group_by: 'type', group: 'feature' })).result!.structuredContent as any;
