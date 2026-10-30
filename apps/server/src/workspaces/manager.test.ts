@@ -80,14 +80,19 @@ test('a target that comes back shows as available after its next background chec
 test('fresh waits for a new check, and the list is not held up by a target that is down', async () => {
   const live = fake('live', { check: 'ok' }, [{ id: 'live/one', name: 'one', target: 'live', status: 'running', createdAt: '2026-01-01T00:00:00Z' } as unknown as Workspace]);
   const dead = fake('dead', { check: 'hang' });
-  const w = new Workspaces([live.runtime, dead.runtime], saved, { ttlMs: 30, timeoutMs: 150 });
+  // T-1836: the check timeout is wide (300 ms) so that "list did not wait for it" is a clear signal on a busy runner, instead of a hard
+  // 40 ms bound on list() that a loaded gate Job sometimes missed.
+  const timeoutMs = 300;
+  const w = new Workspaces([live.runtime, dead.runtime], saved, { ttlMs: 30, timeoutMs });
   await w.targets(); // warm-up, like the one at start
   await sleep(50);
   const fresh = await timed(w.targets(true));
-  assert.ok(fresh.ms >= 100, `fresh waited for the dead one's timeout (${fresh.ms} ms)`);
-  await sleep(50);
+  assert.ok(fresh.ms >= timeoutMs - 20, `fresh waited for the dead one's timeout (${fresh.ms} ms)`);
+  await sleep(50); // the answer is stale now (TTL 30 ms)
+  const checksBefore = dead.calls.check;
   const listed = await timed(w.list());
-  assert.ok(listed.ms < 40, `list took ${listed.ms} ms`);
+  assert.ok(listed.ms < timeoutMs - 20, `list waited for the dead one's check (${listed.ms} ms)`);
+  assert.equal(dead.calls.check, checksBefore + 1, 'the list started a new background check of the down target');
   assert.deepEqual(listed.value.map((x) => x.id), ['live/one']);
-  await sleep(170);
+  await sleep(timeoutMs + 20); // the hung background check times out and is recorded
 });
