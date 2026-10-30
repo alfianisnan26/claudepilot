@@ -35,7 +35,8 @@ const made: FakeClaude[] = [];
  */
 const exited: Promise<void>[] = [];
 const track = (child: ChildProcess) => void exited.push(new Promise((resolve) => child.once('close', () => resolve())));
-const allExited = () => Promise.all(exited);
+/** Bounded: a child that never exits must not hang the teardown (and the gate) for ever; the removal's retries cover what is left. */
+const allExited = () => Promise.race([Promise.all(exited), new Promise<void>((r) => setTimeout(r, 20_000).unref())]);
 before(async () => {
   if (!opts.skip) standIn = await startStandIn();
 });
