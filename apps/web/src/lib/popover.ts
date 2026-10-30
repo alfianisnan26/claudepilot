@@ -122,3 +122,14 @@ export function guards(anchor: Element): { floor: number | null; ceiling: number
   }
   return { floor, ceiling };
 }
+
+const FOCUSABLE = 'a[href],button,input,select,textarea,summary,[tabindex],[contenteditable=""],[contenteditable="true"]';
+
+/**
+ * Whether focus should go back to the control after a tap outside closed its popover (T-2955): only when the tap landed on something that
+ * cannot take focus (plain page), so focus would otherwise end on the body. A tap on a button, link or field keeps the focus it took.
+ */
+export function refocusAnchorAfterOutside(target: { closest?: (selector: string) => unknown } | null, activeIsBody: boolean): boolean {
+  if (!activeIsBody) return false;
+  return !(target && typeof target.closest === 'function' && target.closest(FOCUSABLE));
+}
