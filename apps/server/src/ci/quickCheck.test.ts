@@ -16,7 +16,10 @@ const roots: string[] = [];
 after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
 
 /** The machine's git configuration (signing, hooks) stays out of the fixture. */
-const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+// NODE_TEST_CONTEXT is left out: a `node --test` the script starts (T-2975) would otherwise report to this runner instead of to its own output.
+const PARENT_ENV = { ...process.env };
+delete PARENT_ENV.NODE_TEST_CONTEXT;
+const GIT_ENV = { ...PARENT_ENV, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const sh = (cwd: string, cmd: string) => {
   const r = spawnSync('bash', ['-c', cmd], {
     cwd,
@@ -184,6 +187,54 @@ test('T-960: a Python test runs with unittest when the image has no pytest, and 
   const bad = spawnSync('bash', [f.fake, '--test', 'py/tests/test_bad.py'], { cwd: f.work, encoding: 'utf8', env });
   assert.equal(bad.status, 1, bad.stdout + bad.stderr);
   assert.match(bad.stdout, /test_bad\.py \(unittest, no pytest in the Job image\) FAILED/);
+});
+
+/** T-2975: script checks run by node's own test runner (as Konfersi's backend runs them, test:scripts), never vitest. */
+function scriptChecks(f: ReturnType<typeof fixture>, failing = false) {
+  mkdirSync(join(f.work, 'scripts/lib'), { recursive: true });
+  mkdirSync(join(f.work, 'pkg/tools'), { recursive: true });
+  const body = (ok: boolean) => `import test from 'node:test';\nimport assert from 'node:assert';\ntest('t', () => assert.ok(${ok}));\n`;
+  writeFileSync(join(f.work, 'scripts/snap.check.mjs'), body(!failing));
+  writeFileSync(join(f.work, 'scripts/lib/util.test.mjs'), body(true));
+  writeFileSync(join(f.work, 'pkg/tools/y.check.mjs'), body(true));
+  sh(f.work, 'git add -A && git commit -qm scripts');
+  // A vitest at the root and in pkg: it must not be called for these files (it does not collect *.check.mjs).
+  tool(join(f.work, 'node_modules/.bin/vitest'), `echo "vitest $* in $(basename "$PWD")" >> ${f.log}; exit 1`);
+}
+
+test('T-2975: *.check.mjs and scripts/** tests run with node --test, never vitest; a failing one fails', () => {
+  const f = fixture(0);
+  scriptChecks(f);
+  const tests = ['scripts/snap.check.mjs', 'scripts/lib/util.test.mjs', 'pkg/tools/y.check.mjs', 'pkg/x.test.mjs'];
+  const r = run(f.work, f.fake, tests.flatMap((t) => ['--test', t]));
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /^::: test:\.\/scripts\/snap\.check\.mjs \(node --test\) ok$/m);
+  assert.match(r.stdout, /^::: test:\.\/scripts\/lib\/util\.test\.mjs \(node --test\) ok$/m);
+  assert.match(r.stdout, /^::: test:pkg\/tools\/y\.check\.mjs \(node --test\) ok$/m);
+  assert.equal(last(r.stdout), 'QUICK CHECK: all passed');
+  const tools = readFileSync(f.log, 'utf8');
+  assert.doesNotMatch(tools, /check\.mjs|util\.test\.mjs/, 'vitest never got a script check');
+  assert.match(tools, /^vitest run x\.test\.mjs in pkg$/m, 'an ordinary test file still goes to vitest');
+  // The runner really ran it: a failing check is a failure.
+  const g = fixture(0);
+  scriptChecks(g, true);
+  const bad = run(g.work, g.fake, ['--test', 'scripts/snap.check.mjs']);
+  assert.equal(bad.status, 1, bad.stdout + bad.stderr);
+  assert.equal(last(bad.stdout), 'QUICK CHECK FAILED: test:./scripts/snap.check.mjs (node --test)');
+});
+
+test('T-2975: a repo with no prettier and no eslint whose --test passed is INCOMPLETE, never FAILED "nothing ran"', () => {
+  const f = fixture(0);
+  scriptChecks(f);
+  rmSync(join(f.work, 'node_modules/.bin/prettier'));
+  rmSync(join(f.work, 'node_modules/.bin/eslint'));
+  const r = run(f.work, f.fake, ['--test', 'scripts/snap.check.mjs']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: format SKIPPED \(no prettier\)/);
+  assert.match(r.stdout, /::: lint SKIPPED \(no eslint\)/);
+  assert.match(r.stdout, /::: test:\.\/scripts\/snap\.check\.mjs \(node --test\) ok/);
+  assert.doesNotMatch(r.stdout, /FAILED/);
+  assert.equal(last(r.stdout), 'QUICK CHECK INCOMPLETE: SKIPPED format lint (the other steps passed)');
 });
 
 test('--dir names the worktree, so a lane whose shell is back in another folder checks the right one (T-1053); a missing folder is a usage error', () => {
