@@ -3,7 +3,7 @@
 # cluster Job (scripts/job-run.sh), never in the shared pod (D-61: its memory; and test or lint config code would run next to every crew's
 # credentials). Every check runs even when one fails, and the last line names all failures, so one quick check (about a minute) replaces the
 # two or three CI runs a first failure (Prettier stopping the tests) used to cost. The heavy checks (the whole suite, typecheck, build) stay
-# with the gate.
+# with the gate; the gate's context-pack freshness check runs here too (T-3173), in a repository with scripts/context-pack.sh.
 #   scripts/quick-check.sh [--dir <worktree>] [--base <ref>] [--test <path>]... [--repo <job-run --repo value>] [--no-format] [--no-lint]
 # Run it inside the worktree (or name it with --dir: a lane's shell may be back in another folder, T-1053), after pushing HEAD (job-run runs a PUSHED commit: git push origin HEAD:<your work branch>). The base is the
 # merge base with --base, or with the first of origin/stg, origin/integration, origin/main, origin/master that exists. --test takes a test
@@ -111,6 +111,9 @@ if [ $lint = 1 ] && [ ${#lintable[@]} -gt 0 ]; then
   cmd+="if [ -x \"\$bin/eslint\" ]; then check lint \"\$bin/eslint\" $(q "${lintable[@]}"); else skip lint 'no eslint'; fi; "
 fi
 cmd+="$test_lines"
+# The context pack (T-3173, incident T-2888): a repository with scripts/context-pack.sh gets the gate's own freshness check (scripts/gate.sh)
+# on the checked commit, so a stale docs/context-pack.md fails here, before the merge, not on the integration branch after it.
+cmd+="if [ -f scripts/context-pack.sh ]; then check context-pack bash scripts/context-pack.sh --repo \"\$PWD\" --check $(q "$head"); fi; "
 # The verdict, in this order: a failure (naming the skips too); nothing ran (T-960, 2026-10-17: every check skipped printed "all passed", a
 # false green); a skip with the rest passed is INCOMPLETE (T-612: a missing tool is never reported as passed); else all passed.
 cmd+='echo; if [ -n "$fails" ]; then echo "QUICK CHECK FAILED:$fails${skips:+ (also SKIPPED:$skips)}"; exit 1; fi;
