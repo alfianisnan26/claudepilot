@@ -153,7 +153,9 @@ test('T-3004: an agent never deploys unattended outside stg: a run it starts to 
   try {
     const STG = DEPLOY.replace('environment: production', 'environment: stg');
     const repo = await remote(h, { '.pilot/deploy.yml': DEPLOY, '.pilot/stg.yml': STG });
-    const planOf = (id: string) => JSON.parse(readFileSync(join(h.home.home, '.claudepilot/ci/runs', id, 'plan.json'), 'utf8')) as { jobs: { id: string; env: Record<string, string> }[] };
+    // The plan as the service stores it on the run row (plan.json in the workspace appears only once the runner has picked the run up).
+    const planOf = (id: string) =>
+      JSON.parse((h.store.db!.prepare('SELECT plan FROM ci_runs WHERE id = ?').get(id) as { plan: string }).plan) as { jobs: { id: string; env: Record<string, string> }[] };
     const approvalEnv = (id: string) => planOf(id).jobs.find((j) => j.id === 'release')!.env.PILOT_APPROVAL;
 
     // Protected (the default): the agent's run is held for a decision, and the deploying job knows it waited.
