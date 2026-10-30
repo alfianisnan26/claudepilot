@@ -422,7 +422,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_create',
     title: 'Create a ticket',
     description:
-      'Adds a ticket to the queue. Leave it unassigned for work any agent can take. An agent assigns a person (assignee user) only with an allowed tag (default production, D-62): otherwise it is refused; decide by the written default instead. Never put a secret in a ticket: describe where it lives. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+      'Adds a ticket to the queue. Leave it unassigned for work any agent can take. An agent assigns a person (assignee user) only with an allowed tag (default production, D-62): otherwise it is refused; decide by the written default instead. Never put a secret in a ticket: describe where it lives. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key). Pick the bucket by what the ticket is about (T-3069): pipeline, portal, allow-list, brief or harness problems go to PILOT, whatever workspace you are in; name bucket PILOT or tag claudepilot.',
     scope: 'agent',
     input: z.object({
       bucket: bucketArg.describe('The bucket (project) by its key, like KONF (ticket_buckets lists them). Left out: the bucket your tags imply (tickets.bucketRoutes, e.g. konfersi-migration or area-* to KONF, claudepilot to PILOT), else the parent’s bucket, else your workspace’s, else the bucket of the ticket you or your lead work on, else PILOT. The result says which and why.'),
