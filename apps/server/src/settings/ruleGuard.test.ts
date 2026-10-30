@@ -1920,6 +1920,13 @@ const T2871_BASH: [string, string, string][] = [
   ['sed -i .git/config', 'sed -i s/a/b/ .git/config', G.main],
   ['dd of= a hook', `dd if=${G.evil} of=.git/hooks/pre-commit`, G.main],
   ['chmod of a pattern .git/hooks/*', 'chmod +x .git/hooks/*', G.main],
+  // The pattern branch refuses through couldMatch (the hooks on disk are rule files now) before the git check: each still says what to do.
+  ['rm of a pattern .git/hooks/*.sample', 'rm -f .git/hooks/*.sample', G.main],
+  ['chmod of a brace pattern .git/{hooks/*,config}', 'chmod 777 .git/{hooks/*,config}', G.main],
+  ['an absolute pattern into .git/hooks', `chmod +x ${join(G.gd, 'hooks')}/*`, G.main],
+  ['a non-reader naming a pattern .git/hooks/*', 'xxd .git/hooks/*', G.main],
+  ['a pattern under a variable "$d"/.git/hooks/*', 'chmod +x "$d"/.git/hooks/*', G.main],
+  ['a variable target in a command with a rule-file word', 'echo claude > "$d/.git/config"', G.main],
   ['cp to a pattern .g*/hook?/pre-commit', `cp ${G.evil} .g*/hook?/pre-commit`, G.main],
   ['cp -r a hooks folder into .git', `cp -r ${join(G.root, 'kit', 'hooks')} .git/`, G.main],
   ['cp -r a folder whose .git lands on the checkout’s', `cp -r ${G.tpl}/. ${G.main}/`, G.main],

@@ -152,10 +152,14 @@ function globGitControl(pattern, baseDir, dotglob) {
   return false;
 }
 
-/** A refusal's path (a rule label, maybe with a suffix) that is a git control file. */
+/**
+ * A refusal's path (a rule label, maybe with a suffix) that is a git control file. A path that is not absolute is the word as
+ * written (a pattern, a variable, a name refused before it is resolved): its words say it (.git/hooks/x, "$d/.git/config").
+ */
 function isGitControlHit(p) {
   const s = String(p || '').replace(/ \((through a link|a hard link|a \.claude folder)\)$/, '');
-  return path.isAbsolute(s) && !!gitControlLabel(s);
+  if (!path.isAbsolute(s)) return GIT_CONTROL_REL.test(s);
+  return !!gitControlLabel(s);
 }
 
 function isClaudeDir(abs) {
