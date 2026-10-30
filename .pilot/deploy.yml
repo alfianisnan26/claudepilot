@@ -1,7 +1,9 @@
 # Deploy ClaudePilot to the isnan k3s cluster (docs/dev-session.md, "Deploying with pilot CI"). Started by hand only: in the portal
 # (CI > Remotes > claudepilot > Run on a branch) or by an agent with the Portal MCP tool ci_run_trigger (`/deploy`). The commit is the run's:
-# the head of the branch it runs on (default integration) or a tag. The release job deploys to the environment `production`, which the
-# portal holds for a PERSON's approval (CI > Remotes > environments); verify checks the result and rollback undoes a failed release. The
+# the head of the branch it runs on (default integration) or a tag. The release job deploys to the environment `production`: while that
+# environment is protected (CI > Remotes > environments) the job waits for a decision in the portal; when it is not, a run a person started
+# releases without asking (the commit says "auto-approved") and a run an agent started is refused before anything runs (T-3004). The
+# deployment row of the run (approval, decided_by) is the record of what happened. Verify checks the result and rollback undoes a failed release. The
 # release records the chats attached to a live process (and waits, bounded, while one answers a control request); chats then fails the run
 # when one of them ended for integrity within 10 minutes of the restart, without a rollback (T-277 layer 4).
 # The logic lives in .pilot/scripts/*.sh (tested in apps/server/src/ci/deployPipeline.test.ts); dry_run prints every action, changes nothing.
