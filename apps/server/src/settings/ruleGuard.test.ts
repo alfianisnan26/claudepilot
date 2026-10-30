@@ -1836,3 +1836,85 @@ test('T-2889 the guard lets lanes run the real job-run.sh and approval-passes.sh
   refused(bash('scripts/job-run-passes.sh --list'), 'job-run.sh naming the passes file');
   refused(bash('bash scripts/job-run-passes.sh --list'), 'bash job-run.sh naming the passes file');
 });
+
+// T-713, T-980: lanes merge their own base, revert a commit and start a branch in their own worktree. The lane allow lists these by
+// text; the guard keeps them to exactly that form and, for a plain line, out of a tool checkout and (merge, revert) a lane root's main folder.
+test('T-713, T-980: own-worktree merge --no-edit, revert --no-edit and checkout -b: the exact forms pass, every widening is refused', () => {
+  const g = rig();
+  const work = join(g.home, 'work');
+  const lanes = join(work, 'agentic-worktrees');
+  const uwts = join(work, 'konfersi-universe.worktrees');
+  const wt = join(lanes, 'lane1');
+  const uwt = join(uwts, 'pr-1');
+  const main = join(work, 'konfersi-universe');
+  const tool = join(work, 'claudepilot');
+  for (const d of [join(wt, 'src'), uwt, join(main, '.git'), join(tool, '.git')]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(tool, '.git', 'HEAD'), 'ref: refs/heads/integration\n');
+  const rootsFile = join(g.root, 'git-c-roots');
+  writeFileSync(rootsFile, gitCRootsContent([lanes, uwts], [tool]));
+  const sh = (command: string, cwd = wt) =>
+    run(g, 'Bash', { command, description: 'x' }, { cwd, env: { CLAUDEPILOT_GUARD_GITC_ROOTS_FILE: rootsFile } });
+  const ALLOWED: [string, string, string?][] = [
+    ['merge the ClaudePilot base', 'git merge --no-edit origin/integration'],
+    ['merge the Konfersi base', 'git merge --no-edit origin/stg'],
+    ['merge in a universe worktree', 'git merge --no-edit origin/stg', uwt],
+    ['merge after -C', `git -C ${wt} merge --no-edit origin/stg`],
+    ['merge after -C, universe worktree', `git -C ${uwt} merge --no-edit origin/stg`],
+    ['revert a commit', 'git revert --no-edit abc1234'],
+    ['revert a full sha', 'git revert --no-edit 0123456789abcdef0123456789abcdef01234567'],
+    ['a new branch', 'git checkout -b ticket/T-713-merge-allow'],
+    ['a new branch from a start (-C form, T-974 kept)', `git -C ${wt} checkout -b ticket/T-1-x origin/integration`],
+    // Not an own-worktree form: unchanged.
+    ['merge --abort', 'git merge --abort'],
+    ['an orchestrator merge in the tool checkout', 'git merge --no-ff origin/ticket/T-1-x', tool],
+    ['a new branch in a scratch clone', 'git checkout -b x', g.repo],
+  ];
+  const REFUSED: [string, string, string?][] = [
+    ['a second ref', 'git merge --no-edit origin/stg origin/main'],
+    ['-X theirs', 'git merge --no-edit -X theirs origin/stg'],
+    ['-Xtheirs', 'git merge --no-edit -Xtheirs origin/stg'],
+    ['-s ours', 'git merge --no-edit -s ours origin/stg'],
+    ['--strategy=ours', 'git merge --no-edit --strategy=ours origin/stg'],
+    ['--strategy-option', 'git merge --no-edit --strategy-option=theirs origin/stg'],
+    ['a message', 'git merge --no-edit -m x origin/stg'],
+    ['a message that reads merge', 'git merge -m merge --no-edit origin/stg'],
+    ['--no-verify', 'git merge --no-edit --no-verify origin/stg'],
+    ['--no-ff', 'git merge --no-edit --no-ff origin/stg'],
+    ['a path after --', 'git merge --no-edit origin/stg -- src'],
+    ['a ref in a variable', 'git merge --no-edit "$REF"'],
+    ['a ref by substitution', 'git merge --no-edit $(cat ref.txt)'],
+    ['a ref with ..', 'git merge --no-edit origin/stg..x'],
+    ['the spanning * of a -C rule: a ref named merge', `git -C ${wt} merge origin/main merge --no-edit origin/stg`],
+    ['the spanning * of a -C rule: a message', `git -C ${wt} merge -m merge --no-edit origin/stg`],
+    ['a tab instead of a space', 'git merge --no-edit origin/stg\t-Xtheirs'],
+    ['the main folder of a lane root', 'git merge --no-edit origin/stg', main],
+    ['the tool checkout', 'git merge --no-edit origin/integration', tool],
+    ['the tool checkout after -C', `git -C ${tool} merge --no-edit origin/integration`],
+    ['cd into the tool checkout first', `cd ${tool} && git merge --no-edit origin/integration`],
+    ['revert HEAD (not a sha)', 'git revert --no-edit HEAD'],
+    ['revert two commits', 'git revert --no-edit abc1234 def5678'],
+    ['revert a range', 'git revert --no-edit abc1234..def5678'],
+    ['revert -m', 'git revert --no-edit -m 1 abc1234'],
+    ['revert a strategy', 'git revert --no-edit -X theirs abc1234'],
+    ['revert in the main folder', 'git revert --no-edit abc1234', main],
+    ['revert in the tool checkout', 'git revert --no-edit abc1234', tool],
+    ['checkout -b -f', 'git checkout -b x -f'],
+    ['checkout -fb', 'git checkout -fb x'],
+    ['checkout -b and a path', 'git checkout -b x -- src/app.ts'],
+    ['checkout -b, a start and a path', 'git checkout -b x HEAD src'],
+    ['checkout -b of a protected name', 'git checkout -b main'],
+    ['checkout -b with a tab and -f', 'git checkout -b x\t-f'],
+    ['checkout -b in the tool checkout', 'git checkout -b x', tool],
+    ['checkout -b after cd into the tool checkout', `cd ${tool} && git checkout -b x`],
+  ];
+  const misses: string[] = [];
+  for (const [what, command, cwd] of ALLOWED) {
+    const r = sh(command, cwd);
+    if (r.code !== 0) misses.push(`allowed: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+  }
+  for (const [what, command, cwd] of REFUSED) {
+    const r = sh(command, cwd);
+    if (r.code !== 2 || !r.stderr.startsWith(RULE_GUARD_MESSAGE)) misses.push(`refused: ${what}: ${command} -> ${r.code} ${r.stderr}`);
+  }
+  assert.equal(misses.join('\n'), '');
+});
