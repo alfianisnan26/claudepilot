@@ -221,6 +221,22 @@ test('the authorization matrix over MCP: another session’s ticket, a person’
   }
 });
 
+test('T-3069: ticket_create tells an agent that portal and pipeline problems go to PILOT from any workspace', async () => {
+  const r = await rig();
+  try {
+    const a = await r.agent('kubernetes/kohi-event', 'sa');
+    const tools = (await r.h.rpc(a.secret, 'tools/list')).body.result.tools as { name: string; description: string }[];
+    const create = tools.find((t) => t.name === 'ticket_create');
+    assert.ok(create, 'listed for an agent');
+    assert.ok(
+      create.description.includes('pipeline, portal, allow-list, brief or harness problems go to PILOT, whatever workspace you are in'),
+      create.description,
+    );
+  } finally {
+    r.done();
+  }
+});
+
 test('a looping agent is stopped: tickets per session, and secrets never get in', async () => {
   const { PortalLimits } = await import('../portalmcp/limits.js');
   const r = await rig({ limits: new PortalLimits({ unauthenticatedPerMinute: 100, readPerMinute: 1000, writePerMinute: 1000, destructivePer10Minutes: 10, agentReadPerMinute: 1000, agentWritePerMinute: 1000 }) });
