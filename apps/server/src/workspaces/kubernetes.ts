@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { AppError } from '@isnanme/core';
-import { workspaceId, type Workspace, type WorkspaceStatus } from '@portal/contracts';
+import { workspaceId, type Workspace, type WorkspaceResourceValues, type WorkspaceStatus } from '@portal/contracts';
 import {
   AppsV1Api,
   CoreV1Api,
@@ -17,7 +17,7 @@ import { bytes, checkFit, cores, needOf, unchecked, type FitPod } from './fit.js
 import { cpuQuantity, fitView, memoryQuantity, needOfValues, valuesOf } from './resources.js';
 import { kubernetesDelivery } from './kubernetesDelivery.js';
 import { homeVolumeOf, legacyRuntimeName } from './identity.js';
-import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type ResourceAccess, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
+import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type ResourceAccess, type ResourceApplied, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
 
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
@@ -71,7 +71,32 @@ export interface KubernetesOptions {
   fitCheck?: boolean;
   /** Tests only: the folders delivery may write and read (default: the engine's, `DELIVERY_ROOTS`), and how often starts are polled. */
   delivery?: { roots?: readonly string[]; pollMs?: number };
+  /** Tests only: how often and how long an in-place resize waits for the kubelet's answer (default 500 ms, 10 s; T-3081). */
+  resize?: { pollMs?: number; waitMs?: number };
 }
+
+type Resources = { limits?: Record<string, string>; requests?: Record<string, string> };
+
+/** The `workspace` container's resources with the values set (anything else it had kept). */
+const withValues = (r: Resources | undefined, values: WorkspaceResourceValues): Resources => ({
+  ...r,
+  limits: { ...r?.limits, cpu: cpuQuantity(values.cpus), memory: memoryQuantity(values.memoryMb) },
+  requests: { ...r?.requests, cpu: cpuQuantity(values.cpuRequest), memory: memoryQuantity(values.memoryRequestMb) },
+});
+
+/** The API server's own message of a refusal (its Status body), cut; never a header or the request. */
+function apiMessage(e: unknown): string {
+  const body = (e as { body?: unknown }).body;
+  try {
+    const message = (typeof body === 'string' ? (JSON.parse(body) as { message?: unknown }) : (body as { message?: unknown } | undefined))?.message;
+    if (typeof message === 'string' && message) return message.slice(0, 300);
+  } catch {
+    // not a Status
+  }
+  return (e instanceof Error ? e.message : String(e)).slice(0, 300);
+}
+
+const same = (a: Partial<WorkspaceResourceValues>, b: Partial<WorkspaceResourceValues>) => a.cpus === b.cpus && a.memoryMb === b.memoryMb && a.cpuRequest === b.cpuRequest && a.memoryRequestMb === b.memoryRequestMb;
 
 /** One namespace in a cluster: a Deployment (scaled 1/0 to start/stop) and a PVC per workspace. */
 export class KubernetesRuntime implements Runtime {
@@ -428,9 +453,15 @@ export class KubernetesRuntime implements Runtime {
 
   /**
    * CPU and memory after a create (T-98). The values live in the `workspace` container of the Deployment's pod template; writing them is a
-   * read, change and replace (the read's resourceVersion guards against a change in between), which restarts the pod when it runs (Recreate).
-   * The limit labels the list reads are kept in step. The fit check reads the nodes and every pod on them: the portal's ClusterRole
-   * `claudepilot-portal-fit-check` (deploy/k3s/rbac.yaml); without it the check is `unavailable`, never a guess.
+   * read, change and replace (the read's resourceVersion guards against a change in between). The limit labels the list reads are kept in
+   * step. The fit check reads the nodes and every pod on them: the portal's ClusterRole `claudepilot-portal-fit-check` (deploy/k3s/rbac.yaml);
+   * without it the check is `unavailable`, never a guess.
+   *
+   * A running workspace (T-3081) is resized in place first (`pods/resize`, Kubernetes 1.33 and later), so no session ends; then the
+   * Deployment is written while paused and the ReplicaSet that owns the pod gets the same template, so unpausing finds its template already
+   * there and rolls nothing, and a pod made later (a restart, an eviction) has the new values. When the resize is refused (an older cluster,
+   * no `pods/resize` in the Role, a QoS class change, the kubelet answers Infeasible) the Deployment is written as before and the pod
+   * restarts (Recreate); `refused` says why.
    */
   readonly resources: ResourceAccess = {
     read: async (name) => {
@@ -450,26 +481,106 @@ export class KubernetesRuntime implements Runtime {
       const isSelf = (p: FitPod) => p.namespace === this.#ns && p.labels?.[LABEL.managed] === 'true' && p.labels?.[LABEL.name] === name;
       return fitView(await checkFit(this.#core, { need: needOfValues(want), node, nodeSelector: this.opts.nodeSelector, isSelf }));
     },
-    apply: async (name, values, opts = {}) => {
+    apply: async (name, values, opts = {}): Promise<ResourceApplied | false> => {
       const object = this.#objectName(name);
       const d = await this.#apps.readNamespacedDeployment({ name: object, namespace: this.#ns });
-      if (opts.onlyWhenStopped && (d.spec?.replicas ?? 1) !== 0) return false;
-      const c = d.spec?.template.spec?.containers.find((x) => x.name === CONTAINER);
-      if (!c || d.metadata?.labels?.[LABEL.managed] !== 'true') throw new AppError('CONFLICT', 'That Deployment is not a workspace the portal manages.');
-      c.resources = {
-        ...c.resources,
-        limits: { ...c.resources?.limits, cpu: cpuQuantity(values.cpus), memory: memoryQuantity(values.memoryMb) },
-        requests: { ...c.resources?.requests, cpu: cpuQuantity(values.cpuRequest), memory: memoryQuantity(values.memoryRequestMb) },
-      };
-      d.metadata = {
-        ...d.metadata,
-        labels: { ...d.metadata?.labels, [LIMIT.cpus]: String(values.cpus), [LIMIT.memoryMb]: String(values.memoryMb) },
-        annotations: { ...d.metadata?.annotations, 'claudepilot.resources-changed': new Date().toISOString() },
-      };
-      await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: d });
-      return true;
+      const replicas = d.spec?.replicas ?? 1;
+      if (opts.onlyWhenStopped && replicas !== 0) return false;
+      if (!this.#setValues(d, values)) throw new AppError('CONFLICT', 'That Deployment is not a workspace the portal manages.');
+      if (replicas === 0) {
+        await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: d });
+        return { how: 'written', refused: null };
+      }
+      const resized = await this.#resizeInPlace(name, values);
+      if ('refused' in resized) {
+        await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: d });
+        return { how: 'restarted', refused: resized.refused };
+      }
+      try {
+        await this.#writePaused(object, d, resized.replicaSet, values);
+        return { how: 'resized', refused: null };
+      } catch (e) {
+        // The pod has the values, but the template could not be kept without a roll: written plainly (unpaused), the pod restarts once
+        // more with them, so they are not lost at the next one.
+        const why = apiMessage(e);
+        const fresh = await this.#apps.readNamespacedDeployment({ name: object, namespace: this.#ns });
+        this.#setValues(fresh, values);
+        if (fresh.spec) fresh.spec.paused = false;
+        await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: fresh });
+        return { how: 'restarted', refused: `the pod was resized in place, but its ReplicaSet could not be written (${why})` };
+      }
     },
   };
+
+  /** Sets the values in a managed Deployment (its template, the limit labels, the change annotation); false when it is not one. */
+  #setValues(d: V1Deployment, values: WorkspaceResourceValues): boolean {
+    const c = d.spec?.template.spec?.containers.find((x) => x.name === CONTAINER);
+    if (!c || d.metadata?.labels?.[LABEL.managed] !== 'true') return false;
+    c.resources = withValues(c.resources as Resources | undefined, values);
+    d.metadata = {
+      ...d.metadata,
+      labels: { ...d.metadata?.labels, [LIMIT.cpus]: String(values.cpus), [LIMIT.memoryMb]: String(values.memoryMb) },
+      annotations: { ...d.metadata?.annotations, 'claudepilot.resources-changed': new Date().toISOString() },
+    };
+    return true;
+  }
+
+  /**
+   * The in-place resize (T-3081): a JSON Patch of the `workspace` container's resources on the running pod's `resize` subresource, then up
+   * to `waitMs` for the kubelet: its container status showing the values is done, a `PodResizePending` Infeasible is a refusal, Deferred
+   * (or no answer yet) is left to the kubelet, which applies it when there is room. Answers the ReplicaSet that owns the pod, or why not.
+   */
+  async #resizeInPlace(name: string, values: WorkspaceResourceValues): Promise<{ pod: string; replicaSet: string } | { refused: string }> {
+    const pods = await this.#core.listNamespacedPod({ namespace: this.#ns, labelSelector: `${LABEL.managed}=true,${LABEL.name}=${plainName(name)}` });
+    const pod = pods.items.find((p) => !p.metadata?.deletionTimestamp && !!p.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.state?.running);
+    if (!pod?.metadata?.name) return { refused: 'its pod is not running yet' };
+    const replicaSet = pod.metadata.ownerReferences?.find((o) => o.kind === 'ReplicaSet' && o.controller !== false)?.name;
+    if (!replicaSet) return { refused: 'no ReplicaSet owns its pod' };
+    const index = pod.spec?.containers.findIndex((c) => c.name === CONTAINER) ?? -1;
+    if (index < 0) return { refused: 'its pod has no workspace container' };
+    const want = withValues(pod.spec!.containers[index]!.resources as Resources | undefined, values);
+    try {
+      await this.#core.patchNamespacedPodResize({ name: pod.metadata.name, namespace: this.#ns, body: [{ op: 'add', path: `/spec/containers/${index}/resources`, value: want }] });
+    } catch (e) {
+      return { refused: `the cluster refused the in-place resize: ${apiMessage(e)}` };
+    }
+    const pollMs = this.opts.resize?.pollMs ?? 500;
+    const until = Date.now() + (this.opts.resize?.waitMs ?? 10_000);
+    for (;;) {
+      const now = await this.#core.readNamespacedPod({ name: pod.metadata.name, namespace: this.#ns }).catch(() => null);
+      const pending = now?.status?.conditions?.find((c) => c.type === 'PodResizePending');
+      if (pending?.reason === 'Infeasible') return { refused: `the node cannot resize it in place: ${(pending.message ?? 'Infeasible').slice(0, 300)}` };
+      const status = now?.status?.containerStatuses?.find((s) => s.name === CONTAINER)?.resources as Resources | undefined;
+      if (status && same(valuesOf(status), values)) break;
+      if (Date.now() >= until) {
+        console.log(`[workspaces] ${name}: the in-place resize is accepted; the kubelet has not confirmed it yet${pending?.reason ? ` (${pending.reason})` : ''}`);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+    return { pod: pod.metadata.name, replicaSet };
+  }
+
+  /**
+   * Keeps the resized values without a roll: the Deployment is written paused (the controller makes no new ReplicaSet while paused), the
+   * ReplicaSet that owns the pod gets the same container resources (its pods are not touched by that), and the Deployment is unpaused, which
+   * then finds a ReplicaSet with its template (the controller compares templates ignoring `pod-template-hash`) and rolls nothing.
+   */
+  async #writePaused(object: string, d: V1Deployment, replicaSetName: string, values: WorkspaceResourceValues): Promise<void> {
+    const wasPaused = d.spec?.paused ?? false;
+    d.spec = { ...d.spec!, paused: true };
+    const written = await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: d });
+    const rs = await this.#apps.readNamespacedReplicaSet({ name: replicaSetName, namespace: this.#ns });
+    if (!rs.metadata?.ownerReferences?.some((o) => o.kind === 'Deployment' && o.uid === written.metadata?.uid))
+      throw new AppError('CONFLICT', `ReplicaSet ${replicaSetName} is not this workspace’s`);
+    const c = rs.spec?.template?.spec?.containers.find((x) => x.name === CONTAINER);
+    if (!c) throw new AppError('CONFLICT', `ReplicaSet ${replicaSetName} has no workspace container`);
+    c.resources = withValues(c.resources as Resources | undefined, values);
+    await this.#apps.replaceNamespacedReplicaSet({ name: replicaSetName, namespace: this.#ns, body: rs });
+    const fresh = await this.#apps.readNamespacedDeployment({ name: object, namespace: this.#ns });
+    fresh.spec = { ...fresh.spec!, paused: wasPaused };
+    await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: fresh });
+  }
 
   start = async (name: string) => this.#scale(name, 1);
   stop = async (name: string) => this.#scale(name, 0);
