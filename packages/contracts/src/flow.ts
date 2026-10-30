@@ -39,6 +39,8 @@ export interface FlowAction {
   sessionId: string | null;
   /** The tickets it named (stable ids), at most 20. */
   tickets: string[];
+  /** T-2016: the same tickets by bucket key (KONF-12), in the same order; the id where no key is known. Absent on older actions. */
+  keys?: string[];
   /** One fixed sentence: what and why (never message text from a session). */
   note: string;
 }
