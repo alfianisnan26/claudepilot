@@ -2487,6 +2487,21 @@ export class Tickets {
     return { bucket: this.bucket(caller, into.key), moved };
   }
 
+  /**
+   * T-3189: what a session holds, for Keep going (the portal itself asks, no caller): the tickets assigned to it (`total`, any status), the
+   * ones it must work on (`active`: open or in progress) and the newest `updated_at` among them (a comment, a verdict, a check, a status or
+   * an assignment moves it). One indexed row; nothing about the tickets' text.
+   */
+  heldBy(sessionId: string): { total: number; active: number; lastChangeAt: string | null } {
+    const r = this.#db
+      .prepare(
+        `SELECT count(*) AS total, coalesce(sum(CASE WHEN status IN ('open', 'in_progress') THEN 1 ELSE 0 END), 0) AS active, max(updated_at) AS last
+         FROM tickets WHERE assignee_kind = 'session' AND assignee_ref = ?`,
+      )
+      .get(sessionId) as { total: number; active: number; last: string | null } | undefined;
+    return { total: Number(r?.total ?? 0), active: Number(r?.active ?? 0), lastChangeAt: r?.last ?? null };
+  }
+
   /* ---------- CI (interface I10) ---------- */
 
   /**
