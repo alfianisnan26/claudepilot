@@ -206,7 +206,11 @@ test('T-2975: *.check.mjs and scripts/** tests run with node --test, never vites
   const f = fixture(0);
   scriptChecks(f);
   const tests = ['scripts/snap.check.mjs', 'scripts/lib/util.test.mjs', 'pkg/tools/y.check.mjs', 'pkg/x.test.mjs'];
-  const r = run(f.work, f.fake, tests.flatMap((t) => ['--test', t]));
+  const r = run(
+    f.work,
+    f.fake,
+    tests.flatMap((t) => ['--test', t]),
+  );
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /^::: test:\.\/scripts\/snap\.check\.mjs \(node --test\) ok$/m);
   assert.match(r.stdout, /^::: test:\.\/scripts\/lib\/util\.test\.mjs \(node --test\) ok$/m);

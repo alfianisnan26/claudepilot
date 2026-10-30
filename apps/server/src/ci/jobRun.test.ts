@@ -1007,10 +1007,7 @@ test('T-523: a Job stopped while queued never ran: exit 1 and a last line that s
   assert.match(w.run(['--stop', name]).out, new RegExp(`stopped ${name}\\n1 job\\(s\\) stopped`));
   const r = await s.done;
   assert.equal(r.code, 1, r.out);
-  assert.equal(
-    r.out.trimEnd().split('\n').pop(),
-    `job-run: ${name} was stopped while queued: the command never ran (exit 1)`,
-  );
+  assert.equal(r.out.trimEnd().split('\n').pop(), `job-run: ${name} was stopped while queued: the command never ran (exit 1)`);
   assert.doesNotMatch(r.out, /JOB-RUN EXIT|rc=0/);
   assert.deepEqual(w.state().secrets, {}, 'its Secret is gone too');
 });
@@ -1055,9 +1052,21 @@ test('T-1063: an --also of the --ref repository, or two --also of one name, is r
     ],
     // Another org, same name: the same folder, the same silent loss.
     [['--repo', 'konfersi:platform/konfersi-universe', '--ref', 'x', '--also', 'fork/konfersi-universe'], /the same repository folder/],
-    [['--repo', 'claudepilot', '--ref', 'main', '--also', 'alfianisnan26/claudepilot@main'], /the same repository folder as --ref's \(claudepilot\)/],
     [
-      ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'x', '--also', 'platform/konfersi-shared', '--also', 'other/konfersi-shared@stg'],
+      ['--repo', 'claudepilot', '--ref', 'main', '--also', 'alfianisnan26/claudepilot@main'],
+      /the same repository folder as --ref's \(claudepilot\)/,
+    ],
+    [
+      [
+        '--repo',
+        'konfersi:platform/konfersi-backend',
+        '--ref',
+        'x',
+        '--also',
+        'platform/konfersi-shared',
+        '--also',
+        'other/konfersi-shared@stg',
+      ],
       /--also other\/konfersi-shared: another --also already uses the folder konfersi-shared/,
     ],
   ];
