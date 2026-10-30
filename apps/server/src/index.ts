@@ -503,7 +503,9 @@ chatController.onEvent((id, msg) => {
   portalMcp.managers.revokeSession(id, reason);
 });
 // T-3114: a session that ended, was archived or deleted waits for none of its refused calls: their cards leave Needs you now.
-chatController.onEvent((id, msg) => void expireRefusalsOnEnd(approvals, id, msg, (what, e) => console.error(`[approvals] ${what}: ${(e as Error).message}`)));
+chatController.onEvent(
+  (id, msg) => void expireRefusalsOnEnd(approvals, id, msg, (what, e) => console.error(`[approvals] ${what}: ${(e as Error).message}`)),
+);
 registerBuiltInPortalTools({
   store,
   module: portalMcp,

@@ -10,9 +10,11 @@ export const ATTENTION_PATH = '/admin/attention';
  */
 export function groupByWhy(items: readonly AttentionItem[]): { why: AttentionWhy; label: string; items: AttentionItem[] }[] {
   const asks = items.filter((i) => i.group !== 'refusal');
-  return ATTENTION_WHY.map((why) => ({ why, label: ATTENTION_WHY_LABEL[why], items: asks.filter((i) => i.why === why).sort((a, b) => a.since.localeCompare(b.since)) })).filter(
-    (g) => g.items.length > 0,
-  );
+  return ATTENTION_WHY.map((why) => ({
+    why,
+    label: ATTENTION_WHY_LABEL[why],
+    items: asks.filter((i) => i.why === why).sort((a, b) => a.since.localeCompare(b.since)),
+  })).filter((g) => g.items.length > 0);
 }
 
 /** T-3114: the refused calls, oldest first, and how many calls they stand for (a card refused 3 times counts 3). */

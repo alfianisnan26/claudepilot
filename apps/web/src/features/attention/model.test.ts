@@ -41,9 +41,17 @@ test('T-3114: refused calls leave the why groups for their own group, which coun
     item({ id: 'r1', kind: 'approval', why: 'gate', group: 'refusal', since: t(3) }),
     item({ id: 'r2', kind: 'approval', why: 'gate', group: 'refusal', count: 3, since: t(9) }),
   ];
-  assert.deepEqual(groupByWhy(items).map((g) => [g.why, g.items.map((i) => i.id)]), [['gate', ['bypass']]], 'the real ask alone in its group');
+  assert.deepEqual(
+    groupByWhy(items).map((g) => [g.why, g.items.map((i) => i.id)]),
+    [['gate', ['bypass']]],
+    'the real ask alone in its group',
+  );
   const refused = refusalsOf(items);
-  assert.deepEqual(refused.items.map((i) => i.id), ['r2', 'r1'], 'oldest first');
+  assert.deepEqual(
+    refused.items.map((i) => i.id),
+    ['r2', 'r1'],
+    'oldest first',
+  );
   assert.equal(refused.calls, 4);
   assert.equal(refusedTitle(refused.calls), 'Agents refused 4 calls');
   assert.equal(refusedTitle(1), 'Agents refused 1 call');

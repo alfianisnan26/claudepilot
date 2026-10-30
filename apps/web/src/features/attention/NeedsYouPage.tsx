@@ -112,8 +112,8 @@ export function NeedsYouPage() {
                     {refusedTitle(refused.calls)}
                     <span className="tabular-nums text-muted">{refused.items.length}</span>
                     <InfoTip label="About refused calls">
-                      The rule guard refused these tool calls. Most need nothing: the agent goes on. Allow one only if that exact call should run once. A card leaves after 30
-                      minutes, or when its session ends; the same call again adds to its count.
+                      The rule guard refused these tool calls. Most need nothing: the agent goes on. Allow one only if that exact call
+                      should run once. A card leaves after 30 minutes, or when its session ends; the same call again adds to its count.
                     </InfoTip>
                   </summary>
                   <ul className="mt-2 flex flex-col gap-2">

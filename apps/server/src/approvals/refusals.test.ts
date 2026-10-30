@@ -35,27 +35,52 @@ async function harness() {
   const sessions: Record<string, string> = { 'chat-a': WS, 'chat-b': WS, 'chat-c': WS, 'chat-other': 'docker/ws2' };
   const chat: ApprovalChat = {
     enterBypass: () => Promise.reject(new Error('not in this test')),
-    get: (id) => (sessions[id] ? { id, title: `Agent ${id}`, workspaceId: sessions[id]!, bypassCapable: false, mode: 'default', state: 'idle' } : null),
+    get: (id) =>
+      sessions[id] ? { id, title: `Agent ${id}`, workspaceId: sessions[id]!, bypassCapable: false, mode: 'default', state: 'idle' } : null,
     send: async (sessionId, _uuid, text) => void sent.push({ sessionId, text }),
   };
   const delivered: string[] = [];
   let changes = 0;
-  const approvals = new Approvals({ db: () => store.db, chat, delivery: { passesChanged: (ws) => void delivered.push(ws) }, now: () => clock.now, changed: () => void changes++ });
+  const approvals = new Approvals({
+    db: () => store.db,
+    chat,
+    delivery: { passesChanged: (ws) => void delivered.push(ws) },
+    now: () => clock.now,
+    changed: () => void changes++,
+  });
   return { store, approvals, clock, sent, delivered, changes: () => changes };
 }
 
 const call = (command: string) => ({ tool: 'Bash', input: { command, description: 'x' }, cwd: '/w/repo', form: 'settings' });
 const ask = (session: string, ws = WS) => ({ sessionId: session, workspaceId: ws });
-const refuse = (a: Approvals, session: string, payload: Record<string, unknown>, opts: { id?: string; ttlMinutes?: number; ws?: string } = {}) =>
-  a.create({ kind: 'guard.refusal', payload, reason: 'the rule guard refused this call', ...(opts.ttlMinutes ? { ttlMinutes: opts.ttlMinutes } : {}) }, ask(session, opts.ws), opts.id ? { id: opts.id } : {});
+const refuse = (
+  a: Approvals,
+  session: string,
+  payload: Record<string, unknown>,
+  opts: { id?: string; ttlMinutes?: number; ws?: string } = {},
+) =>
+  a.create(
+    {
+      kind: 'guard.refusal',
+      payload,
+      reason: 'the rule guard refused this call',
+      ...(opts.ttlMinutes ? { ttlMinutes: opts.ttlMinutes } : {}),
+    },
+    ask(session, opts.ws),
+    opts.id ? { id: opts.id } : {},
+  );
 
 test('migration 884: the repeats table and its indexes exist', async () => {
   const { store } = await harness();
   const cols = (store.db!.prepare(`SELECT name FROM pragma_table_info('approval_repeats')`).all() as { name: string }[]).map((c) => c.name);
   assert.deepEqual(cols, ['id', 'approval_id', 'requester_session', 'created_at']);
-  const idx = (store.db!.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'approval_repeats' AND name LIKE 'approval_repeats_%' ORDER BY name`).all() as { name: string }[]).map(
-    (i) => i.name,
-  );
+  const idx = (
+    store
+      .db!.prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'approval_repeats' AND name LIKE 'approval_repeats_%' ORDER BY name`,
+      )
+      .all() as { name: string }[]
+  ).map((i) => i.name);
   assert.deepEqual(idx, ['approval_repeats_approval', 'approval_repeats_session']);
 });
 
@@ -72,7 +97,10 @@ test('a refused call waits 30 minutes by default and never longer; other kinds k
   assert.equal(Date.parse(echo.expiresAt) - h.clock.now, APPROVAL_TTL_DEFAULT_MIN * MIN, 'other kinds keep the default');
   // Past its 30 minutes: out of the queue and of Needs you, and it can not be allowed.
   h.clock.now += 30 * MIN;
-  assert.deepEqual(h.approvals.pending(person).map((p) => p.kind), ['test.echo']);
+  assert.deepEqual(
+    h.approvals.pending(person).map((p) => p.kind),
+    ['test.echo'],
+  );
   await assert.rejects(h.approvals.allow(person, a.id), /expired/);
 });
 
@@ -84,7 +112,12 @@ test('the same refused call in the same workspace is one card with a count; each
   // Again, ten minutes later, from the same session and from another session of the same workspace; key order does not matter.
   h.clock.now += 10 * MIN;
   const againId = newId();
-  const again = refuse(h.approvals, 'chat-a', { form: p.form, cwd: p.cwd, input: { description: 'x', command: p.input.command }, tool: 'Bash' }, { id: againId });
+  const again = refuse(
+    h.approvals,
+    'chat-a',
+    { form: p.form, cwd: p.cwd, input: { description: 'x', command: p.input.command }, tool: 'Bash' },
+    { id: againId },
+  );
   assert.equal(again.id, first.id, 'folded into the waiting card');
   const otherId = newId();
   const other = refuse(h.approvals, 'chat-b', p, { id: otherId });
@@ -97,7 +130,10 @@ test('the same refused call in the same workspace is one card with a count; each
   assert.equal(h.approvals.ownOne('chat-a', againId).id, first.id);
   assert.throws(() => h.approvals.ownOne('chat-c', otherId), /not found|No such/i);
   assert.throws(() => h.approvals.ownOne('chat-b', againId), /not found|No such/i);
-  assert.deepEqual(h.approvals.listOwn('chat-b').map((x) => x.id), [first.id]);
+  assert.deepEqual(
+    h.approvals.listOwn('chat-b').map((x) => x.id),
+    [first.id],
+  );
   // A repeat id pulled again (a restart re-reading the file) is in use: nothing more is counted.
   assert.throws(() => refuse(h.approvals, 'chat-b', p, { id: otherId }), /in use/);
   assert.equal(h.approvals.getFor(person, first.id).count, 3);
@@ -113,7 +149,13 @@ test('the same refused call in the same workspace is one card with a count; each
 
 test('the outbox: repeats of one call fold into one card and never hit the five-per-session cap', async () => {
   const h = await harness();
-  const line = (command: string) => ({ id: newId(), type: 'request' as const, kind: 'guard.refusal', session: 'chat-a', payload: call(command) });
+  const line = (command: string) => ({
+    id: newId(),
+    type: 'request' as const,
+    kind: 'guard.refusal',
+    session: 'chat-a',
+    payload: call(command),
+  });
   // Twelve refusals of one call: one card counted 12, and the session can still file other calls.
   const same = Array.from({ length: 12 }, () => line('echo x > .claude/settings.json'));
   const ids = fileRefusalRequests(h.approvals, h.store, WS, same);
@@ -133,7 +175,8 @@ test('a session that ends, is archived or deleted expires the refused calls it f
   const b = refuse(h.approvals, 'chat-b', call('echo b > .claude/settings.json'));
   const c = refuse(h.approvals, 'chat-c', call('echo c > .claude/settings.json'));
   const echo = h.approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, ask('chat-a'));
-  const session = (over: Record<string, unknown>) => ({ type: 'session', session: { id: 'x', state: 'idle', archivedAt: null, ...over } }) as unknown as ChatServerMessage;
+  const session = (over: Record<string, unknown>) =>
+    ({ type: 'session', session: { id: 'x', state: 'idle', archivedAt: null, ...over } }) as unknown as ChatServerMessage;
   // Not an end: nothing.
   assert.equal(expireRefusalsOnEnd(h.approvals, 'chat-a', session({ state: 'working' })), 0);
   assert.equal(expireRefusalsOnEnd(h.approvals, 'chat-a', session({ state: 'idle' })), 0);
@@ -149,7 +192,10 @@ test('a session that ends, is archived or deleted expires the refused calls it f
   assert.equal(h.approvals.getFor(person, b.id).status, 'expired');
   assert.equal(expireRefusalsOnEnd(h.approvals, 'chat-c', { type: 'removed', session: 'chat-c' } as ChatServerMessage), 1);
   assert.equal(h.approvals.getFor(person, c.id).status, 'expired');
-  assert.deepEqual(h.approvals.pending(person).map((p) => p.id), [echo.id]);
+  assert.deepEqual(
+    h.approvals.pending(person).map((p) => p.id),
+    [echo.id],
+  );
   await assert.rejects(h.approvals.allow(person, a.id), /already expired/);
   // Again: nothing more to expire.
   assert.equal(expireRefusalsOnEnd(h.approvals, 'chat-a', session({ state: 'ended' })), 0);
@@ -160,7 +206,10 @@ test('a session that ends, is archived or deleted expires the refused calls it f
       throw new Error('db gone');
     },
   };
-  assert.equal(expireRefusalsOnEnd(broken, 'chat-a', session({ state: 'ended' }), (what) => logged.push(what)), 0);
+  assert.equal(
+    expireRefusalsOnEnd(broken, 'chat-a', session({ state: 'ended' }), (what) => logged.push(what)),
+    0,
+  );
   assert.equal(logged.length, 1);
 });
 
@@ -175,7 +224,10 @@ test('T-2889 still: Allow on a folded card records its one-time pass, and every 
   assert.equal(allowed.result?.ok, true, allowed.result?.message);
   const pass = passOf('guard.refusal', p)!;
   assert.equal((allowed.result?.output as { pass: string }).pass, pass);
-  assert.deepEqual(h.approvals.livePasses(WS).map((x) => x.pass), [pass]);
+  assert.deepEqual(
+    h.approvals.livePasses(WS).map((x) => x.pass),
+    [pass],
+  );
   assert.deepEqual(h.delivered, [WS]);
   // Each session once, under the id it was given.
   assert.deepEqual(h.sent.map((s) => s.sessionId).sort(), ['chat-a', 'chat-b']);
@@ -183,7 +235,10 @@ test('T-2889 still: Allow on a folded card records its one-time pass, and every 
   assert.ok(h.sent.find((s) => s.sessionId === 'chat-b')!.text.includes(repeatId));
   // The session's end after Allow touches nothing decided: the pass stays live.
   assert.equal(h.approvals.expireForSession('chat-a'), 0);
-  assert.deepEqual(h.approvals.livePasses(WS).map((x) => x.pass), [pass]);
+  assert.deepEqual(
+    h.approvals.livePasses(WS).map((x) => x.pass),
+    [pass],
+  );
 });
 
 test('Needs you: a refused call is in the refusal group with its count, and sorts after every real ask', async () => {
@@ -205,5 +260,8 @@ test('Needs you: a refused call is in the refusal group with its count, and sort
   assert.equal(real.count, undefined);
   // The refusal is older and its why ranks first, yet it sorts after the real ask.
   const bypassLike: AttentionItem = { ...real, why: 'question', since: new Date(h.clock.now).toISOString() };
-  assert.deepEqual([refusal, bypassLike].sort(attentionOrder).map((i) => i.id), [echo.id, r.id]);
+  assert.deepEqual(
+    [refusal, bypassLike].sort(attentionOrder).map((i) => i.id),
+    [echo.id, r.id],
+  );
 });

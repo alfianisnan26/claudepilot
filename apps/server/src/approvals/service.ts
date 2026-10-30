@@ -191,7 +191,9 @@ export class Approvals {
   #twin(kind: string, workspace: string | null, payload: unknown): Row | undefined {
     const want = canonicalJson(payload);
     const rows = this.#db()
-      .prepare("SELECT * FROM approvals WHERE kind = ? AND workspace IS ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id")
+      .prepare(
+        "SELECT * FROM approvals WHERE kind = ? AND workspace IS ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id",
+      )
       .all(kind, workspace, this.#iso()) as Row[];
     return rows.find((r) => canonicalJson(JSON.parse(r.payload)) === want);
   }
@@ -210,7 +212,11 @@ export class Approvals {
    * Asks. `requester`: the verified asking session (an agent's token), or null for the portal's own request. Validates the kind and its
    * schema, caps the size, refuses a secret-shaped value or a key that would hold a secret, and stores the payload once.
    */
-  create(req: ApprovalCreate, requester: ApprovalRequester | null, opts: { id?: string; pendingCap?: { max: number; kinds: readonly string[] } } = {}): Approval {
+  create(
+    req: ApprovalCreate,
+    requester: ApprovalRequester | null,
+    opts: { id?: string; pendingCap?: { max: number; kinds: readonly string[] } } = {},
+  ): Approval {
     // T-2885: a workspace's outbox line names the id its writer already printed. Only the service's own shape; an id in use is a conflict
     // (a card's own id or a repeat's, T-3114).
     if (opts.id !== undefined && !APPROVAL_ID.test(opts.id)) throw new AppError('VALIDATION_FAILED', 'Not an approval id.');
@@ -243,7 +249,10 @@ export class Approvals {
     // T-3114: a refused call waits 30 minutes at most (a day buried the real asks), whatever the asker says.
     const refusal = isRefusalKind(req.kind);
     const ttlMax = refusal ? APPROVAL_TTL_REFUSAL_MIN : APPROVAL_TTL_MAX_MIN;
-    const ttl = Math.min(Math.max(Math.round(req.ttlMinutes ?? (refusal ? APPROVAL_TTL_REFUSAL_MIN : APPROVAL_TTL_DEFAULT_MIN)), 1), ttlMax);
+    const ttl = Math.min(
+      Math.max(Math.round(req.ttlMinutes ?? (refusal ? APPROVAL_TTL_REFUSAL_MIN : APPROVAL_TTL_DEFAULT_MIN)), 1),
+      ttlMax,
+    );
     const now = this.#now();
     const id = opts.id ?? `apr-${randomBytes(9).toString('hex')}`;
     // T-3114: the same refused call again in the same workspace (same kind and payload) while its card waits: no second card. The repeat is
@@ -256,12 +265,14 @@ export class Approvals {
           .prepare('INSERT INTO approval_repeats (id, approval_id, requester_session, created_at) VALUES (?, ?, ?, ?)')
           .run(id, twin.id, requester?.sessionId ?? null, this.#iso(now));
         const until = this.#iso(now + ttl * 60_000);
-        if (until > twin.expires_at) this.#db().prepare("UPDATE approvals SET expires_at = ? WHERE id = ? AND status = 'pending'").run(until, twin.id);
+        if (until > twin.expires_at)
+          this.#db().prepare("UPDATE approvals SET expires_at = ? WHERE id = ? AND status = 'pending'").run(until, twin.id);
         this.#o.changed?.();
         return this.#toApproval(this.#row(twin.id)!);
       }
     }
-    if (opts.pendingCap && requester && this.pendingCount(requester.sessionId, opts.pendingCap.kinds) >= opts.pendingCap.max) throw new AppError('RATE_LIMITED', REFUSAL_CAP_MESSAGE);
+    if (opts.pendingCap && requester && this.pendingCount(requester.sessionId, opts.pendingCap.kinds) >= opts.pendingCap.max)
+      throw new AppError('RATE_LIMITED', REFUSAL_CAP_MESSAGE);
     this.#db()
       .prepare(
         `INSERT INTO approvals (id, kind, payload, requester_session, workspace, tier, reason, status, created_at, expires_at)
@@ -310,7 +321,8 @@ export class Approvals {
     const r = this.#row(id);
     if (r && r.requester_session === sessionId) return this.#toApproval(r);
     // T-3114: the id the guard printed for a repeat answers with the card it was folded into, for the session that filed it only.
-    const rep = this.#db().prepare('SELECT approval_id FROM approval_repeats WHERE id = ? AND requester_session = ?').get(id, sessionId) as { approval_id: string } | undefined;
+    const rep = this.#db().prepare('SELECT approval_id FROM approval_repeats WHERE id = ? AND requester_session = ?').get(id, sessionId) as
+      { approval_id: string } | undefined;
     const card = rep ? this.#row(rep.approval_id) : undefined;
     if (!card) throw new AppError('NOT_FOUND', NO_APPROVAL);
     return this.#toApproval(card);
@@ -325,7 +337,9 @@ export class Approvals {
     if (!db) return 0;
     const result: ApprovalResult = { ok: false, message: why };
     const r = db
-      .prepare("UPDATE approvals SET status = 'expired', decided_at = ?, result = ? WHERE requester_session = ? AND status = 'pending' AND kind = ?")
+      .prepare(
+        "UPDATE approvals SET status = 'expired', decided_at = ?, result = ? WHERE requester_session = ? AND status = 'pending' AND kind = ?",
+      )
       .run(this.#iso(), JSON.stringify(result), sessionId, 'guard.refusal');
     const n = Number(r.changes);
     if (n) this.#o.changed?.();
@@ -415,7 +429,9 @@ export class Approvals {
     // T-3114: every session whose refusal was folded into this card hears it too, once each, under the id it was given.
     const told = new Map<string, string>();
     if (a.requesterSession) told.set(a.requesterSession, a.id);
-    const reps = this.#db().prepare('SELECT id, requester_session FROM approval_repeats WHERE approval_id = ? ORDER BY created_at, id').all(a.id) as { id: string; requester_session: string | null }[];
+    const reps = this.#db()
+      .prepare('SELECT id, requester_session FROM approval_repeats WHERE approval_id = ? ORDER BY created_at, id')
+      .all(a.id) as { id: string; requester_session: string | null }[];
     for (const r of reps) if (r.requester_session && !told.has(r.requester_session)) told.set(r.requester_session, r.id);
     for (const [session, id] of told) {
       const text = `Your approval request ${id} (${a.kind}) was decided. ${what}`;

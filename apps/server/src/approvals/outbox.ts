@@ -39,7 +39,11 @@ export function fileRefusalRequests(approvals: Approvals, store: Pick<Store, 'db
     try {
       // T-3114: the service folds a repeat of a waiting refused call into its card (no new card, so it is not capped) and caps the rest.
       const a = approvals.create(
-        { kind: e.kind, payload: e.payload, reason: e.kind === 'jobrun.pool_env' ? 'job-run refused a deny-listed name' : 'the rule guard refused this call' },
+        {
+          kind: e.kind,
+          payload: e.payload,
+          reason: e.kind === 'jobrun.pool_env' ? 'job-run refused a deny-listed name' : 'the rule guard refused this call',
+        },
         { sessionId: session.id, workspaceId },
         { id: e.id, pendingCap: { max: OUTBOX_PENDING_MAX, kinds: APPROVAL_OUTBOX_KINDS } },
       );
@@ -58,7 +62,12 @@ export function fileRefusalRequests(approvals: Approvals, store: Pick<Store, 'db
  * T-3114: a chat event that ends a session (state `ended`, archived, or deleted) expires the refused calls it filed: nothing waits on them
  * any more. Any other event does nothing. Returns how many cards expired.
  */
-export function expireRefusalsOnEnd(approvals: Pick<Approvals, 'expireForSession'>, sessionId: string, msg: ChatServerMessage, log?: (what: string, e: unknown) => void): number {
+export function expireRefusalsOnEnd(
+  approvals: Pick<Approvals, 'expireForSession'>,
+  sessionId: string,
+  msg: ChatServerMessage,
+  log?: (what: string, e: unknown) => void,
+): number {
   const why =
     msg.type === 'session' && msg.session.state === 'ended'
       ? 'The asking session ended.'
