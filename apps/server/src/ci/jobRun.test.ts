@@ -56,6 +56,8 @@ const k8s = (j) => ({ metadata: { name: j.name, uid: 'uid-' + j.name, creationTi
 const stdin = () => fs.readFileSync(0, 'utf8');
 const job = (n) => read().jobs.find((j) => j.name === n);
 const play = (n, follow) => {
+  // As kubectl: no log for a Job that was deleted (T-523).
+  if (!job(n)) { process.stderr.write('Error from server (NotFound): jobs.batch "' + n + '" not found\n'); process.exit(1); }
   const sc = JSON.parse(fs.readFileSync(path.join(F, 'scenario.json'), 'utf8'));
   if (sc.hang && follow) { while (job(n)) sleep(50); process.exit(1); }
   const sec = read().secrets[n] || '';
@@ -84,7 +86,10 @@ const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.v
 // T-1982: the API server proxying the registry's service: the file "cluster-tags.json" is its answer; none = the call fails.
 if (verb === 'get' && kind === '--raw') { const t = path.join(F, 'cluster-tags.json'); if (!fs.existsSync(t)) process.exit(1); process.stdout.write(fs.readFileSync(t, 'utf8')); }
 else if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
-else if (verb === 'get' && kind === 'job') { const j = job(name); if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
+else if (verb === 'get' && kind === 'job') { const j = job(name);
+  // As kubectl: --ignore-not-found prints nothing and exits 0 for a Job that does not exist (T-523).
+  if (!j && a.includes('--ignore-not-found')) process.exit(0);
+  if (!j || (failing('uid') && !a.includes('json'))) process.exit(1); process.stdout.write(a.includes('json') ? JSON.stringify(k8s(j)) : 'uid-' + name); }
 else if (verb === 'get' && kind === 'pods' && a.includes('app=claudepilot-gate')) { const g = path.join(F, 'gates.txt'); process.stdout.write(fs.existsSync(g) ? fs.readFileSync(g, 'utf8') : ''); }
 else if (verb === 'get' && kind === 'pods' && a.includes('json')) { process.stdout.write(JSON.stringify(podOf(job(a[3].replace('job-name=', ''))))); }
 // The Secret is made by a client-side dry run (JSON on stdout, as kubectl prints it) and then created (never applied) with its ownerReference and label.
@@ -987,6 +992,85 @@ test('cleanup: interrupted while queued, the Job and its Secret are deleted', as
     ['claudepilot-job-00000001', 'claudepilot-job-00000002', 'claudepilot-job-00000003'],
   );
   assert.deepEqual(w.state().secrets, {});
+});
+
+/** The name of the Job this run created (not one of the seeds). */
+const ownJob = (w: ReturnType<typeof world>) => w.state().jobs.find((j) => !/^claudepilot-job-0000000\d$/.test(j.name))?.name;
+
+test('T-523: a Job stopped while queued never ran: exit 1 and a last line that says so (never 0)', async () => {
+  const w = world([1, 2, 3].map((i) => ({ name: `claudepilot-job-0000000${i}`, chat: 'chat-x' })));
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_MAX_PER_CHAT: '5' });
+  await waitFor('queued', () => /queued behind 3/.test(s.out()));
+  const name = ownJob(w);
+  assert.ok(name, 'its Job exists, suspended');
+  // What stops a queued Job: job-run.sh --stop (here: that one Job, as another session would).
+  assert.match(w.run(['--stop', name]).out, new RegExp(`stopped ${name}\\n1 job\\(s\\) stopped`));
+  const r = await s.done;
+  assert.equal(r.code, 1, r.out);
+  assert.equal(
+    r.out.trimEnd().split('\n').pop(),
+    `job-run: ${name} was stopped while queued: the command never ran (exit 1)`,
+  );
+  assert.doesNotMatch(r.out, /JOB-RUN EXIT|rc=0/);
+  assert.deepEqual(w.state().secrets, {}, 'its Secret is gone too');
+});
+
+test('T-523: a Job stopped after its release, before its pod started, ends at once with exit 1 (it never waits out the start deadline)', async () => {
+  const w = world();
+  writeFileSync(join(w.root, 'pending'), '0/3 nodes are available: 3 Insufficient memory.');
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { JOB_RUN_START_WAIT_S: '600' });
+  await waitFor('Pending', () => /is Pending/.test(s.out()));
+  const name = ownJob(w);
+  assert.ok(name);
+  w.run(['--stop', name]);
+  const t = Date.now();
+  const r = await s.done;
+  assert.ok(Date.now() - t < 10_000, 'it did not wait for the start deadline');
+  assert.equal(r.code, 1, r.out);
+  assert.equal(r.out.trimEnd().split('\n').pop(), `job-run: ${name} was stopped before it started: the command never ran (exit 1)`);
+});
+
+test('T-523: a Job stopped while it runs (no exit line) ends at once with exit 1 and says it was stopped (it never waits out the deadline)', async () => {
+  const w = world([], { hang: true });
+  const s = w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'sleep 1000']);
+  await waitFor('the Job running', () => w.state().jobs.some((j) => !j.suspend));
+  const name = ownJob(w);
+  assert.ok(name);
+  await new Promise((r) => setTimeout(r, 300)); // the log stream is following
+  w.run(['--stop', name]);
+  const t = Date.now();
+  const r = await s.done;
+  assert.ok(Date.now() - t < 10_000, 'it did not wait for the deadline');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, new RegExp(`job-run: ${name} was stopped before it finished: no exit code, no result \\(exit 1\\)`));
+  assert.match(r.out.trimEnd().split('\n').pop() ?? '', new RegExp(`^job-run: ${name} rc=1 `));
+});
+
+test('T-1063: an --also of the --ref repository, or two --also of one name, is refused before anything is created (rc 2)', () => {
+  const w = world();
+  const cases: [string[], RegExp][] = [
+    [
+      ['--repo', 'konfersi:platform/konfersi-universe', '--ref', '19f8ff5', '--also', 'platform/konfersi-universe@4a5fc5f1'],
+      /--also platform\/konfersi-universe: the same repository folder as --ref's \(konfersi-universe\).*one pushed commit.*T-1063/,
+    ],
+    // Another org, same name: the same folder, the same silent loss.
+    [['--repo', 'konfersi:platform/konfersi-universe', '--ref', 'x', '--also', 'fork/konfersi-universe'], /the same repository folder/],
+    [['--repo', 'claudepilot', '--ref', 'main', '--also', 'alfianisnan26/claudepilot@main'], /the same repository folder as --ref's \(claudepilot\)/],
+    [
+      ['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'x', '--also', 'platform/konfersi-shared', '--also', 'other/konfersi-shared@stg'],
+      /--also other\/konfersi-shared: another --also already uses the folder konfersi-shared/,
+    ],
+  ];
+  for (const [argv, want] of cases) {
+    const r = w.run([...argv, '--', 'npm test']);
+    assert.equal(r.code, 2, `${argv.join(' ')}: ${r.out}`);
+    assert.match(r.out, want);
+  }
+  assert.deepEqual(w.applied(), [], 'no Job was made');
+  assert.equal(w.calls(), '', 'no kubectl call at all');
+  // A different repository still goes through (the Konfersi test above checks its JR_ALSO).
+  const ok = w.run(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'x', '--also', 'platform/konfersi-shared', '--', 'true']);
+  assert.equal(ok.code, 0, ok.out);
 });
 
 test('cleanup: the chat ends (its Claude process exits) while the Job runs: the Job, its Secret and the script go', async () => {
