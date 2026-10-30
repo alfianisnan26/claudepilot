@@ -129,10 +129,10 @@ test('the old T-<n> and the bucket key resolve in every service call: get, updat
     assert.equal(code(() => h.tickets.get(UI, 'TB-1')), 'NOT_FOUND:No such ticket.');
     h.tickets.update(UI, 'KONF-1', { priority: 'high' });
     h.tickets.comment(UI, 'konf-1', 'via the key');
-    assert.equal(h.tickets.resolve('KONF-1'), 'T-2');
-    assert.equal(h.tickets.resolve('T-2'), 'T-2');
-    assert.equal(h.tickets.resolve('KONF-2'), null);
-    assert.equal(h.tickets.brief('KONF-1')!.key, 'KONF-1');
+    assert.equal(h.tickets.resolve(UI, 'KONF-1'), 'T-2');
+    assert.equal(h.tickets.resolve(UI, 'T-2'), 'T-2');
+    assert.equal(h.tickets.resolve(UI, 'KONF-2'), null);
+    assert.equal(h.tickets.brief(UI, 'KONF-1')!.key, 'KONF-1');
     assert.deepEqual(h.tickets.find({ branch: 'ticket/KONF-1-login', message: 'x\n\nTicket: T-2\nTicket: KONF-1\nTicket: CP-1' }), ['T-2', 'T-1']);
     assert.deepEqual(h.tickets.list(UI, { query: 'KONF-1' }).items.map((x) => x.id), ['T-2'], 'the search finds a key');
     assert.deepEqual(h.tickets.list(UI, { query: 'T-1' }).items.map((x) => x.id), ['T-1'], 'and the old id');

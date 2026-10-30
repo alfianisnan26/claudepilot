@@ -37,7 +37,7 @@ interface ControllerLike {
 interface TicketsLike {
   create(caller: { kind: 'system' }, req: Record<string, unknown>): { id: string };
   comment(caller: { kind: 'system' }, id: string, text: string): unknown;
-  brief(id: string): { status: string } | null;
+  brief(caller: { kind: 'system' }, id: string): { status: string } | null;
 }
 
 /** The chat controller as the sweep needs it; null when what was handed over lacks it (some tests). */
@@ -74,11 +74,11 @@ function ticketPort(raw: unknown): KeepGoingTicketPort | null {
     create: (req) => tickets.create(system, req),
     comment: (id, text) => void tickets.comment(system, id, text),
     isOpen: (id) => {
-      const b = tickets.brief(id);
+      const b = tickets.brief(system, id);
       return !!b && !isTicketClosed(b.status as never);
     },
     isClosed: (id) => {
-      const b = tickets.brief(id);
+      const b = tickets.brief(system, id);
       return !!b && isTicketClosed(b.status as never);
     },
   };

@@ -91,6 +91,7 @@ import {
   canPeerLeadAct, canPeerWorkerComment, canWorkerComment, parseLeadPeerGroups,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
+  registerTicketBucketAuthz,
   type EndedGrantReason,
   type WorkerCommentReason,
 } from './authz.js';
@@ -410,6 +411,9 @@ export class Tickets {
     this.#leadPeerGroups = opts.leadPeerGroups ?? (() => '');
     this.#mergeGates = opts.mergeGates ?? (() => []);
     this.#bucketRoutes = opts.bucketRoutes ?? (() => '');
+    // T-1993: the bucket rule needs its resolver (the seam refuses a ticket_bucket without one: fail closed), so the service that holds the
+    // buckets registers it itself; the routes and tools register the same one again.
+    registerTicketBucketAuthz(this);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -861,22 +865,30 @@ export class Tickets {
     return row;
   }
 
+  /** CI's question (does this ticket exist?) is the portal's own: it is asked as `system`. */
   exists(id: string): boolean {
-    return this.resolve(id) !== null;
+    return this.resolve({ kind: 'system' }, id) !== null;
   }
 
-  /** T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it. */
-  resolve(ref: string): string | null {
+  /**
+   * T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it.
+   * T-1993: or one the caller may not see (`#visible`, its bucket's `view`): the same null. The portal's own bookkeeping passes `system`.
+   */
+  resolve(caller: Caller, ref: string): string | null {
     const n = this.#numberOf(ref);
-    return n !== null && this.#row(n) ? ticketIdOf(n) : null;
+    const row = n === null ? undefined : this.#row(n);
+    return row && this.#visible(caller, row) ? ticketIdOf(row.number) : null;
   }
 
-  /** T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none. */
-  keyOf(ref: string): string | null {
+  /**
+   * T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none.
+   * T-1993: null too when the caller may not see it, so a row of another module (a CI run, a lab or usage row) never names a hidden bucket.
+   */
+  keyOf(caller: Caller, ref: string): string | null {
     const n = this.#numberOf(ref);
-    if (n === null) return null;
-    const r = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(n) as { bucket_key: string; bucket_number: number | null } | undefined;
-    return r ? (r.bucket_number === null ? ticketIdOf(n) : ticketKeyOf(r.bucket_key, r.bucket_number)) : null;
+    const row = n === null ? undefined : this.#row(n);
+    if (!row || !this.#visible(caller, row)) return null;
+    return row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
   }
 
   /** T-1098: the bucket of a ticket named either way (for the routes' bucket check), or null when there is no such ticket. */
@@ -1511,11 +1523,11 @@ export class Tickets {
     }));
   }
 
-  /** A ticket's id and summary, for a link to it. */
-  brief(id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
+  /** A ticket's id and summary, for a link to it. T-1993: null for one the caller may not see, the same as a missing one. */
+  brief(caller: Caller, id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
     const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
-    if (!row) return null;
+    if (!row || !this.#visible(caller, row)) return null;
     const key = row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
     return { id: ticketIdOf(row.number), key, summary: row.summary, status: row.status, type: row.type };
   }
@@ -2177,23 +2189,33 @@ export class Tickets {
   }
 
   /**
+   * T-1993 (FR39): whether the caller may file a new ticket in `b`: the agents' workspace rule (`#bucketOpenTo`) and, for a caller with a seam
+   * actor (an agent, a token, a person whose route passes it), `operate` on the bucket. The portal itself (system, a trigger) files anywhere.
+   */
+  #mayFileIn(caller: Caller, b: BucketRow): boolean {
+    if (!this.#bucketOpenTo(caller, b)) return false;
+    const actor = this.#actorOf(caller);
+    return !actor || can(actor, 'operate', ticketBucketRef(b.key)).allow;
+  }
+
+  /**
    * The bucket a new ticket goes in, and why (T-2881): the one named (refused as not found when it does not exist or is not the agent's); else
    * the one bucket a `tickets.bucketRoutes` rule gives the ticket's own tags; else the parent ticket's bucket (one the caller can see); else the
    * one bucket whose default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on;
-   * else PILOT. The tag, parent and session/lead ticket guesses skip a bucket the caller may not file in (`#bucketOpenTo`); the workspace guess
-   * finds only a bucket whose default workspace is the ticket's own, and PILOT is not checked.
+   * else PILOT. Every step skips a bucket the caller may not file in (`#mayFileIn`, T-1993); when PILOT is one too, the create is refused as
+   * "No such bucket." (fail closed: never a bucket the caller may not see).
    */
   #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null, tags: string[], parent: unknown): { row: BucketRow; choice: TicketBucketChoice } {
     const pick = (row: BucketRow, reason: TicketBucketChoice['reason'], why: string) => ({ row, choice: { bucket: row.key, reason, why } });
     if (raw !== undefined && raw !== null && raw !== '') {
       if (typeof raw !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
       const b = this.#bucketRow(raw.trim().toUpperCase());
-      if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+      if (!b || !this.#mayFileIn(caller, b)) throw noBucket();
       return pick(b, 'named', `${b.key}: named in the request.`);
     }
     const usable = (key: string) => {
       const b = this.#bucketRow(key);
-      return b && this.#bucketOpenTo(caller, b) ? b : undefined;
+      return b && this.#mayFileIn(caller, b) ? b : undefined;
     };
     let routes: ReturnType<typeof parseBucketRoutes> = [];
     try {
@@ -2212,7 +2234,7 @@ export class Tickets {
     if (workspaceId) {
       const one = this.#inWorkspace('default_workspace_id', workspaceId);
       const rows = this.#db.prepare(`SELECT * FROM ticket_buckets WHERE ${one.sql} ORDER BY key LIMIT 2`).all(...one.args) as unknown as BucketRow[];
-      if (rows.length === 1) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
+      if (rows.length === 1 && this.#mayFileIn(caller, rows[0]!)) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
     }
     const s = w.session;
     const lead = s?.parentId ? this.sessions.get(s.parentId) : null;
@@ -2223,11 +2245,11 @@ export class Tickets {
       const n = x?.ticketId ? this.#numberOf(x.ticketId) : null;
       const row = n === null ? undefined : this.#row(n);
       const b = row ? this.#bucketRow(row.bucket_key) : undefined;
-      if (b && row && this.#bucketOpenTo(caller, b))
+      if (b && row && this.#mayFileIn(caller, b))
         return pick(b, reason, `${b.key}: the bucket of ${ticketIdOf(row.number)}, the ticket ${reason === 'session_ticket' ? 'this session' : 'its lead'} works on.`);
     }
     const fallback = this.#bucketRow(TICKET_DEFAULT_BUCKET);
-    if (!fallback) throw noBucket();
+    if (!fallback || !this.#mayFileIn(caller, fallback)) throw noBucket();
     return pick(fallback, 'default', `${fallback.key}: nothing else decided (no bucket, tag rule, parent, workspace or session ticket).`);
   }
 
@@ -2474,7 +2496,7 @@ export class Tickets {
       (x): x is string => !!x,
     );
     // T-1098: a bucket key (`ticket/KONF-12-…`, `Ticket: KONF-12`) resolves to the stable id, so CI keeps speaking T-<n>.
-    return [...new Set(ids.map((id) => this.resolve(id)).filter((id): id is string => !!id))];
+    return [...new Set(ids.map((id) => this.resolve({ kind: 'system' }, id)).filter((id): id is string => !!id))];
   }
 
   /** The checks CI attached to a ticket. */

@@ -180,11 +180,13 @@ test('MCP surface: every ticket tool says both forms; comment and close name pee
     await call('ticket_claim_next', { id: 'TB-1' });
     const c = (await call('ticket_comment', { id: 'TB-1', text: 'note' })).structuredContent;
     assert.deepEqual([c.summary, c.comment.ticket_id, c.comment.ticket_key], ['Commented on TB-1 (T-1).', 'T-1', 'TB-1']);
-    // Other modules' rows (CI runs, trigger runs, the lab, usage) get the key through the lookup the ticket tools installed.
-    assert.equal(ticketKeyOf('T-1'), 'TB-1');
-    assert.deepEqual(ticketKeyField('T-1'), { ticket_key: 'TB-1' });
-    assert.deepEqual(ticketKeyField('T-404'), {});
-    assert.deepEqual(ticketKeyField(null), {});
+    // Other modules' rows (CI runs, trigger runs, the lab, usage) get the key through the lookup the ticket tools installed, as their caller
+    // may see it (T-1993; bucketScope.test.ts has the hidden cases).
+    const owner: Actor = { kind: 'user', userId: 'u_owner', loginSessionId: 'l', via: 'ui' };
+    assert.equal(ticketKeyOf('T-1', owner), 'TB-1');
+    assert.deepEqual(ticketKeyField('T-1', owner), { ticket_key: 'TB-1' });
+    assert.deepEqual(ticketKeyField('T-404', owner), {});
+    assert.deepEqual(ticketKeyField(null, owner), {});
   } finally {
     r.done();
   }

@@ -71,7 +71,7 @@ export function registerTriggerTools(d: { service: TriggerService; owner: Platfo
           number: r.event.number,
           session_id: r.sessionId,
           ticket_id: r.ticketId,
-          ...ticketKeyField(r.ticketId),
+          ...ticketKeyField(r.ticketId, actorOfPrincipal(ctx.principal)),
           cost_usd_estimate: r.costUsd.value,
         })),
       };

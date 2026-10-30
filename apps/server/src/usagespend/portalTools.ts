@@ -23,12 +23,16 @@ import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, PortalToolError, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { OWNER_ACTOR, type Who } from './actor.js';
 import type { UsageSpend } from './service.js';
-import { ticketKeyOf } from '../tickets/keys.js';
+import { ticketKeyField, ticketKeyOf } from '../tickets/keys.js';
+import { actorOfPrincipal } from '../authz/seam.js';
 
-const keyOf = (id: string): { key?: string } => {
-  const k = ticketKeyOf(id);
+/** T-1993: a ticket's bucket key as the caller may see it (none for a bucket it may not view). */
+const keyOf = (ctx: PortalToolContext, id: string): { key?: string } => {
+  const k = ticketKeyOf(id, actorOfPrincipal(ctx.principal));
   return k ? { key: k } : {};
 };
+/** T-1993: a session's `ticket_key`, asked again with the caller's actor (the stored one was read for the portal, not for this caller). */
+const sessionKey = (ctx: PortalToolContext, ticketId: string | null | undefined) => ticketKeyField(ticketId, actorOfPrincipal(ctx.principal));
 
 const BASIS = { cost_usd: 'estimate', tokens: 'measured', requests: 'measured', note: 'Dollars are Claude Code’s own price estimate: for a plan, what the same use would cost on the API, not a bill.' } as const;
 
@@ -65,7 +69,7 @@ function rowView(ctx: PortalToolContext, r: AttributionRow) {
     sessions: r.sessions,
     first_at: r.firstAt,
     last_at: r.lastAt,
-    ...ticketView(r),
+    ...ticketView(ctx, r),
     ...(s
       ? {
           session: {
@@ -74,7 +78,7 @@ function rowView(ctx: PortalToolContext, r: AttributionRow) {
             claude_id: s.claudeId,
             claude: s.claudeName,
             ticket_id: s.ticketId,
-            ...(s.ticketKey ? { ticket_key: s.ticketKey } : {}),
+            ...sessionKey(ctx, s.ticketId),
             parent_id: s.parentId,
             depth: s.depth,
             children: s.children,
@@ -98,16 +102,16 @@ function rowShort(ctx: PortalToolContext, r: AttributionRow) {
     own: money(r.own),
     total: money(r.total),
     share_pct: figure(r.share),
-    ...(s ? { session: { session_id: s.sessionId, ticket_id: s.ticketId, ...(s.ticketKey ? { ticket_key: s.ticketKey } : {}), parent_id: s.parentId, depth: s.depth, state: s.state } } : {}),
-    ...ticketView(r),
+    ...(s ? { session: { session_id: s.sessionId, ticket_id: s.ticketId, ...sessionKey(ctx, s.ticketId), parent_id: s.parentId, depth: s.depth, state: s.state } } : {}),
+    ...ticketView(ctx, r),
   };
 }
 
 /** By ticket (T-449): type, status, done time and the dollars apportioned from leads (the row's `total` holds them; `own` does not). */
-function ticketView(r: AttributionRow) {
+function ticketView(ctx: PortalToolContext, r: AttributionRow) {
   const t = r.ticket;
-  // T-1098: a by-ticket row's key is the stable id; its bucket key goes beside it.
-  return t ? { ticket: { ...(r.by === 'ticket' ? { id: r.key, ...keyOf(r.key) } : {}), type: t.type, status: t.status, done_at: t.doneAt, via_lead_usd: t.viaLeadUsd, via_lead_workers: t.viaLeadWorkers } } : {};
+  // T-1098: a by-ticket row's key is the stable id; its bucket key goes beside it (T-1993: when the caller may view its bucket).
+  return t ? { ticket: { ...(r.by === 'ticket' ? { id: r.key, ...keyOf(ctx, r.key) } : {}), type: t.type, status: t.status, done_at: t.doneAt, via_lead_usd: t.viaLeadUsd, via_lead_workers: t.viaLeadWorkers } } : {};
 }
 
 function budgetView(s: BudgetState) {
