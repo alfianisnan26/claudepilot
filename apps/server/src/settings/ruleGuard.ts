@@ -158,7 +158,9 @@ function globGitControl(pattern, baseDir, dotglob) {
  */
 function isGitControlHit(p) {
   const s = String(p || '').replace(/ \((through a link|a hard link|a \.claude folder)\)$/, '');
-  if (!path.isAbsolute(s)) return GIT_CONTROL_REL.test(s);
+  // A pattern (?, [..], *, **, {a,b}), relative or absolute: any alternative that could reach a git folder's hooks or config.
+  if (/[*?[{]/.test(s) && globGitControl(s, null, false)) return true;
+  if (!path.isAbsolute(s)) return braces(s).some((x) => GIT_CONTROL_REL.test(x));
   return !!gitControlLabel(s);
 }
 
