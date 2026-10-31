@@ -11,13 +11,16 @@ import { ToolRegistry } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { ORPHAN_LOOP, OrphanSweep } from '../tickets/orphans.js';
 import type { TriggerRecord } from '../triggers/store.js';
+import type { LoopInfo } from '../platform/loops.js';
 // The loops, imported for their definitions.
 import '../claudeusage/service.js';
 import '../claudeversion/service.js';
 import '../delivery/reconciler.js';
 import '../notify/pipeline.js';
 import '../triggers/scheduler.js';
+import '../autotransfer/engine.js';
 import { declareSchedulesPolicies, SCHEDULES_POLICIES, SCHEDULES_TOOL_POLICIES } from './authz.js';
+import { HelperRegistry } from './helpers.js';
 import { registerSchedulesTools } from './portalTools.js';
 import { LoopRegistry, portalLoops } from './registry.js';
 import { createSchedulesRoutes } from './routes.js';
@@ -30,7 +33,7 @@ after(() => clearResolvers());
 const fakeToken = () => ['cp', 'at_', 'Q7x'.repeat(10)].join('');
 const at = (s: number) => new Date(Date.UTC(2026, 9, 17, 12, 0, s));
 
-const REAL_LOOPS = ['delivery-reconcile', 'notify-clock', 'orphan-sweep', 'triggers-cron', 'usage-probe', 'version-canary'];
+const REAL_LOOPS = ['autotransfer-tick', 'delivery-reconcile', 'notify-clock', 'orphan-sweep', 'triggers-cron', 'usage-probe', 'version-canary'];
 
 test('the registry lists the portal\'s real loops, each with its module and interval', () => {
   assert.deepEqual(portalLoops.names().filter((n) => REAL_LOOPS.includes(n)), REAL_LOOPS);
@@ -45,7 +48,7 @@ test('a heartbeat updates the last run, the result and the next run; a failure i
   const reg = new LoopRegistry();
   const beat = reg.define({ name: 't-loop', module: 'test', intervalMs: 30_000, description: 'A test loop.' });
   assert.equal(reg.define({ name: 't-loop', module: 'other', intervalMs: 1, description: '' }), beat, 'the same name is the same heartbeat');
-  assert.deepEqual(reg.rows(at(0))[0], { id: 'loop:t-loop', kind: 'loop', name: 't-loop', module: 'test', description: 'A test loop.', interval_ms: 30_000, cron: null, last_run: null, last_result: null, last_error: null, next_run: null, state: 'stopped' });
+  assert.deepEqual(reg.rows(at(0))[0], { id: 'loop:t-loop', kind: 'loop', name: 't-loop', module: 'test', description: 'A test loop.', interval_ms: 30_000, cron: null, last_run: null, last_result: null, last_error: null, next_run: null, state: 'stopped', source: null, owner: null, target: null, action: null, enabled: null });
   beat.started(at(0));
   assert.equal(reg.rows(at(1))[0]!.next_run, at(30).toISOString(), 'before the first beat, the next run counts from the start');
   beat.ok(at(10));
@@ -90,16 +93,16 @@ test('a loop that has not beaten for two intervals is stale; a stopped one never
 });
 
 const trigger = (o: Partial<TriggerRecord>): TriggerRecord =>
-  ({ id: 'trg_a', ownerId: 'u_a', name: 'Nightly', enabled: true, source: 'cron', cron: { expr: '0 3 * * *', tz: 'Asia/Jakarta', catchUp: 'skip' }, paused: null, nextRunAt: at(30).toISOString(), lastRunAt: at(0).toISOString(), ...o }) as TriggerRecord;
+  ({ id: 'trg_a', ownerId: 'u_a', name: 'Nightly', enabled: true, source: 'cron', cron: { expr: '0 3 * * *', tz: 'Asia/Jakarta', catchUp: 'skip' }, paused: null, nextRunAt: at(30).toISOString(), lastRunAt: at(0).toISOString(), action: { type: 'ticket', workspaceId: 'docker/api-dev' }, ...o }) as TriggerRecord;
 
 function schedules(reached: { n: number }, runs: Record<string, TriggerRunState> = {}) {
   const loops = new LoopRegistry();
   loops.define({ name: 'a-loop', module: 'test', intervalMs: 1000, description: 'x' }).started(at(0));
   const triggers = {
-    bySource: () => [trigger({}), trigger({ id: 'trg_b', name: `key ${fakeToken()}`, enabled: false }), trigger({ id: 'trg_c', name: 'Weekly' })],
+    list: () => [trigger({}), trigger({ id: 'trg_b', name: `key ${fakeToken()}`, enabled: false }), trigger({ id: 'trg_c', name: 'Weekly' })],
     runs: (f: { triggerId: string }) => ({ rows: runs[f.triggerId] ? [{ state: runs[f.triggerId]! }] : [] }),
   };
-  const s = new Schedules({ loops, triggers, now: () => at(1) });
+  const s = new Schedules({ loops, triggers, measured: () => [], helpers: new HelperRegistry(), now: () => at(1) });
   return { list: () => (reached.n++, s.list()) };
 }
 
@@ -177,8 +180,52 @@ test('schedules_list: a read token sees loops and triggers, a trigger\'s name as
 });
 
 test('declared through the seam: view on the platform\'s system area, for the route and the tool', () => {
-  assert.deepEqual(SCHEDULES_POLICIES, { 'GET /api/schedules': { kind: 'platform', area: 'system', verb: 'view' } });
+  assert.deepEqual(SCHEDULES_POLICIES['GET /api/schedules'], { kind: 'platform', area: 'system', verb: 'view' });
+  assert.equal(SCHEDULES_POLICIES['POST /api/schedules/heartbeat']!.kind, 'bearer', 'the heartbeat is its own door (heartbeat.test.ts)');
+  assert.equal(SCHEDULES_POLICIES['POST /api/schedules/heartbeat']!.bearer, undefined, 'a first-party client token never opens it');
   assert.deepEqual(SCHEDULES_TOOL_POLICIES, { schedules_list: { kind: 'platform', area: 'system', verb: 'view' } });
   assert.deepEqual(declaredPolicies().get('GET /api/schedules'), SCHEDULES_POLICIES['GET /api/schedules']);
   assert.deepEqual(declaredToolPolicies().get('schedules_list'), SCHEDULES_TOOL_POLICIES.schedules_list);
+});
+
+test('every trigger source is listed with its owner, workspace, action and switch; only a cron trigger has a next run (T-965)', () => {
+  const action = (workspaceId: string, type: string) => ({ type, workspaceId }) as TriggerRecord['action'];
+  const triggers = {
+    list: () => [
+      trigger({ action: action('docker/api-dev', 'ticket') }),
+      trigger({ id: 'trg_ci', name: 'Regression red', source: 'ci_failed', cron: null, nextRunAt: null, action: action('kubernetes/konfersi', 'ticket_session') }),
+      trigger({ id: 'trg_wh', name: 'PR opened', source: 'webhook', cron: null, nextRunAt: at(50).toISOString(), paused: 'cost cap', action: action('docker/web', 'session') }),
+    ],
+    runs: (f: { triggerId: string }) => ({ rows: f.triggerId === 'trg_ci' ? [{ state: 'failed' as TriggerRunState }] : [] }),
+  };
+  const rows = new Schedules({ loops: new LoopRegistry(), measured: () => [], helpers: new HelperRegistry(), triggers, now: () => at(1) }).list();
+  assert.deepEqual(
+    rows.map((r) => [r.id, r.source, r.owner, r.target, r.action, r.enabled, r.state, r.next_run]),
+    [
+      ['trigger:trg_a', 'cron', 'u_a', 'docker/api-dev', 'ticket', true, 'ok', at(30).toISOString()],
+      ['trigger:trg_ci', 'ci_failed', 'u_a', 'kubernetes/konfersi', 'ticket_session', true, 'failing', null],
+      ['trigger:trg_wh', 'webhook', 'u_a', 'docker/web', 'session', false, 'disabled', null],
+    ],
+  );
+  assert.equal(rows[1]!.cron, null);
+});
+
+test('the measured loops of platform/loops.ts are listed once: a twin of a beating loop is left out; stale after two intervals, failing after a throw', () => {
+  const loops = new LoopRegistry();
+  loops.define({ name: 'usage-probe', module: 'claudeusage', intervalMs: 120_000, description: 'x' });
+  const measured = (): LoopInfo[] => [
+    { id: 'claudeusage.poll', what: 'twin', everyMs: 120_000, since: at(0).toISOString(), lastRunAt: null, lastMs: null, lastOk: null, lastError: null, runs: 0, failures: 0 },
+    { id: 'store.backup', what: 'Daily database backup (checked hourly)', everyMs: 3_600_000, since: at(0).toISOString(), lastRunAt: at(0).toISOString(), lastMs: 3, lastOk: true, lastError: null, runs: 1, failures: 0 },
+    { id: 'repos.scan', what: 'scan', everyMs: 10_000, since: at(0).toISOString(), lastRunAt: at(0).toISOString(), lastMs: 1, lastOk: false, lastError: `push refused ${fakeToken()}`, runs: 1, failures: 1 },
+  ];
+  const s = (now: Date) => new Schedules({ loops, measured, helpers: new HelperRegistry(), now: () => now }).list();
+  const rows = s(at(15));
+  assert.deepEqual(rows.map((r) => r.id), ['loop:usage-probe', 'loop:store.backup', 'loop:repos.scan']);
+  const backup = rows[1]!;
+  assert.deepEqual([backup.kind, backup.module, backup.description, backup.interval_ms, backup.last_result, backup.state, backup.next_run], ['loop', 'store', 'Daily database backup (checked hourly)', 3_600_000, 'ok', 'ok', new Date(at(0).getTime() + 3_600_000).toISOString()]);
+  assert.deepEqual([rows[2]!.state, rows[2]!.last_result], ['failing', 'failed']);
+  assert.ok(!rows[2]!.last_error!.includes(fakeToken()), 'a measured loop\'s error is cleaned of credentials');
+  assert.equal(s(at(21)).find((r) => r.id === 'loop:repos.scan')!.state, 'stale', 'no run for more than two intervals: stale wins');
+  const alone = new Schedules({ loops: new LoopRegistry(), measured, helpers: new HelperRegistry(), now: () => at(1) }).list();
+  assert.ok(alone.some((r) => r.id === 'loop:claudeusage.poll'), 'without its twin, the measured loop is listed');
 });

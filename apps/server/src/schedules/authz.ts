@@ -8,6 +8,12 @@ import { declarePolicies, declareToolPolicies } from '../authz/seam.js';
 
 export const SCHEDULES_POLICIES: RoutePolicies = {
   'GET /api/schedules': { kind: 'platform', area: 'system', verb: 'view' },
+  // T-965: a helper outside the portal says it is alive. Its own door (./heartbeat.ts): an admin's Portal MCP token, never a cookie, then
+  // `operate` on the platform's `system` area through the seam (a read token: NOT_FOUND).
+  'POST /api/schedules/heartbeat': {
+    kind: 'bearer',
+    why: 'An admin’s Portal MCP token (not an agent’s, the manager’s or a first-party client’s), never a cookie; then can(token, operate, platform system), else 404.',
+  },
 };
 
 export const SCHEDULES_TOOL_POLICIES = {

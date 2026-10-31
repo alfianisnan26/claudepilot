@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
+  SCHEDULES_API,
   VSCODE_API,
   isStableWorkspaceId,
   type RenameWorkspaceRequest,
@@ -135,6 +136,8 @@ import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporter
 import type { ReporterService } from './reporter/service.js';
 import { clientAddress } from './clientAddress.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
+import { createHeartbeatRoutes } from './schedules/heartbeat.js';
+import { portalHelpers } from './schedules/helpers.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -1228,6 +1231,19 @@ export function createApp(
     vs.route('/', createVscodeApproveRoutes(vsFlow, vsDeps) as never);
     vs.route('/', createVscodeBearerRoutes(vsDeps) as never);
     app.route('/api/vscode', vs);
+
+    // A helper's heartbeat (T-965, schedules/heartbeat.ts): an admin's Portal MCP token is its door, never a cookie, so it is mounted here,
+    // before the schedules module's cookie-guarded routes under the same prefix. A beat is a few bytes: 4 KiB at most.
+    app.use(SCHEDULES_API.heartbeat, loginLimit);
+    app.route(
+      SCHEDULES_API.heartbeat,
+      createHeartbeatRoutes({
+        tokens: portalMcp.tokens,
+        helpers: portalHelpers,
+        mcpEnabled: () => portalMcp.settings.get().enabled,
+        clientKey: (c) => clientKey(c as Context<Env>),
+      }),
+    );
   }
 
   // Tickets: the queue of work for people and agents; agents reach it through Portal MCP tools instead.

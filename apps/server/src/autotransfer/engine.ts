@@ -26,6 +26,7 @@ import {
 import { AppError } from '@isnanme/core';
 import type { AuditInput } from '../platform/audit.js';
 import type { NotifyBus } from '../notify/bus.js';
+import { defineLoop } from '../schedules/registry.js';
 import { decide, effectiveMode, leftFor, modelFamily, sourceReading, windowPeriod, type DecideCounters, type Decision } from './decide.js';
 import type { ChatPort, ClockPort, OwnerPort, UsagePort } from './ports.js';
 import { effectiveSettings, platformSettings, type AutoSettingsReader } from './settings.js';
@@ -51,6 +52,13 @@ const JITTER_MS = 20_000;
 /** A new usage reading asks for a tick too (T-105 item 2): a burst of readings is one tick, and never sooner than this after the last one. */
 const REFRESH_DEBOUNCE_MS = 5_000;
 const REFRESH_MIN_GAP_MS = 30_000;
+/** The tick on the Schedules list (T-965): its interval is the longest gap between two ticks, the jitter included. */
+export const AUTOTRANSFER_LOOP = defineLoop({
+  name: 'autotransfer-tick',
+  module: 'autotransfer',
+  intervalMs: TICK_MS + JITTER_MS,
+  description: 'Looks again at every chat at or under the move threshold, and at those waiting for quota.',
+});
 /** The refusals that make a chat at or under the threshold wait for quota rather than give up (T-105 R3). */
 const WAIT_CODES: ReadonlySet<string> = new Set(['no_destination', 'destination_busy', 'session_cap', 'day_cap', 'paused']);
 /** What the engine says to a chat (fixed text over names and numbers; never anyone else's words). */
@@ -167,11 +175,19 @@ export class AutoTransferEngine {
       this.#sweep = this.#d.clock.timer(6 * 60 * MIN, sweep);
     };
     sweep();
+    const at = () => new Date(this.#d.clock.now());
     const tick = () => {
       this.#tick = this.#d.clock.timer(TICK_MS + Math.random() * JITTER_MS, tick);
-      void this.tick().catch((e: unknown) => console.error(`[autotransfer] tick failed: ${(e as Error).message}`));
+      void this.tick().then(
+        () => AUTOTRANSFER_LOOP.ok(at()),
+        (e: unknown) => {
+          AUTOTRANSFER_LOOP.fail(e, at());
+          console.error(`[autotransfer] tick failed: ${(e as Error).message}`);
+        },
+      );
     };
     this.#tick = this.#d.clock.timer(TICK_MS + Math.random() * JITTER_MS, tick);
+    AUTOTRANSFER_LOOP.started(at());
     this.#offUsage = this.#d.usage.onReading?.(() => this.usageRefreshed()) ?? null;
   }
 
@@ -180,6 +196,7 @@ export class AutoTransferEngine {
     this.#off?.();
     this.#off = null;
     this.#sweep?.();
+    if (this.#tick) AUTOTRANSFER_LOOP.stopped();
     this.#tick?.();
     this.#tick = null;
     this.#offUsage?.();
