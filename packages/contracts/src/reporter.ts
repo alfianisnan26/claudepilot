@@ -141,16 +141,83 @@ export interface ReporterPerformance {
   memory: { usedJsHeapBytes: number | null; totalJsHeapBytes: number | null };
 }
 
+/**
+ * What was deployed (owner, 2026-10-31: commit, branch, version). From the SDK config (data-version, data-commit, data-branch,
+ * data-env, data-built-at, data-repo, or init()), else meta tags (version, app-version, commit, build-id), else null: never guessed.
+ */
+export interface ReporterBuildInfo {
+  version: string | null;
+  commit: string | null;
+  branch: string | null;
+  /** "stg", "uat", "local"... as the page declares it. */
+  environment: string | null;
+  builtAt: string | null;
+  /** The repo context, one of the bucket's repos when the bucket lists any. */
+  repo: string | null;
+}
+
+/** Where the person was. Query VALUES are redacted in url and search (keys kept); the hash is kept (SPA routes) but capped. */
+export interface ReporterPageInfo {
+  url: string;
+  origin: string;
+  /** The domain (host without port). */
+  host: string;
+  path: string;
+  search: string;
+  hash: string;
+  title: string;
+  referrer: string;
+  lang: string;
+  /** The SPA's route pattern when the app exposes one (e.g. a meta tag or init({ route })), else null. */
+  route: string | null;
+  /** Steps in this tab's history, a hint of how the person got here. */
+  historyLength: number;
+}
+
+/** The device and browser (owner, 2026-10-31: device info). Each field null when the browser does not tell. */
+export interface ReporterDeviceInfo {
+  userAgent: string;
+  /** From User-Agent Client Hints when available, else parsed from the user agent. */
+  browser: { name: string | null; version: string | null };
+  os: { name: string | null; version: string | null };
+  mobile: boolean | null;
+  touch: boolean;
+  screen: { w: number; h: number; dpr: number; orientation: string | null };
+  viewport: { w: number; h: number };
+  hardwareConcurrency: number | null;
+  deviceMemoryGb: number | null;
+  connection: { effectiveType: string | null; downlinkMbps: number | null; rttMs: number | null; saveData: boolean | null };
+  timezone: string | null;
+  locale: string | null;
+}
+
+/** The page's state at capture (owner, 2026-10-31: state). */
+export interface ReporterPageState {
+  scroll: { x: number; y: number; maxY: number };
+  visibility: string;
+  online: boolean;
+  colorScheme: 'light' | 'dark';
+  reducedMotion: boolean;
+  /** document.activeElement as a selector (focus bugs), or null. */
+  focused: string | null;
+  /** Names only, never values, of this origin's localStorage, sessionStorage and cookies readable by script. */
+  storageKeys: { local: string[]; session: string[]; cookies: string[] };
+  /**
+   * What the app chose to expose through init({ getState }), as JSON: capped (evidenceBytes share), redacted, and null when the app
+   * gives none. The SDK never reads app state on its own.
+   */
+  app: unknown;
+}
+
 /** The JSON attachment of a reported ticket. Every list is capped by REPORTER_LIMITS and redacted before it leaves the page. */
 export interface ReporterEvidence {
   schema: typeof REPORTER_EVIDENCE_SCHEMA;
   sdkVersion: string;
   capturedAt: string;
-  page: { url: string; title: string; referrer: string; lang: string };
-  userAgent: string;
-  /** The deployed version the page declared (commit, tag or build id), or null when it declared none. */
-  appVersion: string | null;
-  repo: string | null;
+  page: ReporterPageInfo;
+  device: ReporterDeviceInfo;
+  state: ReporterPageState;
+  build: ReporterBuildInfo;
   anchor: ReporterAnchor;
   dom: { selector: string | null; path: string; snippet: string } | null;
   components: ReporterComponentNode[];
@@ -190,8 +257,7 @@ export interface ReporterCreateTicketRequest {
   priority?: TicketPriority;
   tags?: string[];
   captures: ReporterCaptureInput[];
-  appVersion: string | null;
-  repo: string | null;
+  build: ReporterBuildInfo;
   sdkVersion: string;
 }
 
@@ -243,8 +309,7 @@ export interface ReporterReview {
 /** POST /reporter/v1/reviews */
 export interface ReporterStartReviewRequest {
   title?: string;
-  appVersion: string | null;
-  repo: string | null;
+  build: ReporterBuildInfo;
   sdkVersion: string;
 }
 
@@ -291,7 +356,7 @@ export interface ReporterTicket {
   url: string;
   /** The ticket's captures, in order; empty when it did not come from the widget. */
   captures: (ReporterCapture & { screenshotUrl: string | null })[];
-  appVersion: string | null;
+  build: ReporterBuildInfo | null;
 }
 
 export interface ReporterSession {
@@ -315,8 +380,7 @@ export interface ReporterNoteHit {
  * page's evidence viewer: a strip of the captures, each with its screenshot, crop and evidence tabs.
  */
 export interface TicketReporterEvidence {
-  appVersion: string | null;
-  repo: string | null;
+  build: ReporterBuildInfo;
   sdkVersion: string;
   origin: string;
   createdAt: string;
@@ -348,7 +412,7 @@ export interface ReporterCallout {
 
 /** Host page (SDK) -> panel iframe. The panel accepts these only from window.parent and only from the `origin` it was opened for. */
 export type ReporterHostMessage =
-  | { type: 'pilot-reporter:hello'; bridge: typeof REPORTER_BRIDGE_VERSION; sdkVersion: string; page: { url: string; title: string }; appVersion: string | null; repo: string | null }
+  | { type: 'pilot-reporter:hello'; bridge: typeof REPORTER_BRIDGE_VERSION; sdkVersion: string; page: { url: string; title: string }; build: ReporterBuildInfo }
   | { type: 'pilot-reporter:navigated'; page: { url: string; title: string } }
   /** The capture the panel asked for. The screenshot travels as a transferred ArrayBuffer. */
   | { type: 'pilot-reporter:capture-result'; requestId: string; screenshot: ArrayBuffer; mediaType: 'image/png' | 'image/jpeg' | 'image/webp'; evidence: ReporterEvidence }
