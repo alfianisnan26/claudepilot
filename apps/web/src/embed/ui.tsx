@@ -70,7 +70,7 @@ export function Seg<T extends string>({ value, options, onChange, label }: { val
           disabled={o.disabled}
           title={o.hint}
           onClick={() => onChange(o.value)}
-          className={`min-h-11 flex-1 rounded-[10px] px-2 text-[13px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-40 ${value === o.value ? 'bg-surface text-ink shadow-sm' : 'text-muted'}`}
+          className={`min-h-11 flex-1 rounded-[10px] px-2 text-[13px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-40 ${value === o.value ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'}`}
         >
           {o.label}
         </button>
@@ -89,8 +89,8 @@ export function Notice({ tone = 'info', children }: { tone?: 'info' | 'error' | 
 }
 
 export function PhaseChip({ phase, pending }: { phase: ReporterWorkPhase; pending?: boolean }) {
-  if (pending) return <span className="rounded-full border border-dashed border-line-strong px-2 py-0.5 text-[12px] font-semibold text-muted">Pending</span>;
-  return <span className={`rounded-full px-2 py-0.5 text-[12px] font-semibold whitespace-nowrap ${PHASE_TONE[phase]}`}>{PHASE_LABEL[phase]}</span>;
+  if (pending) return <span className="rounded-full border border-dashed border-line-strong px-2 py-0.5 text-[12.5px] font-semibold text-muted">Pending</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-[12.5px] leading-4 font-semibold whitespace-nowrap ${PHASE_TONE[phase]}`}>{PHASE_LABEL[phase]}</span>;
 }
 
 /** "stg ✓ · uat – · prod ?", each environment with its reason as a tooltip and for screen readers. */
@@ -115,11 +115,13 @@ export function EnvStrip({ deployments, current }: { deployments: ReporterDeploy
 const cache = new Map<string, Promise<string>>();
 const MAX = 80;
 
-export function AuthImg({ client, src, alt, className }: { client: ReporterClient; src: string | null; alt: string; className?: string }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+/** An image the API serves (bearer token) as an object URL from the small cache; null while loading, 'failed' when it could not load. */
+export function useAuthUrl(client: ReporterClient, src: string | null): string | null | 'failed' {
+  const [url, setUrl] = useState<string | null | 'failed'>(null);
   useEffect(() => {
+    setUrl(null);
     if (!src) return;
+    if (src.startsWith('blob:')) return setUrl(src);
     let live = true;
     let p = cache.get(src);
     if (!p) {
@@ -134,14 +136,20 @@ export function AuthImg({ client, src, alt, className }: { client: ReporterClien
     }
     p.then(
       (u) => live && setUrl(u),
-      () => live && setFailed(true),
+      () => live && setUrl('failed'),
     );
     return () => {
       live = false;
     };
   }, [client, src]);
-  if (!src || failed) return <div className={`bg-surface-2 ${className ?? ''}`} aria-label={`${alt} unavailable`} role="img" />;
-  return url ? <img src={url} alt={alt} className={`object-cover ${className ?? ''}`} /> : <div className={`skeleton bg-surface-2 ${className ?? ''}`} aria-busy="true" />;
+  return url;
+}
+
+/** A fixed-size image the API serves: lazy (decoded off the main thread), the box sized before it loads so nothing shifts. */
+export function AuthImg({ client, src, alt, className }: { client: ReporterClient; src: string | null; alt: string; className?: string }) {
+  const url = useAuthUrl(client, src);
+  if (!src || url === 'failed') return <div className={`bg-surface-2 ${className ?? ''}`} aria-label={`${alt || 'Image'} unavailable`} role="img" />;
+  return url ? <img src={url} alt={alt} loading="lazy" decoding="async" className={`object-cover ${className ?? ''}`} /> : <div className={`skeleton bg-surface-2 ${className ?? ''}`} aria-busy="true" />;
 }
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {

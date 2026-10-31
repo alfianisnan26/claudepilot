@@ -115,9 +115,10 @@ test('token scope: other bucket, other origin, expired, revoked, origin removed,
     const other = h.tickets.create(UI, { summary: 'theirs', bucket: 'OTHER' });
     await same404(await h.call(`/reporter/v1/tickets/${other.key}`, { token: t }), 'a ticket of another bucket');
 
-    // A new connect by the same person on the same site replaces (revokes) the older token.
+    // A token beyond the person's newest REPORTER_LIMITS.liveTokensPerSite on this site is revoked (the cap test is in hardening.test.ts).
+    for (let i = 0; i < REPORTER_LIMITS.liveTokensPerSite; i++) h.mint();
+    await same404(await me(t), 'replaced by newer connects');
     const revoked = h.mint().token;
-    await same404(await me(t), 'replaced by a newer connect');
     h.service.revoke(h.service.verify(revoked)!.id, 'test');
     await same404(await me(revoked), 'revoked');
     t = h.mint().token;

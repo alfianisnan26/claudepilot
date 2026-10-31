@@ -19,6 +19,11 @@ Code: `apps/server/src/reporter/` (`service.ts`, `routes.ts`, `validate.ts`, `de
   bucket. The panel may also send `x-reporter-bucket` and `x-reporter-origin`; when present they must match the token. Any failure answers
   the same 404 as a missing object; a call without a token answers 401. `DELETE /reporter/v1/me` revokes the panel's own token (sign out;
   not in the contract's route table).
+- Up to `REPORTER_LIMITS.liveTokensPerSite` (5) live tokens per person, bucket and origin: minting a sixth revokes the oldest live one
+  (`revoked_reason` "replaced by a newer connect"); each keeps its own 12 h expiry and expired ones do not count. Until 2026-10-31 a new
+  approval revoked all the person's older tokens there, and test agents approving as the owner signed the owner's panel out. The panel
+  treats a 401, or a 404 that `GET /me` confirms, as "session ended" (clears the token, shows Connect); a 404 while `/me` answers is a
+  missing object, shown in that view only.
 
 ## Pages and files under /reporter/v1
 
@@ -58,9 +63,36 @@ Every route of `REPORTER_ROUTES` under `/reporter/v1` from `me` down. No `Access
   `GET /session-targets`, `POST /observed-build`, `GET /sessions`, `GET /knowledge`, `GET /knowledge/note`.
 - `GET /events`: NDJSON lines `{"type":"hello"|"changed"|"ping"}`; checked every 2 s, closed after 10 minutes or when the token stops being
   valid. The panel re-reads on `changed` and polls every 30 s when the stream fails.
+- `GET /me` also returns `clientIp` and `clientIpFamily` (4 or 6): the request's address as the portal sees it, by the app's one rule
+  (`clientAddress.ts`): the trusted proxy's LAST `X-Forwarded-For` entry when `PORTAL_TRUST_PROXY=true`, else the socket; a header a client
+  sets is never believed. The same address is stored as `reporter_ip` on each widget ticket's evidence record (migration 902), named in the
+  description's "Where" section ("Reporter IP") and in the owner's Evidence viewer. The page never sends it.
+
+### Chat in the widget (PILOT-1111)
+
+`GET /sessions/:id/messages` (`?before=&limit=` a page counted back from the newest, or `?after=`), `POST /sessions/:id/messages`
+(`ReporterChatSendRequest`), `GET /sessions/:id/stream?after=` (NDJSON `ReporterChatStreamLine`: hello, update with new lines and the state,
+ping, gone; checked every second, closed after 5 minutes, at most 2 per token), `GET /sessions/:id/blobs/:blobId` (images only, sandboxed).
+
+- **Which sessions.** Only a session of the token's bucket: one of its direct-report targets, linked to one of its tickets, or in its default
+  workspace; and one the token's person may `view` (reads) or `operate` (send) through the seam. Anything else, an unknown id or no chat is
+  the same 404, checked before any count.
+- **What it shows: never more than the portal shows the owner.** The person's and the assistant's text (redacted when stored, and again on the
+  way out with `chat/redact.ts`), a tool call as its name and one line of its input (a command, a path; at most 120 characters), an approval
+  as one line, an error as one line, images by reference. Sub-agent lines, thinking, tool output, costs, system notes, a move's context and
+  side questions are left out (`reporter/chat.ts`).
+- **Sending.** The chat controller's own `send` (the path the portal's composer uses), as `portal-mcp:<token id>` named
+  `<person> (reporter, <origin>)`: the transcript and Claude see that the message came through the widget on that site, not typed in the
+  portal. Decided on the record (2026-10-31): the panel runs inside someone else's page, so its messages are framed like the reporter's
+  ticket replies rather than as the owner at the keyboard. Text up to 8000 characters, optionally the current capture as one png, jpeg or
+  webp image within the model's image limit. 20 messages per token per 10 minutes, every attempt counted. An ended session refuses (409).
+  Approvals are never answered from the widget: the panel links out to pilot. Audited as `reporter.chat_sent`.
 
 Rate limits: 30 tickets per token per hour (`REPORTER_LIMITS.ticketsPerHour`), 120 per origin per hour, 6 direct-to-session reports per token
-per hour.
+per hour, 20 chat messages per token per 10 minutes.
+
+Capture modes: `viewport` (only what was on screen; "Screen", the default), `full` (the whole page; desktop) and `crop`. `viewport` is
+additive and accepted everywhere `full` is; the description says "screen (what was visible)".
 
 ## What is filed
 
@@ -69,10 +101,11 @@ per hour.
   `repro.spec.ts` from the first capture's interaction trail.
 - Validation: screenshots by magic bytes (PNG, JPEG, WebP) within 8 MB; the evidence parsed against `ReporterEvidence` (schema version, list
   caps refused, strings capped), every string redacted with `chat/redact.ts` plus JWTs and long `prefix_<base62>` keys; query values replaced;
-  input values always `[masked]`; app state keys that look secret are redacted.
+  input values always `[masked]`; app state keys that look secret are redacted. The optional `captureGaps` (what the DOM screenshot
+  could not draw, at most 10, one line of 200 characters each) is kept when present; older SDKs send none.
 - The description is written by the server: the reporter's words on top, then where (site, environment, repo, domain, path, route, build
-  commit, branch, version, device), a section per capture (URL, device, area and element, console errors, failed requests, LCP, UI check
-  findings, attachment ids), steps to reproduce, and a deployment footer that the server rewrites when the state changes.
+  commit, branch, version, device), a section per capture (URL, device, "Not captured: ..." when the shot has gaps, area and element,
+  console errors, failed requests, LCP, UI check findings, attachment ids), steps to reproduce, and a deployment footer that the server rewrites when the state changes.
 
 ## Direct to a session
 

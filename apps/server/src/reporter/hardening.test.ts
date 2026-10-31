@@ -372,7 +372,7 @@ test('connect: "Sign in first" goes to the login page with a way back to this co
   }
 });
 
-test('connect: a new approval revokes the same person’s older tokens for that bucket and origin only', async () => {
+test('connect: a new approval keeps the same person’s other tokens for that site (another device, a test run); other sites untouched', async () => {
   const h = await reporterHarness();
   try {
     h.service.updateConfig('OTHER', { enabled: true, sites: [{ origin: 'https://other.example', environment: 'prod', repo: 'x/y', label: null, branch: null }] }, 'test');
@@ -381,12 +381,30 @@ test('connect: a new approval revokes the same person’s older tokens for that 
     const uat = h.mint('https://uat.konfersi.com').token;
     const other = h.service.mint('OTHER', 'https://other.example', owner, 'Owner').token;
     const stg2 = h.mint().token;
-    assert.equal(h.service.verify(stg1), null, 'the older stg token is revoked');
+    // The live bug (2026-10-31): a test agent approved as the owner and the owner's own panel was signed out ("Not found." everywhere).
+    assert.ok(h.service.verify(stg1), 'the earlier stg token still works');
     assert.ok(h.service.verify(stg2), 'the new one works');
     assert.ok(h.service.verify(uat), 'another origin of the bucket is untouched');
     assert.ok(h.service.verify(other), 'another bucket is untouched');
+  } finally {
+    h.done();
+  }
+});
+
+test('connect: at most REPORTER_LIMITS.liveTokensPerSite live tokens per person and site; the oldest beyond it is revoked', async () => {
+  const h = await reporterHarness();
+  try {
+    const max = REPORTER_LIMITS.liveTokensPerSite;
+    assert.equal(max, 5);
+    const uat = h.mint('https://uat.konfersi.com').token;
+    const stg = Array.from({ length: max }, () => h.mint().token);
+    for (const t of stg) assert.ok(h.service.verify(t), 'five live at once');
+    const sixth = h.mint().token;
+    assert.equal(h.service.verify(stg[0]!), null, 'the oldest is revoked');
+    for (const t of [...stg.slice(1), sixth]) assert.ok(h.service.verify(t), 'the five newest stay');
+    assert.ok(h.service.verify(uat), 'another origin does not count');
     const reason = h.store.db!.prepare('SELECT revoked_reason FROM reporter_tokens WHERE revoked_at IS NOT NULL').all() as { revoked_reason: string }[];
-    assert.deepEqual(reason.map((r) => r.revoked_reason), ['replaced by a new connect']);
+    assert.deepEqual(reason.map((r) => r.revoked_reason), ['replaced by a newer connect']);
   } finally {
     h.done();
   }

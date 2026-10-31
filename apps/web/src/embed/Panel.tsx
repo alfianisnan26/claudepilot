@@ -1,4 +1,15 @@
-import { REPORTER_BRIDGE_VERSION, type ReporterBuildInfo, type ReporterConnectMessage, type ReporterHostMessage, type ReporterReportTarget, type ReporterReview, type ReporterSessionTargetStatus, type ReporterStatus } from '@portal/contracts';
+import {
+  REPORTER_BRIDGE_VERSION,
+  type ReporterBuildInfo,
+  type ReporterCaptureMode,
+  type ReporterConnectMessage,
+  type ReporterHostMessage,
+  type ReporterMe,
+  type ReporterReportTarget,
+  type ReporterReview,
+  type ReporterSessionTargetStatus,
+  type ReporterStatus,
+} from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogoMark } from '../components/LogoMark';
 import {
@@ -16,7 +27,10 @@ import {
   type StoredToken,
 } from './api';
 import { captureRequest, createPanelBridge, exactOrigin, targetMessage, type PanelBridge } from './bridge';
-import { PanelContext, newId, type Capture, type PanelState, type Tab } from './context';
+import { ChatView } from './ChatView';
+import { ContextSheet } from './ContextSheet';
+import { PanelContext, newId, type Capture, type ChatOpen, type PanelState, type Tab } from './context';
+import { choiceKey, parseChoice } from './formModel';
 import { Icon, type IconName } from './icons';
 import { buildCallouts, closesPanel, isChangeEvent, parseHotkeys, pickTarget, targetNotice, type Hotkeys } from './model';
 import { KnowledgeTab, SessionsTab, SettingsTab } from './OtherTabs';
@@ -26,6 +40,8 @@ import { Btn, Notice } from './ui';
 
 const BUCKET = /^[A-Z]{2,6}$/;
 const POLL_MS = 30_000;
+/** Shots on one report (the form's strip). */
+const REPORT_SHOTS_MAX = 6;
 
 /**
  * The reporter panel (/reporter/v1/embed?bucket=&origin=), framed by the SDK on the host page. It answers `ready` once it knows the
@@ -56,7 +72,13 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     setTokenState(null);
   }, [kv, bucket, origin]);
 
-  const client = useMemo(() => createClient({ token: () => tokenRef.current?.token ?? null, onUnauthorized: signOut }), [signOut]);
+  // The token was refused (revoked, expired, its site removed): back to Connect with one line, never a raw "Not found." on every tab.
+  const [ended, setEnded] = useState(false);
+  const sessionEnded = useCallback(() => {
+    if (tokenRef.current) setEnded(true);
+    signOut();
+  }, [signOut]);
+  const client = useMemo(() => createClient({ token: () => tokenRef.current?.token ?? null, onUnauthorized: sessionEnded }), [sessionEnded]);
 
   const [status, setStatus] = useState<ReporterStatus | null>(null);
   const [statusFailed, setStatusFailed] = useState(false);
@@ -68,7 +90,13 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const [missing, setMissing] = useState<PanelState['missing']>(null);
   const [focused, setFocused] = useState<PanelState['focused']>(null);
   const [review, setReview] = useState<ReporterReview | null>(null);
-  const [capture, setCaptureState] = useState<Capture | null>(null);
+  const [shots, setShots] = useState<Capture[]>([]);
+  const capture = shots.at(-1) ?? null;
+  const appendNext = useRef(false);
+  const [chat, setChat] = useState<ChatOpen | null>(null);
+  const [hostContext, setHostContext] = useState<PanelState['hostContext']>(null);
+  const [me, setMe] = useState<ReporterMe | null>(null);
+  const [contextOpen, setContextOpen] = useState<'context' | 'carries' | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [targets, setTargets] = useState<ReporterSessionTargetStatus[]>([]);
   const [hostTarget, setHostTarget] = useState<ReporterReportTarget | null>(null);
@@ -119,7 +147,14 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [post]);
   // The Ticket | Session choice the SDK's capture toolbar starts on: sent after ready, on every change, and with each capture request.
-  const [choice, setChoiceState] = useState<ReporterReportTarget>({ kind: 'ticket' });
+  // Remembered per bucket (owner, 2026-10-31): the form and the toolbar start on the last destination the person chose.
+  const [choice, setChoiceState] = useState<ReporterReportTarget>(() => {
+    try {
+      return parseChoice(kv.getItem(choiceKey(bucket))) ?? { kind: 'ticket' };
+    } catch {
+      return { kind: 'ticket' };
+    }
+  });
   const choiceRef = useRef<ReporterReportTarget>(choice);
   const setChoice = useCallback(
     (t: ReporterReportTarget) => {
@@ -127,15 +162,20 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
       if (!m || m.type !== 'pilot-reporter:target') return;
       choiceRef.current = m.target;
       setChoiceState(m.target);
+      try {
+        kv.setItem(choiceKey(bucket), JSON.stringify(m.target));
+      } catch {
+        // per-viewer convenience only
+      }
       post(m);
     },
-    [post],
+    [post, kv, bucket],
   );
 
   const notify = useCallback((text: string, tone: 'info' | 'error' | 'ok' = 'info') => setToast({ text, tone, id: Date.now() }), []);
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), toast.tone === 'error' ? 7000 : 4000);
+    const t = setTimeout(() => setToast(null), toast.tone === 'error' ? 7000 : toast.tone === 'ok' ? 2000 : 4000);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -167,6 +207,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     if (!token || !status?.enabled) return;
     client.me().then(
       (me) => {
+        setMe(me);
         if (me && typeof me.actorLabel === 'string' && me.actorLabel !== tokenRef.current?.actorLabel && tokenRef.current) {
           const next = { ...tokenRef.current, actorLabel: me.actorLabel };
           writeToken(kv, origin, next);
@@ -199,7 +240,20 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     void reloadReview();
     client.sessionTargets().then(setTargets, () => setTargets([]));
   }, [connected, client, reloadReview, tick]);
-  useEffect(() => post({ type: 'pilot-reporter:tray', count: review?.status === 'draft' ? review.comments.length : 0 }), [review, post]);
+  // The widget button's badges: draft comments, and the person's open tickets waiting for their reply (re-counted on every change).
+  const [replies, setReplies] = useState(0);
+  useEffect(() => {
+    if (!connected) return setReplies(0);
+    let live = true;
+    client.tickets({ status: 'open', mine: true, sort: 'updated', order: 'desc', limit: 100 }).then(
+      (l) => live && setReplies(l.items.filter((t) => t.awaitingReporter).length),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [connected, client, tick]);
+  useEffect(() => post({ type: 'pilot-reporter:tray', count: review?.status === 'draft' ? review.comments.length : 0, replies }), [review, replies, post]);
 
   // ---- callouts for the current page ----
   const path = page ? safePath(page.url) : null;
@@ -267,24 +321,38 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   }, [connected, client, refresh]);
 
   // ---- captures ----
+  // The report's shots: a new capture starts a new report unless the form's "+" asked to add one.
   const setCapture = useCallback((c: Capture | null) => {
-    setCaptureState((old) => {
-      if (old && old !== c) URL.revokeObjectURL(old.previewUrl);
-      return c;
+    setShots((old) => {
+      for (const o of old) if (o !== c) URL.revokeObjectURL(o.previewUrl);
+      return c ? [c] : [];
+    });
+  }, []);
+  const removeShot = useCallback((captureId: string) => {
+    setShots((old) => {
+      const gone = old.find((o) => o.captureId === captureId);
+      if (gone) URL.revokeObjectURL(gone.previewUrl);
+      return old.filter((o) => o.captureId !== captureId);
     });
   }, []);
   const requestCapture = useCallback(
-    (mode: 'full' | 'crop', precise = false) => {
+    (mode: ReporterCaptureMode, precise = false, append = false) => {
       const requestId = newId();
+      appendNext.current = append;
       setPending(requestId);
       post(captureRequest(requestId, mode, precise, choiceRef.current));
     },
     [post],
   );
+  const openChat = useCallback((c: ChatOpen | null) => {
+    setChat(c);
+    if (c) setTab('sessions');
+  }, []);
   const focus = useCallback(
     (key: string, captureId: string | null) => {
       setMissing(null);
-      post({ type: 'pilot-reporter:focus', key, captureId, spotlight: true });
+      // With the sheet open the page shows only the pin highlight (UX review 2026-10-31); Play all asks for the spotlight itself.
+      post({ type: 'pilot-reporter:focus', key, captureId, spotlight: false });
     },
     [post],
   );
@@ -323,7 +391,10 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         if (m.requestId !== pendingRef.current) return;
         const screenshot = new Blob([m.screenshot], { type: m.mediaType });
         if (m.target) takeHostTarget(m.target);
-        setCapture({ captureId: newId(), requestId: m.requestId, screenshot, previewUrl: URL.createObjectURL(screenshot), evidence: m.evidence, ...(m.target ? { target: m.target } : {}) });
+        const shot: Capture = { captureId: newId(), requestId: m.requestId, screenshot, previewUrl: URL.createObjectURL(screenshot), evidence: m.evidence, ...(m.target ? { target: m.target } : {}) };
+        if (appendNext.current) setShots((old) => [...old, shot].slice(-REPORT_SHOTS_MAX));
+        else setCapture(shot);
+        appendNext.current = false;
         setPending(null);
         setTab('report');
         return;
@@ -331,6 +402,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
       case 'pilot-reporter:capture-cancelled':
         if (m.requestId !== pendingRef.current) return;
         setPending(null);
+        appendNext.current = false;
         if (m.reason === 'error') notify(m.message ? `Capture failed: ${m.message}` : 'Capture failed.', 'error');
         return;
       case 'pilot-reporter:panel-opened':
@@ -352,6 +424,9 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
       case 'pilot-reporter:focus-missing':
         setMissing({ key: m.key, captureId: m.captureId, reason: m.reason });
         return;
+      case 'pilot-reporter:context':
+        setHostContext({ page: m.page, device: m.device, build: m.build, counts: m.counts });
+        return;
     }
   };
 
@@ -360,6 +435,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     (t: StoredToken) => {
       writeToken(kv, origin, t);
       setTokenState(t);
+      setEnded(false);
       reportedBuild.current = false;
       notify('Connected', 'ok');
     },
@@ -393,8 +469,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         reloadReview,
         capture,
         setCapture,
+        shots,
+        removeShot,
         pending,
         requestCapture,
+        chat,
+        openChat,
+        hostContext,
+        me,
+        showContext: (section = 'context') => setContextOpen(section),
         targets,
         hostTarget,
         choice,
@@ -423,10 +506,11 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   if (!status.enabled) return <Quiet text="The reporter is off for this site." />;
 
   const draftCount = review?.status === 'draft' ? review.comments.length : 0;
+  const detail = connected && ((tab === 'tickets' && !!selected) || (tab === 'sessions' && !!chat));
   const tabs: { id: Tab; label: string; icon: IconName; badge?: number }[] = [
-    { id: 'tickets', label: 'Tickets', icon: 'ticket' },
+    { id: 'tickets', label: 'Tickets', icon: 'inbox' },
     { id: 'report', label: 'Report', icon: 'camera', badge: draftCount },
-    { id: 'sessions', label: 'Sessions', icon: 'bot' },
+    { id: 'sessions', label: 'Sessions', icon: 'messagesSquare' },
     { id: 'knowledge', label: 'Knowledge', icon: 'bookOpen' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
   ];
@@ -435,20 +519,34 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     <PanelContext.Provider value={state}>
       <div className="flex h-dvh flex-col overflow-hidden bg-bg text-ink">
         {/* No close button here: the SDK's frame draws the one close (it works even when this page fails to load); Esc closes too. */}
-        <header className="flex min-h-11 shrink-0 items-center gap-2 border-b border-line px-3">
-          <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold" title={status.bucketName}>
-            {status.bucketName || bucket}
-          </h1>
-          {status.site && (
-            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[12px] font-semibold text-ink-soft" title={`${status.site.repo} · ${status.site.origin}`}>
-              {status.site.environment}
-            </span>
-          )}
-        </header>
+        {/* One row (UX review 2026-10-31): the environment and Context, nothing repeated; the right end stays clear for the SDK's close X.
+            Detail views (a ticket, a chat) hide it and the tabs: their own back · title · open row is the only header. */}
+        {!detail && (
+          <header className="flex min-h-11 shrink-0 items-center gap-1 pr-14 pl-3">
+            <h1 className="sr-only">{status.bucketName || bucket}</h1>
+            {status.site && (
+              <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[12.5px] font-semibold text-ink-soft" title={`${status.bucketName || bucket} · ${status.site.repo} · ${status.site.origin}`}>
+                {status.site.environment}
+              </span>
+            )}
+            {connected && (
+              <button
+                type="button"
+                aria-label="Context"
+                title="Context"
+                onClick={() => setContextOpen('context')}
+                className="inline-flex size-11 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+              >
+                <Icon name="info" className="size-[18px]" />
+              </button>
+            )}
+          </header>
+        )}
         {!connected ? (
-          <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} />
+          <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} note={ended ? 'Session ended. Connect again.' : null} />
         ) : (
           <>
+            {!detail && (
             <nav role="tablist" aria-label="Sections" className="flex shrink-0 border-b border-line">
               {tabs.map((t) => (
                 <button
@@ -459,9 +557,11 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
                   aria-label={t.label}
                   title={t.label}
                   onClick={() => setTab(t.id)}
-                  className={`relative flex min-h-11 flex-1 items-center justify-center focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${tab === t.id ? 'text-ink' : 'text-muted'}`}
+                  className={`relative flex min-h-11 min-w-0 items-center justify-center ${tab === t.id ? 'flex-[2.2]' : 'flex-1'} md:flex-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${tab === t.id ? 'text-ink' : 'text-muted'}`}
                 >
                   <Icon name={t.icon} />
+                  {/* The word beside the active icon; every word from 768 px. */}
+                  <span className={`ml-1.5 text-[13px] font-semibold ${tab === t.id ? 'inline' : 'hidden md:inline'}`}>{t.label}</span>
                   {!!t.badge && (
                     <span className="absolute top-1.5 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-accent px-1 text-center text-[10.5px] leading-4 font-bold text-primary-ink tabular-nums">{t.badge}</span>
                   )}
@@ -469,15 +569,17 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
                 </button>
               ))}
             </nav>
-            <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            )}
+            <main id="panel-main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {tab === 'tickets' && <TicketsTab />}
               {tab === 'report' && <ReportTab />}
-              {tab === 'sessions' && <SessionsTab />}
+              {tab === 'sessions' && (chat ? <ChatView key={chat.sessionId} open={chat} onBack={() => setChat(null)} /> : <SessionsTab />)}
               {tab === 'knowledge' && <KnowledgeTab />}
               {tab === 'settings' && <SettingsTab />}
             </main>
           </>
         )}
+        {contextOpen && connected && <ContextSheet section={contextOpen} onClose={() => setContextOpen(null)} />}
         {toast && (
           <div className="pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50" key={toast.id}>
             <Notice tone={toast.tone}>{toast.text}</Notice>
@@ -504,7 +606,22 @@ function safePath(url: string): string | null {
  * two minutes and this frame claims it with the verifier only it knows (polling while the popup is open). The token stays in this frame's
  * storage and never reaches the host page.
  */
-function Connect({ client, bucket, origin, bucketName, onConnected }: { client: ReporterClient; bucket: string; origin: string; bucketName: string; onConnected: (t: StoredToken) => void }) {
+export function Connect({
+  client,
+  bucket,
+  origin,
+  bucketName,
+  onConnected,
+  note = null,
+}: {
+  client: ReporterClient;
+  bucket: string;
+  origin: string;
+  bucketName: string;
+  onConnected: (t: StoredToken) => void;
+  /** Why the panel is here again ("Session ended. Connect again."), shown as one line. */
+  note?: string | null;
+}) {
   const [waiting, setWaiting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cleanup = useRef<(() => void) | null>(null);
@@ -605,6 +722,7 @@ function Connect({ client, bucket, origin, bucketName, onConnected }: { client: 
         <p className="text-[16px] font-bold">Connect</p>
         <p className="mt-1 text-[13.5px] text-muted">Sign in to pilot to see and file {bucketName || bucket} tickets from this page.</p>
       </div>
+      {note && !waiting && <Notice tone="info">{note}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {waiting ? (
         <>
