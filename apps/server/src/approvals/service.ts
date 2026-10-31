@@ -36,7 +36,7 @@ import {
   type ApprovalPools,
   type ApprovalRequester,
 } from './kinds.js';
-import { canonicalJson, cleanRefusal, PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom } from './pass.js';
+import { canonicalJson, cleanRefusal, PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom, withoutDescription } from './pass.js';
 
 type Row = {
   id: string;
@@ -95,19 +95,11 @@ type RepeatRow = { id: string; approval_id: string; requester_session: string | 
 /**
  * T-3206: what makes two refusals "the same call" for the fold. Claude Code writes a new free-text `description` on most retries, so the
  * key is the tool, its input WITHOUT `description` (the rest of the input in canonical JSON), the folder and the form. Only the fold uses
- * it: the card stores the first call exactly, and its pass hashes that. Any other kind folds on its whole payload.
+ * it: the card stores the first call exactly. Its pass (T-3233, `passOf`) leaves out a Bash call's description too, so a retry after Allow
+ * matches whatever description it carries; another tool's description stays in the pass. Any other kind folds on its whole payload.
  */
 export function refusalFoldKey(kind: string, payload: unknown): string {
   return canonicalJson(kind === 'guard.refusal' ? withoutDescription(payload) : payload);
-}
-
-/** A refusal payload with its tool input's free-text `description` left out (anything else: unchanged). */
-function withoutDescription<T>(payload: T): T {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-  const p = payload as Record<string, unknown>;
-  if (!p.input || typeof p.input !== 'object' || Array.isArray(p.input)) return payload;
-  const { description: _free, ...input } = p.input as Record<string, unknown>;
-  return { ...p, input } as T;
 }
 
 export interface ApprovalsOptions {

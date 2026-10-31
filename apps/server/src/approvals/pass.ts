@@ -6,7 +6,8 @@
 // kind first, so one kind's pass never matches the other's call and no two different calls share a byte string.
 //
 //   jobrun.pool_env: kind, cwd, each argv element      (job-run: printf '%s\0' jobrun.pool_env "$PWD" "${argv0[@]}" | sha256sum)
-//   guard.refusal:   kind, tool, canonical JSON of the input (keys sorted at every level), cwd as the hook gave it
+//   guard.refusal:   kind, tool, canonical JSON of the input (keys sorted at every level), cwd as the hook gave it; a Bash input
+//                    without its free-text `description` (T-3233: a label, rewritten on most retries), every other field kept
 
 import { createHash } from 'node:crypto';
 import { REDACTED, redact } from '../chat/redact.js';
@@ -123,6 +124,15 @@ export const wasRedacted = (payload: unknown) => JSON.stringify(payload ?? null)
 
 const digest = (parts: string[]) => createHash('sha256').update(parts.map((p) => `${p}\0`).join('')).digest('hex');
 
+/** T-3206: a refusal payload with its tool input's free-text `description` left out (anything else: unchanged). */
+export function withoutDescription<T>(payload: T): T {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const p = payload as Record<string, unknown>;
+  if (!p.input || typeof p.input !== 'object' || Array.isArray(p.input)) return payload;
+  const { description: _free, ...input } = p.input as Record<string, unknown>;
+  return { ...p, input } as T;
+}
+
 /** The pass of a stored request's payload, or null for a kind that has none. */
 export function passOf(kind: string, payload: Record<string, unknown>): string | null {
   if (kind === 'jobrun.pool_env') {
@@ -130,7 +140,10 @@ export function passOf(kind: string, payload: Record<string, unknown>): string |
     return digest(['jobrun.pool_env', String(payload.cwd), ...args]);
   }
   if (kind === 'guard.refusal') {
-    const input = payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input) ? (payload.input as Record<string, unknown>) : {};
+    // T-3233: a Bash call's `description` is a label that does not change what runs, and Claude Code writes a new one on most retries;
+    // the guard leaves it out the same way (ruleGuard.ts `passOfCall`). Another tool's description may mean something, so it stays.
+    const call = payload.tool === 'Bash' ? withoutDescription(payload) : payload;
+    const input = call.input && typeof call.input === 'object' && !Array.isArray(call.input) ? (call.input as Record<string, unknown>) : {};
     return digest(['guard.refusal', String(payload.tool), canonicalJson(digestInput(String(payload.tool), input)), String(payload.cwd)]);
   }
   return null;
