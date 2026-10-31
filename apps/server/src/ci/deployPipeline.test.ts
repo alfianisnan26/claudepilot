@@ -42,7 +42,8 @@ function templateFiles(): Record<string, string> {
   add('deploy/k3s/portal.yaml');
   out['deploy/k3s/portal.yaml'] = out['deploy/k3s/portal.yaml']!
     .replace(/(claudepilot\/portal:)\S+/, (_m, head: string) => `${head}${FAKE_TAGS.portal}`)
-    .replace(/(claudepilot\/workspace:)\S+/, (_m, head: string) => `${head}${FAKE_TAGS.workspace}`);
+    // PORTAL_K8S_IMAGE's line, the one the pipeline bumps (.pilot/scripts/lib.sh tag_line): not a target's own image in PORTAL_K8S_TARGETS.
+    .replace(/^(\s*value: [^'\s]+\/claudepilot\/workspace:)\S+$/m, (_m, head: string) => `${head}${FAKE_TAGS.workspace}`);
   add('scripts/k3s-build.sh');
   add('scripts/gate-job.sh');
   add('scripts/gate-verdict.sh');
