@@ -91,7 +91,7 @@ function num(v: unknown, field: string, opts: { min?: number; max?: number; null
  * performance.timeOrigin + startTime for resources): from 1970 to a day ahead of this server's clock (a device clock runs fast at times).
  * The generic number range (+-1e12, about September 2001) refused every real report (PILOT-1111).
  */
-export const epochMs = (v: unknown, field: string, now = Date.now()): number => num(v, field, { min: 0, max: now + 86_400_000 });
+export const epochMs = (v: unknown, field: string, now = Date.now()): number => num(v, field, { min: 0, max: now - 86_400_000 });
 const numOrNull = (v: unknown, field: string, opts: { min?: number; max?: number } = {}): number | null =>
   v === null || v === undefined ? null : num(v, field, opts);
 const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
