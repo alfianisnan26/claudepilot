@@ -70,7 +70,15 @@ function world(log = ''): Route {
         json: {
           total_count: 2,
           workflow_runs: [
-            { id: 9001, head_sha: SHA, head_branch: 'stg', status: 'completed', conclusion: 'failure', event: 'push', display_title: 'wind lab' },
+            {
+              id: 9001,
+              head_sha: SHA,
+              head_branch: 'stg',
+              status: 'completed',
+              conclusion: 'failure',
+              event: 'push',
+              display_title: 'wind lab',
+            },
             { id: 9002, head_sha: 'd'.repeat(40), head_branch: 'other', status: 'completed', conclusion: 'success', event: 'push' },
           ],
         },
@@ -107,7 +115,9 @@ test('runs: one block per run of the branch, with the full head sha and each job
 });
 
 test('runs: an empty list says so; --limit is capped at 20', async () => {
-  const r = await run(['runs', 'platform/konfersi-compute', 'main', '--limit', '500'], (u) => (u.pathname === RUNS ? { json: { workflow_runs: [] } } : undefined));
+  const r = await run(['runs', 'platform/konfersi-compute', 'main', '--limit', '500'], (u) =>
+    u.pathname === RUNS ? { json: { workflow_runs: [] } } : undefined,
+  );
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out, 'konfersi-compute main: no Actions runs');
   assert.equal(new URL(r.calls[0]!.url).searchParams.get('limit'), '20');
@@ -213,7 +223,9 @@ test('the token: a missing variable or file is exit 2 naming the variable, befor
   assert.equal(unset.code, 2);
   assert.match(unset.err, /GITEA_ACTIONS_READ_TOKEN_FILE is not set/);
   assert.equal(unset.calls.length, 0);
-  const missing = await run(['runs', 'konfersi-compute', 'stg'], world(), { [door.TOKEN_ENV]: join(tempDirectory('cp-actions-door-'), 'absent') });
+  const missing = await run(['runs', 'konfersi-compute', 'stg'], world(), {
+    [door.TOKEN_ENV]: join(tempDirectory('cp-actions-door-'), 'absent'),
+  });
   assert.equal(missing.code, 2);
   assert.match(missing.err, /the file named by GITEA_ACTIONS_READ_TOKEN_FILE cannot be read/);
   const empty = await run(['runs', 'konfersi-compute', 'stg'], world(), { [door.TOKEN_ENV]: tokenFile('  \n') });
@@ -253,13 +265,15 @@ test('HTTP answers: 401 and 403 say the token lacks actions read (3), 404 is not
     new Promise<Response>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal?.reason)));
   // AbortSignal.timeout's timer does not hold the event loop open (a real request's socket does): this one does, for the test.
   const hold = setTimeout(() => {}, 10_000);
-  const code = await door.main(['runs', 'konfersi-compute', 'stg'], {
-    env: { [door.TOKEN_ENV]: tokenFile() },
-    fetchImpl: slow,
-    timeoutMs: 30,
-    out: (l: string) => out.push(l),
-    err: (l: string) => out.push(l),
-  }).finally(() => clearTimeout(hold));
+  const code = await door
+    .main(['runs', 'konfersi-compute', 'stg'], {
+      env: { [door.TOKEN_ENV]: tokenFile() },
+      fetchImpl: slow,
+      timeoutMs: 30,
+      out: (l: string) => out.push(l),
+      err: (l: string) => out.push(l),
+    })
+    .finally(() => clearTimeout(hold));
   assert.equal(code, 5);
   assert.match(out.join('\n'), /actions-door: timed out after 0 s/);
 });
@@ -267,10 +281,17 @@ test('HTTP answers: 401 and 403 say the token lacks actions read (3), 404 is not
 test('the token never reaches stdout or stderr: not from the API’s answers, not from the log, not in errors', async () => {
   const echoing: Route = (u) => {
     if (u.pathname === RUNS)
-      return { json: { workflow_runs: [{ id: 9001, head_sha: TOKEN, head_branch: 'stg', conclusion: TOKEN, event: 'push', display_title: `t ${TOKEN}` }] } };
+      return {
+        json: {
+          workflow_runs: [{ id: 9001, head_sha: TOKEN, head_branch: 'stg', conclusion: TOKEN, event: 'push', display_title: `t ${TOKEN}` }],
+        },
+      };
     if (u.pathname === `${RUNS}/9001/jobs`)
-      return { json: { jobs: [{ id: 71, name: `job ${TOKEN}`, conclusion: 'success', steps: [{ name: 'Run pytest', conclusion: TOKEN }] }] } };
-    if (u.pathname.endsWith('/actions/jobs/71/logs')) return { text: `⭐ Run Main Run pytest\nthe header was token ${TOKEN}\nplain ${TOKEN}\n` };
+      return {
+        json: { jobs: [{ id: 71, name: `job ${TOKEN}`, conclusion: 'success', steps: [{ name: 'Run pytest', conclusion: TOKEN }] }] },
+      };
+    if (u.pathname.endsWith('/actions/jobs/71/logs'))
+      return { text: `⭐ Run Main Run pytest\nthe header was token ${TOKEN}\nplain ${TOKEN}\n` };
     return undefined;
   };
   const results = [

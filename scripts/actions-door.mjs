@@ -63,7 +63,8 @@ export function parseArgs(argv) {
   if (cmd === 'runs') {
     if (rest.length !== 1 || opt.lines !== undefined || opt.job !== undefined) throw new DoorError(EXIT.usage, USAGE);
     const branch = rest[0];
-    if (!BRANCH.test(branch) || branch.includes('..')) throw new DoorError(EXIT.usage, 'branch: letters, digits, . _ / - only, at most 200');
+    if (!BRANCH.test(branch) || branch.includes('..'))
+      throw new DoorError(EXIT.usage, 'branch: letters, digits, . _ / - only, at most 200');
     return { cmd, repo, branch, limit: count(opt.limit, CAPS.defaultRuns, CAPS.runs, '--limit') };
   }
   if (rest.length !== 2 || opt.limit !== undefined) throw new DoorError(EXIT.usage, USAGE);
@@ -91,7 +92,8 @@ export function readToken(env) {
     throw new DoorError(EXIT.token, `the file named by ${TOKEN_ENV} cannot be read`);
   }
   const token = text.trim();
-  if (!token || token.length > 512 || /\s/.test(token)) throw new DoorError(EXIT.token, `the file named by ${TOKEN_ENV} does not hold one token`);
+  if (!token || token.length > 512 || /\s/.test(token))
+    throw new DoorError(EXIT.token, `the file named by ${TOKEN_ENV} does not hold one token`);
   return token;
 }
 
@@ -106,7 +108,10 @@ const SHAPES = [
   // `Bearer x`, `token x` with a long value.
   [/\b((?:bearer|token)\s+)[A-Za-z0-9._~+/=-]{16,}/gi, '$1' + REDACTED],
   // `token=x`, `"password": "x"`, `api_key: x`, `GITEA_TOKEN=x`: the value.
-  [/([A-Za-z0-9_.-]{0,40}(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_.-]{0,40}["']?\s{0,4}[:=]\s{0,4}["']?)[^\s"',;]{6,}/gi, '$1' + REDACTED],
+  [
+    /([A-Za-z0-9_.-]{0,40}(?:token|secret|password|passwd|api[_-]?key)[A-Za-z0-9_.-]{0,40}["']?\s{0,4}[:=]\s{0,4}["']?)[^\s"',;]{6,}/gi,
+    '$1' + REDACTED,
+  ],
   // Known key prefixes (GitHub, GitLab, Anthropic, Slack, AWS, the portal's own tokens).
   [/\b(?:gh[pousr]_|github_pat_|glpat-|sk-ant-|xox[abprs]-|cp(?:at|oa|or|st|en|na|wh|ws|ns)_)[A-Za-z0-9_-]{8,}/g, REDACTED],
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, REDACTED],
@@ -151,9 +156,13 @@ function makeGet({ base, token, fetchImpl, timeoutMs }) {
       });
     } catch (e) {
       const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
-      throw new DoorError(EXIT.http, timedOut ? `timed out after ${Math.round(timeoutMs / 1000)} s` : 'the request failed (network or redirect)');
+      throw new DoorError(
+        EXIT.http,
+        timedOut ? `timed out after ${Math.round(timeoutMs / 1000)} s` : 'the request failed (network or redirect)',
+      );
     }
-    if (res.status === 401 || res.status === 403) throw new DoorError(EXIT.auth, `HTTP ${res.status}: the token lacks actions read on this repository`);
+    if (res.status === 401 || res.status === 403)
+      throw new DoorError(EXIT.auth, `HTTP ${res.status}: the token lacks actions read on this repository`);
     if (res.status === 404) throw new DoorError(EXIT.notFound, 'not found (HTTP 404)');
     if (!res.ok) throw new DoorError(EXIT.http, `HTTP ${res.status} from the Gitea API`);
     if (as === 'text') return await res.text();
@@ -194,7 +203,8 @@ async function runs(plan, get, token, out) {
     if (r.display_title || r.name) out(`  ${cleanField(r.display_title || r.name, token)}`);
     for (const j of await jobsOf(get, plan.repo, id)) {
       out(`  job ${cleanField(j.name, token)}: ${cleanField(state(j), token)}`);
-      for (const s of Array.isArray(j.steps) ? j.steps : []) out(`    ${cleanField(state(s), token).padEnd(9)} ${cleanField(s.name, token)}`);
+      for (const s of Array.isArray(j.steps) ? j.steps : [])
+        out(`    ${cleanField(state(s), token).padEnd(9)} ${cleanField(s.name, token)}`);
     }
   }
 }
@@ -240,7 +250,10 @@ async function log(plan, get, token, out) {
     );
   }
   if (hits.length > 1) {
-    throw new DoorError(EXIT.usage, `step "${cleanField(plan.step, token)}" is in ${hits.length} jobs; name one with --job: ${hits.map((j) => cleanField(j.name, token)).join(' | ')}`);
+    throw new DoorError(
+      EXIT.usage,
+      `step "${cleanField(plan.step, token)}" is in ${hits.length} jobs; name one with --job: ${hits.map((j) => cleanField(j.name, token)).join(' | ')}`,
+    );
   }
   const job = hits[0];
   const jobId = String(job.id ?? '');
@@ -249,7 +262,9 @@ async function log(plan, get, token, out) {
   const text = await get(`${q(plan.repo)}/actions/jobs/${jobId}/logs`, 'text');
   const section = stepSection(text, plan.step);
   const tail = section.lines.slice(-plan.lines);
-  out(`run ${plan.runId}  job ${cleanField(job.name, token)}: ${cleanField(state(job), token)}  step ${cleanField(plan.step, token)}: ${cleanField(state(step), token)}`);
+  out(
+    `run ${plan.runId}  job ${cleanField(job.name, token)}: ${cleanField(state(job), token)}  step ${cleanField(plan.step, token)}: ${cleanField(state(step), token)}`,
+  );
   if (!section.found) out(`(no start marker for this step in the job log: the last ${tail.length} lines of the whole job follow)`);
   else out(`(the last ${tail.length} of the step's ${section.lines.length} lines)`);
   for (const line of tail) out(cleanLine(line, token));
@@ -259,7 +274,10 @@ async function log(plan, get, token, out) {
  * The door. Returns the exit code; writes through `out` and `err` only. `base` and `fetchImpl` are for the tests: the command line calls
  * this with neither, so the host is HOST and the request goes through the global fetch.
  */
-export async function main(argv, { env = {}, fetchImpl = globalThis.fetch, out = console.log, err = console.error, base = HOST, timeoutMs = CAPS.timeoutMs } = {}) {
+export async function main(
+  argv,
+  { env = {}, fetchImpl = globalThis.fetch, out = console.log, err = console.error, base = HOST, timeoutMs = CAPS.timeoutMs } = {},
+) {
   let token = '';
   try {
     const plan = parseArgs(argv);
