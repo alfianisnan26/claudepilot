@@ -111,7 +111,13 @@ try {
       await b.goto(embed, 2500);
       await b.eval(`localStorage.setItem('pilot-reporter:token:KONF:${HOST}', JSON.stringify({ token: '${token}', expiresAt: new Date(Date.now() + 36e5).toISOString(), actorLabel: 'Owner', bucketKey: 'KONF' }))`);
       await b.goto(embed, 2500);
-      await b.waitFor(`document.body.innerText.includes('KONF-12')`, 10000, 'the ticket list');
+      try {
+        await b.waitFor(`document.body.innerText.includes('KONF-12')`, 10000, 'the ticket list');
+      } catch (e) {
+        await b.shot(`reporter-${label}-stuck`);
+        console.error(`${label}: stuck on`, JSON.stringify(await b.eval('document.body.innerText.slice(0, 300)')), errors.join(' | '));
+        throw e;
+      }
       check(`${label} list`, await b.eval(AUDIT));
       await b.shot(`reporter-${label}-list`);
 
