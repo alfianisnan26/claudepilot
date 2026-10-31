@@ -6,7 +6,7 @@ import { rmSync } from 'node:fs';
 import { afterEach, test } from 'node:test';
 import { CHAT_SOCKET_PATH, type ChatServerMessage } from '@portal/contracts';
 import { WebSocket } from 'ws';
-import { clearResolvers } from '../authz/seam.js';
+import { clearResolvers, ownerActor, useSocketActor } from '../authz/seam.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { registerChatAuthz } from './authz.js';
@@ -51,6 +51,9 @@ async function rig() {
   });
   controller.btw.start();
   const server: Server = createServer();
+  // A signed-in tab is the founding user (the portal installs its own reader from the session cookie: app.ts).
+  const was = useSocketActor(() => ownerActor());
+  cleanups.push(async () => void useSocketActor(was));
   attachChat(server, controller, () => true);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;

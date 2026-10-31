@@ -1,5 +1,5 @@
 import { AppError } from '@isnanme/core';
-import { can } from '../authz/seam.js';
+import { actorUserId, can } from '../authz/seam.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
 import { parseBucketRoutes, routeByTags } from './bucketRoutes.js';
 import {
@@ -150,6 +150,7 @@ interface EndedGrant {
 interface ChecklistTaggedAudit {
   action: 'create' | 'update';
   actor: string;
+  userId: string | null;
   sessionId: string | null;
   leadId: string | null;
   allowedTag: string | null;
@@ -159,6 +160,7 @@ interface ChecklistTaggedAudit {
 interface AssignedPersonAudit {
   action: 'create' | 'update';
   actor: string;
+  userId: string | null;
   actorKind: 'agent' | 'token';
   sessionId: string | null;
   leadId: string | null;
@@ -168,6 +170,8 @@ interface AssignedPersonAudit {
 /** The identity a change is recorded under. */
 interface Writer {
   actor: string;
+  /** The person the audit row is about (organizations slice 0, review m5): the caller's actor's user; null for the portal and a trigger. */
+  userId: string | null;
   label: string;
   fromAgent: boolean;
   /** The session the caller is: an agent's own (verified from its token) or the one an admin's token named (FR11). */
@@ -519,18 +523,20 @@ export class Tickets {
    * may act for a session (a script working on its behalf): `sessionId` names which, and must be a live one.
    */
   #writer(caller: Caller, sessionId?: string | null): Writer {
-    if (caller.kind === 'ui') return { actor: 'ui', label: 'Admin', fromAgent: false, session: null };
-    if (caller.kind === 'system') return { actor: 'system', label: 'Portal', fromAgent: false, session: null };
+    // Review m5: the audit row names the caller's person; a person's route without an actor is the legacy `ui` (the founding user).
+    if (caller.kind === 'ui') return { actor: 'ui', userId: caller.actor ? actorUserId(caller.actor) : FOUNDING_USER_ID, label: 'Admin', fromAgent: false, session: null };
+    if (caller.kind === 'system') return { actor: 'system', userId: null, label: 'Portal', fromAgent: false, session: null };
     if (caller.kind === 'trigger')
-      return { actor: `trigger:${caller.triggerId}`, label: cleanText(caller.label, 60) || 'Trigger', fromAgent: true, session: null };
+      return { actor: `trigger:${caller.triggerId}`, userId: null, label: cleanText(caller.label, 60) || 'Trigger', fromAgent: true, session: null };
+    const userId = caller.actor ? actorUserId(caller.actor) : null;
     if (caller.kind === 'agent') {
       if (sessionId && sessionId !== caller.sessionId) throw new AppError('FORBIDDEN', 'Agents can act only as their own session.');
       const s = this.sessions.get(caller.sessionId);
       if (!s) throw new AppError('FORBIDDEN', 'Your session no longer exists.');
       if (s.state === 'ended') throw new AppError('FORBIDDEN', 'Your session has ended.');
-      return { actor: `session:${caller.sessionId}`, label: cleanText(s.title, 60) || caller.label, fromAgent: true, session: s };
+      return { actor: `session:${caller.sessionId}`, userId, label: cleanText(s.title, 60) || caller.label, fromAgent: true, session: s };
     }
-    const base = { actor: `portal-mcp:${caller.tokenId}`, fromAgent: true };
+    const base = { actor: `portal-mcp:${caller.tokenId}`, userId, fromAgent: true };
     if (sessionId) {
       const s = this.sessions.get(sessionId);
       if (!s) throw invalid('session_id', 'No such session.');
@@ -569,11 +575,12 @@ export class Tickets {
     return row.workspace_id === null || this.#isIn(row, caller.workspaceId);
   }
 
-  /** The seam's actor for a caller (T-1857), or null when no bucket rule applies to it (the portal, a trigger, a person's route that checks it). */
+  /**
+   * The seam's actor for a caller (T-1857), or null when no bucket rule applies to it (the portal, a trigger, a person's route that checks it).
+   * Organizations slice 0 (review m4): an agent or a token that came without its actor is nobody (every bucket refused), never the founding user.
+   */
   #actorOf(caller: Caller): Actor | null {
-    if (caller.kind === 'agent')
-      return caller.actor ?? { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: caller.tokenId, sessionId: caller.sessionId, workspaceId: caller.workspaceId };
-    if (caller.kind === 'token') return caller.actor ?? { kind: 'token', userId: FOUNDING_USER_ID, tokenId: caller.tokenId, scope: caller.scope };
+    if (caller.kind === 'agent' || caller.kind === 'token') return caller.actor ?? { kind: 'anonymous' };
     if (caller.kind === 'ui') return caller.actor ?? null;
     return null;
   }
@@ -699,7 +706,7 @@ export class Tickets {
       kind: 'ticket.acted_for_ended',
       actor: w.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: `ticket:${ticketId}`,
       detail: { ticketId, action, sessionId: w.session?.id ?? null, forSession: grant.forSession, why: grant.why },
     });
@@ -819,7 +826,7 @@ export class Tickets {
       kind: 'ticket.worker_commented',
       actor: w.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: `ticket:${ticketId}`,
       detail: { ticketId, sessionId: w.session?.id ?? null, leadId: w.session?.parentId ?? null, holder: row.assignee_ref ?? null, why },
     });
@@ -1649,6 +1656,7 @@ export class Tickets {
       return {
         action: facts.action,
         actor: w.actor,
+        userId: w.userId,
         actorKind: caller.kind === 'agent' ? 'agent' : 'token',
         sessionId: w.session?.id ?? null,
         leadId: w.session?.parentId ?? null,
@@ -1659,7 +1667,7 @@ export class Tickets {
       kind: 'ticket.agent_assign_refused',
       actor: w.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: facts.ticketId ? `ticket:${facts.ticketId}` : null,
       detail: {
         ticketId: facts.ticketId,
@@ -1705,6 +1713,7 @@ export class Tickets {
       return {
         action: facts.action,
         actor: w.actor,
+        userId: w.userId,
         sessionId: w.session?.id ?? null,
         leadId: w.session?.parentId ?? null,
         allowedTag: facts.tagsAfter.find((t) => allowedTags.includes(t)) ?? null,
@@ -1714,7 +1723,7 @@ export class Tickets {
       kind: 'ticket.agent_checklist_refused',
       actor: w.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: facts.ticketId ? `ticket:${facts.ticketId}` : null,
       detail: {
         ticketId: facts.ticketId,
@@ -1736,7 +1745,7 @@ export class Tickets {
       kind: 'ticket.agent_checklist_tagged',
       actor: a.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: a.userId,
       subject: `ticket:${ticketId}`,
       detail: { ticketId, action: a.action, actorKind: 'token', sessionId: a.sessionId, leadId: a.leadId, allowedTag: a.allowedTag },
     });
@@ -1749,7 +1758,7 @@ export class Tickets {
       kind: 'ticket.agent_assigned_person',
       actor: a.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: a.userId,
       subject: `ticket:${ticketId}`,
       detail: { ticketId, action: a.action, actorKind: a.actorKind, sessionId: a.sessionId, leadId: a.leadId, allowedTag: a.allowedTag },
     });
@@ -2033,7 +2042,7 @@ export class Tickets {
         kind: 'ticket.lead_assigned',
         actor: w.actor,
         actorLabel: null,
-        userId: FOUNDING_USER_ID,
+        userId: w.userId,
         subject: `ticket:${ticketIdOf(row.number)}`,
         detail: { ticketId: ticketIdOf(row.number), ...handoff },
       });
@@ -2095,7 +2104,7 @@ export class Tickets {
         kind: 'ticket.lead_peer_closed',
         actor: w.actor,
         actorLabel: null,
-        userId: FOUNDING_USER_ID,
+        userId: w.userId,
         subject: `ticket:${ticketIdOf(row.number)}`,
         detail: { ticketId: ticketIdOf(row.number), sessionId: w.session?.id ?? null, holder: row.assignee_ref ?? null, holderLead: peerRoot, outcome, why: 'lead_peer' },
       });
@@ -2407,7 +2416,7 @@ export class Tickets {
   }
 
   #moveAudit(w: Writer, kind: string, detail: Record<string, unknown>) {
-    this.onAudit?.({ kind, actor: w.actor, actorLabel: null, userId: FOUNDING_USER_ID, subject: typeof detail.ticketId === 'string' ? `ticket:${detail.ticketId}` : null, detail });
+    this.onAudit?.({ kind, actor: w.actor, actorLabel: null, userId: w.userId, subject: typeof detail.ticketId === 'string' ? `ticket:${detail.ticketId}` : null, detail });
   }
 
   /**
@@ -2727,7 +2736,7 @@ export class Tickets {
         kind: 'ticket.verdict_refused',
         actor: w.actor,
         actorLabel: null,
-        userId: FOUNDING_USER_ID,
+        userId: w.userId,
         subject: `ticket:${ticketId}`,
         detail: { ticketId, role, why: d.why, sessionId: w.session?.id ?? null },
       });
@@ -2759,7 +2768,7 @@ export class Tickets {
       kind: 'ticket.verdict',
       actor: w.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: `ticket:${ticketId}`,
       detail: { ticketId, role, verdict, commit, sessionId: w.session?.id ?? null, ...(batch ? { batch } : {}) },
     });
@@ -2899,7 +2908,7 @@ export class Tickets {
         kind: 'ticket.merge_status_refused',
         actor: w.actor,
         actorLabel: null,
-        userId: FOUNDING_USER_ID,
+        userId: w.userId,
         subject: `ticket:${ticketId}`,
         detail: { ticketId, repo: okRepo, state: okState, sessionId: w.session?.id ?? null },
       });
@@ -2936,7 +2945,7 @@ export class Tickets {
       kind: 'ticket.merge_status',
       actor: w.actor,
       actorLabel: null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: `ticket:${ticketId}`,
       detail: { ticketId, repo, pr, prHead, state, why, sessionId: w.session?.id ?? null },
     });
@@ -3164,7 +3173,7 @@ export class Tickets {
       kind: 'ticket.bumped',
       actor: w.actor,
       actorLabel: caller.kind === 'token' ? caller.label : null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: `ticket:${ticketId}`,
       detail: { ticketId, sessionId: session.id, mode, note: note.length > 0 },
     });
@@ -3326,7 +3335,7 @@ export class Tickets {
       this.onAudit?.({
         kind: 'ticket.continued',
         actor: 'system',
-        userId: FOUNDING_USER_ID,
+        userId: null,
         subject: `session:${to}`,
         detail: { sessionId: to, fromSessions: [...from], tickets: moved },
       });
@@ -3406,7 +3415,7 @@ export class Tickets {
       kind: 'ticket.adopted',
       actor: w.actor,
       actorLabel: caller.kind === 'token' ? caller.label : null,
-      userId: FOUNDING_USER_ID,
+      userId: w.userId,
       subject: `session:${plan.from}`,
       detail: { sessionId: plan.me.id, forSession: plan.from, why: plan.why, tickets: moved },
     });
@@ -3546,7 +3555,7 @@ export class Tickets {
       this.onAudit?.({
         kind: 'ticket.fallback',
         actor: 'system',
-        userId: FOUNDING_USER_ID,
+        userId: null,
         subject: `ticket:${move.ticketId}`,
         detail: { ticketId: move.ticketId, from: move.from, to: move.to, reason: move.reason, holder: move.holder },
       });

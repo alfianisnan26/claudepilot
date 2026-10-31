@@ -36,17 +36,17 @@ test('lifetimes: 15m, 1h, 1d and the day counts; unknown ones and both fields at
     const want: Record<string, number> = { '15m': 15 * MIN, '1h': 60 * MIN, '1d': 1440 * MIN, '7d': 7 * 1440 * MIN, '30d': 30 * 1440 * MIN, '90d': 90 * 1440 * MIN, '365d': 365 * 1440 * MIN };
     assert.deepEqual([...PORTAL_TOKEN_LIFETIMES], Object.keys(want));
     for (const life of PORTAL_TOKEN_LIFETIMES) {
-      const { token } = h.module.createToken({ label: `life ${life}`, scope: 'read', expiresIn: life }, URL_);
+      const { token } = h.module.createToken({ label: `life ${life}`, scope: 'read', expiresIn: life }, URL_, 'user:u_owner');
       assert.equal(Date.parse(token.expiresAt) - now, want[life], life);
     }
     for (const days of [7, 30, 90, 365] as const) {
-      const { token } = h.module.createToken({ label: `days ${days}`, scope: 'read', expiresInDays: days }, URL_);
+      const { token } = h.module.createToken({ label: `days ${days}`, scope: 'read', expiresInDays: days }, URL_, 'user:u_owner');
       assert.equal(Date.parse(token.expiresAt) - now, days * 1440 * MIN);
     }
-    assert.equal(Date.parse(h.module.createToken({ label: 'default', scope: 'read' }, URL_).token.expiresAt) - now, 90 * 1440 * MIN, 'default 90 days');
-    for (const bad of ['5m', '2h', '7', 7, '1w', '', null]) assert.equal(failure(() => h.module.createToken({ label: 'bad', scope: 'read', expiresIn: bad as never }, URL_))?.code, 'VALIDATION_FAILED', String(bad));
-    for (const bad of [1, 14, 0, -7, '7'] as unknown[]) assert.equal(failure(() => h.module.createToken({ label: 'bad', scope: 'read', expiresInDays: bad as never }, URL_))?.code, 'VALIDATION_FAILED', String(bad));
-    assert.equal(failure(() => h.module.createToken({ label: 'bad', scope: 'read', expiresIn: '1h', expiresInDays: 7 }, URL_))?.code, 'VALIDATION_FAILED');
+    assert.equal(Date.parse(h.module.createToken({ label: 'default', scope: 'read' }, URL_, 'user:u_owner').token.expiresAt) - now, 90 * 1440 * MIN, 'default 90 days');
+    for (const bad of ['5m', '2h', '7', 7, '1w', '', null]) assert.equal(failure(() => h.module.createToken({ label: 'bad', scope: 'read', expiresIn: bad as never }, URL_, 'user:u_owner'))?.code, 'VALIDATION_FAILED', String(bad));
+    for (const bad of [1, 14, 0, -7, '7'] as unknown[]) assert.equal(failure(() => h.module.createToken({ label: 'bad', scope: 'read', expiresInDays: bad as never }, URL_, 'user:u_owner'))?.code, 'VALIDATION_FAILED', String(bad));
+    assert.equal(failure(() => h.module.createToken({ label: 'bad', scope: 'read', expiresIn: '1h', expiresInDays: 7 }, URL_, 'user:u_owner'))?.code, 'VALIDATION_FAILED');
   } finally {
     h.done();
   }
@@ -56,14 +56,14 @@ test('a 15-minute token works until its fifteenth minute and is refused from the
   let now = Date.now();
   const h = await portalMcpHarness({ now: () => new Date(now) });
   try {
-    const { secret } = h.module.createToken({ label: 'ci run', scope: 'read', expiresIn: '15m' }, URL_);
+    const { secret } = h.module.createToken({ label: 'ci run', scope: 'read', expiresIn: '15m' }, URL_, 'user:u_owner');
     assert.equal((await h.rpc(secret, 'tools/list')).status, 200);
     now += 15 * MIN - 1000;
     assert.equal((await h.rpc(secret, 'tools/list')).status, 200, 'a second before');
     now += 1000;
     assert.equal((await h.rpc(secret, 'tools/list')).status, 401, 'at fifteen minutes');
     assert.equal(h.module.tokens.liveWithLabel('ci run').length, 0, 'an expired token no longer holds its label');
-    h.module.createToken({ label: 'ci run', scope: 'read', expiresIn: '1h' }, URL_);
+    h.module.createToken({ label: 'ci run', scope: 'read', expiresIn: '1h' }, URL_, 'user:u_owner');
   } finally {
     h.done();
   }
@@ -72,21 +72,21 @@ test('a 15-minute token works until its fifteenth minute and is refused from the
 test('a label with live tokens is refused with 409 and the newest one’s id and expiry, never a secret', async () => {
   const h = await portalMcpHarness();
   try {
-    const first = h.module.createToken({ label: 'coordinator', scope: 'admin', expiresIn: '1h' }, URL_);
-    const second = h.module.createToken({ label: 'coordinator', scope: 'admin', expiresIn: '1h', addAnother: true }, URL_);
-    const refused = failure(() => h.module.createToken({ label: ' coordinator ', scope: 'admin', expiresIn: '1h' }, URL_));
+    const first = h.module.createToken({ label: 'coordinator', scope: 'admin', expiresIn: '1h' }, URL_, 'user:u_owner');
+    const second = h.module.createToken({ label: 'coordinator', scope: 'admin', expiresIn: '1h', addAnother: true }, URL_, 'user:u_owner');
+    const refused = failure(() => h.module.createToken({ label: ' coordinator ', scope: 'admin', expiresIn: '1h' }, URL_, 'user:u_owner'));
     assert.equal(refused?.code, 'TOKEN_LABEL_IN_USE');
     assert.equal(new AppError('TOKEN_LABEL_IN_USE').status, 409);
     assert.deepEqual(refused?.details, { label: 'coordinator', live: 2, newest: { id: second.token.id, expiresAt: second.token.expiresAt } });
     const text = JSON.stringify(refused);
     for (const s of [first.secret, second.secret]) assert.ok(!text.includes(s) && !text.includes(s.slice(-4)));
     // Another scope with the same label is the same client: refused too.
-    assert.equal(failure(() => h.module.createToken({ label: 'coordinator', scope: 'read' }, URL_))?.code, 'TOKEN_LABEL_IN_USE');
-    assert.equal(failure(() => h.module.createToken({ label: 'coordinator', scope: 'read', replace: true, addAnother: true }, URL_))?.code, 'VALIDATION_FAILED');
+    assert.equal(failure(() => h.module.createToken({ label: 'coordinator', scope: 'read' }, URL_, 'user:u_owner'))?.code, 'TOKEN_LABEL_IN_USE');
+    assert.equal(failure(() => h.module.createToken({ label: 'coordinator', scope: 'read', replace: true, addAnother: true }, URL_, 'user:u_owner'))?.code, 'VALIDATION_FAILED');
     // Another label is fine; a revoked label is free again.
-    h.module.createToken({ label: 'other', scope: 'admin' }, URL_);
+    h.module.createToken({ label: 'other', scope: 'admin' }, URL_, 'user:u_owner');
     h.module.revokeLabel('other', false, 'user:u_owner');
-    h.module.createToken({ label: 'other', scope: 'admin' }, URL_);
+    h.module.createToken({ label: 'other', scope: 'admin' }, URL_, 'user:u_owner');
   } finally {
     h.done();
   }
@@ -95,8 +95,8 @@ test('a label with live tokens is refused with 409 and the newest one’s id and
 test('replace revokes the label’s live tokens (one audit row each, with who) and mints the new one', async () => {
   const h = await portalMcpHarness();
   try {
-    const a = h.module.createToken({ label: 'relay', scope: 'admin' }, URL_);
-    const b = h.module.createToken({ label: 'relay', scope: 'operate', addAnother: true }, URL_);
+    const a = h.module.createToken({ label: 'relay', scope: 'admin' }, URL_, 'user:u_owner');
+    const b = h.module.createToken({ label: 'relay', scope: 'operate', addAnother: true }, URL_, 'user:u_owner');
     const c = h.module.createToken({ label: 'relay', scope: 'admin', expiresIn: '1h', replace: true }, URL_, 'user:u_owner');
     assert.equal((await h.rpc(a.secret, 'tools/list')).status, 401);
     assert.equal((await h.rpc(b.secret, 'tools/list')).status, 401);
@@ -119,17 +119,17 @@ test('the cap: live admin tokens per label stop at the setting (default 3); othe
   const { PortalMcpModule } = await import('./module.js');
   const m = new PortalMcpModule(h.store, { maxActivePerLabel: () => max });
   try {
-    for (let i = 0; i < 3; i++) m.createToken({ label: 'bot', scope: 'admin', addAnother: i > 0 }, URL_);
-    const capped = failure(() => m.createToken({ label: 'bot', scope: 'admin', addAnother: true }, URL_));
+    for (let i = 0; i < 3; i++) m.createToken({ label: 'bot', scope: 'admin', addAnother: i > 0 }, URL_, 'user:u_owner');
+    const capped = failure(() => m.createToken({ label: 'bot', scope: 'admin', addAnother: true }, URL_, 'user:u_owner'));
     assert.equal(capped?.code, 'TOKEN_CAP');
     assert.equal(new AppError('TOKEN_CAP').status, 409);
     assert.equal(capped?.details.live, 3);
     assert.equal(capped?.details.max, 3);
-    m.createToken({ label: 'bot', scope: 'read', addAnother: true }, URL_);
+    m.createToken({ label: 'bot', scope: 'read', addAnother: true }, URL_, 'user:u_owner');
     max = 4;
-    m.createToken({ label: 'bot', scope: 'admin', addAnother: true }, URL_);
-    assert.equal(failure(() => m.createToken({ label: 'bot', scope: 'admin', addAnother: true }, URL_))?.code, 'TOKEN_CAP');
-    m.createToken({ label: 'bot', scope: 'admin', replace: true }, URL_);
+    m.createToken({ label: 'bot', scope: 'admin', addAnother: true }, URL_, 'user:u_owner');
+    assert.equal(failure(() => m.createToken({ label: 'bot', scope: 'admin', addAnother: true }, URL_, 'user:u_owner'))?.code, 'TOKEN_CAP');
+    m.createToken({ label: 'bot', scope: 'admin', replace: true }, URL_, 'user:u_owner');
     assert.equal(m.tokens.liveWithLabel('bot').length, 1);
     // The setting is in the registry with its InfoTip text, and the shared store validates its range.
     const def = settingDef(PORTAL_TOKEN_CAP_SETTING);
@@ -148,7 +148,7 @@ test('agents’ per-session tokens have no label and are not subject to the labe
   try {
     for (let i = 0; i < 5; i++) assert.ok((await h.agentToken('docker/api', `s${i}`)).secret);
     assert.equal(h.module.agents.liveCounts().get('docker/api'), 5);
-    for (let i = 0; i < 3; i++) h.module.createToken({ label: 'bot', scope: 'admin', addAnother: i > 0 }, URL_);
+    for (let i = 0; i < 3; i++) h.module.createToken({ label: 'bot', scope: 'admin', addAnother: i > 0 }, URL_, 'user:u_owner');
     assert.equal(h.module.revokeLabel('bot', false, 'user:u_owner'), 3);
     assert.equal(h.module.agents.liveCounts().get('docker/api'), 5, 'a label revoke leaves agents alone');
   } finally {

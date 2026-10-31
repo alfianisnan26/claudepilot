@@ -295,7 +295,7 @@ test('R1: a VS Code token is refused by /mcp like an unknown one, and a label al
     assert.equal(viaMcp.status, unknown.status);
     assert.deepEqual(viaMcp.body, unknown.body, 'the same answer as an unknown token');
     // A token made in Access -> MCP with the VS Code label is still not a VS Code token.
-    const lookalike = h.mcp.module.createToken({ label: `${VSCODE_TOKEN_LABEL_PREFIX}laptop`, scope: 'operate', addAnother: true }, 'http://x/mcp');
+    const lookalike = h.mcp.module.createToken({ label: `${VSCODE_TOKEN_LABEL_PREFIX}laptop`, scope: 'operate', addAnother: true }, 'http://x/mcp', 'user:u_owner');
     assert.equal((await h.call('GET', '/api/vscode/me', { bearer: lookalike.secret })).status, 401);
     assert.notEqual((await h.mcp.rpc(lookalike.secret, 'tools/list')).status, 401, 'and it still works on /mcp');
   } finally {
@@ -444,7 +444,7 @@ test('migration 49: tokens carry their client (NULL before and for Access -> MCP
   try {
     const cols = (h.mcp.store.db!.prepare('PRAGMA table_info(pmcp_tokens)').all() as { name: string }[]).map((c) => c.name);
     assert.ok(cols.includes('client') && cols.includes('client_instance'));
-    const plain = h.mcp.module.createToken({ label: 'a script', scope: 'read' }, 'http://x/mcp');
+    const plain = h.mcp.module.createToken({ label: 'a script', scope: 'read' }, 'http://x/mcp', 'user:u_owner');
     assert.equal(h.mcp.module.tokens.get(plain.token.id)!.client, null);
     assert.throws(() => h.mcp.store.db!.prepare("UPDATE pmcp_tokens SET client = 'other' WHERE id = ?").run(plain.token.id), /CHECK/);
   } finally {

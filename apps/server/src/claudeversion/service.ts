@@ -42,7 +42,7 @@ import {
   type Workspace,
   type WorkspaceClaudeBrief,
 } from '@portal/contracts';
-import { actorString, actorUserId, can, ownerActor, systemActor, visible } from '../authz/seam.js';
+import { actorString, actorUserId, can, systemActor, visible } from '../authz/seam.js';
 import type { Actor } from '@portal/contracts';
 import type { AuditInput } from '../platform/audit.js';
 import { defineLoop } from '../schedules/registry.js';
@@ -813,7 +813,7 @@ export class ClaudeVersions {
     // The cadence is a setting (the shared settings store audits it too); a change is also a platform-level act, so it goes to the platform audit.
     this.#stopSettings = this.deps.settings.onChange((key, value, old) => {
       if (key !== CLAUDE_SETTING_KEYS.canaryDays) return;
-      this.#audit('schedule_set', ownerActor(), { detail: `every ${String(value)} days (was ${String(old)})` });
+      this.#audit('schedule_set', systemActor('claude-canary-schedule'), { detail: `every ${String(value)} days (was ${String(old)})` });
       this.#notify();
     });
     const interrupted = this.store.interruptRunning('The portal stopped while it ran.', this.#now());

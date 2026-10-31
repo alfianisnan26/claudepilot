@@ -78,7 +78,9 @@ export function createPortalMcpRoutes(module: PortalMcpModule, deps?: PortalMcpR
     requireCan(actor, 'manage', tokenRef());
     const req = await body<CreatePortalTokenRequest>(c);
     // Organizations slice 0 (P2): bound to the person asking (a token's person when an admin token asks), never to the founding user by default.
-    return c.json(success(module.createToken(req, mcpUrl(c), actorString(actor), undefined, actorUserId(actor) ?? undefined)), 201);
+    const ownerId = actorUserId(actor);
+    const minter = ownerId ? { ownerId, accountId: actor.kind === 'user' ? (actor.accountId ?? null) : (actor.kind === 'token' ? module.tokens.accountOf(actor.tokenId) : null) } : undefined;
+    return c.json(success(module.createToken(req, mcpUrl(c), actorString(actor), undefined, minter)), 201);
   });
 
   // "Revoke older" and "Revoke all of this label" on the tokens page: one audit row per token, with who.

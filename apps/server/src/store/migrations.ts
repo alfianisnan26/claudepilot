@@ -4129,6 +4129,37 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 462,
+    name: 'organizations slice 0 review: tokens and sessions remember the account behind them; the founder mark and guarded SSO links audited',
+    up(db) {
+      // Review M1 and M2 (docs/prd/multi-user.md §20). The actor value cannot tell the founder account's tokens from the server code's (both
+      // act as u_owner), so a token records the ACCOUNT it was minted from (identity/accountGate.ts) in a table of this block: reporter_tokens
+      // is made by 900, which a new database runs after this one. No row: the server code, or a token from before (the founding user's, as
+      // it always was). A chat session records the account that started it; an agent token acts as that account and stops with it.
+      // Review m1 and m2: one audit row names the account 460 marked founder (the owner confirms it), and one per SSO link made before this
+      // slice to an account the new linking rule would refuse (a password, an admin, the founder): those links keep working and are flagged.
+      db.exec(`
+        CREATE TABLE token_accounts (
+          kind TEXT NOT NULL CHECK (kind IN ('pmcp', 'reporter')),
+          token_id TEXT NOT NULL,
+          account_id TEXT NOT NULL,
+          PRIMARY KEY (kind, token_id)
+        ) STRICT;
+        CREATE INDEX token_accounts_account ON token_accounts (account_id);
+        ALTER TABLE chat_sessions ADD COLUMN started_by_account TEXT;
+        INSERT INTO platform_audit (at, severity, kind, actor, user_id, subject, detail)
+          SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'medium', 'identity.founder_marked', 'system:migration', 'u_owner', 'user:' || id,
+                 json_object('email', email, 'rule', 'the earliest admin account made in the portal (migration 460)')
+          FROM users WHERE founder = 1;
+        INSERT INTO platform_audit (at, severity, kind, actor, user_id, subject, detail)
+          SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'medium', 'identity.sso_link_guarded', 'system:migration', u.id, 'user:' || u.id,
+                 json_object('providerId', i.provider_id, 'email', u.email, 'role', u.role, 'founder', u.founder, 'passwordSet', u.password_set)
+          FROM sso_identities i JOIN users u ON u.id = i.user_id
+          WHERE u.role = 'admin' OR u.founder = 1 OR u.password_set = 1;
+      `);
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {

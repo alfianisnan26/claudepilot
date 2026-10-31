@@ -204,7 +204,18 @@ export const teamRef = (id: TeamId): ObjectRef => objectRef('team', id);
  * - `anonymous`: no sign-in. Only `public` routes are open to it.
  */
 export type Actor =
-  | { kind: 'user'; userId: UserId; loginSessionId: string; via: 'ui' | 'cli' | 'dev-seed' | 'client'; ip?: string }
+  | {
+      kind: 'user';
+      userId: UserId;
+      loginSessionId: string;
+      via: 'ui' | 'cli' | 'dev-seed' | 'client';
+      ip?: string;
+      /**
+       * The email account signed in (organizations slice 0), absent for the server code. It differs from `userId` only for the founder account
+       * (which acts as `u_owner`); what this person mints or starts records it, so it stops when the account is disabled, demoted or removed.
+       */
+      accountId?: string;
+    }
   | { kind: 'token'; userId: UserId; tokenId: string; scope: PortalScope }
   | { kind: 'agent'; userId: UserId; tokenId: string; sessionId: string; workspaceId: string }
   | { kind: 'job'; userId: UserId; job: string }

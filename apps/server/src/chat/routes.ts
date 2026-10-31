@@ -94,7 +94,10 @@ export function createChatRoutes(controller: ChatController): Hono {
     if (typeof req.workspaceId !== 'string' || !req.workspaceId.trim())
       throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
     // Only the person's own request can ask for Bypass to be allowed later in the session (FR20); the policy decides.
-    return c.json(success(await controller.create(req, { bypassOptIn: req.allowBypass === true })), 201);
+    // Organizations slice 0 (review M2): the account starting it, so its agents act as that account and stop with it.
+    const who = actorOf(c);
+    const account = who.kind === 'user' ? (who.accountId ?? null) : undefined;
+    return c.json(success(await controller.create(req, { bypassOptIn: req.allowBypass === true, ...(account !== undefined ? { account } : {}) })), 201);
   });
 
   // GET /api/chat/sessions/:id — one session.

@@ -18,6 +18,7 @@ import {
   type UserId,
   isUserId,
 } from '@portal/contracts';
+import { accountStanding, recordTokenAccount, tokenAccount } from '../identity/accountGate.js';
 import type { Store } from '../store/store.js';
 import type { PortalPrincipal } from './registry.js';
 import { cleanText, looksLikeSecret } from './sanitize.js';
@@ -86,6 +87,8 @@ export interface CreateTokenRules {
 /** Organizations slice 0 (P2): who mints a token, from the real actor. Required: a token nobody owns is never made. */
 export interface TokenMinter {
   ownerId: UserId;
+  /** The email account that minted it (review M1), or null for the server code: the token stops when that account is disabled, demoted or removed. */
+  accountId?: string | null;
 }
 /** `last_used_at` is written at most this often per token: a busy script must not turn every call into a write. */
 const TOUCH_EVERY_MS = 60_000;
@@ -161,6 +164,11 @@ export class PortalTokens {
   get(id: string): PortalToken | null {
     const row = this.#db?.prepare('SELECT * FROM pmcp_tokens WHERE id = ?').get(id) as Row | undefined;
     return row ? view(row) : null;
+  }
+
+  /** The email account a token was minted from (review M1), or null for the server code's and those from before migration 462. */
+  accountOf(id: string): string | null {
+    return tokenAccount(this.#db, 'pmcp', id);
   }
 
   /** Tokens that can still be used right now. */
@@ -249,6 +257,7 @@ export class PortalTokens {
       origin?.instance ?? null,
       minter.ownerId,
     );
+    recordTokenAccount(db, 'pmcp', id, minter.accountId);
     this.onChange?.();
     return { token: this.get(id)!, secret, replaced };
   }
@@ -261,6 +270,8 @@ export class PortalTokens {
     if (row.revoked_at) return { ok: false, reason: 'revoked', tokenId: row.id };
     const now = this.now();
     if (Date.parse(row.expires_at) <= now.getTime()) return { ok: false, reason: 'expired', tokenId: row.id };
+    // Review M1: a token lives no longer than the account it was minted from (disabled, demoted, removed: refused like a revoked one).
+    if (!accountStanding(this.#db, tokenAccount(this.#db, 'pmcp', row.id)).ok) return { ok: false, reason: 'revoked', tokenId: row.id };
     this.#touch(row.id, ip, now);
     return {
       ok: true,

@@ -129,3 +129,25 @@ test('an email match never links an account with a password, an admin, the found
   await users.update(plain.id, { password: GOOD });
   assert.equal(users.linkableByEmail(plain.id), false);
 });
+
+test('review m8: email variants (case, NFKC) of a guarded account are refused; plus-addressing is another mailbox and gets its own account', async () => {
+  const { users, signIn, code } = sso('member');
+  const pw = await users.create({ email: 'pw@example.com', password: GOOD, role: 'member' }, 'ui');
+  const fullwidth = 'ｐｗ@example.com'; // NFKC folds it to pw@example.com
+  for (const email of ['PW@Example.COM', ' pw@example.com ', fullwidth]) assert.equal(await code(signIn({ sub: `s-${email}`, email })), 'sso:no_account', email);
+  const plus = await signIn({ sub: 's-plus', email: 'pw+x@example.com' });
+  assert.equal(plus.created, true);
+  assert.notEqual(plus.user.id, pw.id, 'never the account with the password');
+});
+
+test('review m2: a link made before slice 0 to a guarded account keeps signing in and is flagged; an ordinary link is not', async () => {
+  const { db, users, signIn } = sso('member');
+  const first = await signIn({ sub: 'sub-plain', email: 'plain@example.com' });
+  assert.equal(first.guarded, false);
+  assert.deepEqual([(await signIn({ sub: 'sub-plain', email: 'plain@example.com' })).guarded, first.created], [false, true], 'reusing an ordinary link');
+  const admin = await users.create({ email: 'boss@example.com', password: GOOD, role: 'admin' }, 'ui');
+  const providerId = (db.prepare('SELECT id FROM sso_providers LIMIT 1').get() as { id: string }).id;
+  db.prepare("INSERT INTO sso_identities (provider_id, subject, user_id, email, linked_at) VALUES (?, 'sub-boss', ?, 'boss@example.com', 'before')").run(providerId, admin.id);
+  const again = await signIn({ sub: 'sub-boss', email: 'boss@example.com' });
+  assert.deepEqual([again.user.id, again.guarded, again.linked], [admin.id, true, false]);
+});

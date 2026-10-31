@@ -211,7 +211,8 @@ const owner = (): Actor => ({ kind: 'user', userId: FOUNDING_USER_ID, loginSessi
  * 'unavailable' when the database could not be read. Unset (tests, scripts): every non-founding user is an account with no role (null).
  */
 export type AccountRoleOf = (userId: UserId) => 'admin' | 'member' | 'disabled' | 'unavailable' | null;
-let accountRole: AccountRoleOf = () => null;
+const NO_ROLES: AccountRoleOf = () => null;
+let accountRole: AccountRoleOf = NO_ROLES;
 /** app.ts installs the users' roles once at start-up; returns the one before (tests restore it). */
 export const useAccountRoles = (fn: AccountRoleOf): AccountRoleOf => {
   const was = accountRole;
@@ -243,8 +244,15 @@ export const singleOwner: Authz = {
     if (actor.kind === 'system') return { allow: true, level: 'manage' };
     const userId = actor.userId;
     if (!isUserId(userId)) return deny('actor_disabled');
-    // A token or a job of an account that was disabled acts for nobody (a gone account holds only what it owns: nothing, once P3 reassigns).
-    if (userId !== FOUNDING_USER_ID && roleNow(userId) === 'disabled') return deny('actor_disabled');
+    // An account that was disabled acts for nobody. Review M1: a token or an agent of an account that is gone acts for nobody either (once
+    // the portal's users are installed; module tests with made-up users install none). The founding user has no account row: the founder
+    // ACCOUNT's tokens and agents carry `u_owner`, so they are stopped where they are verified, by the account recorded at mint
+    // (identity/accountGate.ts), not here.
+    if (userId !== FOUNDING_USER_ID) {
+      const role = roleNow(userId);
+      if (role === 'disabled') return deny('actor_disabled');
+      if (role === null && accountRole !== NO_ROLES && (actor.kind === 'token' || actor.kind === 'agent')) return deny('actor_disabled');
+    }
 
     // What the way of acting allows at most.
     let cap: Level = 'manage';
@@ -404,11 +412,10 @@ export const useSocketActor = (fn: SocketActorOf | null): SocketActorOf | null =
 /**
  * Who opened a socket. The connection's `authorized` check (the module's own `portal.session(cookie)` call) decides signed in or not; the
  * person is the one the installed `useSocketActor` reads from the same cookie (organizations slice 0), so a second admin's socket is theirs.
- * With none installed (a module's unit test) a signed-in socket is the founding user, as before.
+ * With none installed the socket is nobody (review m4: no founding-user fallback; a module's unit test installs its own reader).
  */
 export function actorOfSocket(req: IncomingMessage, authorized: (req: IncomingMessage) => boolean): Actor {
-  if (!authorized(req)) return ANONYMOUS;
-  if (!socketActor) return owner();
+  if (!authorized(req) || !socketActor) return ANONYMOUS;
   return socketActor(req) ?? ANONYMOUS;
 }
 

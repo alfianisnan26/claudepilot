@@ -185,6 +185,15 @@ export class PortalUsers {
     return !this.#db().prepare('SELECT 1 FROM sso_identities WHERE user_id = ? LIMIT 1').get(id);
   }
 
+  /**
+   * Review m2: whether an account is one the linking rule guards (a password of its own, an admin, the founder). A link made to such an
+   * account before slice 0 keeps signing in; each such sign-in is flagged in the audit (identity/routes.ts), not refused.
+   */
+  guarded(id: string): boolean {
+    const r = this.#db().prepare('SELECT role, founder, password_set FROM users WHERE id = ?').get(id) as { role: string; founder: number; password_set: number } | undefined;
+    return !!r && (r.role === 'admin' || r.founder === 1 || r.password_set !== 0);
+  }
+
   /** One account as its own holder sees it. */
   get(id: string): PortalUser {
     return view(this.#row(id));

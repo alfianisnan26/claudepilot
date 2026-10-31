@@ -198,14 +198,20 @@ export class PortalMcpModule {
   /**
    * Mints an admin's token. `by` is who asked (`actorString`), written in every audit row: the mint, and one `token_revoked` row per token a
    * `replace` revoked. The label rules and the cap are the admin tokens' only (T-258); agents' per-session tokens are minted by `agents.mint`.
-   * Organizations slice 0 (P2): the token is bound to `ownerId`, the user of the actor who asked (the route passes it), else to the person
-   * `by` names (`user:<id>`; the legacy `ui` is the founding user). With neither (a bare token or job string) nothing is minted.
+   * Organizations slice 0 (P2): the token is bound to `minter` (the user of the actor who asked and the email account behind it, which the
+   * routes pass), else to the person `by` names as `user:<id>`. Nothing else mints: not a token or job string, not the legacy `ui` (review
+   * m4: no default that makes a founding-user token).
    */
-  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by = 'ui', origin?: ClientTokenOrigin, ownerId?: UserId): CreatedPortalToken {
+  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by: string, origin?: ClientTokenOrigin, minter?: { ownerId: UserId; accountId?: string | null }): CreatedPortalToken {
     const named = parseActorString(by);
-    const owner = ownerId ?? (named.kind === 'user' ? named.id : null);
+    const owner = minter?.ownerId ?? (named.kind === 'user' && !named.legacy ? named.id : null);
     if (!owner) throw new AppError('FORBIDDEN', 'A token is made by a signed-in person.');
-    const { token, secret, replaced } = this.tokens.create(req, { maxAdminPerLabel: this.#maxActivePerLabel() }, { ownerId: owner }, origin);
+    const { token, secret, replaced } = this.tokens.create(
+      req,
+      { maxAdminPerLabel: this.#maxActivePerLabel() },
+      { ownerId: owner, accountId: minter?.accountId ?? null },
+      origin,
+    );
     for (const id of replaced) {
       this.mcp.confirmations.forget(id);
       this.audit.event('token_revoked', id, { reason: 'replaced by a new token with this label', by, replacedBy: token.id });

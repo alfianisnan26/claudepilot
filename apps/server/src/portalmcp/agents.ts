@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import { PORTAL_AGENT_TOKEN_PREFIX } from '@portal/contracts';
+import { accountStanding } from '../identity/accountGate.js';
 import type { Store } from '../store/store.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
 import type { PortalPrincipal } from './registry.js';
@@ -334,6 +335,16 @@ export class AgentAccess implements AgentTokenMinter {
    * session is still running. A session that ended without anyone revoking its token revokes it here, so a token is
    * never good past its session whatever the wiring does.
    */
+  /** The email account that started a session (chat_sessions.started_by_account), or null. Unreadable: an account no one has (fail closed). */
+  #starterOf(sessionId: string): string | null {
+    try {
+      const r = this.#db?.prepare('SELECT started_by_account FROM chat_sessions WHERE id = ?').get(sessionId) as { started_by_account: string | null } | undefined;
+      return r?.started_by_account ?? null;
+    } catch {
+      return 'unreadable';
+    }
+  }
+
   verify(secret: string): AgentVerify {
     if (!secret.startsWith(PORTAL_AGENT_TOKEN_PREFIX) || secret.length < 20 || secret.length > 128) return { ok: false, reason: 'unknown' };
     const row = this.#db
@@ -362,6 +373,13 @@ export class AgentAccess implements AgentTokenMinter {
       this.#revoke('id = ?', [row.id], 'its session ended');
       return { ok: false, reason: 'ended', tokenId: row.id };
     }
+    // Organizations slice 0 (review M2): an agent acts as the account that started its session (the founding user for the server code, a
+    // ticket or a trigger) and stops when that account is disabled, demoted or removed.
+    const starter = accountStanding(this.#db, this.#starterOf(row.session_id));
+    if (!starter.ok) {
+      this.#revoke('id = ?', [row.id], 'the account that started its session lost access');
+      return { ok: false, reason: 'disabled', tokenId: row.id };
+    }
     this.#touch(row.id, now);
     // T-436: an agent token is never unbound: no list (a token minted before the bind), or one that does not parse, reaches no vault.
     let vaults: string[] = [];
@@ -375,6 +393,7 @@ export class AgentAccess implements AgentTokenMinter {
       ok: true,
       principal: {
         kind: 'agent',
+        userId: starter.userId,
         tokenId: row.id,
         label: `session ${row.session_id.slice(0, 8)} in ${row.workspace_id}`,
         scope: 'agent',

@@ -67,7 +67,7 @@ export async function portalMcpHarness(opts: HarnessOptions = {}) {
     const base = label ?? `${scope}-test`;
     const n = (minted.get(base) ?? 0) + 1;
     minted.set(base, n);
-    const { token: t, secret } = module.createToken({ label: n === 1 || label ? base : `${base} ${n}`, scope, addAnother: !!label && n > 1 }, URL_);
+    const { token: t, secret } = module.createToken({ label: n === 1 || label ? base : `${base} ${n}`, scope, addAnother: !!label && n > 1 }, URL_, 'user:u_owner');
     return { id: t.id, secret };
   };
 

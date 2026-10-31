@@ -3,7 +3,7 @@
 // tabs ask for it, and pages are told only when what one shows is different, so a busy session's stream of events costs nothing.
 
 import type { Actor, GlanceSnapshot } from '@portal/contracts';
-import { actorString, actorUserId, ownerActor } from '../authz/seam.js';
+import { actorString, actorUserId } from '../authz/seam.js';
 import { buildSnapshot, type GlanceSources } from './build.js';
 
 /** A burst of events (a turn ending, a worker starting, ten tasks reporting) becomes one build. */
@@ -38,7 +38,7 @@ export class Glance {
   }
 
   /** `actor`'s snapshot, built again if a source changed since it was. */
-  snapshot(actor: Actor = ownerActor()): GlanceSnapshot {
+  snapshot(actor: Actor): GlanceSnapshot {
     const key = actorKey(actor);
     this.#actors.set(key, actor);
     return this.#cache.get(key) ?? this.#build(key, actor);

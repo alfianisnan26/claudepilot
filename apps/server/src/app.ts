@@ -125,6 +125,7 @@ import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
 import { cookie as cookieOf } from './workspaces/shell.js';
+import { revokeAccountTokens } from './identity/accountGate.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
@@ -326,7 +327,7 @@ export function createApp(
         userId = s.userId; // the database could not be read: the account as itself, never the founder
       }
     }
-    return { kind: 'user', userId, loginSessionId: 'legacy', via: 'ui' };
+    return { kind: 'user', userId, loginSessionId: 'legacy', via: 'ui', ...(s.userId ? { accountId: s.userId } : {}) };
   };
   useAccountRoles((id) => portal.roleOf(id));
   useSocketActor((req) => {
@@ -709,6 +710,13 @@ export function createApp(
 
   // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
   admin.get('/users', (c) => c.json(success(users.list())));
+  /** Review M1: revokes what the account minted or started (identity/accountGate.ts), with one audit row of the counts. */
+  const endAccountTokens = (id: string, reason: string, c: Context<Env>) => {
+    const db = store.writable ? store.db : null;
+    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    const ended = revokeAccountTokens(db, id, new Date().toISOString(), reason);
+    if (ended.pmcp + ended.reporter + ended.agent > 0) audit('account.tokens_revoked', id, { ...ended, reason }, 'medium', actorOf(c));
+  };
   admin.post('/users', async (c) => {
     const u = await users.create(await body<CreatePortalUserRequest>(c), 'ui');
     audit('account.created', u.id, { email: u.email, role: u.role }, 'info', actorOf(c));
@@ -721,6 +729,8 @@ export function createApp(
     const u = await users.update(id, req);
     // Review #3: a password reset or a disable ends the account's sessions now (and its sockets with them).
     if (req.password !== undefined || u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) portal.revokeUser(id);
+    // Review M1: a disable or a demotion also ends every token the account minted and every agent of a session it started, for good.
+    if (u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) endAccountTokens(id, u.state === 'disabled' ? 'account disabled' : 'account demoted', c);
     audit(
       'account.updated',
       id,
@@ -743,6 +753,7 @@ export function createApp(
     teams.removeUser(id);
     sso.removeUser(id);
     portal.revokeUser(id);
+    endAccountTokens(id, 'account removed', c);
     audit('account.removed', id, { email: before.email, role: before.role }, 'info', actorOf(c));
     return c.json(success({ removed: true }));
   });
@@ -1242,7 +1253,7 @@ export function createApp(
   if (portalMcp) {
     const vsDeps: VscodeDeps = {
       tokens: {
-        create: (req, by, origin) => portalMcp.createToken(req, '', by, origin),
+        create: (req, by, origin, minter) => portalMcp.createToken(req, '', by, origin, minter),
         verify: (secret, ip) => portalMcp.tokens.verify(secret, ip),
         revoke: (id, reason) => portalMcp.revokeToken(id, reason, 'vscode'),
       },

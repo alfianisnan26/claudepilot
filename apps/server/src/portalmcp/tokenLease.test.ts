@@ -78,7 +78,7 @@ test('near expiry the lease renews with replace: the old token is revoked, one l
   const s = await setup();
   try {
     // A crashed run left a 7-day token behind with this label: the first mint replaces it instead of meeting TOKEN_LABEL_IN_USE.
-    const leftover = s.h.module.createToken({ label: 'dev-sessions-supervisor', scope: 'admin', expiresInDays: 7 }, 'http://portal.test/mcp');
+    const leftover = s.h.module.createToken({ label: 'dev-sessions-supervisor', scope: 'admin', expiresInDays: 7 }, 'http://portal.test/mcp', 'user:u_owner');
     const lease = tokenLease({ api: s.api, label: 'dev-sessions-supervisor', now: s.clock.now });
     const first = await lease.get();
     assert.equal((await s.h.rpc(leftover.secret, 'tools/list')).status, 401, 'the leftover is revoked');

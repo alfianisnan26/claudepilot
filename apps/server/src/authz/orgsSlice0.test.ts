@@ -115,5 +115,5 @@ test('sockets: the installed reader names the person; not authorized or no perso
   assert.deepEqual(actorOfSocket(req('s=other'), () => true), anonymous(), 'signed in, but nobody the reader knows');
   assert.deepEqual(actorOfSocket(req('s=admin'), () => false), anonymous(), 'the module’s own check still decides');
   useSocketActor(null);
-  assert.deepEqual(actorOfSocket(req(''), () => true), ownerActor(), 'with no reader installed (a module’s unit test), as before');
+  assert.deepEqual(actorOfSocket(req(''), () => true), anonymous(), 'with no reader installed the socket is nobody (review m4)');
 });

@@ -13,7 +13,7 @@ process.once('beforeExit', () => h.done());
 
 const refusal = (label: unknown): string | null => {
   try {
-    h.module.createToken({ label: label as string, scope: 'read' }, URL_);
+    h.module.createToken({ label: label as string, scope: 'read' }, URL_, 'user:u_owner');
     return null;
   } catch (e) {
     return isAppError(e) ? `${e.code}:${(e.details as { label?: string } | undefined)?.label ?? ''}` : String(e);
@@ -23,7 +23,7 @@ const refusal = (label: unknown): string | null => {
 test('a token made without a label is refused, with a message that says what the label is for', () => {
   for (const label of [undefined, null, '', '   ', 42]) assert.match(refusal(label) ?? 'accepted', /^VALIDATION_FAILED:Required\.$/, String(label));
   try {
-    h.module.createToken({ scope: 'read' }, URL_);
+    h.module.createToken({ scope: 'read' }, URL_, 'user:u_owner');
     assert.fail('accepted');
   } catch (e) {
     assert.ok(isAppError(e));
@@ -38,9 +38,9 @@ test('the label is one line of plain text of 1 to 60 characters, trimmed', () =>
   assert.match(refusal('a\u0000b') ?? 'accepted', /^VALIDATION_FAILED:/);
   assert.match(refusal('<b>relay</b>') ?? 'accepted', /^VALIDATION_FAILED:/);
   assert.match(refusal('x'.repeat(PORTAL_TOKEN_LABEL_MAX + 1)) ?? 'accepted', /^VALIDATION_FAILED:/);
-  const { token } = h.module.createToken({ label: `  ${'x'.repeat(PORTAL_TOKEN_LABEL_MAX)}  `, scope: 'read' }, URL_);
+  const { token } = h.module.createToken({ label: `  ${'x'.repeat(PORTAL_TOKEN_LABEL_MAX)}  `, scope: 'read' }, URL_, 'user:u_owner');
   assert.equal(token.label, 'x'.repeat(PORTAL_TOKEN_LABEL_MAX));
-  assert.equal(h.module.createToken({ label: '  relay ', scope: 'read' }, URL_).token.label, 'relay');
+  assert.equal(h.module.createToken({ label: '  relay ', scope: 'read' }, URL_, 'user:u_owner').token.label, 'relay');
 });
 
 test('the label stays on the audit rows of what the token did, whatever happens to the token later', async () => {

@@ -229,3 +229,17 @@ test('chat: no session_done mid-move, for an ended session, or when nobody asked
     m.off();
   }
 });
+
+test('organizations slice 0: a real account id (base64url) is an audience, for a spend alert and on the bus; a name that is no id is dropped', () => {
+  const { bus, got } = collect();
+  let fire: (a: SpendAlert) => void = () => {};
+  adaptSpend({ onAlert: (fn) => ((fire = fn), () => {}) }, bus);
+  const scope = { kind: 'workspace' as const, id: 'docker/api-dev', label: 'api-dev' };
+  const budget = (owner: string) =>
+    ({ kind: 'budget', id: `b-${owner}`, at: '', level: 'high', scope, owner, workspaceId: null, summary: '', budgetId: 'bud_1', budgetName: 'x', scopeLabel: null, usedPct: 95, periodEnd: '', paused: false }) as SpendAlert;
+  fire(budget('u_Ab3-xY_9kQ2z'));
+  fire(budget('ui'));
+  assert.deepEqual(got.map((e) => e.audience), [['u_Ab3-xY_9kQ2z'], undefined]);
+  bus.emit({ ...got[0]!, audience: ['u_Ab3-xY_9kQ2z', 'not a user', 'u_owner'] });
+  assert.deepEqual(got.at(-1)!.audience, ['u_Ab3-xY_9kQ2z', 'u_owner']);
+});
