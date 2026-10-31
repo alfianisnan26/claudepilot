@@ -62,6 +62,8 @@ export function buildQuery(p: ListPrefs, currentPath: string | null, extra: Part
   if (p.mine) q.mine = true;
   if (p.q.trim()) q.q = p.q.trim();
   if (p.scope === 'page' && currentPath) q.path = pathnameOf(currentPath);
+  // Before the host has said which page it is on there is no path, and position needs one (the server answers 422).
+  if (q.sort === 'position' && !q.path && !extra.path) q.sort = 'updated';
   return { ...q, ...extra };
 }
 
@@ -303,4 +305,9 @@ export function targetNotice(wanted: ReporterReportTarget | null | undefined, ta
   if (!targets.length) return 'No session is set up for direct reports in this bucket: this goes in as a ticket.';
   if (!targets.some((t) => t.available)) return 'No target session is available now: this goes in as a ticket.';
   return null;
+}
+
+/** Esc closes the panel, unless a control already used the key (preventDefault) or an IME is composing. */
+export function closesPanel(e: Pick<KeyboardEvent, 'key' | 'defaultPrevented' | 'isComposing'>): boolean {
+  return e.key === 'Escape' && !e.defaultPrevented && !e.isComposing;
 }

@@ -6,7 +6,7 @@
 ## IN FLIGHT (all wait on a blind review from another unit)
 - T-3206 (PILOT-1109) refusal fold follow-ups: dfa82cb9, self-test claudepilot-job-f1e83470 pass 40; REVIEW-ASK c50404.
 - T-3233 (PILOT-1119) pass ignores a Bash description: 0d1bbd66 (on T-3206), self-test claudepilot-job-d9b2054d pass 111; REVIEW-ASK c50432; merge also held for the coordinator's wall answer.
-- T-3215 (PILOT-1112) spawn stuck starting: 591fcd34, self-test claudepilot-job-6b856e90 pass 48.
+- T-3215 (PILOT-1112, owner top item) spawn stuck starting: merged onto integration 490f66e3 (ticket/T-3215-on-integration, CP-B3215b Opus); red proof claudepilot-job-42632e48 3/3 fail; self-test claudepilot-job-1e16aa78 pass 11, typecheck claudepilot-job-c621964b; REVIEW-ASK c50601. Fix ends a stuck worker in 60 s; it creates no slots.
 - T-3222 + T-3207 (PILOT-1116/1110) queued worker shows planned mode, stale-row test, PRD: b95ea140 (on T-3215), self-test claudepilot-job-ce549d7b + claudepilot-job-605a1c00; REVIEW-ASK c50520.
 - T-3220 (PILOT-1115) keep-going heir for tickets: 180cc150; REVIEW-ASK c50398.
 
@@ -22,10 +22,12 @@
 - Relay REVIEW-ASKs to T-84: T-3206, T-3233, T-3215, T-3222/3207, T-3220, and the predecessor's T-3173, T-2966/2967 (own lineage, I may not review them).
 - T-3233: confirm ruleGuard.ts passOfCall is crew-changeable, or needs a person.
 - T-3225: run publish.mjs --only=skills,persona --apply from fc7b77eb or later.
-- Move b3fead22's tickets from 4ee04b70 to cce0f6be; close T-2997 on deploy #613.
+- Move b3fead22's tickets from 4ee04b70 to cce0f6be (adopt CONFLICT again 08:45), or end b3fead22; close T-2997 on deploy #613.
+- kohi-event running-agents cap (18/18 at 06:01): free idle sessions so Konfersi Business workers can start (c50593).
+- T-3244: PILOT-HEALTH nudge names epics with no open slice.
 
 ## NEEDS A HUMAN
 - none
 
 ## NEXT
-- Merge order on review passes: T-3215 -> T-3222/3207; T-3206 -> T-3233; T-3220. Then the open PILOT queue (rest is walls or watchdog).
+- Merge order on review passes: T-3215 (490f66e3) -> T-3222/3207 (merge up onto it); T-3206 -> T-3233; T-3220. Then the open PILOT queue (rest is walls or watchdog).

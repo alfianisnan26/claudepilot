@@ -12,7 +12,7 @@ import {
   type TicketType,
 } from '@portal/contracts';
 import { useEffect, useState, type ReactNode } from 'react';
-import { SEVERITIES, countBySeverity, cropBox, pathnameOf } from '@/features/reporter/shared';
+import { SEVERITIES, countBySeverity, cropBox, shotCaption } from '@/features/reporter/shared';
 import type { ReporterClient } from './api';
 import { usePanel, type Capture } from './context';
 import { Icon } from './icons';
@@ -198,7 +198,7 @@ function Duplicates({ capture, onAdded }: { capture: Capture; onAdded: (key: str
           <AuthImg client={client} src={d.thumbnailUrl} alt="" className="size-12 shrink-0 rounded-lg" />
           <div className="min-w-0 flex-1">
             <p className="text-[12px] text-muted tabular-nums">
-              {d.key} · {d.reasons.map((r) => REASON[r]).join(', ')}
+              <span className="whitespace-nowrap">{d.key}</span> · {d.reasons.map((r) => REASON[r]).join(', ')}
             </p>
             <p className="line-clamp-2 text-[13.5px] font-semibold break-words">{d.summary}</p>
           </div>
@@ -578,9 +578,7 @@ function CommentRow(props: {
           <AuthImg client={client} src={c.screenshotUrl} alt="" className="size-14 rounded-lg" />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="text-[12px] break-all text-muted">
-            {c.index} · {pathnameOf(c.anchor.path)}
-          </p>
+          <p className="text-[12px] break-all text-muted">{shotCaption(c.index, c.anchor.path)}</p>
           {props.editing ? (
             <textarea value={props.draft} onChange={(e) => props.setDraft(e.target.value)} rows={3} maxLength={REPORTER_LIMITS.commentChars} aria-label="Comment" className={`${inputClass} mt-1 resize-y`} />
           ) : (

@@ -1,14 +1,28 @@
-import { REPORTER_BRIDGE_VERSION, type ReporterBuildInfo, type ReporterHostMessage, type ReporterReportTarget, type ReporterReview, type ReporterSessionTargetStatus, type ReporterStatus } from '@portal/contracts';
+import { REPORTER_BRIDGE_VERSION, type ReporterBuildInfo, type ReporterConnectMessage, type ReporterHostMessage, type ReporterReportTarget, type ReporterReview, type ReporterSessionTargetStatus, type ReporterStatus } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { clearToken, createClient, memoryStorage, parseConnectMessage, readToken, safeStorage, writeToken, type StoredToken } from './api';
+import { LogoMark } from '../components/LogoMark';
+import {
+  clearToken,
+  connectCode,
+  connectPair,
+  connectWindowName,
+  createClient,
+  memoryStorage,
+  parseConnectMessage,
+  readToken,
+  safeStorage,
+  writeToken,
+  type ReporterClient,
+  type StoredToken,
+} from './api';
 import { captureRequest, createPanelBridge, exactOrigin, targetMessage, type PanelBridge } from './bridge';
 import { PanelContext, newId, type Capture, type PanelState, type Tab } from './context';
 import { Icon, type IconName } from './icons';
-import { buildCallouts, isChangeEvent, parseHotkeys, pickTarget, targetNotice, type Hotkeys } from './model';
+import { buildCallouts, closesPanel, isChangeEvent, parseHotkeys, pickTarget, targetNotice, type Hotkeys } from './model';
 import { KnowledgeTab, SessionsTab, SettingsTab } from './OtherTabs';
 import { ReportTab } from './ReportTab';
 import { TicketsTab } from './TicketsTab';
-import { Btn, IconBtn, Notice } from './ui';
+import { Btn, Notice } from './ui';
 
 const BUCKET = /^[A-Z]{2,6}$/;
 const POLL_MS = 30_000;
@@ -95,6 +109,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     return () => b.dispose();
   }, [origin]);
   const post = useCallback<PanelState['post']>((msg) => bridge.current?.post(msg), []);
+  // Esc closes the panel (the SDK's frame draws the only close button; a key pressed in here never reaches the host page). A control that
+  // uses Esc itself (the hotkey recorder) calls preventDefault and keeps the panel open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (closesPanel(e)) post({ type: 'pilot-reporter:close' });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [post]);
   // The Ticket | Session choice the SDK's capture toolbar starts on: sent after ready, on every change, and with each capture request.
   const [choice, setChoiceState] = useState<ReporterReportTarget>({ kind: 'ticket' });
   const choiceRef = useRef<ReporterReportTarget>(choice);
@@ -411,7 +434,8 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   return (
     <PanelContext.Provider value={state}>
       <div className="flex h-dvh flex-col overflow-hidden bg-bg text-ink">
-        <header className="flex shrink-0 items-center gap-2 border-b border-line pl-3">
+        {/* No close button here: the SDK's frame draws the one close (it works even when this page fails to load); Esc closes too. */}
+        <header className="flex min-h-11 shrink-0 items-center gap-2 border-b border-line px-3">
           <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold" title={status.bucketName}>
             {status.bucketName || bucket}
           </h1>
@@ -420,10 +444,9 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
               {status.site.environment}
             </span>
           )}
-          <IconBtn icon="x" label="Close" onClick={() => post({ type: 'pilot-reporter:close' })} />
         </header>
         {!connected ? (
-          <Connect bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} />
+          <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} />
         ) : (
           <>
             <nav role="tablist" aria-label="Sections" className="flex shrink-0 border-b border-line">
@@ -475,30 +498,56 @@ function safePath(url: string): string | null {
 }
 
 /**
- * Sign-in: a popup of the portal (first party, the portal cookie applies) where the signed-in person approves this site; it posts a
- * token back to this frame only (same origin, our nonce). The token stays in this frame's storage and never reaches the host page.
+ * Sign-in: a popup of the portal (first party, the portal cookie applies) where the signed-in person approves this site. The token reaches
+ * this frame only, two ways: the popup posts it to its opener (this frame: same origin, our nonce), or, when the popup lost its opener
+ * (signing in inside it goes through the portal's pages, whose Cross-Origin-Opener-Policy cuts it off), the server holds the approval for
+ * two minutes and this frame claims it with the verifier only it knows (polling while the popup is open). The token stays in this frame's
+ * storage and never reaches the host page.
  */
-function Connect({ bucket, origin, bucketName, onConnected }: { bucket: string; origin: string; bucketName: string; onConnected: (t: StoredToken) => void }) {
-  const [waiting, setWaiting] = useState(false);
+function Connect({ client, bucket, origin, bucketName, onConnected }: { client: ReporterClient; bucket: string; origin: string; bucketName: string; onConnected: (t: StoredToken) => void }) {
+  const [waiting, setWaiting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cleanup = useRef<(() => void) | null>(null);
-  useEffect(() => () => cleanup.current?.(), []);
+  const popupRef = useRef<Window | null>(null);
+  // The next attempt's verifier and nonce, made ahead: window.open must run in the click itself (a popup blocker), before any await.
+  const next = useRef<{ verifier: string; nonce: string } | null>(null);
+  const prepare = useCallback(() => {
+    next.current = null;
+    connectPair().then(
+      (p) => (next.current = p),
+      () => undefined,
+    );
+  }, []);
+  useEffect(() => {
+    prepare();
+    return () => cleanup.current?.();
+  }, [prepare]);
 
   const start = () => {
     cleanup.current?.();
+    try {
+      popupRef.current?.close();
+    } catch {
+      // gone already
+    }
     setError(null);
-    const nonce = newId();
+    const pair = next.current;
+    prepare();
+    // Without WebCrypto there is no verifier: the popup can still hand the token over through its opener.
+    const nonce = pair?.nonce ?? newId();
+    const verifier = pair?.verifier ?? null;
     const url = `/reporter/v1/connect?${new URLSearchParams({ bucket, origin, nonce })}`;
-    const popup = window.open(url, 'pilot-reporter-connect', 'popup,width=480,height=680');
+    const popup = window.open(url, connectWindowName(nonce), 'popup,width=480,height=680');
     if (!popup) {
       setError('The sign-in window was blocked. Allow pop-ups for this site and try again.');
       return;
     }
-    setWaiting(true);
-    const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin || e.source !== popup) return;
-      const msg = parseConnectMessage(e.data, nonce, bucket);
-      if (!msg) return;
+    popupRef.current = popup;
+    setWaiting(nonce);
+    let finished = false;
+    let poll: ReturnType<typeof setTimeout> | null = null;
+    const finish = (msg: ReporterConnectMessage) => {
+      if (finished) return;
       done();
       try {
         popup.close();
@@ -507,37 +556,70 @@ function Connect({ bucket, origin, bucketName, onConnected }: { bucket: string; 
       }
       onConnected({ token: msg.token, expiresAt: msg.expiresAt, actorLabel: msg.actorLabel, bucketKey: msg.bucketKey });
     };
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin || e.source !== popup) return;
+      const msg = parseConnectMessage(e.data, nonce, bucket);
+      if (msg) finish(msg);
+    };
+    const claim = async () => {
+      if (finished || !verifier) return;
+      if (poll) clearTimeout(poll);
+      poll = null;
+      try {
+        const msg = parseConnectMessage(await client.claimConnect(bucket, origin, verifier), nonce, bucket);
+        if (msg) return finish(msg);
+      } catch {
+        // not reachable now: try again
+      }
+      if (!finished) poll = setTimeout(() => void claim(), 2000);
+    };
+    // Back from the popup (a phone shows it as a tab): ask at once instead of waiting for the next tick.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void claim();
+    };
     const timer = setTimeout(() => {
       done();
       setError('No answer from the sign-in window.');
     }, 10 * 60_000);
     const done = () => {
+      finished = true;
       window.removeEventListener('message', onMessage);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
       clearTimeout(timer);
-      setWaiting(false);
+      if (poll) clearTimeout(poll);
+      setWaiting(null);
       cleanup.current = null;
     };
     window.addEventListener('message', onMessage);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    if (verifier) poll = setTimeout(() => void claim(), 2000);
     cleanup.current = done;
   };
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
-      <Icon name="ticket" className="size-8 text-muted" />
+      <LogoMark className="size-12" />
       <div>
         <p className="text-[16px] font-bold">Connect</p>
         <p className="mt-1 text-[13.5px] text-muted">Sign in to pilot to see and file {bucketName || bucket} tickets from this page.</p>
       </div>
       {error && <Notice tone="error">{error}</Notice>}
       {waiting ? (
-        <div className="flex gap-2">
-          <Btn tone="secondary" onClick={start}>
-            Open again
-          </Btn>
-          <Btn tone="ghost" onClick={() => cleanup.current?.()}>
-            Cancel
-          </Btn>
-        </div>
+        <>
+          <p className="text-[13px] text-muted">
+            Code <span className="font-mono text-[14px] font-semibold tracking-widest text-ink">{connectCode(waiting)}</span>
+          </p>
+          <div className="flex gap-2">
+            <Btn tone="secondary" onClick={start}>
+              Open again
+            </Btn>
+            <Btn tone="ghost" onClick={() => cleanup.current?.()}>
+              Cancel
+            </Btn>
+          </div>
+        </>
       ) : (
         <Btn tone="primary" onClick={start} className="w-full max-w-60">
           Connect
