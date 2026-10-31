@@ -259,7 +259,8 @@ function FilterSheet({ prefs, counts, onChange, onClose }: { prefs: ListPrefs; c
     { value: 'open', label: 'Open' },
     { value: 'closed', label: 'Closed' },
     { value: 'all', label: 'All' },
-    ...TICKET_STATUSES.map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] })),
+    // 'open' as a query means every open status (the contract's group), so the status itself is not offered twice.
+    ...TICKET_STATUSES.filter((s) => s !== 'open').map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] })),
   ];
   return (
     <SheetFrame title="Filter" onClose={onClose}>

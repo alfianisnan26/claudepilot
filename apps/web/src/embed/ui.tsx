@@ -49,7 +49,7 @@ export function Chip({ on, onClick, children, count }: { on: boolean; onClick: (
       type="button"
       aria-pressed={on}
       onClick={onClick}
-      className={`inline-flex min-h-11 items-center gap-1 rounded-full border px-3 text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${on ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong text-ink'}`}
+      className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-full border px-3 text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${on ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong text-ink'}`}
     >
       {children}
       {count !== undefined && <span className={`tabular-nums ${on ? 'opacity-80' : 'text-muted'}`}>{count}</span>}
