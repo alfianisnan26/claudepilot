@@ -210,6 +210,13 @@ export function splitStream(buffer: string): { events: unknown[]; rest: string }
   return { events, rest };
 }
 
+/** True for an events-stream line that means something changed; the server's 'hello' and keep-alive 'ping' lines are not. */
+export function isChangeEvent(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false;
+  const t = (e as { type?: unknown }).type;
+  return t !== 'ping' && t !== 'hello';
+}
+
 /** A normalized, comparable form of a hotkey ("Alt+Shift+R"), or null for a lone modifier. */
 export function hotkeyOf(e: { key: string; altKey: boolean; shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): string | null {
   if (['Alt', 'Shift', 'Control', 'Meta'].includes(e.key)) return null;

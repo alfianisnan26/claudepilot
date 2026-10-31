@@ -4,7 +4,7 @@ import { clearToken, createClient, memoryStorage, parseConnectMessage, readToken
 import { createPanelBridge, exactOrigin, type PanelBridge } from './bridge';
 import { PanelContext, newId, type Capture, type PanelState, type Tab } from './context';
 import { Icon, type IconName } from './icons';
-import { buildCallouts, parseHotkeys, type Hotkeys } from './model';
+import { buildCallouts, isChangeEvent, parseHotkeys, type Hotkeys } from './model';
 import { KnowledgeTab, SessionsTab, SettingsTab } from './OtherTabs';
 import { ReportTab } from './ReportTab';
 import { TicketsTab } from './TicketsTab';
@@ -195,7 +195,8 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     const ctl = new AbortController();
     let backoff = 2000;
     let debounce: ReturnType<typeof setTimeout> | null = null;
-    const bump = () => {
+    const bump = (e: unknown) => {
+      if (!isChangeEvent(e)) return;
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(refresh, 400);
     };

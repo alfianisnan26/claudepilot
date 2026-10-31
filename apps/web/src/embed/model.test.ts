@@ -10,6 +10,7 @@ import {
   buildQuery,
   groupByPage,
   hotkeyOf,
+  isChangeEvent,
   parseHotkeys,
   parsePrefs,
   playlist,
@@ -235,4 +236,10 @@ test('after a direct report the panel says plainly whether the session got it', 
   const failed = sentText(['KONF-3', 'KONF-4'], session, { sessionId: 's1', delivered: false, error: 'session ended' }, ['screenshot']);
   assert.equal(failed.tone, 'error');
   assert.equal(failed.text, '2 tickets filed. The session did not get it (session ended); the ticket is kept. Upload failed: screenshot.');
+});
+
+test('events: the server stream (NDJSON hello, ping, changed) triggers a refresh only on a change', () => {
+  const { events } = splitStream('{"type":"hello","at":"x"}\n{"type":"ping"}\n{"type":"changed","at":"y"}\n');
+  assert.deepEqual(events.map(isChangeEvent), [false, false, true]);
+  assert.equal(isChangeEvent(null), false);
 });
