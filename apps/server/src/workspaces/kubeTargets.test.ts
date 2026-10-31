@@ -142,7 +142,7 @@ test('a target runtime: a new workspace gets the target image; a stopped one mad
     const puts = () => fake.seen('PUT', '/apis/apps/v1/namespaces/img-workspaces/deployments/ws-old').length;
     await rt.start('old');
     assert.equal(puts(), 0, 'running: not rewritten');
-    assert.equal(deployment(fake, 'ws-old').spec.template.spec.containers[0]!.image as unknown, 'reg/workspace:1');
+    assert.equal((deployment(fake, 'ws-old') as unknown as typeof old).spec.template.spec.containers[0]!.image, 'reg/workspace:1');
 
     // Stop, start: the image is the target's, the pull secret is added, the browser keeps its own.
     await rt.stop('old');
@@ -164,7 +164,7 @@ test('a target runtime: a new workspace gets the target image; a stopped one mad
     // A target on PORTAL_K8S_IMAGE never rewrites a workspace's image (a hand-set one stays until its target names one).
     await rt.stop('old');
     await plainRt.start('old');
-    assert.equal(deployment(fake, 'ws-old').spec.template.spec.containers[0]!.image as unknown, 'reg/dev:2');
+    assert.equal((deployment(fake, 'ws-old') as unknown as typeof old).spec.template.spec.containers[0]!.image, 'reg/dev:2');
     assert.equal(puts(), 1);
   } finally {
     await fake.stop();
