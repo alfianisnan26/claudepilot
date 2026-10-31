@@ -554,7 +554,8 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
     let live = true;
     client.ticket(ticketKey).then(
       (v) => live && (setT(v), setFailed(null)),
-      (e: Error) => live && setFailed(e.message),
+      // A 404 while the session is fine (the client checks /me) is this ticket gone, said in this view only.
+      (e: Error & { status?: number }) => live && setFailed(e.status === 404 ? 'This ticket is not here any more.' : e.message),
     );
     // Reading the thread marks it read.
     client.comments(ticketKey).then(

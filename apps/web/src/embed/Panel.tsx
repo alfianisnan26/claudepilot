@@ -72,7 +72,13 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     setTokenState(null);
   }, [kv, bucket, origin]);
 
-  const client = useMemo(() => createClient({ token: () => tokenRef.current?.token ?? null, onUnauthorized: signOut }), [signOut]);
+  // The token was refused (revoked, expired, its site removed): back to Connect with one line, never a raw "Not found." on every tab.
+  const [ended, setEnded] = useState(false);
+  const sessionEnded = useCallback(() => {
+    if (tokenRef.current) setEnded(true);
+    signOut();
+  }, [signOut]);
+  const client = useMemo(() => createClient({ token: () => tokenRef.current?.token ?? null, onUnauthorized: sessionEnded }), [sessionEnded]);
 
   const [status, setStatus] = useState<ReporterStatus | null>(null);
   const [statusFailed, setStatusFailed] = useState(false);
@@ -429,6 +435,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     (t: StoredToken) => {
       writeToken(kv, origin, t);
       setTokenState(t);
+      setEnded(false);
       reportedBuild.current = false;
       notify('Connected', 'ok');
     },
@@ -536,7 +543,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
           </header>
         )}
         {!connected ? (
-          <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} />
+          <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} note={ended ? 'Session ended. Connect again.' : null} />
         ) : (
           <>
             {!detail && (
@@ -599,7 +606,22 @@ function safePath(url: string): string | null {
  * two minutes and this frame claims it with the verifier only it knows (polling while the popup is open). The token stays in this frame's
  * storage and never reaches the host page.
  */
-function Connect({ client, bucket, origin, bucketName, onConnected }: { client: ReporterClient; bucket: string; origin: string; bucketName: string; onConnected: (t: StoredToken) => void }) {
+export function Connect({
+  client,
+  bucket,
+  origin,
+  bucketName,
+  onConnected,
+  note = null,
+}: {
+  client: ReporterClient;
+  bucket: string;
+  origin: string;
+  bucketName: string;
+  onConnected: (t: StoredToken) => void;
+  /** Why the panel is here again ("Session ended. Connect again."), shown as one line. */
+  note?: string | null;
+}) {
   const [waiting, setWaiting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cleanup = useRef<(() => void) | null>(null);
@@ -700,6 +722,7 @@ function Connect({ client, bucket, origin, bucketName, onConnected }: { client: 
         <p className="text-[16px] font-bold">Connect</p>
         <p className="mt-1 text-[13.5px] text-muted">Sign in to pilot to see and file {bucketName || bucket} tickets from this page.</p>
       </div>
+      {note && !waiting && <Notice tone="info">{note}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {waiting ? (
         <>

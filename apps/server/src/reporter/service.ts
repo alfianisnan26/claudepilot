@@ -473,15 +473,20 @@ export class ReporterService {
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + REPORTER_LIMITS.tokenHours * HOUR).toISOString();
     const actorLabel = label.replace(/[\u0000-\u001f\u007f<>"]/g, '').slice(0, 60) || 'Reporter';
-    // One live token per (person, bucket, origin): a new approval revokes that person's older ones there, so an approval nobody received
-    // (a page that opened the popup itself) does not leave a live token behind, and the table does not grow.
+    // Up to REPORTER_LIMITS.liveTokensPerSite live tokens per (person, bucket, origin): a new approval revokes only the oldest beyond that, so
+    // another device (or a test run approving as the same person) does not sign this one out, and the table still cannot grow without bound.
+    // Each token keeps its own 12 h expiry; expired ones do not count.
     this.#inTx(() => {
-      this.#wdb
-        .prepare("UPDATE reporter_tokens SET revoked_at = ?, revoked_reason = 'replaced by a new connect' WHERE bucket_key = ? AND origin = ? AND actor_user = ? AND revoked_at IS NULL")
-        .run(now.toISOString(), key, origin, actor.userId);
       this.#wdb
         .prepare('INSERT INTO reporter_tokens (id, token_hash, bucket_key, origin, actor_user, actor_label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .run(id, sha(token), key, origin, actor.userId, actorLabel, now.toISOString(), expiresAt);
+      this.#wdb
+        .prepare(
+          `UPDATE reporter_tokens SET revoked_at = ?, revoked_reason = 'replaced by a newer connect' WHERE id IN (
+             SELECT id FROM reporter_tokens WHERE bucket_key = ? AND origin = ? AND actor_user = ? AND revoked_at IS NULL AND expires_at > ?
+             ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)`,
+        )
+        .run(now.toISOString(), key, origin, actor.userId, now.toISOString(), REPORTER_LIMITS.liveTokensPerSite);
     });
     return { token, id, expiresAt, bucketKey: key, actorLabel };
   }

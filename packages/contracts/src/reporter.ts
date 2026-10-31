@@ -42,6 +42,11 @@ export const REPORTER_LIMITS = {
   textChars: 2000,
   /** Token lifetime. */
   tokenHours: 12,
+  /**
+   * Live tokens one person keeps per bucket and origin (several devices, browsers, test runs): a new approval revokes only the oldest beyond
+   * this. Was one (2026-10-31): a test agent approving as the owner signed the owner's own panel out.
+   */
+  liveTokensPerSite: 5,
   /** Tickets a token may file per hour. */
   ticketsPerHour: 30,
   /** Chat messages a token may send to sessions in ten minutes (chat in the widget). */

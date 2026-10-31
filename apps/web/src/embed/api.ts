@@ -204,8 +204,31 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
     return h;
   };
 
+  /*
+   * Session ended (live bug 2026-10-31: a revoked token printed "Not found." on every tab). Every refusal of a token is the uniform 404 (or
+   * 401 without one), so a 404 on a call made WITH the token is checked once against /me: /me refused too means the token is gone, and the
+   * panel signs out ("Session ended. Connect again."); /me fine means the object itself is missing, and the view says so. One check at a time.
+   */
+  let checking: Promise<void> | null = null;
+  const refused = (status: number, path: string, withToken: boolean) => {
+    if (!withToken) return;
+    if (status === 401 || (status === 404 && path === R.me)) return opts.onUnauthorized();
+    if (status !== 404 || checking) return;
+    checking = f(R.me, { headers: headers(), credentials: 'omit' })
+      .then(
+        (r) => {
+          if (r.status === 401 || r.status === 404) opts.onUnauthorized();
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        checking = null;
+      });
+  };
+
   async function call<T>(method: string, path: string, body?: unknown, raw?: { blob: Blob; headers: Record<string, string> }): Promise<T> {
     let res: Response;
+    const withToken = !!opts.token() && path !== R.connectClaim && !path.startsWith(R.status);
     try {
       res = await f(path, {
         method,
@@ -217,7 +240,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
       throw new ReporterApiError('NETWORK_ERROR', 'Could not reach pilot.', 0);
     }
     const json: unknown = await res.json().catch(() => null);
-    if (res.status === 401) opts.onUnauthorized();
+    refused(res.status, path.split('?')[0]!, withToken);
     const env = json as { data?: unknown; error?: { code?: string; message?: string } } | null;
     if (res.ok) return (env && typeof env === 'object' && 'data' in env ? env.data : json) as T;
     const code = env?.error?.code ?? (res.status === 404 ? 'NOT_FOUND' : res.status === 429 ? 'RATE_LIMITED' : 'ERROR');
@@ -265,7 +288,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
     observedBuild: (req) => call('POST', R.observedBuild, req),
     blobUrl: async (url) => {
       const res = await f(url, { headers: headers(), credentials: 'omit' });
-      if (res.status === 401) opts.onUnauthorized();
+      refused(res.status, url, !!opts.token());
       if (!res.ok) throw new ReporterApiError('ERROR', `Image failed (${res.status}).`, res.status);
       return URL.createObjectURL(await res.blob());
     },
@@ -286,7 +309,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
   async function readLines(url: string, onEvent: (e: unknown) => void, signal: AbortSignal): Promise<void> {
     {
       const res = await f(url, { headers: headers({ Accept: 'text/event-stream' }), credentials: 'omit', signal });
-      if (res.status === 401) opts.onUnauthorized();
+      refused(res.status, url.split('?')[0]!, !!opts.token());
       if (!res.ok || !res.body) throw new ReporterApiError(res.status === 404 ? 'NOT_FOUND' : 'ERROR', `Stream failed (${res.status}).`, res.status);
       const reader = res.body.getReader();
       const dec = new TextDecoder();

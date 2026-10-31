@@ -19,6 +19,11 @@ Code: `apps/server/src/reporter/` (`service.ts`, `routes.ts`, `validate.ts`, `de
   bucket. The panel may also send `x-reporter-bucket` and `x-reporter-origin`; when present they must match the token. Any failure answers
   the same 404 as a missing object; a call without a token answers 401. `DELETE /reporter/v1/me` revokes the panel's own token (sign out;
   not in the contract's route table).
+- Up to `REPORTER_LIMITS.liveTokensPerSite` (5) live tokens per person, bucket and origin: minting a sixth revokes the oldest live one
+  (`revoked_reason` "replaced by a newer connect"); each keeps its own 12 h expiry and expired ones do not count. Until 2026-10-31 a new
+  approval revoked all the person's older tokens there, and test agents approving as the owner signed the owner's panel out. The panel
+  treats a 401, or a 404 that `GET /me` confirms, as "session ended" (clears the token, shows Connect); a 404 while `/me` answers is a
+  missing object, shown in that view only.
 
 ## Pages and files under /reporter/v1
 
