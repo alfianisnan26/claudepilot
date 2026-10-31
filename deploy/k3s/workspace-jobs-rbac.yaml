@@ -1,0 +1,193 @@
+# Least-privilege cluster access for the org workspaces isnan and konfersi (migration C.3.3, 2026-10-31): applied by hand first, kept here as
+# it is live (compared with `kubectl get -o yaml`, status and server fields left out; the token Secrets were not read back). Argo CD manages it
+# from this file; every object is annotated never to be pruned or deleted with the app (like the org namespaces in workspace-orgs.yaml), so a
+# bad sync never takes a workspace's cluster access away mid-run. scripts/job-run.sh and scripts/gate-job.sh work under these accounts
+# (gate-job.sh needs no get on Secrets). apps/server/src/workspaces/kubeTargets.test.ts checks the file's shape.
+#
+# Migration C.3.3: least-privilege cluster access for the org workspaces (isnan, konfersi).
+# One ServiceAccount per workspace in isnan-claudepilot (where job-run / gate-job create their Jobs), a long-lived token Secret each,
+# a namespaced Role for Jobs + their pods/logs + the per-Job Secret + gate-result ConfigMaps, and a ValidatingAdmissionPolicy that
+# keeps "create Jobs" from becoming "run anything as anyone": Jobs/Secrets/ConfigMaps must carry the scripts' names, Jobs get no SA token,
+# no service account, only emptyDir volumes, no host namespaces, no privileged containers, and secretKeyRefs only to the Job's own Secret.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: ws-isnan-jobs, namespace: isnan-claudepilot, labels: {app.kubernetes.io/part-of: claudepilot, claudepilot/workspace: isnan}, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: ws-konfersi-jobs, namespace: isnan-claudepilot, labels: {app.kubernetes.io/part-of: claudepilot, claudepilot/workspace: konfersi}, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/service-account-token
+metadata: {name: ws-isnan-jobs-token, namespace: isnan-claudepilot, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false", kubernetes.io/service-account.name: ws-isnan-jobs}}
+---
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/service-account-token
+metadata: {name: ws-konfersi-jobs-token, namespace: isnan-claudepilot, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false", kubernetes.io/service-account.name: ws-konfersi-jobs}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: claudepilot-ws-jobs, namespace: isnan-claudepilot, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+rules:
+  - {apiGroups: [batch], resources: [jobs], verbs: [get, list, watch, create, patch, delete]}
+  - {apiGroups: [""], resources: [pods], verbs: [get, list, watch]}
+  - {apiGroups: [""], resources: [pods/log], verbs: [get]}
+  - {apiGroups: [""], resources: [events], verbs: [get, list, watch]}
+  # The per-Job credential Secret: create/patch/delete only (no get/list/watch), names limited by the policy below.
+  - {apiGroups: [""], resources: [secrets], verbs: [create, patch, delete]}
+  # Gate results (scripts/gate-record.sh): names limited by the policy below.
+  - {apiGroups: [""], resources: [configmaps], verbs: [get, list, create, patch, update, delete]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: claudepilot-ws-jobs, namespace: isnan-claudepilot, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: claudepilot-ws-jobs}
+subjects:
+  - {kind: ServiceAccount, name: ws-isnan-jobs, namespace: isnan-claudepilot}
+  - {kind: ServiceAccount, name: ws-konfersi-jobs, namespace: isnan-claudepilot}
+---
+# job-run placement: node labels and real memory (kubectl get node, kubectl top nodes).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: claudepilot-ws-nodes-read, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+rules:
+  - {apiGroups: [""], resources: [nodes], verbs: [get, list]}
+  - {apiGroups: [metrics.k8s.io], resources: [nodes, pods], verbs: [get, list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: claudepilot-ws-nodes-read, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: claudepilot-ws-nodes-read}
+subjects:
+  - {kind: ServiceAccount, name: ws-isnan-jobs, namespace: isnan-claudepilot}
+  - {kind: ServiceAccount, name: ws-konfersi-jobs, namespace: isnan-claudepilot}
+---
+# job-run's image lookup: GET the registry's tag list through the API server's service proxy (read only).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: claudepilot-ws-registry-read, namespace: isnan-registry, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+rules:
+  - {apiGroups: [""], resources: [services/proxy], resourceNames: ["registry:5000", "registry"], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: claudepilot-ws-registry-read, namespace: isnan-registry, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: claudepilot-ws-registry-read}
+subjects:
+  - {kind: ServiceAccount, name: ws-isnan-jobs, namespace: isnan-claudepilot}
+  - {kind: ServiceAccount, name: ws-konfersi-jobs, namespace: isnan-claudepilot}
+---
+# k3s-status (isnan only): read-only views it prints. Events cluster-wide, deploy/pods/pvc in the portal and workspace namespaces,
+# the portal's log, Argo CD applications.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: claudepilot-ws-status-read, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+rules:
+  - {apiGroups: [""], resources: [events], verbs: [list]}
+  - {apiGroups: [events.k8s.io], resources: [events], verbs: [list]}
+  - {apiGroups: [""], resources: [pods], verbs: [list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: claudepilot-ws-status-read, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: claudepilot-ws-status-read}
+subjects: [{kind: ServiceAccount, name: ws-isnan-jobs, namespace: isnan-claudepilot}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: claudepilot-ws-status-read, namespace: isnan-claudepilot, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+rules:
+  - {apiGroups: [apps], resources: [deployments, replicasets], verbs: [get, list]}
+  - {apiGroups: [apps], resources: [deployments/log], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: claudepilot-ws-status-read, namespace: isnan-claudepilot, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: claudepilot-ws-status-read}
+subjects: [{kind: ServiceAccount, name: ws-isnan-jobs, namespace: isnan-claudepilot}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: claudepilot-ws-status-read, namespace: isnan-claudepilot-workspaces, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+rules:
+  - {apiGroups: [apps], resources: [deployments, replicasets], verbs: [get, list]}
+  - {apiGroups: [""], resources: [pods, persistentvolumeclaims], verbs: [get, list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: claudepilot-ws-status-read, namespace: isnan-claudepilot-workspaces, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: claudepilot-ws-status-read}
+subjects: [{kind: ServiceAccount, name: ws-isnan-jobs, namespace: isnan-claudepilot}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: claudepilot-ws-status-read, namespace: isnan-argocd, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+rules:
+  - {apiGroups: [argoproj.io], resources: [applications], verbs: [get, list]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: claudepilot-ws-status-read, namespace: isnan-argocd, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: claudepilot-ws-status-read}
+subjects: [{kind: ServiceAccount, name: ws-isnan-jobs, namespace: isnan-claudepilot}]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: claudepilot-ws-jobs-guard, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: isnan-claudepilot}}
+    objectSelector: {}
+    resourceRules:
+      - {apiGroups: [batch], apiVersions: ["*"], operations: [CREATE, UPDATE, DELETE], resources: [jobs], scope: "*"}
+      - {apiGroups: [""], apiVersions: ["*"], operations: [CREATE, UPDATE, DELETE], resources: [secrets, configmaps], scope: "*"}
+  matchConditions:
+    - name: org-workspace-sa
+      expression: "request.userInfo.username in ['system:serviceaccount:isnan-claudepilot:ws-isnan-jobs', 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs']"
+  variables:
+    - {name: obj, expression: "request.operation == 'DELETE' ? oldObject : object"}
+    - {name: name, expression: "request.operation == 'DELETE' ? oldObject.metadata.name : object.metadata.name"}
+    - {name: pod, expression: "request.resource.resource == 'jobs' && request.operation != 'DELETE' ? object.spec.template.spec : null"}
+    - name: ctrs
+      expression: "variables.pod == null ? [] : variables.pod.containers + (has(variables.pod.initContainers) ? variables.pod.initContainers : [])"
+  validations:
+    - expression: "request.resource.resource != 'jobs' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4})$')"
+      message: "Jobs from a workspace are named by job-run.sh / gate-job.sh"
+    - expression: "request.resource.resource != 'secrets' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4})$')"
+      message: "a workspace may only touch the per-Job Secrets"
+    # A PATCH answers with the whole Secret: only gate-job (claudepilot, isnan workspace) patches, and only its own gate Secrets, so one org
+    # cannot read the other's in-flight per-Job credentials that way. konfersi never runs gate-job: its deletes stay on claudepilot-job-*.
+    # (Since 2026-10-31 gate-job.sh no longer patches its Secret: it creates it owned by the suspended Job. The rule stays as it was applied.)
+    - expression: "request.resource.resource != 'secrets' || request.operation != 'UPDATE' || (request.userInfo.username == 'system:serviceaccount:isnan-claudepilot:ws-isnan-jobs' && variables.name.startsWith('claudepilot-gate-'))"
+      message: "only gate-job (isnan workspace) patches Secrets, and only claudepilot-gate-*"
+    - expression: "request.resource.resource != 'secrets' || request.userInfo.username != 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs' || variables.name.startsWith('claudepilot-job-')"
+      message: "the konfersi workspace touches only claudepilot-job-* Secrets"
+    - expression: "request.resource.resource != 'configmaps' || variables.name.startsWith('claudepilot-gate-result-')"
+      message: "a workspace may only touch gate-result ConfigMaps"
+    - expression: "variables.pod == null || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false)"
+      message: "Jobs from a workspace set automountServiceAccountToken: false"
+    - expression: "variables.pod == null || ((!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName in ['', 'default']) && (!has(variables.pod.serviceAccount) || variables.pod.serviceAccount in ['', 'default']))"
+      message: "Jobs from a workspace run as the default service account"
+    - expression: "variables.pod == null || !has(variables.pod.volumes) || variables.pod.volumes.all(v, has(v.emptyDir))"
+      message: "Jobs from a workspace use emptyDir volumes only"
+    - expression: "variables.pod == null || !((has(variables.pod.hostNetwork) && variables.pod.hostNetwork) || (has(variables.pod.hostPID) && variables.pod.hostPID) || (has(variables.pod.hostIPC) && variables.pod.hostIPC))"
+      message: "no host namespaces"
+    - expression: "variables.ctrs.all(c, !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false)"
+      message: "no privileged containers"
+    - expression: "variables.ctrs.all(c, !has(c.envFrom) || size(c.envFrom) == 0)"
+      message: "no envFrom"
+    - expression: "variables.ctrs.all(c, !has(c.env) || c.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef) || e.valueFrom.secretKeyRef.name == object.metadata.name))"
+      message: "secretKeyRef only to the Job's own Secret"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: claudepilot-ws-jobs-guard, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+spec:
+  policyName: claudepilot-ws-jobs-guard
+  validationActions: [Deny]

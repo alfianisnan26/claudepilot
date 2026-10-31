@@ -376,6 +376,39 @@ test('deploy/k3s: PORTAL_K8S_TARGETS in portal.yaml parses, and each of its name
   }
 });
 
+test('deploy/k3s/workspace-jobs-rbac.yaml: the org workspaces’ Job accounts, never pruned, no Secret read, guarded by the admission policy that fits gate-job.sh', () => {
+  const all = docs('deploy/k3s/workspace-jobs-rbac.yaml');
+  for (const d of all) assert.equal(d.metadata.annotations?.['argocd.argoproj.io/sync-options'], 'Delete=false,Prune=false', `${d.kind}/${d.metadata.name}: never pruned or deleted with the app`);
+  const accounts = ['ws-isnan-jobs', 'ws-konfersi-jobs'];
+  const sas = all.filter((d) => d.kind === 'ServiceAccount');
+  assert.deepEqual(sas.map((d) => [d.metadata.namespace, d.metadata.name, (d as unknown as { automountServiceAccountToken?: boolean }).automountServiceAccountToken]), accounts.map((n) => ['isnan-claudepilot', n, false]));
+  // The token Secrets are filled by the cluster: git holds no data.
+  for (const s of all.filter((d) => d.kind === 'Secret')) {
+    assert.equal((s as unknown as { type: string }).type, 'kubernetes.io/service-account-token');
+    assert.equal((s as unknown as { data?: unknown; stringData?: unknown }).data ?? (s as unknown as { stringData?: unknown }).stringData, undefined, `${s.metadata.name}: no data in git`);
+  }
+  // The Job Role: Secrets are created, patched and deleted, never read (gate-job.sh and job-run.sh need no more).
+  type Rule = { apiGroups: string[]; resources: string[]; verbs: string[] };
+  const role = all.find((d) => d.kind === 'Role' && d.metadata.name === 'claudepilot-ws-jobs')!;
+  const secretVerbs = (role.rules as Rule[]).filter((r) => r.resources.includes('secrets')).flatMap((r) => r.verbs);
+  assert.deepEqual(secretVerbs.sort(), ['create', 'delete', 'patch']);
+  const binding = all.find((d) => d.kind === 'RoleBinding' && d.metadata.name === 'claudepilot-ws-jobs')!;
+  assert.deepEqual(binding.subjects?.map((s) => s.name), accounts);
+  const gateJob = readFileSync(join(REPO, 'scripts/gate-job.sh'), 'utf8');
+  assert.doesNotMatch(gateJob, /kubectl[^\n]*\b(get|patch|replace|edit) secrets?\b/, 'gate-job.sh never reads or patches a Secret');
+  // The admission policy: enforced (Deny, Fail closed), matching exactly these accounts; the Job and Secret names gate-job.sh makes pass it.
+  const policy = all.find((d) => d.kind === 'ValidatingAdmissionPolicy')!;
+  const spec = policy.spec as { failurePolicy: string; matchConditions: { expression: string }[]; validations: { expression: string }[] };
+  assert.equal(spec.failurePolicy, 'Fail');
+  for (const a of accounts) assert.ok(spec.matchConditions[0]!.expression.includes(`system:serviceaccount:isnan-claudepilot:${a}`), a);
+  const pb = all.find((d) => d.kind === 'ValidatingAdmissionPolicyBinding')!.spec as { policyName: string; validationActions: string[] };
+  assert.equal(pb.policyName, policy.metadata.name);
+  assert.deepEqual(pb.validationActions, ['Deny']);
+  const nameRule = /matches\('([^']+)'\)/.exec(spec.validations.find((v) => v.expression.startsWith("request.resource.resource != 'jobs'"))!.expression)![1]!;
+  assert.match('claudepilot-gate-0123abc-9f0e', new RegExp(nameRule), 'a gate-job.sh name passes the policy');
+  assert.match(gateJob, /job=claudepilot-gate-\$sha-\$\(od -An -N2 -tx1/, 'gate-job.sh still names its Job claudepilot-gate-<7 hex>-<4 hex>');
+});
+
 test('deploy/k3s-build: the heavy Jobs keep away from workspace pods in every workspace namespace', () => {
   for (const file of ['job-run.yaml', 'image-build-job.yaml', 'gate-job.yaml']) {
     const text = readFileSync(join(REPO, 'deploy/k3s-build', file), 'utf8');

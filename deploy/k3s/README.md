@@ -8,6 +8,7 @@ The portal runs in the cluster as one pod and its workspaces run as pods too, at
 | `namespace.yaml` | `isnan-claudepilot-workspaces` (where workspaces are created), a memory default for pods in it and a quota |
 | `workspace-orgs.yaml` | one workspace namespace per org (`isnan-pilot-ws-isnan`, `-konfersi`, `-kohilabs`), each with the same LimitRange, a quota sized to its workspace, and the portal's Role; the portal serves them as the targets of `PORTAL_K8S_TARGETS` |
 | `rbac.yaml` | the portal's service account, a Role in the workspaces namespace and the one cluster-wide right it needs (create a namespace) |
+| `workspace-jobs-rbac.yaml` | the isnan and konfersi workspaces' own accounts (`ws-isnan-jobs`, `ws-konfersi-jobs`): Jobs and their per-Job Secrets in `isnan-claudepilot` (no Secret reads), read-only views for job-run and k3s-status, and the admission policy `claudepilot-ws-jobs-guard` that keeps their Jobs to what job-run and gate-job make; never pruned or deleted with the app |
 | `portal.yaml` | volume, Deployment, Service and the Traefik IngressRoute |
 
 ## Before the first sync (by hand, not in git)
