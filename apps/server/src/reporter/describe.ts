@@ -1,3 +1,4 @@
+// (proof commit for D-106: a reporter-only change; never merged)
 // UI reporter: the Markdown a reported ticket's description carries, written by the SERVER from what it stored (so it improves without an
 // SDK release), and the repro steps and Playwright test built from a capture's interaction trail. An agent must be able to tell from the
 // description alone which page, which build (commit, branch, environment), which repo and which device to look at.
