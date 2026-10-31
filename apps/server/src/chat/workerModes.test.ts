@@ -451,6 +451,60 @@ test('PILOT-997: a new session no person started starts in Auto while “Auto fo
   }
 });
 
+/**
+ * T-2882: an ended chat that ran in `mode`, then a new chat that continues it, started by `actor` (Keep going's by default); resolves
+ * with the new chat's mode once its first launch has settled (and its restore, if any, was answered).
+ */
+async function continued(s: Live, mode: ChatPermissionMode, actor: string = KEEPGOING_ACTOR): Promise<{ id: string; mode: string }> {
+  const chat = new ChatStore(s.store);
+  const prev = `ended-${mode}-${Math.random().toString(36).slice(2, 10)}`;
+  chat.create({ id: prev, workspaceId: 'docker/ws1', cwd: '/home/node', title: `Ended in ${mode}`, origin: 'mcp' });
+  chat.patchSession(prev, { state: 'ended', process: 'gone', mode });
+  const before = s.ws.tails.length;
+  const started = async () => {
+    const t = await s.controller.create({ workspaceId: 'docker/ws1', title: `Continues ${mode}`, continuedFrom: prev }, { actor });
+    await until(() => s.ws.tails.length === before + 1);
+    await until(() => s.controller.get(t.id)?.state === 'idle');
+    // The first launch's mode switch (if any) goes out after the launch settles: wait for the row to move off the start mode, or a while.
+    for (let i = 0; i < 40 && s.controller.get(t.id)!.mode === 'default'; i++) await sleep(10);
+    return t;
+  };
+  const t = await answering(s, started());
+  return { id: t.id, mode: s.controller.get(t.id)!.mode };
+}
+
+test('T-2882: Keep going’s new chat keeps the ended chat’s mode when it is narrower than Auto, capped at Auto, audited', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.autonomousAuto = () => true;
+    const dontAsk = await continued(s, 'dontAsk');
+    assert.equal(dontAsk.mode, 'dontAsk', 'an ended chat in Don’t ask: its continuation is not widened to Auto');
+    const carried = s.controller.audit({ kind: 'mode.carried' }).find((x) => x.sessionId === dontAsk.id)!;
+    assert.equal(carried.detail.mode, 'dontAsk');
+    assert.equal(s.controller.audit({ kind: 'mode.auto' }).filter((x) => x.sessionId === dontAsk.id).length, 0, 'no Auto start');
+    assert.equal((await continued(s, 'plan')).mode, 'plan');
+    assert.equal((await continued(s, 'acceptEdits')).mode, 'acceptEdits', 'Edit is narrower than Auto');
+    assert.equal((await continued(s, 'auto')).mode, 'auto');
+    assert.equal((await continued(s, 'bypassPermissions')).mode, 'auto', 'capped at Auto: Bypass is never carried');
+    assert.equal((await continued(s, 'default')).mode, 'auto', 'the start mode says nothing of a choice: Auto, as before');
+    // A person who continues a chat starts it as they set it, as before.
+    assert.equal((await continued(s, 'dontAsk', 'ui')).mode, 'default');
+  } finally {
+    await s.done();
+  }
+});
+
+test('T-2882: with “Auto for agents” off the cap is the start mode: Don’t ask is carried, Edit is not', async () => {
+  const s = await liveSession();
+  try {
+    s.controller.autonomousAuto = () => false;
+    assert.equal((await continued(s, 'dontAsk')).mode, 'dontAsk');
+    assert.equal((await continued(s, 'acceptEdits')).mode, 'default', 'Edit is wider than Manual');
+  } finally {
+    await s.done();
+  }
+});
+
 test('T-2997: “Auto for agents” on: a Manual lead’s worker with no mode runs in Auto, Auto asked by name is allowed; a wider other mode and Bypass by name stay refused', async () => {
   const r = await rig();
   try {

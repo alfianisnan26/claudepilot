@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { hostname, homedir, cpus, totalmem, freemem } from 'node:os';
 import { AppError } from '@isnanme/core';
 import { workspaceId, type Workspace } from '@portal/contracts';
+import { childEnv } from '../childEnv.js';
 import type { JsonFile } from '../jsonFile.js';
 import { ETC, hostDir, hostPath, loadPty, sample, userEnv, writeEntry, type Pty } from './hostexec.js';
 import type { CreateSpec, DeliveryAccess, ExecSession, Runtime, ShellSession } from './runtime.js';
@@ -14,6 +15,9 @@ export interface LocalState {
 }
 
 const OFF = 'This machine is switched off. Start it first.';
+
+/** What commands here inherit: the portal's environment without its own heap cap (T-2615, childEnv), HOME at the real home. */
+const hostEnv = () => userEnv(homedir(), childEnv());
 
 /**
  * The machine the portal runs on, as one workspace. Starting it switches access on and stopping it
@@ -50,7 +54,7 @@ export class LocalRuntime implements Runtime {
       return new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
         // Scripts name the portal's folder as a workspace has it (the chat host's install, say).
         const local = script.split(`${ETC}/`).join(`${hostDir()}/`);
-        const child = spawn('sh', ['-c', local], { cwd: homedir(), env: userEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+        const child = spawn('sh', ['-c', local], { cwd: homedir(), env: hostEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
         const out: Buffer[] = [];
         const err: Buffer[] = [];
         const timer = setTimeout(() => {
@@ -160,7 +164,7 @@ export class LocalRuntime implements Runtime {
       cols: size.cols,
       rows: size.rows,
       cwd: homedir(),
-      env: { ...userEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+      env: { ...hostEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     }) as Pty;
     return {
       write: (data) => term.write(data),
@@ -177,7 +181,7 @@ export class LocalRuntime implements Runtime {
     // Arguments that are workspace paths (the chat host, a session's folder, a Claude's directory) are this machine's.
     const [bin, ...args] = command.map((c) => hostPath(c));
     if (!bin) throw new AppError('VALIDATION_FAILED', 'No command.');
-    const child = spawn(bin, args, { cwd: homedir(), env: userEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, { cwd: homedir(), env: hostEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdin.on('error', () => undefined); // a write after the command exited (EPIPE) is the caller's lost race, not a crash
     const dataFns: ((data: Buffer) => void)[] = [];
     const exitFns: ((code: number | null) => void)[] = [];

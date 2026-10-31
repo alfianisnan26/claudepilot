@@ -106,9 +106,10 @@ export function attachChat(server: Server, controller: ChatController, authorize
           const id = controller.resolve(msg.session);
           subscribed.add(id);
           // Backlog first (stored events after the tab's last seq), then live updates flow via `off`. T-2589: bounded by the store's
-          // HISTORY_MAX_EVENTS; a tab further behind gets the newest of them (a gap before the first), the older ones stay in the paged read.
-          const items = controller.history(id, msg.afterSeq ?? 0);
-          if (items.length) send({ type: 'events', session: id, items });
+          // HISTORY_MAX_EVENTS; a tab further behind gets the newest of them, the older ones stay in the paged read. T-2591: such a
+          // backlog says `gap`, so the tab re-seeds from the newest page instead of showing a silent hole.
+          const { items, gap } = controller.historyAfter(id, msg.afterSeq ?? 0);
+          if (items.length) send(gap ? { type: 'events', session: id, items, gap: true } : { type: 'events', session: id, items });
           const session = controller.get(id);
           if (session) {
             // A running process gets its reader back if it lost it (after a restart, say).

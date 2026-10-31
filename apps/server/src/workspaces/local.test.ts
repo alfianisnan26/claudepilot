@@ -101,6 +101,26 @@ describe('LocalRuntime', () => {
     assert.equal((await rt.delivery.run(NAME, 'exit 3')).code, 3);
   });
 
+  it('does not pass the portal’s heap cap on to commands, scripts or terminals (T-2615)', async () => {
+    const before = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--max-old-space-size=1536 --disable-warning=ExperimentalWarning';
+    try {
+      const ran = await output(await rt.exec(NAME, ['sh', '-c', 'printf "%s" "$NODE_OPTIONS"']));
+      assert.equal(ran.text, '--disable-warning=ExperimentalWarning', 'a command keeps the other flags, not the heap cap');
+      assert.equal((await rt.delivery.run(NAME, 'printf "%s" "$NODE_OPTIONS"')).stdout, '--disable-warning=ExperimentalWarning');
+      process.env.NODE_OPTIONS = '--max-old-space-size=1536';
+      assert.equal(
+        (await rt.delivery.run(NAME, 'printf "%s" "${NODE_OPTIONS-unset}"')).stdout,
+        'unset',
+        'nothing else: the variable is gone',
+      );
+      assert.equal(process.env.NODE_OPTIONS, '--max-old-space-size=1536', 'the portal’s own environment is unchanged');
+    } finally {
+      if (before === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = before;
+    }
+  });
+
   it('opens a terminal that echoes, and resizes', async () => {
     const shell = await rt.shell(NAME, { cols: 100, rows: 30 });
     const seen: string[] = [];

@@ -4,6 +4,7 @@
 import { AppError, success } from '@isnanme/core';
 import { createHash } from 'node:crypto';
 import {
+  CHAT_HISTORY_GAP_HEADER,
   sessionRef,
   type ChatAuditEntry,
   type ChatWorktreeRemoval,
@@ -243,14 +244,15 @@ export function createChatRoutes(controller: ChatController): Hono {
   // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume), as before T-376, at most HISTORY_MAX_EVENTS
   // (T-2589): a reader further behind gets the newest of them, and pages back with `before` for the older ones.
   // GET …/events?before=<seq>&limit=<n> — a page counted back from the newest (T-376, eventPage.ts): oldest first, `more`, tool_result previews.
+  // T-2591: an `after` answer that left events out before its first (the reader was more than the cap behind) says so in the
+  // `X-Chat-History-Gap: 1` header; the body stays the plain list it always was.
   chat.get('/:id/events', (c) => {
     requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));
     const q = eventsQuery({ after: c.req.query('after'), before: c.req.query('before'), limit: c.req.query('limit') });
-    return c.json(
-      success(
-        q.kind === 'after' ? controller.history(c.req.param('id'), q.after) : controller.historyPage(c.req.param('id'), q.before, q.limit),
-      ),
-    );
+    if (q.kind !== 'after') return c.json(success(controller.historyPage(c.req.param('id'), q.before, q.limit)));
+    const { items, gap } = controller.historyAfter(c.req.param('id'), q.after);
+    if (gap) c.header(CHAT_HISTORY_GAP_HEADER, '1');
+    return c.json(success(items));
   });
   // GET /api/chat/sessions/:id/events/:seq — one stored event whole (a tool_result a page cut to its preview).
   chat.get('/:id/events/:seq', (c) => {
