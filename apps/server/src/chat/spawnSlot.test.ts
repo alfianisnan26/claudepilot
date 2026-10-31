@@ -30,11 +30,18 @@ async function rig() {
   return { h, s, a, caps, done: async () => (h.done(), s.done()) };
 }
 
-const spawnReports = (s: Live) => s.controller.history(s.id).flatMap((e) => (e.kind === 'user' && e.actor === CREW_REPORT_ACTOR ? [e.text ?? ''] : []));
+const spawnReports = (s: Live) =>
+  s.controller.history(s.id).flatMap((e) => (e.kind === 'user' && e.actor === CREW_REPORT_ACTOR ? [e.text ?? ''] : []));
 
 /** `p` settled within `ms`: its outcome; else 'pending' (it hung). */
 async function within<T>(p: Promise<T>, ms: number): Promise<{ ok: T } | { err: unknown } | 'pending'> {
-  return Promise.race([p.then((v) => ({ ok: v }), (e: unknown) => ({ err: e })), sleep(ms).then(() => 'pending' as const)]);
+  return Promise.race([
+    p.then(
+      (v) => ({ ok: v }),
+      (e: unknown) => ({ err: e }),
+    ),
+    sleep(ms).then(() => 'pending' as const),
+  ]);
 }
 
 test('T-3215: a worker queued at a full cap is ended with the cap’s reason within the agent wait (not 15 min), and its lead is told', async () => {
@@ -52,7 +59,9 @@ test('T-3215: a worker queued at a full cap is ended with the cap’s reason wit
     await until(() => spawnReports(r.s).length > 0, 4000);
     assert.match(
       spawnReports(r.s).join('\n'),
-      new RegExp(`Worker ${out.id} could not start \\(1 session is already running in docker/ws1, which is the limit \\(Settings › Running agents\\)\\. .*\\), so it was ended before it got any instruction\\.`),
+      new RegExp(
+        `Worker ${out.id} could not start \\(1 session is already running in docker/ws1, which is the limit \\(Settings › Running agents\\)\\. .*\\), so it was ended before it got any instruction\\.`,
+      ),
     );
     assert.equal(r.s.ws.starts, starts, 'it never started');
   } finally {
@@ -75,7 +84,10 @@ test('T-3215: resume and mode on a worker waiting for a slot answer at once, say
       assert.ok(got !== 'pending' && 'err' in got, `${op} is refused while it waits`);
       const e = (got as { err: { code?: string; message?: string } }).err;
       assert.equal(e.code, 'CONFLICT');
-      assert.match(e.message ?? '', /^Waiting for a slot · 1 of 1 running in docker\/ws1 .*\. It starts by itself when a slot frees, or is ended with the reason after 60 s/);
+      assert.match(
+        e.message ?? '',
+        /^Waiting for a slot · 1 of 1 running in docker\/ws1 .*\. It starts by itself when a slot frees, or is ended with the reason after 60 s/,
+      );
     }
     // The slot frees: the queued start runs, its mode first, then the first instruction.
     const tails = r.s.ws.tails.length;
@@ -106,7 +118,10 @@ test('T-3215: an agent’s message to an asleep worker at a full cap answers wit
     const got = await within(r.s.controller.messageFamily(r.s.id, w.id, 'Go on.'), 3000);
     assert.notEqual(got, 'pending', 'the lead gets an answer (before: it waited the 15-minute wait, and its tool call timed out)');
     assert.ok(got !== 'pending' && 'err' in got);
-    assert.match((got as { err: Error }).err.message, /1 session is already running in docker\/ws1, which is the limit \(Settings › Running agents\)/);
+    assert.match(
+      (got as { err: Error }).err.message,
+      /1 session is already running in docker\/ws1, which is the limit \(Settings › Running agents\)/,
+    );
     assert.equal(r.s.controller.get(w.id)!.state, 'idle', 'the worker stays as it was');
     // A person's message still waits the long wait (it is not cut to the agent's).
     const person = r.s.controller.send(w.id, randomUUID(), 'Go on.').catch((e: unknown) => e);
