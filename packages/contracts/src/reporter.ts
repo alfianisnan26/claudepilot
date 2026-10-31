@@ -343,6 +343,36 @@ export interface ReporterSubmitReviewResponse {
   ticketKeys: string[];
 }
 
+/**
+ * GET /reporter/v1/tickets query (owner, 2026-10-31: better filtering and sorting). All optional; the panel keeps the last choice
+ * per viewer. `page` scopes to tickets with a capture on that path ('this' = the page the person is on, sent as the path).
+ */
+export interface ReporterTicketQuery {
+  /** Default 'open'. */
+  status?: 'open' | 'closed' | 'all' | TicketStatus;
+  type?: TicketType[];
+  priority?: TicketPriority[];
+  tags?: string[];
+  /** Text in key, summary or a capture's comment. */
+  q?: string;
+  /** A path: tickets with a capture there. Absent = every page. */
+  path?: string;
+  /** Only tickets this token's person filed. */
+  mine?: boolean;
+  /** 'position' = top-to-bottom on the page (needs path); default 'updated'. */
+  sort?: 'updated' | 'created' | 'priority' | 'position' | 'captures';
+  order?: 'asc' | 'desc';
+  cursor?: string;
+  limit?: number;
+}
+
+/** The list answer: the page, plus counts for the filter chips (by status, priority and type, and how many are on this path). */
+export interface ReporterTicketList {
+  items: ReporterTicket[];
+  nextCursor: string | null;
+  counts: { status: Record<string, number>; priority: Record<string, number>; type: Record<string, number>; onPath: number };
+}
+
 /** A ticket as the widget sees it (the list, the callouts and the detail card). */
 export interface ReporterTicket {
   key: string;
@@ -420,7 +450,12 @@ export type ReporterHostMessage =
   /** A capture the person started with a hotkey: the panel opens on the report form with it. */
   | { type: 'pilot-reporter:capture-started'; requestId: string; mode: 'full' | 'crop' }
   | { type: 'pilot-reporter:panel-opened' }
-  | { type: 'pilot-reporter:callout-clicked'; key: string };
+  | { type: 'pilot-reporter:callout-clicked'; key: string; captureId: string }
+  /** The showcase moved (Prev / Next on the caption card) or ended. */
+  | { type: 'pilot-reporter:focus-changed'; key: string; captureId: string }
+  | { type: 'pilot-reporter:focus-ended' }
+  /** The capture is not on this page, or its element is gone and the stored rect is off-screen. */
+  | { type: 'pilot-reporter:focus-missing'; key: string; captureId: string | null; reason: 'other-page' | 'not-found' };
 
 /** Panel iframe -> host page (SDK). The SDK accepts these only from its iframe's contentWindow and only from the portal origin. */
 export type ReporterPanelMessage =
@@ -430,6 +465,14 @@ export type ReporterPanelMessage =
   | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
   | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }
   | { type: 'pilot-reporter:highlight'; key: string }
+  /**
+   * Showcase (owner, 2026-10-31: show and focus the tickets of this page so the issue is plain to see): scroll to the capture's area,
+   * dim the rest of the page (spotlight), pulse the outlined box, show a caption card (key, summary, status, "2 of 5", comment
+   * excerpt) with Prev / Next across this ticket's captures on this page and Close. Captures on another page: the SDK reports
+   * focus-missing so the panel can offer to open that page.
+   */
+  | { type: 'pilot-reporter:focus'; key: string; captureId: string | null; spotlight: boolean }
+  | { type: 'pilot-reporter:focus-clear' }
   /** Comments in the open draft review: the widget button shows the count as a badge (0 hides it). */
   | { type: 'pilot-reporter:tray'; count: number }
   | { type: 'pilot-reporter:close' };
@@ -450,7 +493,7 @@ export const REPORTER_ROUTES = {
   status: '/reporter/v1/status', // GET ?bucket=&origin= (panel, same-origin, no token): ReporterStatus for the panel's ready message
   connect: '/reporter/v1/connect', // GET page (popup) ?bucket=&origin=&nonce=; POST approve (cookie, same-origin)
   me: '/reporter/v1/me', // GET
-  tickets: '/reporter/v1/tickets', // GET ?status=open|all&path=, POST
+  tickets: '/reporter/v1/tickets', // GET ReporterTicketQuery -> ReporterTicketList, POST
   ticket: '/reporter/v1/tickets/:key', // GET
   captures: '/reporter/v1/tickets/:key/captures', // POST ReporterAddCapturesRequest
   attach: '/reporter/v1/tickets/:key/attachments', // POST raw body; x-reporter-capture: <captureId>; x-reporter-kind: screenshot | evidence
