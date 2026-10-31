@@ -21,8 +21,8 @@ skips the round while it is switched off, or while the portal cannot write (froz
 | c | A lead idle for `flow.idleAfterMin` (30) while its unit (itself and its workers) holds open or in-progress tickets, and it runs fewer live workers than its cap | Message that lead its next tickets: priority first, then oldest, at most 5 |
 | d | A lead that was in Bypass is now on the default mode or has ended | Reported only (audit and card). See Bypass |
 | e | No ticket done in `flow.stallHours` (3) while tickets wait in review | Notify the owner once per stall, when it has lasted `flow.notifyAfterHours` (3) after the first nudge. If no lead could be told, the time counts from when the stall began |
-| conflict | In review, the merge gate's newest open record is `conflict` (T-2014). Told at once, the round it is seen (T-2018; it used to wait `flow.mergeAfterMin`) | Message the ticket's unit lead: send it back to its builder for a rebase; QA then verifies the new head |
-| no_pr | In review, the merge gate's newest open record is `no_pr`, told at once too (T-2014, T-2018) | Message the ticket's unit lead: open the PR (or have its builder open it), or say on the ticket why not |
+| conflict | In review, a record of the merge gate (any repo, T-2016) not merged is `conflict` (T-2014). Told at once, the round it is seen (T-2018; it used to wait `flow.mergeAfterMin`) | Message the ticket's unit lead: send it back to its builder for a rebase; QA then verifies the new head |
+| no_pr | In review, a record of the merge gate (any repo, T-2016) not merged is `no_pr`, told at once too (T-2014, T-2018) | Message the ticket's unit lead: open the PR (or have its builder open it), or say on the ticket why not |
 | idle_lanes | A lead that may be told (live, not stopped by a person, Keep going not paused for it) has one or more builder workers idle for `flow.laneIdleMin` (10) while its unit has a `conflict` or `no_pr` record, or open or in-progress tickets (T-2018) | Message that lead the idle lane ids (longest idle first) and the next items: conflicts first (ticket, repo#pr), then no_pr, then the open tickets, priority first then oldest (at most 5) |
 
 **Idle lanes** (T-2018). On 2026-10-22 at 03:35 UTC, 4 sessions were working and 19 idle, every Claude had fresh quota, and 15 PRs
@@ -38,7 +38,9 @@ The card counts the idle lanes of units that have work. Rate limited like every 
 **The merge gate's record** (T-2014, tickets PRD FR36e). The merge gate (the program's merge-gate lead, or a worker it started) records what
 it knows of a ticket's pull request per repo with `ticket_merge_status`: the PR number, its current head and a state (`ready`, `merged`,
 `conflict`, `waiting`, `no_pr`, `failed`). When a ticket has a record, the watchdog uses it and not the heuristic below: a ticket whose every
-recorded repo is `merged` is skipped; otherwise the newest record that is not `merged` stands. `conflict` and `no_pr` go to the ticket's unit
+recorded repo is `merged` is skipped. T-2016: every repo is judged: each repo whose record is `conflict` or `no_pr` is its own row (a
+conflict in one repo is never hidden behind a newer `ready` record of another), and a ticket with one is not counted to merge; otherwise
+the newest record that is not `merged` stands. `conflict` and `no_pr` go to the ticket's unit
 lead (the lead whose unit holds it; a ticket no unit lead holds is recorded `skipped` once per window); the rest are judged on that record's
 `pr_head`, the same rule the merge gate applies: a QA PASS on exactly that commit, and a review PASS on it too when the ticket has any review
 verdict. A ticket that is done or won't do is never looked at (only open, in-progress, blocked and in-review tickets are read). On
@@ -139,18 +141,42 @@ After every round the watchdog publishes the live topic `keepgoing` (the same wa
 ## Known gaps
 
 - "Merged" is read as "no longer in review". The portal does not read the integration branch.
+- A PR whose head is contained in another open PR (an ancestor of its head) is not detected: that needs a forge compare per PR per round
+  (T-2023, rejected for cost). The lead answers on the ticket, which holds the alert.
+- For a program with no group set, merge status is accepted from every group's leads, not only the group whose leads hold the ticket
+  (T-2016 item 5, optional, not built).
 
 ## D-102 merges, the forge's word and idle workers (2026-10-24)
 
 - **Self-tested merges.** A ticket in review has a merge basis when the implementer's comment carries the merge gate's line
   `Self-test: <job | command> on <sha> pass <N>[ stg same failures: <ids>]` on the head (the recorded PR head, else the newest commit seen).
-  A HIGH ticket (tag `risk:high`, or any review verdict on it) needs a review PASS on that head as well. A QA PASS stays a basis on its own.
+  A HIGH ticket (tag `risk-high`, or any review verdict on it) needs a review PASS on that head as well. A QA PASS stays a basis on its own.
+  T-2250: the tag rule refuses a colon, so `risk:high` cannot be stored; the watchdog reads `risk-high`, `risk_high` and (for an older row)
+  `risk:high`, in any case.
   A NORMAL self-test row goes to its own unit lead (D-99); QA-passed and HIGH rows to the merge gate. A self-tested ticket is never asked of QA.
 - **REVIEW-ASK.** A HIGH ticket self-tested on the head with no review verdict for `flow.mergeAfterMin`, and nobody working on it, is asked of
   a peer lead (round robin, never the author's lineage), in the same message as that peer's QA-ASK batch. A review FAIL goes back to the author, not asked again.
 - **The forge's word (FlowPrPort).** With `FLOW_FORGE_URL` and `FLOW_FORGE_TOKEN` set (a Gitea base URL and a token that may read pull requests),
   each recorded PR not merged is read each round (at most 60 per program): merged there counts as merged, closed unmerged as `no_pr`,
   an open PR is judged on its live head and is a `conflict` when Gitea cannot merge it. Unset or unanswered: the record stands as written.
+  T-2023: a recorded `conflict` speaks only for the head it named. Mergeable now, it is `ready`; pushed to since (the live head differs)
+  and Gitea has not judged the new head yet (`mergeable` unknown), it is `waiting`, judged on the new head like any other, never the old
+  conflict again.
+- **Stale alerts held (T-2023).** On 2026-10-22 the same conflict alert for three PRs (one rebased, one contained in another PR, one
+  superseded) was sent every 30 to 60 min, and the lead answered each time. The watchdog now remembers each `conflict` and `no_pr` alert it
+  told: the ticket, the repo and PR, the head and the state (`flow:state` `items`, kept a day, through a restart). The same alert is not
+  told again while someone has commented on the ticket since it was told, unless the gate records the PR again (a newer record) or the
+  head changes (another alert). A ticket nobody answered is reminded each window as before. The alert ends with how to answer: say so on
+  the ticket, or record the PR with `ticket_merge_status`. The card still counts held alerts; idle lanes are not given them. An answer on
+  another ticket (T-84) is not read: answer on the ticket itself.
+- **Bucket keys on the card (T-2016).** Each action carries `keys` (the tickets' bucket keys, KONF-12, in the order of `tickets`; the id
+  where no key is known) and the card's action line shows them; an action saved before has none and shows the ids.
 - **Idle.** A lead's cap counts workers that work (working, starting, busy, running agents or waiting on a person), not ones merely live; its unit's
   open work is the tickets not dispatched plus those whose holder ended or sat idle `flow.idleAfterMin`.
+- **Outside tickets (T-3198).** A program ticket held by a session whose crew root is no lead of the program (on 2026-10-30 the claudepilot
+  lead held `konfersi-migration` tickets, and their merge rows went to the Konfersi gate, their asks to Konfersi peers) is that crew root's to
+  move: every alert about it (merge rows of any basis, `conflict` and `no_pr`, QA-ASK and REVIEW-ASK) goes to the holder's crew root,
+  through the same send, rate limit and holds, never to the gate or a peer. A root that is gone, closed or held drops the alert for that
+  round (`flow.skipped`); it is never sent elsewhere. Unheld tickets and the counts are unchanged. That root, or a worker it started, may
+  record the ticket's merge status (tickets PRD FR36e), and a fast-forward merge with no PR is recorded `merged` with `pr_head` alone.
 

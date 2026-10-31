@@ -11,7 +11,7 @@ import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { AUTO_REFUSED } from './controller.js';
 import { registerChatTools } from './portalTools.js';
 import { ChatStore } from './store.js';
-import { APPLIED, controls, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
+import { APPLIED, controls, fail, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
 test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', () => {
   // T-2997: Bypass only from a parent in it NOW (the portal's live check); a stored Bypass alone gives Auto, the policy on or off.
@@ -19,6 +19,11 @@ test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', (
   assert.equal(workerMode(undefined, 'bypassPermissions', { parentInBypass: true, autonomousAuto: true }), 'bypassPermissions');
   assert.equal(workerMode(undefined, 'bypassPermissions'), 'auto', 'a stored Bypass the parent is not in now: Auto');
   assert.equal(workerMode(undefined, 'bypassPermissions', { autonomousAuto: true }), 'auto');
+  // T-2997 comment 50003: the parent's Bypass wins over a requested Auto; a narrower mode asked by name is kept.
+  assert.equal(workerMode('auto', 'bypassPermissions', { parentInBypass: true, autonomousAuto: true }), 'bypassPermissions', 'Auto asked under a lead in Bypass now: Bypass');
+  assert.equal(workerMode('auto', 'bypassPermissions', { parentInBypass: true }), 'bypassPermissions');
+  for (const m of ['plan', 'dontAsk', 'default', 'acceptEdits'] as const) assert.equal(workerMode(m, 'bypassPermissions', { parentInBypass: true }), m, `${m} asked is kept`);
+  assert.equal(workerMode('auto', 'bypassPermissions', { autonomousAuto: true }), 'auto', 'Auto asked, the lead not in Bypass now: Auto');
   // T-2997: "Auto for agents" on: Auto whatever the parent's mode; off, the rule below (D-103).
   for (const p of ['default', 'dontAsk', 'plan', 'acceptEdits', 'auto', null] as const) assert.equal(workerMode(undefined, p, { autonomousAuto: true }), 'auto', `${p} with the policy on`);
   assert.equal(workerMode('dontAsk', 'default', { autonomousAuto: true }), 'dontAsk', 'the mode asked still wins');
@@ -47,8 +52,11 @@ test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', (
   assert.equal(autoModeAllowed(trigger, { autonomousAuto: true }), true);
 });
 
-/** Answers every mode switch (with the mode asked), settings read and usage read, in the order they reach the process, until `p` settles. */
-async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
+/**
+ * Answers every mode switch (with the mode asked), settings read and usage read, in the order they reach the process, until `p` settles.
+ * `refuse`: the modes the process refuses to switch to (its error answer), as Claude Code does when Auto is not available to it.
+ */
+async function answering<T>(s: Live, p: Promise<T>, refuse: ReadonlySet<string> = new Set()): Promise<T> {
   let done = s.ws.sends.length;
   let settled = false;
   p.then(
@@ -66,7 +74,8 @@ async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
       for (let i = s.ws.tailArgs.length - 1; i >= 0 && at < 0; i--) if (s.ws.tailArgs[i]![1] === sent.args[1]) at = i;
       const tail = s.ws.tails[at];
       if (!tail) break; // its process is not tailed yet: try again on the next round
-      if (c.request.subtype === 'set_permission_mode') tail.push(ok(c.id, { mode: String(c.request.mode) }));
+      if (c.request.subtype === 'set_permission_mode')
+        tail.push(refuse.has(String(c.request.mode)) ? fail(c.id, `${String(c.request.mode)} mode is not available`) : ok(c.id, { mode: String(c.request.mode) }));
       else if (c.request.subtype === 'get_settings') tail.push(ok(c.id, APPLIED));
       else if (c.request.subtype === 'get_usage') tail.push(ok(c.id, USAGE_API_KEY));
     }
@@ -115,6 +124,10 @@ test('PILOT-997: a worker of a Manual lead gets dontAsk; of an Auto lead, Auto; 
     assert.equal(r.s.controller.get(auto.id)!.bypassCapable, false);
     const audit = r.s.controller.audit({ kind: 'mode.auto' }).find((x) => x.sessionId === auto.id);
     assert.ok(audit, 'mode.auto is audited for the worker');
+    // T-2997: Auto asked by name under a lead not in Bypass stays Auto, never capable, and says nothing about Bypass.
+    const asked = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Split more.', title: 'Auto asked worker', mode: 'auto' }))) as Spawned & { bypass?: string };
+    assert.deepEqual([asked.applied, asked.unconfirmed, asked.bypass], [['mode auto'], [], undefined]);
+    assert.deepEqual([r.s.controller.get(asked.id)!.mode, r.s.controller.get(asked.id)!.bypassCapable], ['auto', false]);
     // Narrower than its lead is fine.
     const edit = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Edit only.', title: 'Edit worker', mode: 'acceptEdits' })));
     assert.equal(r.s.controller.get(edit.id)!.mode, 'acceptEdits');
@@ -171,17 +184,28 @@ test('PILOT-997: a worker of a lead in Bypass keeps Bypass through the gated inh
     assert.deepEqual(capable.detail, { how: 'inherit', parent: lead });
     const entered = r.s.controller.audit({ kind: 'bypass.entered' }).find((x) => x.sessionId === w.id)!;
     assert.equal(entered.detail.how, 'inherit');
-    // Asking a narrower mode by name is still fine from a Bypass lead.
+    // T-2997 comment 50003 ("if bypass is on lead, should bypass"): Auto asked by name from a lead in Bypass now gets Bypass, through the
+    // same gated inherit path (before: an Auto worker, never made capable).
+    r.s.controller.autonomousAuto = () => true;
     const auto = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Review.', title: 'Auto worker', mode: 'auto' })));
-    assert.equal(r.s.controller.get(auto.id)!.mode, 'auto');
-    assert.equal(r.s.controller.get(auto.id)!.bypassCapable, false, 'capability only when Bypass is handed on');
+    assert.deepEqual([auto.applied, auto.unconfirmed], [['mode bypassPermissions'], []]);
+    assert.deepEqual([r.s.controller.get(auto.id)!.mode, r.s.controller.get(auto.id)!.bypassCapable], ['bypassPermissions', true]);
+    assert.equal(r.s.controller.audit({ kind: 'bypass.entered' }).find((x) => x.sessionId === auto.id)?.detail.how, 'inherit');
+    // A narrower mode asked by name is kept, and gets no capability.
+    const narrow = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Read.', title: 'dontAsk worker', mode: 'dontAsk' })));
+    assert.deepEqual([r.s.controller.get(narrow.id)!.mode, r.s.controller.get(narrow.id)!.bypassCapable], ['dontAsk', false], 'capability only when Bypass is handed on');
 
     // The policy turned off: the inherit path is not available, so the worker is not made capable and runs in Auto (T-2997; before:
-    // dontAsk), never Bypass and never waiting on a person.
+    // dontAsk), never Bypass and never waiting on a person; the result says why, unasked or Auto asked.
     r.s.controller.bypassAllowed = () => false;
-    const off = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Ship more.', title: 'Policy off worker' })));
-    assert.deepEqual([off.applied, off.unconfirmed], [['mode auto'], []]);
-    assert.deepEqual([r.s.controller.get(off.id)!.mode, r.s.controller.get(off.id)!.bypassCapable], ['auto', false]);
+    for (const mode of [undefined, 'auto'] as const) {
+      const raw = await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Ship more.', title: `Policy off worker ${mode}`, ...(mode ? { mode } : {}) }));
+      const off = spawned(raw) as Spawned & { bypass?: string };
+      assert.deepEqual([off.applied, off.unconfirmed], [['mode auto'], []], String(mode));
+      assert.deepEqual([r.s.controller.get(off.id)!.mode, r.s.controller.get(off.id)!.bypassCapable], ['auto', false], String(mode));
+      assert.equal(off.bypass, 'Bypass not inherited: the Bypass policy is off, auto instead', String(mode));
+      assert.match(raw.result!.content![0]!.text, /Bypass not inherited: the Bypass policy is off, auto instead\./, 'the summary says why');
+    }
   } finally {
     await r.done();
   }
@@ -592,6 +616,37 @@ test('T-2997: a lead whose stored mode says Bypass but which is not in Bypass no
     assert.equal(await answering(r.s, r.s.controller.inheritBypass(direct.id)), false);
     assert.equal(r.s.controller.audit({ kind: 'bypass.entered' }).length, 0, 'Bypass was never entered');
     assert.equal(r.s.controller.audit({ kind: 'bypass.capable' }).filter((x) => x.detail.how === 'inherit').length, 0, 'no capability handed on');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-3215 (PILOT-1112, folds PILOT-1025): a worker never runs in default or dontAsk unasked: Auto refused by its Claude ends it before any instruction, the lead told why', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.autonomousAuto = () => true;
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    assert.equal(r.s.controller.get(r.s.id)!.mode, 'default', 'set up: the lead runs in Manual');
+    const sendsBefore = r.s.ws.sends.length;
+    const refused = await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: 'Auto refused' }), new Set(['auto', 'dontAsk']));
+    assert.equal(refused.result?.isError, true, 'the spawn fails');
+    const error = refused.result!.structuredContent!.error as { code: string; message: string };
+    assert.equal(error.code, 'CONFLICT');
+    assert.match(error.message, /^The worker could not be confirmed in auto mode \(auto mode is not available\), so it was ended before it got any instruction: it would have run in default/);
+    const w = r.s.controller.children(r.s.id).find((c) => c.title === 'Auto refused')!;
+    assert.equal(w.state, 'ended', 'never left running in default');
+    assert.equal(r.s.controller.history(w.id).some((e) => e.kind === 'user'), false, 'no instruction went in');
+    const modes = controls({ sends: r.s.ws.sends.slice(sendsBefore) } as unknown as Live['ws']).filter((c) => c.request.subtype === 'set_permission_mode').map((c) => c.request.mode);
+    assert.deepEqual(modes, ['auto'], 'no dontAsk fallback is tried');
+
+    // A wider mode asked by name (acceptEdits under an Auto lead) and refused: ended too, never default.
+    await answering(r.s, r.s.controller.control(r.s.id, 'mode', { mode: 'auto' }, { actor: 'ui' }));
+    const edit = await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Edit only.', title: 'Edit refused', mode: 'acceptEdits' }), new Set(['acceptEdits']));
+    assert.equal(edit.result?.isError, true);
+    assert.equal(r.s.controller.children(r.s.id).find((c) => c.title === 'Edit refused')!.state, 'ended');
+    // Auto answered: the worker runs in Auto (the default order unchanged).
+    const ok2 = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run it.', title: 'Auto ok' })));
+    assert.deepEqual([ok2.applied, r.s.controller.get(ok2.id)!.mode], [['mode auto'], 'auto']);
   } finally {
     await r.done();
   }

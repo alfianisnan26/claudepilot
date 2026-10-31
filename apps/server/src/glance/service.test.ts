@@ -174,7 +174,8 @@ test('glanceSources: tickets are the ones assigned to a person, asked as the per
     ci: fakeCi([run({ id: 'F', repoId: 'r', pipeline: 'ci', branch: 'main', status: 'failed', created: 2 * HOUR, finished: HOUR })]),
   });
   assert.deepEqual(src.tickets(OWNER).count, 4);
-  assert.deepEqual(asked, [[{ kind: 'ui' }, { assignee: 'user', limit: 5 }]]);
+  // T-1993: asked with the person's actor, so a bucket they may not view is out of the items and the total.
+  assert.deepEqual(asked, [[{ kind: 'ui', actor: OWNER }, { assignee: 'user', limit: 5 }]]);
   assert.deepEqual(src.runningTasks(OWNER, 'gone'), []);
   const ci = src.failedRuns(OWNER, NOW);
   assert.deepEqual([ci.count, ci.items.map((r) => r.id)], [1, ['F']]);

@@ -11,13 +11,14 @@
 //
 // Counts and ids only; an experiment's name and hypothesis are a person's text and come back labelled untrusted.
 
-import { ATTRIBUTION_LEAD_BASIS, CREW_WINDOWS, LAB_STRATUM_KEYS, type CrewFigure, type CrewProgramScore, type CrewWindowScore, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
+import { ATTRIBUTION_LEAD_BASIS, CREW_WINDOWS, LAB_STRATUM_KEYS, type Actor, type CrewFigure, type CrewProgramScore, type CrewWindowScore, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
 import { fullInput } from '../portalmcp/compact.js';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareLabPolicies } from './authz.js';
 import type { Lab } from './index.js';
 import { parseSince } from './routes.js';
 import { ticketKeyField } from '../tickets/keys.js';
+import { actorOfPrincipal } from '../authz/seam.js';
 
 declareLabPolicies();
 
@@ -27,8 +28,8 @@ const med = (s: LabStat | null) => (s ? s.median : null);
 const ci = (i: LabInterval) => (i === 'n too small' ? i : [r2(i.low), r2(i.high)]);
 
 /** The tickets' dollars (usage spend's per-ticket figures, T-449): ticket, type, status, own, via lead, total. Top `n` (default 10). */
-const ticketsShort = (t: LabTicketCost[] | undefined, n = 10) =>
-  (t ?? []).slice(0, n).map((x) => ({ ticket: x.ticket, ...ticketKeyField(x.ticket), type: x.type, status: x.status, done_at: x.doneAt, own_usd: x.ownUsd, via_lead_usd: x.viaLeadUsd, total_usd: x.totalUsd }));
+const ticketsShort = (actor: Actor, t: LabTicketCost[] | undefined, n = 10) =>
+  (t ?? []).slice(0, n).map((x) => ({ ticket: x.ticket, ...ticketKeyField(x.ticket, actor), type: x.type, status: x.status, done_at: x.doneAt, own_usd: x.ownUsd, via_lead_usd: x.viaLeadUsd, total_usd: x.totalUsd }));
 
 /** A figure in a short row: its value, or `unavailable:<reason>`. */
 const v = (f: CrewFigure) => (f.basis === 'unavailable' ? `unavailable:${f.reason ?? 'no_source'}` : f.value);
@@ -172,14 +173,14 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       const s = lab.summary({ ...(args.period ? { period: args.period } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}), ...(own ? { sessionId: own } : {}) });
       const n = s.rows.reduce((t, r) => t + r.n, 0);
       const summary = `${n} slice${n === 1 ? '' : 's'} in ${s.rows.length} row${s.rows.length === 1 ? '' : 's'} since ${new Date(s.sinceMs).toISOString().slice(0, 10)}${own ? ' (this session only)' : ''}. Dollars are estimates.`;
-      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), tickets: ticketsShort(s.tickets), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
+      if (!args.full) return { summary, scope: own ? 'session' : 'portal', period: s.period, rows: s.rows.map(compactRow), tickets: ticketsShort(actorOfPrincipal(ctx.principal), s.tickets), more: 'full: true for p90s, outcomes, Bash classes, experiments and sources.' };
       return {
         summary,
         scope: own ? 'session' : 'portal',
         period: s.period,
         since_ms: s.sinceMs,
         rows: s.rows,
-        tickets: ticketsShort(s.tickets, 25),
+        tickets: ticketsShort(actorOfPrincipal(ctx.principal), s.tickets, 25),
         tickets_basis: ATTRIBUTION_LEAD_BASIS,
         ...(own ? {} : { experiments: lab.experimentViews().map((v) => experimentRow(v, ctx, lab)) }),
         basis: s.basis,

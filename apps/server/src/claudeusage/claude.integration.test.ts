@@ -3,7 +3,7 @@
 // (testkit/README.md). No sign-in, no real token, nothing leaves the machine. Skipped when `claude` or `openssl` is missing.
 
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,10 +28,20 @@ const FAKE_API_KEY = ['sk', 'ant', 'api03', 'x'.repeat(40)].join('-');
 
 let standIn: StandIn;
 const made: FakeClaude[] = [];
+/**
+ * T-2421: every Claude Code process this file starts, until it exits. A probe or a turn returns once stdin is closed, and the process may
+ * write in its HOME (and run its SessionEnd hooks) for up to 2 s more before it is killed: removing the folders meanwhile failed the
+ * teardown with ENOTEMPTY under the gate's load. The folders go only after every process is gone.
+ */
+const exited: Promise<void>[] = [];
+const track = (child: ChildProcess) => void exited.push(new Promise((resolve) => child.once('close', () => resolve())));
+/** Bounded: a child that never exits must not hang the teardown (and the gate) for ever; the removal's retries cover what is left. */
+const allExited = () => Promise.race([Promise.all(exited), new Promise<void>((r) => setTimeout(r, 20_000).unref())]);
 before(async () => {
   if (!opts.skip) standIn = await startStandIn();
 });
 after(async () => {
+  await allExited();
   made.forEach((c) => c.remove());
   await standIn?.close();
 });
@@ -45,7 +55,7 @@ const fake = (o: Parameters<typeof makeFakeClaude>[0] = {}) => {
 
 /** The environment a workspace would hand `exec` (in `cwd` when given: where a project's own settings sit): plus an API key and a token that the probe must not pass on. */
 const envFor = (c: FakeClaude) => ({ HOME: c.home, PATH: process.env.PATH ?? '', ...standIn.childEnv(), ANTHROPIC_API_KEY: FAKE_API_KEY, CLAUDE_CODE_OAUTH_TOKEN: 'FAKE-must-be-dropped' });
-const ioFor = (c: FakeClaude, cwd?: string): ProbeIo => ({ exec: localExec(envFor(c), { cwd }) });
+const ioFor = (c: FakeClaude, cwd?: string): ProbeIo => ({ exec: localExec(envFor(c), { cwd, exited }) });
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const at5h = Date.UTC(2026, 9, 12, 5, 0, 0);
@@ -112,7 +122,7 @@ test('real CLI: Default with no login is signed out; a Claude whose settings nam
 
 test('real CLI: a Claude not installed here reads as such', opts, async () => {
   const claude = fake();
-  const r = await probeClaude({ exec: localExec({ HOME: claude.home, PATH: '/usr/bin:/bin' }) }, 'local', 'x', '');
+  const r = await probeClaude({ exec: localExec({ HOME: claude.home, PATH: '/usr/bin:/bin' }, { exited }) }, 'local', 'x', '');
   // /usr/bin has no `claude`, so the wrapper's `exec env … claude` ends 127 (or `timeout` does), never a reading.
   assert.equal(r.failed, true);
   assert.ok(['not_installed', 'unreadable'].includes(r.problem!), String(r.problem));
@@ -122,6 +132,7 @@ test('real CLI: a Claude not installed here reads as such', opts, async () => {
 function rawUsage(env: Record<string, string>): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const child = spawn('claude', ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
+    track(child);
     const timer = setTimeout(() => (child.kill('SIGKILL'), reject(new Error('no reply'))), 30_000);
     let buf = '';
     child.stdout.on('data', (d: Buffer) => {
@@ -156,6 +167,7 @@ function runTurn(c: FakeClaude): Promise<Record<string, unknown>[]> {
     const env: Record<string, string> = { HOME: c.home, PATH: process.env.PATH ?? '', DISABLE_TELEMETRY: '1', DISABLE_AUTOUPDATER: '1', ...standIn.childEnv() };
     if (c.configDir) env.CLAUDE_CONFIG_DIR = c.configDir;
     const child = spawn('claude', ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--no-session-persistence'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
+    track(child);
     const lines: Record<string, unknown>[] = [];
     let buf = '';
     const timer = setTimeout(() => (child.kill('SIGKILL'), reject(new Error('the turn did not finish'))), 60_000);
@@ -259,7 +271,11 @@ function hooked(directory: string) {
     project,
     /** What ran, after a moment for a hook that runs as the process ends. */
     fired: async () => (await new Promise((r) => setTimeout(r, 1500)), readdirSync(marks).sort()),
-    remove: () => [marks, project].forEach((d) => rmSync(d, { recursive: true, force: true })),
+    /** After every process this file started is gone (T-2421); a hook's own `touch` may still land, hence the retries. */
+    remove: async () => {
+      await allExited();
+      for (const d of [marks, project]) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    },
   };
 }
 
@@ -273,13 +289,13 @@ test('real CLI: the probe runs no hook (--safe-mode), in the Claude’s settings
       assert.deepEqual(await h.fired(), [], `a probe of ${directory || 'Default'} ran a hook`);
 
       // The control: the same Claude and project with only the flag taken out of the command. A regression test that cannot fail proves nothing.
-      const run = localExec(envFor(h.claude), { cwd: h.project });
+      const run = localExec(envFor(h.claude), { cwd: h.project, exited });
       const unsafe: ProbeIo = { exec: (t, n, cmd) => run(t, n, cmd.filter((a) => a !== SAFE_MODE_FLAG)) };
       await probeClaude(unsafe, 'local', 'x', directory);
       const fired = await h.fired();
       assert.ok(fired.includes('user-SessionStart') && fired.includes('project-SessionStart'), `without --safe-mode the hooks ran (${fired.join(', ') || 'none'})`);
     } finally {
-      h.remove();
+      await h.remove();
     }
   }
 });

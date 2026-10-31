@@ -2,7 +2,7 @@
 // in memory. Nothing here runs a workspace or contacts anyone.
 
 import { AppError } from '@isnanme/core';
-import type { ChatRequest, ChatSession, CreateChatSessionRequest, NotifyEvent } from '@portal/contracts';
+import type { ChatRequest, ChatSession, CreateChatSessionRequest, NotifyEvent, TicketStatus } from '@portal/contracts';
 import { fakeClock } from '../autotransfer/testkit.js';
 import { FakeChat, fakeOwner, freshStore, session } from '../notify/testkit.js';
 import { PlatformAudit } from '../platform/audit.js';
@@ -76,6 +76,10 @@ export class KgChat extends FakeChat implements KeepGoingChatPort {
   /** PILOT-996: the controller's Bypass put-back, when a test installs it (absent: Keep going only reports). */
   bypassSeenAt?: (id: string) => string | null;
   restoreBypass?: (id: string) => Promise<boolean>;
+  /** T-3189: the sessions this one started (by `parentId`). */
+  children(id: string): ChatSession[] {
+    return [...this.sessions.values()].filter((s) => s.parentId === id);
+  }
   /** The controller's hooks the module installs. */
   keepGoingOf?: (id: string) => unknown;
   readonly emittedFor: string[] = [];
@@ -98,14 +102,51 @@ export class KgChat extends FakeChat implements KeepGoingChatPort {
   }
 }
 
-/** Tickets in memory: what was made and commented, and which are open. */
-export function fakeTickets(): KeepGoingTicketPort & { made: { id: string; summary: string; description: string; tags: string[]; priority: string; type: string }[]; comments: { id: string; text: string }[]; close(id: string): void; isClosed(id: string): boolean } {
+/** T-3189: a ticket assigned to a chat, as `heldBy` counts it. */
+export interface HeldTicket {
+  id: string;
+  sessionId: string;
+  status: TicketStatus;
+  updatedAt: string;
+}
+
+/** Tickets in memory: what was made and commented, and which are open; T-3189: the ones assigned to chats (`hold`, `touch`). */
+export function fakeTickets(): KeepGoingTicketPort & {
+  made: { id: string; summary: string; description: string; tags: string[]; priority: string; type: string }[];
+  comments: { id: string; text: string }[];
+  close(id: string): void;
+  isClosed(id: string): boolean;
+  held: HeldTicket[];
+  hold(sessionId: string, status: TicketStatus, at: string): string;
+  touch(id: string, at: string, status?: TicketStatus): void;
+  heldBy(sessionId: string): { total: number; active: number; lastChangeAt: string | null };
+} {
   const made: { id: string; summary: string; description: string; tags: string[]; priority: string; type: string }[] = [];
   const comments: { id: string; text: string }[] = [];
   const closed = new Set<string>();
+  const held: HeldTicket[] = [];
   return {
     made,
     comments,
+    held,
+    hold: (sessionId, status, at) => {
+      const id = `T-H${held.length + 1}`;
+      held.push({ id, sessionId, status, updatedAt: at });
+      return id;
+    },
+    touch: (id, at, status) => {
+      const t = held.find((x) => x.id === id)!;
+      t.updatedAt = at;
+      if (status) t.status = status;
+    },
+    heldBy: (sessionId) => {
+      const mine = held.filter((t) => t.sessionId === sessionId);
+      return {
+        total: mine.length,
+        active: mine.filter((t) => t.status === 'open' || t.status === 'in_progress').length,
+        lastChangeAt: mine.map((t) => t.updatedAt).sort().at(-1) ?? null,
+      };
+    },
     create(req) {
       const id = `T-${made.length + 1}`;
       made.push({ id, summary: req.summary, description: req.description, tags: req.tags, priority: req.priority, type: req.type });

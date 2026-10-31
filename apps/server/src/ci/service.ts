@@ -51,7 +51,7 @@ import {
 } from '@portal/contracts';
 import { NO_VALUES, SessionStream } from '../chat/valueRedact.js';
 import { evaluateRule, needsPersonOf, ruleLine, WINDOW } from './autoApprove.js';
-import { deploysOnlyToStg, LEAD_ENVIRONMENT } from './authz.js';
+import { deploysOnlyToStg, LEAD_ENVIRONMENT, startedByAgent } from './authz.js';
 import type { Store } from '../store/store.js';
 import { globMatches } from './glob.js';
 import { CiUnreachable, type CiHost, type CiReply } from './host.js';
@@ -987,11 +987,29 @@ export class CiService {
     const deployments: DeploymentRow[] = [];
     for (const j of jobs) {
       const env = this.#cs.ensureEnvironment(repo.id, j.environment!, 'system', newId('e'));
+      // T-3004 (incident T-2893): an agent never deploys unattended outside stg. A run it started whose deploying job would not wait for a
+      // decision in the portal (the environment is not protected) is refused before anything runs; the setting stays a person's.
+      if (!env.protected && env.name !== LEAD_ENVIRONMENT && startedByAgent(run.actor))
+        return {
+          problem: {
+            file: '',
+            line: 0,
+            column: 0,
+            path: `jobs.${j.id}.environment`,
+            severity: 'error',
+            code: 'needs-person',
+            message: `Refused: the job ${j.id} deploys to ${env.name}, which does not hold for an approval in the portal, and an agent started this run (${run.actor}).`,
+            hint: `What to do: a person starts this run in the portal, or a person protects ${env.name} (CI > Remotes > environments) so the job waits for their approval.`,
+          },
+        };
       let key: string | null = null;
       if (env.protected) {
         key = randomBytes(32).toString('hex');
         j.approval = { environment: env.name, gate: createHash('sha256').update(key).digest('hex') };
       }
+      // T-3004: the job knows how it was let through, so what it writes (the release commit) says so truthfully: `held` (it waited for a
+      // decision in the portal: a person's, or the environment's own rule, FR41a) or `auto` (nobody decided).
+      j.env = { ...j.env, PILOT_APPROVAL: key ? 'held' : 'auto' };
       deployments.push({
         id: newId('d'),
         run_id: run.id,
@@ -1850,7 +1868,8 @@ export class CiService {
       };
       // A rerun deploys again: fresh gates and its own approvals, never the old run's.
       const gates = plan ? this.#gates(repo, plan, row0(copy)) : null;
-      if (gates && 'problem' in gates) throw new AppError('CONFLICT', gates.problem.message);
+      if (gates && 'problem' in gates)
+        throw new AppError('CONFLICT', gates.problem.hint ? `${gates.problem.message} ${gates.problem.hint}` : gates.problem.message);
       if (plan) copy.plan = JSON.stringify(plan);
       this.#cs.insertRun(copy);
       if (gates) for (const d of gates.deployments) this.#cs.insertDeployment(d);
@@ -2135,6 +2154,10 @@ export class CiService {
         rule: opts.rule ?? null,
       },
     });
+    // T-3004: a deploy an agent may not run unattended is recorded as a failed run (the evidence) and refused to the caller, so no agent
+    // reports it as started.
+    const refused = row.status === 'failed' ? json<CiDiagnostic[]>(row.diagnostics, []).find((d) => d.code === 'needs-person') : undefined;
+    if (refused) throw new AppError('FORBIDDEN', `${refused.message} ${refused.hint ?? ''} Recorded as run #${row.number}.`);
     return this.get(row.id);
   }
 

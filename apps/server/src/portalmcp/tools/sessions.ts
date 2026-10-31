@@ -8,6 +8,7 @@ import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
 import { cleanText } from '../sanitize.js';
 import { NO_PARENT } from '../authz.js';
+import { ticketKeyField } from '../../tickets/keys.js';
 import { assertCanChange, costFields, resolveWorkspace, uiLink } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 
@@ -44,8 +45,8 @@ const sessionBrief = (s: ChatSession, ctx: PortalToolContext) => ({
   origin: s.origin,
   started_by: s.startedBy ?? null,
   ticket_id: s.ticketId ?? null,
-  // T-1098: its bucket key (KONF-12) beside the stable id.
-  ...(s.ticketKey ? { ticket_key: s.ticketKey } : {}),
+  // T-1098: its bucket key (KONF-12) beside the stable id. T-1993: asked again with the caller's actor, so a bucket it may not view is not named.
+  ...ticketKeyField(s.ticketId, actorOfPrincipal(ctx.principal)),
   // T-294: the tree (the session that started it) and who runs it (its role, its Claude).
   parent_id: s.parentId ?? null,
   agent: s.agent ?? null,

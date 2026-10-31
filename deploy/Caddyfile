@@ -1,3 +1,5 @@
+# pilot.dev.isnan.me on the owner's Mac: a second address for the k3s portal (pilot.ai.isnan.me), so the database, sessions and
+# workspaces are the cluster's. No portal runs here.
 # PORTAL_TLS picks how the certificate is made:
 #   internal   - Caddy's own local CA (default). Browsers warn until they trust Caddy's root certificate.
 #   cloudflare - Let's Encrypt through a DNS-01 challenge; needs CLOUDFLARE_API_TOKEN (DNS edit on the zone).
@@ -16,6 +18,13 @@
 {$PORTAL_DOMAIN} {
 	import tls_{$PORTAL_TLS:internal}
 	encode zstd gzip
-	# WebSockets (shell, chat, live) pass through as-is; Host is kept, so the same-origin checks hold.
-	reverse_proxy portal:3000
+	# The cluster is not changed: the request reaches it as pilot.ai.isnan.me. The portal's CSRF check wants Origin to match Host,
+	# so this domain's own Origin is rewritten too; any other Origin passes unchanged and is still refused. WebSockets pass through.
+	reverse_proxy https://{$PORTAL_UPSTREAM:192.168.100.5}:443 {
+		header_up Host pilot.ai.isnan.me
+		header_up Origin https://{$PORTAL_DOMAIN} https://pilot.ai.isnan.me
+		transport http {
+			tls_server_name pilot.ai.isnan.me
+		}
+	}
 }

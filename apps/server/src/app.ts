@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
   API,
+  SCHEDULES_API,
   VSCODE_API,
   isStableWorkspaceId,
   type RenameWorkspaceRequest,
@@ -52,6 +53,7 @@ import {
   type AppPortList,
   type OpenAppPortRequest,
   type OpenAppPortResult,
+  type Actor,
 } from '@portal/contracts';
 import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
@@ -120,7 +122,7 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
-import { actorOf, actorString, actorUserId, visible } from './authz/seam.js';
+import { actorOf, actorOfPrincipal, actorString, actorUserId, ownerActor, visible } from './authz/seam.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
@@ -130,7 +132,12 @@ import { ManagerService } from './manager/service.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
+import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes } from './reporter/routes.js';
+import type { ReporterService } from './reporter/service.js';
+import { clientAddress } from './clientAddress.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
+import { createHeartbeatRoutes } from './schedules/heartbeat.js';
+import { portalHelpers } from './schedules/helpers.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
 
@@ -151,10 +158,7 @@ export function sameHostOrigin(origin: string, host: string | undefined): boolea
   }
 }
 
-const clientKey = (c: Context<Env>) => {
-  const forwarded = config.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
-  return forwarded || (c.env.incoming?.socket.remoteAddress ?? 'unknown');
-};
+const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
 
 async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   try {
@@ -201,6 +205,7 @@ export function createApp(
     connect,
     appPorts,
     oidc,
+    reporter,
   }: {
     serveWeb: boolean;
     notify?: (...topics: LiveTopic[]) => void;
@@ -252,6 +257,8 @@ export function createApp(
     appPorts?: AppPorts;
     /** The OpenID Connect client SSO sign-in uses (tests give one that talks to a fake provider). */
     oidc?: OidcClient;
+    /** UI reporter (docs/prd/ui-reporter-server.md): the owner's config and evidence under /api, the widget's files, pages and panel API under /reporter/v1. */
+    reporter?: { service: ReporterService; vendorDirs: string[] };
   },
 ) {
   const app = new Hono<Env>();
@@ -293,7 +300,11 @@ export function createApp(
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
-  app.use(secureHeaders({ strictTransportSecurity: false, ...(serveWeb ? { contentSecurityPolicy: contentSecurityPolicy(`${config.paths.webDist}/index.html`) } : {}) }));
+  const appHeaders = secureHeaders({ strictTransportSecurity: false, ...(serveWeb ? { contentSecurityPolicy: contentSecurityPolicy(`${config.paths.webDist}/index.html`) } : {}) });
+  // UI reporter (docs/prd/ui-reporter-server.md): /reporter/v1 is loaded by OTHER sites (the SDK script, the panel framed by an allowed origin,
+  // the connect popup that hands a token to its opener), so its routes set their own CSP, framing and resource policy; the rest stays.
+  const reporterHeaders = secureHeaders({ strictTransportSecurity: false, xFrameOptions: false, crossOriginResourcePolicy: false, crossOriginOpenerPolicy: false });
+  app.use((c, next) => (reporter && c.req.path.startsWith('/reporter/v1/') ? reporterHeaders(c, next) : appHeaders(c, next)));
   // What the API says is for this session only: never kept by a shared cache or replayed from the back/forward cache.
   // (Blobs and downloads set their own Cache-Control.)
   app.use('/api/*', async (c, next) => {
@@ -1220,6 +1231,19 @@ export function createApp(
     vs.route('/', createVscodeApproveRoutes(vsFlow, vsDeps) as never);
     vs.route('/', createVscodeBearerRoutes(vsDeps) as never);
     app.route('/api/vscode', vs);
+
+    // A helper's heartbeat (T-965, schedules/heartbeat.ts): an admin's Portal MCP token is its door, never a cookie, so it is mounted here,
+    // before the schedules module's cookie-guarded routes under the same prefix. A beat is a few bytes: 4 KiB at most.
+    app.use(SCHEDULES_API.heartbeat, loginLimit);
+    app.route(
+      SCHEDULES_API.heartbeat,
+      createHeartbeatRoutes({
+        tokens: portalMcp.tokens,
+        helpers: portalHelpers,
+        mcpEnabled: () => portalMcp.settings.get().enabled,
+        clientKey: (c) => clientKey(c as Context<Env>),
+      }),
+    );
   }
 
   // Tickets: the queue of work for people and agents; agents reach it through Portal MCP tools instead.
@@ -1358,6 +1382,54 @@ export function createApp(
     cn.route('/', connect.routes() as never);
     app.route('/api/connect', cn);
     app.route('/', connect.publicRoutes() as never);
+  }
+
+  // UI reporter (docs/prd/ui-reporter-server.md): the owner's routes behind the session guard (POST deployments takes a Portal MCP token
+  // instead), the ticket page's evidence, and the widget's routes under /reporter/v1 (outside /api: public files and pages, the connect popup
+  // with its own CSRF rule, the panel API with its bearer token and no CORS).
+  if (reporter) {
+    const reporterAudit = (kind: string, detail: Record<string, unknown>, actor: string) => {
+      try {
+        platform?.audit.record({ kind, actor, userId: null, detail, severity: 'info' });
+      } catch {
+        // the audit never breaks a report
+      }
+    };
+    const portalOrigin = (c: Context) => {
+      const sso = process.env.PORTAL_SSO_ORIGIN?.trim();
+      if (sso) return sso.replace(/\/+$/, '');
+      const proto = config.trustProxy ? c.req.header('x-forwarded-proto')?.split(',')[0]?.trim() : undefined;
+      const u = new URL(c.req.url);
+      return `${proto === 'https' || proto === 'http' ? proto : u.protocol.replace(':', '')}://${c.req.header('host') ?? u.host}`;
+    };
+    app.route(
+      '/api/reporter',
+      createReporterOwnerRoutes(reporter.service, {
+        guard: requireSession as never,
+        audit: reporterAudit,
+        portalToken: (secret) => {
+          const v = portalMcp?.tokens.verify(secret);
+          if (!v?.ok || v.principal.kind !== 'user' || (v.principal.scope !== 'operate' && v.principal.scope !== 'admin')) return null;
+          return { actor: actorOfPrincipal(v.principal), label: v.principal.label };
+        },
+      }) as never,
+    );
+    app.route('/api/tickets', createReporterEvidenceRoutes(reporter.service, { guard: requireSession as never, visibleTicket: (actor, ref) => tickets?.resolve({ kind: 'ui', actor }, ref) ?? null }) as never);
+    app.route(
+      '/reporter/v1',
+      createReporterWidgetRoutes(reporter.service, {
+        webDist: serveWeb ? config.paths.webDist : null,
+        vendorDirs: reporter.vendorDirs,
+        portalOrigin,
+        signedIn: (c) => {
+          const token = getCookie(c, cookie);
+          return token && portal.session(token) ? (ownerActor() as Actor & { userId: string }) : null;
+        },
+        userLabel: () => 'Owner',
+        clientKey: (c) => clientKey(c as Context<Env>),
+        audit: reporterAudit,
+      }) as never,
+    );
   }
 
   app.all('/api/*', () => {

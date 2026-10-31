@@ -74,7 +74,7 @@ const names = <T extends string>(raw: string | undefined, all: readonly T[], fie
 export function createTicketRoutes(tickets: Tickets): Hono {
   declareTicketPolicies();
   registerTicketBucketAuthz(tickets);
-  setTicketKeyLookup((id) => tickets.keyOf(id));
+  setTicketKeyLookup((id, actor) => tickets.keyOf({ kind: 'ui', actor }, id));
   const app = new Hono();
   const id = (c: Context) => c.req.param('id') ?? '';
 
@@ -145,7 +145,8 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   app.post('/', async (c) => {
     const req = await body<CreateTicketRequest>(c);
     if (typeof req.bucket === 'string' && req.bucket.trim()) requireCan(actorOf(c), 'operate', ticketBucketRef(req.bucket.trim().toUpperCase()));
-    return c.json(success(tickets.create(UI, req)), 201);
+    // T-1993 (FR39): with the person's actor, so the bucket chosen for them (no bucket named) is one they may file in.
+    return c.json(success(tickets.create(viewer(c), req)), 201);
   });
 
   // Buckets (T-1098). Registered before `/:id`.
@@ -209,12 +210,13 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     const session = c.req.query('session') ?? '';
     if (!session) throw new AppError('VALIDATION_FAILED', 'Name the session.', { details: { session: 'Required.' } });
     requireCan(actorOf(c), 'view', sessionRef(session));
-    return c.json(success(tickets.bumpedInto(UI, session)));
+    // T-1993: with the person's actor, so a ticket of a bucket they may not view is left out (its summary is not shown).
+    return c.json(success(tickets.bumpedInto(viewer(c), session)));
   });
 
   app.get('/:id', (c) => c.json(success(tickets.get(UI, id(c)))));
   app.get('/:id/brief', (c) => {
-    const brief = tickets.brief(id(c));
+    const brief = tickets.brief(viewer(c), id(c));
     if (!brief) throw new AppError('NOT_FOUND', 'No such ticket.');
     return c.json(success(brief));
   });

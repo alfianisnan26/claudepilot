@@ -40,7 +40,10 @@ interface LoopState {
 export const STALE_INTERVALS = 2;
 const ERROR_MAX = 200;
 
-const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+export const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+
+/** The trigger fields of a row that is not a trigger. */
+export const NOT_A_TRIGGER = { source: null, owner: null, target: null, action: null, enabled: null } as const;
 
 export class LoopRegistry {
   readonly #loops = new Map<string, { state: LoopState; beat: LoopHeartbeat }>();
@@ -102,6 +105,7 @@ function rowOf(s: LoopState, now: number): ScheduleRow {
     last_error: s.lastError,
     next_run: s.running && since !== null ? iso(since + s.def.intervalMs) : null,
     state,
+    ...NOT_A_TRIGGER,
   };
 }
 

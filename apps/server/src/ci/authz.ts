@@ -69,6 +69,13 @@ export const deploysOnlyToStg = (jobs: readonly { hidden?: boolean; environment?
 };
 
 /**
+ * T-3004: a run started through the Portal MCP (an agent `session:`, the General Manager `manager:`, a token `portal-mcp:`), never by a
+ * person in the portal (`ui`) nor by a git event (`push`, `upstream`). Such a run may deploy unattended to `stg` only (D-62); any other
+ * environment must hold its job for a decision in the portal (protected), or the run is refused (service.ts, #gates).
+ */
+export const startedByAgent = (actor: string): boolean => /^(?:session|manager|portal-mcp):/.test(actor);
+
+/**
  * T-476: is `branch` the session's own, on this remote? A worktree branch (flag set by the session adapter) is its own anywhere; a folder
  * branch only on the folder's own remote and only as dev/* or ticket/*. A missing flag or a missing remote counts as no (fail closed).
  */

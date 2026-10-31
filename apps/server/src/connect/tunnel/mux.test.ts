@@ -258,8 +258,13 @@ describe('mux scheduling', () => {
     const session = new MuxSession({ role: 'client', socket: mine });
     const a = session.open();
     a.write(Buffer.alloc(300_000, 1)); // more than the window: it is sent in frames of at most 64 KiB, up to the window
-    await new Promise((r) => setTimeout(r, 50));
-    const sizes = frames.filter((f) => f[1] === FRAME_TYPE.data).map((f) => f.readUInt32BE(8));
+    // T-1731/T-1732: wait until the whole window has arrived (a fixed 50 ms was too short on a loaded runner), then a little more to catch
+    // any frame sent past the window, and only then count.
+    const dataSizes = () => frames.filter((f) => f[1] === FRAME_TYPE.data).map((f) => f.readUInt32BE(8));
+    const sent = () => dataSizes().reduce((x, y) => x + y, 0);
+    for (const until = Date.now() + 5_000; sent() < CONNECT_LIMITS.initialWindow && Date.now() < until; ) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 20));
+    const sizes = dataSizes();
     assert.ok(sizes.length >= 4);
     assert.ok(sizes.every((n) => n <= 65_536));
     assert.ok(sizes.reduce((x, y) => x + y, 0) <= CONNECT_LIMITS.initialWindow, 'never more than the peer’s window');

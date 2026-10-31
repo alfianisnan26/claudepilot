@@ -780,6 +780,36 @@ async function healthy() {
   }
 }
 
+/**
+ * T-965: tells the portal's Schedules list that this supervisor is alive, once a round (`POST /api/schedules/heartbeat` with its admin
+ * token); late by two intervals, the page shows it late. The interval is a round's sleep plus a minute for its work. Best effort: a refusal
+ * is logged once, never stops a round.
+ */
+let heartbeatQuiet = false;
+async function heartbeat() {
+  if (DRY) return;
+  try {
+    const token = await mcpToken();
+    const res = await fetch(`${PORTAL}/api/schedules/heartbeat`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'dev-sessions-supervisor', kind: 'supervisor', interval: Math.max(10, ROUND_S + 60), description: 'Keeps the dev tracks alive (docs/dev-sessions/supervisor.mjs).' }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    await res.text();
+    if (res.ok) heartbeatQuiet = false;
+    else if (!heartbeatQuiet) {
+      heartbeatQuiet = true;
+      log(`schedules heartbeat refused (${res.status}): the Schedules page will show the supervisor late`);
+    }
+  } catch (e) {
+    if (!heartbeatQuiet) {
+      heartbeatQuiet = true;
+      log(`schedules heartbeat failed: ${e.message}`);
+    }
+  }
+}
+
 /** `rounds`: how many rounds to watch before returning (the test runs one or two; the script runs until LIFETIME_H). */
 async function watch({ rounds = Infinity } = {}) {
   const until = Date.now() + LIFETIME_H * 3_600_000;
@@ -817,6 +847,7 @@ async function watch({ rounds = Infinity } = {}) {
       continue;
     }
     goodRounds++;
+    await heartbeat();
     await ensureWorktreeTrust(list).catch((e) => log(`folder trust: could not check the worktrees: ${e.message}`));
     await ensureRepoWorktreeTrust().catch((e) => log(`folder trust: could not list the programs' worktrees: ${e.message}`));
     const steady = badAt === null || (goodRounds >= STEADY_ROUNDS && Date.now() - badAt >= HEALTH_QUIET_MIN * 60_000);

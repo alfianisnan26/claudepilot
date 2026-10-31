@@ -44,7 +44,8 @@ const SHAPES: Shape[] = [
   // (cpst_), which sits in the environment of that session's Claude Code process and so can be printed by a tool; the General Manager's (cpmt_, T-968) likewise.
   // Notifications and triggers (platform track): an answer token (cpna_), a trigger's webhook secret (cpwh_), a channel's signing secret
   // (cpws_) and a notification secret (cpns_).
-  { kind: 'portal', re: /(?<![A-Za-z0-9])cp(?:at|oa|or|st|en|na|wh|ws|ns)_[A-Za-z0-9_-]{20,}/dg, swallow: '[A-Za-z0-9_-]' },
+  // The UI reporter's panel token (cprt_, one bucket and one origin) likewise.
+  { kind: 'portal', re: /(?<![A-Za-z0-9])cp(?:at|oa|or|st|en|na|wh|ws|ns|rt)_[A-Za-z0-9_-]{20,}/dg, swallow: '[A-Za-z0-9_-]' },
   // Discord and Slack incoming-webhook URLs carry their secret in the path: the secret part goes.
   { kind: 'webhook', re: /(https?:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/(?:v\d{1,2}\/)?webhooks\/)(\d{5,30}\/[A-Za-z0-9_-]{20,})/dgi, group: 2, swallow: '[A-Za-z0-9_-]' },
   { kind: 'webhook', re: /(https?:\/\/hooks\.slack\.com\/(?:services|workflows|triggers)\/)([A-Za-z0-9_\/-]{20,})/dgi, group: 2, swallow: '[A-Za-z0-9_/-]' },
@@ -63,7 +64,7 @@ const SHAPES: Shape[] = [
 ];
 
 /** Cheap pre-check: text with none of these can't hold a complete match. */
-const TRIGGER = /sk-ant-|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abprs]-|cp(?:at|oa|or|st|en|na|wh|ws|ns)_|webhooks\/|hooks\.slack|PRIVATE KEY|bearer|key|token|secret|passw/i;
+const TRIGGER = /sk-ant-|gh[pousr]_|github_pat_|AKIA|ASIA|xox[abprs]-|cp(?:at|oa|or|st|en|na|wh|ws|ns|rt)_|webhooks\/|hooks\.slack|PRIVATE KEY|bearer|key|token|secret|passw/i;
 
 interface RawSpan {
   start: number;

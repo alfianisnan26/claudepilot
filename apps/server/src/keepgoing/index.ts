@@ -32,12 +32,16 @@ interface ControllerLike {
   /** PILOT-996: when it was last in Bypass, and the gated put-back (the controller's `bypassSeenAt`, `restoreBypass`). */
   bypassSeenAt?: (id: string) => string | null;
   restoreBypass?: (id: string) => Promise<boolean>;
+  /** T-3189: the sessions a session started (its workers). */
+  children?: (id: string) => ChatSession[];
 }
 
 interface TicketsLike {
   create(caller: { kind: 'system' }, req: Record<string, unknown>): { id: string };
   comment(caller: { kind: 'system' }, id: string, text: string): unknown;
-  brief(id: string): { status: string } | null;
+  brief(caller: { kind: 'system' }, id: string): { status: string } | null;
+  /** T-3189: what a session holds (counts and the newest change). */
+  heldBy?(sessionId: string): { total: number; active: number; lastChangeAt: string | null };
 }
 
 /** The chat controller as the sweep needs it; null when what was handed over lacks it (some tests). */
@@ -62,6 +66,7 @@ export function keepGoingChatPort(raw: unknown): (KeepGoingChatPort & { controll
     ...(typeof ctl.bypassSeenAt === 'function' && typeof ctl.restoreBypass === 'function'
       ? { bypassSeenAt: (id: string) => ctl.bypassSeenAt!(id), restoreBypass: (id: string) => ctl.restoreBypass!(id) }
       : {}),
+    ...(typeof ctl.children === 'function' ? { children: (id: string) => ctl.children!(id) } : {}),
   };
 }
 
@@ -74,13 +79,14 @@ function ticketPort(raw: unknown): KeepGoingTicketPort | null {
     create: (req) => tickets.create(system, req),
     comment: (id, text) => void tickets.comment(system, id, text),
     isOpen: (id) => {
-      const b = tickets.brief(id);
+      const b = tickets.brief(system, id);
       return !!b && !isTicketClosed(b.status as never);
     },
     isClosed: (id) => {
-      const b = tickets.brief(id);
+      const b = tickets.brief(system, id);
       return !!b && isTicketClosed(b.status as never);
     },
+    ...(typeof tickets.heldBy === 'function' ? { heldBy: (sessionId: string) => tickets.heldBy!(sessionId) } : {}),
   };
 }
 

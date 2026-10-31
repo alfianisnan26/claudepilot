@@ -20,6 +20,7 @@ import {
   METRICS_TREND_WINDOWS,
   METRICS_WINDOWS,
   platformRef,
+  type Actor,
   type CrewFigure,
   type MetricsFlowGroup,
   type MetricsFlowWindow,
@@ -138,9 +139,9 @@ const groupShort = (g: MetricsFlowGroup) => ({
 });
 
 /** A drill-down row: ids, type, priority, status, close time, lead, the stage hours (null: left out), rounds and fails. */
-const ticketShort = (r: MetricsTicketRow) => ({
+const ticketShort = (actor: Actor) => (r: MetricsTicketRow) => ({
   ticket: r.ticket,
-  ...ticketKeyField(r.ticket),
+  ...ticketKeyField(r.ticket, actor),
   type: r.type,
   priority: r.priority,
   status: r.status,
@@ -423,7 +424,7 @@ export function registerMetricsTools(lab: Lab, registry: ToolRegistry = portalTo
           rows: [],
           next_cursor: null,
         };
-      const rows = t.rows.slice(0, page.limit).map(ticketShort);
+      const rows = t.rows.slice(0, page.limit).map(ticketShort(actorOfPrincipal(ctx.principal)));
       const summary = `${t.total} ticket${t.total === 1 ? '' : 's'} closed in the last ${scope}${page.offset ? `, from row ${page.offset + 1}` : ''}. Hours.`;
       const head = {
         summary,

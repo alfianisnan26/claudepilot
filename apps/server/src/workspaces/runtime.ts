@@ -237,8 +237,19 @@ export interface Runtime {
 }
 
 /**
+ * How `ResourceAccess.apply` applied a change (T-3081): `written` into a stopped Deployment; `resized` in place on the running pod (no restart)
+ * and written into its Deployment and ReplicaSet; `restarted`: written into the Deployment, whose pod rolled, `refused` saying why the
+ * in-place resize was not used (null when there was no running pod to resize).
+ */
+export interface ResourceApplied {
+  how: 'written' | 'resized' | 'restarted';
+  refused: string | null;
+}
+
+/**
  * CPU and memory of a workspace after its create (T-98, docs/prd/targets-connect.md §25). Kubernetes only: the values are the `workspace`
- * container's limits and requests in its Deployment, and a change to them restarts the pod (the Deployment is Recreate).
+ * container's limits and requests in its Deployment. A running pod is resized in place (`pods/resize`, T-3081); only when that is refused
+ * does the pod restart (the Deployment is Recreate).
  */
 export interface ResourceAccess {
   /** What the Deployment has now, and whether it is scaled up (a stopped workspace is scaled to 0). Throws 404 when there is no Deployment. */
@@ -246,8 +257,9 @@ export interface ResourceAccess {
   /** The fit check for these requests (resources.ts); `unavailable` when the node or the pods could not be read. Never throws for that. */
   fit(name: string, want: Pick<WorkspaceResourceValues, 'cpuRequest' | 'memoryRequestMb'>): Promise<WorkspaceResourcesFit>;
   /**
-   * Writes the values into the Deployment's pod template (its pod restarts when it runs). `onlyWhenStopped`: only while it is scaled to 0
-   * (a start applies pending values before it scales up); answers whether it wrote them.
+   * Writes the values into the Deployment's pod template. A running pod is first resized in place; when the resize is refused the pod
+   * restarts with the template, as before T-3081. `onlyWhenStopped`: only while it is scaled to 0 (a start applies pending values before it
+   * scales up). Answers how it applied them, or false when it wrote nothing.
    */
-  apply(name: string, values: WorkspaceResourceValues, opts?: { onlyWhenStopped?: boolean }): Promise<boolean>;
+  apply(name: string, values: WorkspaceResourceValues, opts?: { onlyWhenStopped?: boolean }): Promise<ResourceApplied | false>;
 }

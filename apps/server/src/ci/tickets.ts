@@ -54,7 +54,7 @@ export class TicketsAdapter implements CiTicketsPort {
   }
 
   resolve(id: string): string | null {
-    return this.tickets.resolve(id);
+    return this.tickets.resolve(SYSTEM, id);
   }
 
   find(refs: { branch?: string; message?: string }): string[] {
@@ -74,7 +74,7 @@ export class TicketsAdapter implements CiTicketsPort {
   }
 
   closed(ticketId: string): boolean | null {
-    const b = this.tickets.brief(ticketId);
+    const b = this.tickets.brief(SYSTEM, ticketId);
     return b ? isTicketClosed(b.status) : null;
   }
 
@@ -83,7 +83,7 @@ export class TicketsAdapter implements CiTicketsPort {
   }
 
   info(ticketId: string): { summary: string; type: string; status: string } | null {
-    const b = this.tickets.brief(ticketId);
+    const b = this.tickets.brief(SYSTEM, ticketId);
     return b ? { summary: b.summary, type: b.type, status: b.status } : null;
   }
 }

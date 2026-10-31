@@ -316,6 +316,9 @@ const TAIL_PAGE = 500;
 
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'killed']);
 
+/** T-3017: whether the session has a Claude Code process that can still run sub-agents. */
+const hasLiveProcess = (row: { process: string; state: string }): boolean => row.process === 'live' && row.state !== 'ended';
+
 /** T-2368: a task {@link taskOut} reads as running (`running`, NULL, or a status this portal does not know), in SQL. */
 const TASK_RUNNING_SQL = `(status IS NULL OR status NOT IN (${[...TASK_STATUSES]
   .filter((s) => s !== 'running')
@@ -880,9 +883,12 @@ export class ChatStore {
       lastSeq: row.last_seq,
       waiting,
       waitingFor,
-      agentsRunning: counts
-        ? (counts.agents.get(row.id) ?? 0)
-        : (
+      // T-3017: a chat with no live process (asleep, gone, ended) runs nothing, whatever rows a process that is over left behind.
+      agentsRunning: !hasLiveProcess(row)
+        ? 0
+        : counts
+          ? (counts.agents.get(row.id) ?? 0)
+          : (
             this.#db()
               .prepare(`SELECT count(*) AS n FROM chat_tasks WHERE session_id = ? AND (status IS NULL OR status = 'running')`)
               .get(row.id) as { n: number }
@@ -1290,6 +1296,17 @@ export class ChatStore {
     return typeof row?.name === 'string' ? row.name : null;
   }
 
+  /** Whether `toolUseId` is a stored Agent (or Task) call of the session's main thread: one that started a sub-agent. T-3025. */
+  mainAgentCall(sessionId: string, toolUseId: string): boolean {
+    const row = this.#db()
+      .prepare(
+        `SELECT json_extract(payload, '$.toolName') AS name FROM chat_events
+         WHERE session_id = ? AND kind = 'tool_use' AND parent_tool_use_id IS NULL AND json_extract(payload, '$.toolUseId') = ? ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(sessionId, toolUseId) as { name: string | null } | undefined;
+    return row?.name === 'Agent' || row?.name === 'Task';
+  }
+
   /** Whether the one-time "Ready" note (from the first `system/init`) is stored; other system notes don't count. */
   hasReady(sessionId: string): boolean {
     return !!this.#db()
@@ -1663,6 +1680,21 @@ export class ChatStore {
         `UPDATE chat_tasks SET status = 'killed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND (status IS NULL OR status = 'running')${pick}`,
       )
       .run(this.#stamp(), sessionId, ...(only ?? []));
+    return Number(result.changes) > 0;
+  }
+
+  /**
+   * T-3017: Claude Code's whole set of background tasks still running (`background_tasks_changed`). A background task that reads running
+   * here but is not in the set has ended: it reads `completed`, ended now (a later end line of its own still sets how it really ended).
+   * Foreground tasks are never in the set and are left alone. Says whether any changed.
+   */
+  endBackgroundTasksNotIn(sessionId: string, running: readonly string[]): boolean {
+    const keep = running.length ? ` AND task_id NOT IN (${running.map(() => '?').join(', ')})` : '';
+    const result = this.#writable()
+      .prepare(
+        `UPDATE chat_tasks SET status = 'completed', ended_at = coalesce(ended_at, ?) WHERE session_id = ? AND background = 1 AND ${TASK_RUNNING_SQL}${keep}`,
+      )
+      .run(this.#stamp(), sessionId, ...running);
     return Number(result.changes) > 0;
   }
 

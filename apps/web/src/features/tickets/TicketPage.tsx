@@ -27,6 +27,7 @@ import { errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { ticketsApi } from './api';
+import { DeploymentChips, EvidenceCard, useReporterEvidence } from '@/features/reporter/Evidence';
 import { Attachments, fileSize } from './Attachments';
 import { ORPHAN_TITLE, SESSION_STATE_LABEL, actorName, bucketOption, fallbackSentence, ticketLabel, verdictBatchOf } from './labels';
 import { AssigneeChip, CheckChips, MergeChips, PriorityMark, StatusBadge, TagList, TicketFlags, TypeBadge, VerdictBatchChips } from './parts';
@@ -78,6 +79,8 @@ export function TicketPage() {
     void load();
   }, [load]);
   useLive('tickets', () => void load());
+  // UI reporter: the ticket's evidence and where its fix is deployed (null when it did not come from the widget).
+  const evidence = useReporterEvidence(id, detail?.ticket.updatedAt);
 
   const change = async (patch: Parameters<typeof ticketsApi.update>[1], done?: string) => {
     setBusy(true);
@@ -133,6 +136,7 @@ export function TicketPage() {
           <StatusBadge status={t.status} />
           <TypeBadge type={t.type} />
           <TicketFlags ticket={t} />
+          {evidence && <DeploymentChips evidence={evidence} />}
         </div>
         {t.orphan && (
           <div role="status" className="mt-3 flex items-start gap-2 rounded-2xl bg-danger-soft px-3.5 py-2.5 text-[14px]">
@@ -243,7 +247,7 @@ export function TicketPage() {
           <h2 className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-muted">
             Description {t.source === 'agent' && <Badge>Written by an agent</Badge>}
           </h2>
-          {t.description ? <Markdown text={t.description} className="max-w-measure text-[14.5px] leading-relaxed" /> : <p className="text-sm text-muted">No description.</p>}
+          {t.description ? <Markdown text={t.description} hideComments className="max-w-measure text-[14.5px] leading-relaxed" /> : <p className="text-sm text-muted">No description.</p>}
           {closed && t.closingSummary && (
             <div className="mt-4 border-t border-line pt-3">
               <h3 className="mb-1 text-[13px] font-semibold text-muted">Outcome</h3>
@@ -251,6 +255,8 @@ export function TicketPage() {
             </div>
           )}
         </Card>
+
+        {evidence && <EvidenceCard ticketId={t.id} evidence={evidence} />}
 
         <Attachments ticketId={t.id} attachments={detail.attachments ?? []} onChanged={load} />
 
