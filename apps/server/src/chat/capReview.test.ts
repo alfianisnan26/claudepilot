@@ -29,7 +29,8 @@ async function started(s: Live, o: { parentId?: string; bypassOptIn?: boolean } 
 
 /** A turn of `id` ends on `tail`, and the usage check after it is answered (as in capLeads.test.ts). */
 async function endTurn(s: Live, id: string, tail: { push(x: string): void }, uuid: string) {
-  for (const state of ['queued', 'started']) tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state, uuid: `${uuid}-${state}`, session_id: id }));
+  for (const state of ['queued', 'started'])
+    tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state, uuid: `${uuid}-${state}`, session_id: id }));
   tail.push(line({ type: 'result', subtype: 'success', total_cost_usd: 0.01, is_error: false, session_id: id }));
   tail.push(line({ type: 'command_lifecycle', command_uuid: uuid, state: 'completed', uuid: `${uuid}-done`, session_id: id }));
   tail.push(ok((await s.take('get_usage')).id, USAGE_API_KEY));
@@ -132,7 +133,8 @@ async function mcpRig() {
   return { h, s, a, caps, done: async () => (h.done(), s.done()) };
 }
 
-const spawnReports = (s: Live) => s.controller.history(s.id).flatMap((e) => (e.kind === 'user' && e.actor === CREW_REPORT_ACTOR ? [e.text ?? ''] : []));
+const spawnReports = (s: Live) =>
+  s.controller.history(s.id).flatMap((e) => (e.kind === 'user' && e.actor === CREW_REPORT_ACTOR ? [e.text ?? ''] : []));
 
 test('T-417 review 2: a queued worker gets its mode, then its first instruction, before a message its parent sent while it waited', async () => {
   const r = await mcpRig();
@@ -162,7 +164,12 @@ test('T-417 review 2: a queued worker gets its mode, then its first instruction,
     const csid = r.s.controller.get(id)!.claudeSessionId;
     const sent = r.s.ws.sends.filter((x) => x.args[1] === csid).map((x) => x.line);
     const at = (needle: string) => sent.findIndex((l) => l.includes(needle));
-    assert.ok(at('set_permission_mode') >= 0 && at('set_permission_mode') < at('Check the parser.') && at('Check the parser.') < at('Also look at the lexer.'), 'mode, then the instruction, then the message');
+    assert.ok(
+      at('set_permission_mode') >= 0 &&
+        at('set_permission_mode') < at('Check the parser.') &&
+        at('Check the parser.') < at('Also look at the lexer.'),
+      'mode, then the instruction, then the message',
+    );
   } finally {
     await r.done();
   }
@@ -173,15 +180,27 @@ test('T-417 review 3: a queued worker whose start fails is ended at once, waits 
   try {
     r.s.controller.agentSlotWaitMs = 200; // T-3215: a worker's queued start waits the agent wait
     const starts = r.s.ws.starts;
-    const spawned = await r.h.call(r.a.secret, 'session_spawn', { prompt: 'Check the parser.', title: 'Parser', model: 'sonnet', effort: 'high' });
+    const spawned = await r.h.call(r.a.secret, 'session_spawn', {
+      prompt: 'Check the parser.',
+      title: 'Parser',
+      model: 'sonnet',
+      effort: 'high',
+    });
     const id = (spawned.result!.structuredContent.session as { id: string }).id;
     await until(() => r.s.controller.get(id)!.state === 'ended', 4000);
     await until(() => spawnReports(r.s).length > 0, 4000);
-    assert.match(spawnReports(r.s).join('\n'), new RegExp(`Worker ${id} could not start .*so it was ended before it got any instruction\\.`));
+    assert.match(
+      spawnReports(r.s).join('\n'),
+      new RegExp(`Worker ${id} could not start .*so it was ended before it got any instruction\\.`),
+    );
     await sleep(500); // longer than two more waits would take
     assert.equal(waitNotes(r.s, id), 1, 'it waited once: nothing relaunched it to wait again');
     assert.equal(r.s.ws.starts, starts, 'it never started');
-    assert.equal(r.s.controller.history(id).some((e) => e.kind === 'user'), false, 'no instruction went in');
+    assert.equal(
+      r.s.controller.history(id).some((e) => e.kind === 'user'),
+      false,
+      'no instruction went in',
+    );
   } finally {
     await r.done();
   }
@@ -194,7 +213,10 @@ test('T-416 review 6310 #2: a queued worker refused for memory when its slot com
     const limit = 8 * 1024 ** 3;
     const fits = limit - MEMORY_HEADROOM_BYTES - SESSION_MEMORY_ESTIMATE_BYTES;
     const st = { used: fits, clock: 1_000_000 };
-    r.s.controller.memory = new WorkspaceMemory({ read: async () => parseMemoryProbe(`max ${limit}\nanon ${st.used}\nactive_file 0\n`, st.clock), now: () => st.clock });
+    r.s.controller.memory = new WorkspaceMemory({
+      read: async () => parseMemoryProbe(`max ${limit}\nanon ${st.used}\nactive_file 0\n`, st.clock),
+      now: () => st.clock,
+    });
     const starts = r.s.ws.starts;
     const spawned = await r.h.call(r.a.secret, 'session_spawn', { prompt: 'Check the parser.', title: 'Parser' });
     assert.equal(spawned.result?.isError, undefined, JSON.stringify(spawned.raw));
@@ -205,9 +227,18 @@ test('T-416 review 6310 #2: a queued worker refused for memory when its slot com
     r.caps.perWorkspace = 2; // the slot comes
     await until(() => r.s.controller.get(out.id)!.state === 'ended', 4000);
     await until(() => spawnReports(r.s).length > 0, 4000);
-    assert.match(spawnReports(r.s).join('\n'), new RegExp(`Worker ${out.id} could not start \\(Not enough memory in docker/ws1: .*\\), so it was ended before it got any instruction\\.`));
+    assert.match(
+      spawnReports(r.s).join('\n'),
+      new RegExp(
+        `Worker ${out.id} could not start \\(Not enough memory in docker/ws1: .*\\), so it was ended before it got any instruction\\.`,
+      ),
+    );
     assert.equal(r.s.ws.starts, starts, 'it never started');
-    assert.equal(r.s.controller.history(out.id).some((e) => e.kind === 'user'), false, 'no instruction went in');
+    assert.equal(
+      r.s.controller.history(out.id).some((e) => e.kind === 'user'),
+      false,
+      'no instruction went in',
+    );
     assert.deepEqual(
       r.s.controller.audit({ kind: 'memory.refused' }).map((a) => a.detail.at),
       ['queued'],
@@ -226,7 +257,10 @@ test('T-417 review 3: settings a queued worker could not confirm reach its lead 
     r.caps.perWorkspace = 2;
     await until(() => r.s.controller.history(id).some((e) => e.kind === 'user' && e.text === 'Check the parser.'), 4000);
     await until(() => spawnReports(r.s).length > 0, 4000);
-    assert.match(spawnReports(r.s).join('\n'), new RegExp(`Worker ${id} started with your instruction\\. Not confirmed: mode dontAsk: .*model sonnet: `));
+    assert.match(
+      spawnReports(r.s).join('\n'),
+      new RegExp(`Worker ${id} started with your instruction\\. Not confirmed: mode dontAsk: .*model sonnet: `),
+    );
   } finally {
     await r.done();
   }
@@ -238,7 +272,8 @@ function policy(s: Live, allowed: boolean) {
   s.controller.reauth = { fresh: (token) => token === 'tok' };
 }
 
-const bypassAsks = (s: Live) => controls(s.ws).filter((c) => c.request.subtype === 'set_permission_mode' && c.request.mode === 'bypassPermissions');
+const bypassAsks = (s: Live) =>
+  controls(s.ws).filter((c) => c.request.subtype === 'set_permission_mode' && c.request.mode === 'bypassPermissions');
 
 test('T-417 review 7: a lead slept in Bypass that is no longer a lead at its wake does not get Bypass back, and says why', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
@@ -260,7 +295,10 @@ test('T-417 review 7: a lead slept in Bypass that is no longer a lead at its wak
     assert.equal(s.controller.get(lead.id)!.process, 'live');
     assert.equal(s.controller.get(lead.id)!.mode, 'default', 'not in Bypass');
     assert.equal(bypassAsks(s).length, asked, 'Claude Code was never asked to enter Bypass');
-    assert.ok(notes(s, lead.id).some((t) => t.startsWith('Bypass not kept after the wake: this chat is no longer a lead')), JSON.stringify(notes(s, lead.id)));
+    assert.ok(
+      notes(s, lead.id).some((t) => t.startsWith('Bypass not kept after the wake: this chat is no longer a lead')),
+      JSON.stringify(notes(s, lead.id)),
+    );
     const left = s.controller.audit({ kind: 'bypass.left', sessionId: lead.id })[0]!;
     assert.deepEqual([left.detail.why, left.detail.how], ['not_lead', 'wake']);
   } finally {
