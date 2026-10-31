@@ -283,6 +283,10 @@ const IDLE_SLEEP_MS = 30 * 60_000;
 /** T-417: a start or wake at a full live cap waits this long for a slot, looking again every SLOT_POLL_MS. */
 const SLOT_WAIT_MS = 15 * 60_000;
 const SLOT_POLL_MS = 1000;
+/** T-3215: the controls that need a running process, answered at once while the session waits for a slot. */
+const SLOT_BOUND_CONTROLS: ReadonlySet<string> = new Set(['resume', 'mode', 'model', 'effort', 'ultracode']);
+/** T-3215: an agent's start or wake (a spawned worker, a wake an agent asked for) waits at most this long for a slot. */
+const AGENT_SLOT_WAIT_MS = 60_000;
 /** How often live sessions' processes are checked. */
 const LIVENESS_MS = 60_000;
 /**
@@ -400,7 +404,7 @@ interface PendingControl {
 }
 
 /** A control request Claude Code didn't answer in time (as opposed to one it refused, or one never sent). */
-class ControlTimeout extends AppError {
+export class ControlTimeout extends AppError {
   constructor() {
     super('SERVICE_UNAVAILABLE', 'Claude Code didn’t answer in time. Try again.', { expose: true });
   }
@@ -613,6 +617,8 @@ export const CREW_REPORT_ACTOR = 'portal:crew';
 const HOLD_KIND = 'crewhold';
 /** A person at the keyboard (`ui`, the default) or signed in with a shared account (`account:<id>`). */
 const isPersonActor = (actor: string | undefined): boolean => actor === undefined || actor === CHAT_ACTOR_UI || actor.startsWith('account:');
+/** T-3215: an agent session (its session_message, its spawn): it waits on a tool call, so a slot wait for it is short. */
+const isAgentActor = (actor: string | undefined): boolean => !!actor && actor.startsWith('session:');
 /** T-546: a report quotes at most this much of the first line of the worker's latest reply (its verdict or DONE, and the sha). */
 const CREW_REPLY_HEAD = 120;
 /** T-294: a report the lead could not take is tried this often, backing off; then again at the next change of a worker or of the lead. */
@@ -1169,6 +1175,11 @@ export class ChatController {
   controlTimeoutMs = CONTROL_TIMEOUT_MS;
   /** T-417: how long a start or a wake waits for a slot under the live cap before it is refused naming the cap. */
   slotWaitMs = SLOT_WAIT_MS;
+  /**
+   * T-3215: the same wait for an agent's start or wake: a spawned worker's queued start, and a wake asked by an agent (session_message, its
+   * resume). Nobody watches it, so it ends with the cap's reason in about a minute instead of sitting at starting/asleep for 15.
+   */
+  agentSlotWaitMs = AGENT_SLOT_WAIT_MS;
   /** T-417: how often a start that waits for a slot looks again. */
   slotPollMs = SLOT_POLL_MS;
   /** How long one short `cp-session` command may run. */
@@ -2364,7 +2375,8 @@ export class ChatController {
     const op = (async () => {
       try {
         try {
-          await this.#slot(row.workspace_id, this.#chat.row(id) ?? row);
+          // T-3215: a worker's queued start (nobody watches it) gives up in about a minute, with the cap's reason; a person's waits longer.
+          await this.#slot(row.workspace_id, this.#chat.row(id) ?? row, row.parent_id ? this.agentSlotWaitMs : this.slotWaitMs);
         } finally {
           // Cleared here, whichever way the wait went (T-417 review: `#slot` returns early when its first look finds room).
           this.#showSlotWait(id, null);
@@ -3256,6 +3268,17 @@ export class ChatController {
     // A Restart under way: a change waits for the new process (Stop and End don't wait).
     if (op !== 'rename' && op !== 'stop' && op !== 'end') await this.#restarting.get(sessionId);
     const a: NonNullable<ChatControl['args']> = args && typeof args === 'object' ? args : {};
+    // T-3215: a start or wake already waits for a slot: a resume or a setting would only wait behind it (up to the whole wait, no answer).
+    // Say so at once; the waiting start goes on by itself (a worker's spawn applies its settings when it starts).
+    const waiting = SLOT_BOUND_CONTROLS.has(op) ? this.#slotWaits.get(sessionId) : undefined;
+    if (waiting) {
+      const worker = !!this.#chat.row(sessionId)?.parent_id;
+      throw new AppError(
+        'CONFLICT',
+        `${waiting}. It starts by itself when a slot frees${worker ? `, or is ended with the reason after ${Math.ceil(this.agentSlotWaitMs / 1000)} s` : ''}; ending an idle session frees one.`,
+        { details: { slotWait: waiting } },
+      );
+    }
     switch (op) {
       case 'stop':
         // T-294: a person stopped it: crew reports wait until a message from someone else lets it run again (they never undo the Stop).
@@ -4295,6 +4318,11 @@ export class ChatController {
     return session && this.#autoAllowed(session) ? 'auto' : 'dontAsk';
   }
 
+  /** T-2997 (PILOT-1025): whether the Bypass policy allows Bypass now (a spawn says so when a Bypass parent's worker gets Auto instead). */
+  bypassPolicyOn(): boolean {
+    return this.#bypassAllowed();
+  }
+
   /** T-2997 (PILOT-1025): whether `sessions.autonomousAuto` is on now (a spawn's unasked mode and its Auto by name read it). */
   autonomousAutoOn(): boolean {
     return this.#autonomousAutoOn();
@@ -5211,13 +5239,13 @@ export class ChatController {
    * first served within the workspace) and the session shows why (`slotWait`, "Waiting for a slot · 4 of 4 running"), looking again every `slotPollMs`; it is
    * refused naming the cap only after `slotWaitMs`, or when the portal stops. A session that became live meanwhile needs no slot.
    */
-  async #slot(workspaceId: string, waking: ChatSessionRow | null): Promise<void> {
+  async #slot(workspaceId: string, waking: ChatSessionRow | null, waitMs = this.slotWaitMs): Promise<void> {
     // First come, first served: behind the ones already waiting for this room, a newcomer doesn't even try (T-417 review).
     let full = this.#waitingAhead(workspaceId, null) ?? (await this.#tryRoom(workspaceId, waking));
     if (!full) return;
     const turn: SlotTurn = { workspaceId, full };
     this.#slotQueue.push(turn);
-    const deadline = Date.now() + this.slotWaitMs;
+    const deadline = Date.now() + waitMs;
     const id = waking?.id ?? null;
     try {
       for (;;) {
@@ -6195,7 +6223,8 @@ export class ChatController {
       // as it is (asleep or interrupted) and the caller reads why. A restart (`budget` false) is exempt: its own process just stopped.
       if (budget) await this.#memoryBudget(row.workspace_id, row, actor, sessionId);
       try {
-        await this.#slot(row.workspace_id, row);
+        // T-3215: a wake an agent asked for (session_message, its resume) waits about a minute, then answers with the cap's reason.
+        await this.#slot(row.workspace_id, row, isAgentActor(actor) ? this.agentSlotWaitMs : this.slotWaitMs);
         await this.#startProcess(sessionId, { resume: true });
       } finally {
         this.#granted.delete(sessionId); // its slot counted as running until the launch settled (T-417 review)

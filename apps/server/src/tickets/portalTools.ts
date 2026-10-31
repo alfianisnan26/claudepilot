@@ -71,6 +71,10 @@ export function ticketWorkspaceOf(ctx: PortalToolContext, given: string | undefi
 export interface TicketToolOptions {
   /** T-1105: whether a workspace (`<target>/<name>`) exists now, for a token's default workspace; index.ts asks the workspace identities. */
   workspaceExists?: (workspaceId: string) => boolean;
+  /** UI reporter (docs/prd/ui-reporter-server.md): a short note when the ticket came from the reporter widget, so ticket_get says so. */
+  reporterNote?: (ticketId: string) => Record<string, unknown> | null;
+  /** UI reporter: a fix commit named on close (ticket_close fix_commit), for the per-environment deployment state. */
+  onFixCommit?: (ticketId: string, commit: string) => void;
 }
 
 /** Where ticket text came from, for the label the model sees. */
@@ -216,6 +220,15 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   const bucketArg = z.string().max(6).optional();
   /** Every tool names a ticket either way (FR38): the stable id or its bucket key. */
   const ticketIdArg = z.string().max(20).describe('The ticket: T-12 or its bucket key (KONF-3).');
+  /** UI reporter: `reporter` on ticket_get when the ticket came from the widget (what it holds and how to read it). */
+  const reporterOf = (id: string): { reporter?: Record<string, unknown> } => {
+    try {
+      const note = opts.reporterNote?.(id);
+      return note ? { reporter: note } : {};
+    } catch {
+      return {};
+    }
+  };
   const uiUrl = (id: string) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`;
 
   registerPortalTool({
@@ -396,6 +409,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
           events: d.events.map((e) => eventView(ctx, e)),
           checks: d.checks.map((c) => ({ name: ctx.untrusted(c.name, 'ci', 80), state: c.state, run_id: c.runId, commit: c.commit, link: ctx.untrusted(c.link, 'ci', 300), updated_at: c.updatedAt })),
           attachments: (d.attachments ?? []).map((a) => attachmentView(ctx, a)),
+          ...reporterOf(t.id),
           ui: uiUrl(t.id),
         };
       const cut: string[] = [];
@@ -413,6 +427,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
         ...(d.sessions.length ? { sessions: d.sessions.slice(0, 3).map((s) => ({ id: s.id, state: s.state })) } : {}),
         ...(d.checks.length ? { checks: d.checks.map((c) => ({ name: ctx.untrusted(c.name, 'ci', 80), state: c.state, run_id: c.runId })) } : {}),
         ...(d.attachments?.length ? { attachments: d.attachments.map((a) => attachmentView(ctx, a)) } : {}),
+        ...reporterOf(t.id),
         ...(cut.length ? { cut } : {}),
       };
     },
@@ -589,10 +604,22 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       id: ticketIdArg,
       summary: z.string().min(1).max(2_000).describe('What was done, or why not. Markdown.'),
       outcome: z.enum(['done', 'wont_do']).optional().describe('done (default) or wont_do.'),
+      fix_commit: z
+        .string()
+        .regex(/^[0-9a-fA-F]{7,40}$/)
+        .optional()
+        .describe('The commit that fixes it (full or short sha), when there is one: the portal then shows per environment whether the fix is deployed.'),
       session_id: sessionIdArg,
     }),
     handler(ctx, args) {
       const t = tickets.close(callerOf(ctx), args.id, { summary: args.summary, outcome: args.outcome as 'done' | 'wont_do' | undefined }, { sessionId: args.session_id });
+      if (args.fix_commit) {
+        try {
+          opts.onFixCommit?.(t.id, args.fix_commit);
+        } catch {
+          // the close stands; the fix commit can be found from its trailer later
+        }
+      }
       ctx.affected(`ticket:${t.id}`);
       return { summary: `Closed ${t.id} as ${t.status}.`, ticket: { id: t.id, status: t.status, closing_summary: ctx.untrusted(t.closingSummary, sourceOf(t), 2_000) } };
     },

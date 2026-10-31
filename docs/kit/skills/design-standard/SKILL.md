@@ -27,6 +27,7 @@ This skill is a slot. Every project has, or should have, its own design standard
 - **No tokens yet** (a new project): do not make up a palette inside a feature. Use the stack's or the chosen base design system's defaults unchanged, say so on the ticket, and let the token set come from its own ticket, reviewed, before features depend on it.
 - No decoration that does no work: no gradients, glow, emoji or decorative icons. A translucent (glass) surface only where the standard names it; the first program allows it only for the floating header and tab bar.
 - Reuse the existing component before you write a new one. Two components that do one job is drift.
+- **Adjust first.** Fix a look by tuning what exists: its tokens, opacity, spacing, the shared component's props. A new element, wrapper or component (a box behind a subtitle for contrast, say) only when no adjustment can meet the need; say why in the PR or ticket. A fix to a shared look goes on every sibling page that shares it.
 
 ## Generic rules (where the project's standard is silent)
 

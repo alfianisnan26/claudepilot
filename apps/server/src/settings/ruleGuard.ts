@@ -2450,7 +2450,8 @@ function ask(input, tool, form) {
 // T-2889: the one-time pass. A person who allowed request <id> made the portal deliver the sha256 of that exact call (the kind, the tool,
 // the canonical JSON of its input, the folder; approvals/pass.ts) to a root-owned file. A call that hashes to a listed, unexpired pass
 // that this workspace has not used yet goes through ONCE: the hash goes to the used list first, then a 'used' line to the outbox, so the
-// portal drops the pass. Any other call (another input, folder or tool) hashes differently and is refused as before. The file must be a
+// portal drops the pass. Any other call (another input, folder or tool) hashes differently and is refused as before; only a Bash call's
+// free-text description is no part of the hash (T-3233: Claude Code writes a new one on most retries). The file must be a
 // regular file owned by root that only root may write; the agent cannot make one. The path and owner are fixed: the wrapper runs this
 // under env -i, so the two overrides below are only reachable by a test that runs the script itself.
 const PASSES_FILE = process.env.CLAUDEPILOT_GUARD_PASSES_FILE || '/etc/claudepilot/approval-passes';
@@ -2468,7 +2469,11 @@ function passOfCall(input, tool) {
   const ti = input && input.tool_input && typeof input.tool_input === 'object' && !Array.isArray(input.tool_input) ? input.tool_input : null;
   if (!ti || !tool) return '';
   const cwd = typeof input.cwd === 'string' ? input.cwd : '';
-  const parts = ['guard.refusal', tool, canon(digestInput(tool, ti)), cwd];
+  // T-3233: a Bash call's free-text description is no part of the call (the portal's passOf leaves it out the same way); every other
+  // field, and any other tool's description, stays. fromEntries keeps every other own key as it is (Object.assign would turn a
+  // "__proto__" key into a prototype and drop it from the hash).
+  const call = tool === 'Bash' ? Object.fromEntries(Object.entries(ti).filter(function (e) { return e[0] !== 'description'; })) : ti;
+  const parts = ['guard.refusal', tool, canon(digestInput(tool, call)), cwd];
   return require('crypto').createHash('sha256').update(parts.map(function (x) { return x + '\0'; }).join('')).digest('hex');
 }
 function usePass(input, tool) {

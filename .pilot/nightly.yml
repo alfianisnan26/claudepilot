@@ -1,0 +1,19 @@
+# Nightly (D-106): the WHOLE release gate on integration's head, the safety net under the change-scoped deploy gate (a test the import graph
+# missed still fails here within a day). A head whose tree already has a green FULL result (or differs from one only in documents nothing
+# reads) is not gated again. A red gate fails the run, which the portal reports as a failed CI run (a notification), with the verdict and
+# the failing tests in the log. Waits while another gate Job runs, so two gates never share k3s-node2 (2026-10-31: both slowed down).
+# Started by hand or by an agent (ci_run_trigger nightly on integration); local-git-ci has no `on.schedule` yet (FR16, M3), so the nightly
+# start comes from a portal cron trigger until it has (docs/dev-session.md, "The change-scoped gate"). The logic is in .pilot/scripts/nightly.sh.
+name: Nightly
+on:
+  manual: {}
+timeout: 3h
+concurrency:
+  group: nightly-claudepilot
+jobs:
+  gate:
+    name: Full gate
+    timeout: 170m
+    steps:
+      - name: The whole release gate on the head
+        run: bash .pilot/scripts/nightly.sh
