@@ -3788,6 +3788,36 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 797,
+    name: 'tickets: a merge status of state merged may name its head with no PR, a fast-forward merge (T-3198)',
+    up(db) {
+      // T-3198 (tickets PRD FR36e): a fast-forward merge to the integration branch has no pull request, so `merged` may be recorded with
+      // `pr_head` and no `pr`. Every other state keeps 796's rule (no_pr: neither needed; the rest: both). SQLite can't change a CHECK, so
+      // the table is rebuilt with every row and id kept, in the store's transaction (the autotransfer_events rebuild is the precedent); no
+      // table, view or trigger refers to it. Next free number of the tickets overflow (785-787, 794-796 used, 788 is T-975's).
+      db.exec(`
+        CREATE TABLE ticket_merge_status_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          repo TEXT NOT NULL CHECK (length(repo) BETWEEN 1 AND 120),
+          pr INTEGER CHECK (pr IS NULL OR pr > 0),
+          pr_head TEXT CHECK (pr_head IS NULL OR length(pr_head) = 40),
+          state TEXT NOT NULL CHECK (state IN ('ready', 'merged', 'conflict', 'waiting', 'no_pr', 'failed')),
+          reason TEXT,
+          actor TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          at TEXT NOT NULL,
+          CHECK (state = 'no_pr' OR (pr_head IS NOT NULL AND (pr IS NOT NULL OR state = 'merged')))
+        ) STRICT;
+        INSERT INTO ticket_merge_status_new (id, ticket_number, repo, pr, pr_head, state, reason, actor, actor_label, at)
+          SELECT id, ticket_number, repo, pr, pr_head, state, reason, actor, actor_label, at FROM ticket_merge_status;
+        DROP TABLE ticket_merge_status;
+        ALTER TABLE ticket_merge_status_new RENAME TO ticket_merge_status;
+        CREATE INDEX ticket_merge_status_ticket ON ticket_merge_status (ticket_number, repo, id);
+      `);
+    },
+  },
+  {
     version: 856,
     name: 'efficiency lab: metric snapshots per program, and closed tickets by close time (T-2360)',
     up(db) {

@@ -2837,16 +2837,19 @@ export class Tickets {
   /**
    * Why the agent session `s` may record a merge status on `row`, or null: `gate` when it is the merge-gate lead of a flow program whose tag
    * the ticket carries (the configured id, a session it continues or one that continues it, top-level), `gate_worker` when it is a live
-   * worker that lead started directly. Anything else (another lead, a peer, a worker's worker, a person's token) is refused.
+   * worker that lead started directly. T-3198: `holder_lead` when it is the crew root of the session holding the ticket (the holder itself
+   * when that is a top-level lead; a session it continues or one that continues it), `holder_lead_worker` when it is a worker that root
+   * started directly: the lead whose crew holds a ticket records its own merges even when no lead of the ticket's program is its own.
+   * Anything else (another lead, a peer, a worker's worker, a person's token) is refused.
    */
-  #mergeGateWhy(s: TicketSessionInfo, row: Row): 'gate' | 'gate_worker' | null {
+  #mergeGateWhy(s: TicketSessionInfo, row: Row): 'gate' | 'gate_worker' | 'holder_lead' | 'holder_lead_worker' | null {
     if (s.state === 'ended' || s.archivedAt) return null;
     const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
     let programs: { tag: string; gates: string[] }[];
     try {
       programs = this.#mergeGates();
     } catch {
-      return null; // unreadable: nobody (fail closed)
+      programs = []; // unreadable: no program gate (fail closed); the holder's own lead below reads no setting
     }
     const lineOf = (id: string): string[] => {
       const g = this.sessions.get(id);
@@ -2860,12 +2863,20 @@ export class Tickets {
         if (s.parentId && line.includes(s.parentId)) return 'gate_worker';
       }
     }
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    const root = holder ? this.#crewRoot(holder) : null;
+    if (root) {
+      const line = this.#rootLineage(root);
+      if (!s.parentId && line.includes(s.id)) return 'holder_lead';
+      if (s.parentId && line.includes(s.parentId)) return 'holder_lead_worker';
+    }
     return null;
   }
 
   /**
    * FR36e (T-2014): the merge gate records what it knows of a ticket's pull request in one repo (`ticket_merge_status`). Only an agent's
-   * own token, and only the merge-gate lead of a flow program the ticket belongs to or a worker it started ({@link #mergeGateWhy}); a ticket
+   * own token, and only a lead of a flow program the ticket belongs to, the lead whose crew holds it (T-3198), or a worker either started
+   * ({@link #mergeGateWhy}); a ticket
    * the caller cannot see is the same not found. A row is added, never edited; audited `ticket.merge_status` (or `_refused`).
    */
   recordMergeStatus(
@@ -2892,7 +2903,7 @@ export class Tickets {
         subject: `ticket:${ticketId}`,
         detail: { ticketId, repo: okRepo, state: okState, sessionId: w.session?.id ?? null },
       });
-      throw new AppError('FORBIDDEN', 'Only a lead of a flow program this ticket belongs to, or a worker it started, records a merge status.');
+      throw new AppError('FORBIDDEN', 'Only a lead of a flow program this ticket belongs to, the lead whose crew holds it, or a worker either started, records a merge status.');
     }
     const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
     const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
@@ -2901,7 +2912,11 @@ export class Tickets {
     if (pr !== null && !(typeof pr === 'number' && Number.isInteger(pr) && pr > 0 && pr < TICKET_MERGE_LIMITS.pr)) throw invalid('pr', 'A pull request number.');
     const prHead = req.prHead === undefined || req.prHead === null ? null : normalizeSha(req.prHead);
     if (req.prHead !== undefined && req.prHead !== null && !prHead) throw invalid('pr_head', VERDICT_REFUSAL_TEXT.bad_commit);
-    if (state !== 'no_pr' && (pr === null || prHead === null)) throw invalid(pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head.');
+    // T-3198: merged may name the head alone (a fast-forward merge to the integration branch has no pull request); every other state but
+    // no_pr names the pull request and its head, as before.
+    const prNeeded = state !== 'no_pr' && state !== 'merged';
+    if ((prNeeded && pr === null) || (state !== 'no_pr' && prHead === null))
+      throw invalid(prNeeded && pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head; merged may name the head alone (a merge with no PR).');
     const reason = req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
     const at = this.#now().toISOString();
     const stored = this.#tx(() => {
