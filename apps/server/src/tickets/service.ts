@@ -2903,7 +2903,10 @@ export class Tickets {
         subject: `ticket:${ticketId}`,
         detail: { ticketId, repo: okRepo, state: okState, sessionId: w.session?.id ?? null },
       });
-      throw new AppError('FORBIDDEN', 'Only a lead of a flow program this ticket belongs to, the lead whose crew holds it, or a worker either started, records a merge status.');
+      throw new AppError(
+        'FORBIDDEN',
+        'Only a lead of a flow program this ticket belongs to, the lead whose crew holds it, or a worker either started, records a merge status.',
+      );
     }
     const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
     const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
@@ -2916,8 +2919,12 @@ export class Tickets {
     // no_pr names the pull request and its head, as before.
     const prNeeded = state !== 'no_pr' && state !== 'merged';
     if ((prNeeded && pr === null) || (state !== 'no_pr' && prHead === null))
-      throw invalid(prNeeded && pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head; merged may name the head alone (a merge with no PR).');
-    const reason = req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
+      throw invalid(
+        prNeeded && pr === null ? 'pr' : 'pr_head',
+        'Every state but no_pr names the pull request and its head; merged may name the head alone (a merge with no PR).',
+      );
+    const reason =
+      req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
     const at = this.#now().toISOString();
     const stored = this.#tx(() => {
       this.#db

@@ -1042,7 +1042,7 @@ function high(r: ReturnType<typeof rig>, n: number, holder: string, reviewed: bo
   if (reviewed) r.tickets.verdict(`T-${n}`, { role: 'review', verdict: 'pass', commit: sha('a'), at: ago(r, 25) });
 }
 
-test('T-3198: an outside HIGH ticket with its self-test and a review PASS: the merge alert goes to the holder\'s crew root, never the gate', async () => {
+test("T-3198: an outside HIGH ticket with its self-test and a review PASS: the merge alert goes to the holder's crew root, never the gate", async () => {
   const r = rig();
   outsideCrew(r);
   high(r, 3006, 'wo', true);
@@ -1051,7 +1051,10 @@ test('T-3198: an outside HIGH ticket with its self-test and a review PASS: the m
   const toOut = r.chat.sent.filter((m) => m.id === OUT);
   assert.equal(toOut.length, 1);
   assert.match(toOut[0]!.text, /Your crew holds it and no lead of the program does/);
-  assert.match(toOut[0]!.text, new RegExp(`- T-3006 \\(KONF-3006\\) claudepilot/portal#3006 self-test \\+ review PASS on the PR head ${sha('a')}`));
+  assert.match(
+    toOut[0]!.text,
+    new RegExp(`- T-3006 \\(KONF-3006\\) claudepilot/portal#3006 self-test \\+ review PASS on the PR head ${sha('a')}`),
+  );
   assert.doesNotMatch(toOut[0]!.text, /T-70 /);
   const toGate = r.chat.sent.filter((m) => m.id === LEAD_A);
   assert.equal(toGate.length, 1);
@@ -1064,7 +1067,7 @@ test('T-3198: an outside HIGH ticket with its self-test and a review PASS: the m
   assert.match(told.note, /crew holds these tickets/);
 });
 
-test('T-3198: an outside ticket\'s review and QA asks go to the holder\'s crew root, never round robin to a peer lead', async () => {
+test("T-3198: an outside ticket's review and QA asks go to the holder's crew root, never round robin to a peer lead", async () => {
   const r = rig();
   outsideCrew(r);
   high(r, 980, 'wo', false); // self-tested, no review: a REVIEW-ASK
@@ -1081,7 +1084,7 @@ test('T-3198: an outside ticket\'s review and QA asks go to the holder\'s crew r
   assert.equal(r.engine.snapshot().programs[0]!.counts.qa, 3, 'the card counts all three, as before');
 });
 
-test('T-3198: an outside ticket\'s conflict and no_pr go to the holder\'s crew root, not to a unit lead or the gate', async () => {
+test("T-3198: an outside ticket's conflict and no_pr go to the holder's crew root, not to a unit lead or the gate", async () => {
   const r = rig();
   outsideCrew(r);
   r.tickets.add(31, { holder: 'wo' });
@@ -1089,13 +1092,16 @@ test('T-3198: an outside ticket\'s conflict and no_pr go to the holder\'s crew r
   r.tickets.add(32, { holder: 'wo' });
   r.tickets.merged('T-32', { repo: 'claudepilot/portal', pr: null, prHead: null, state: 'no_pr', reason: null });
   await r.engine.round();
-  assert.deepEqual(r.chat.sent.map((m) => m.id), [OUT, OUT]);
+  assert.deepEqual(
+    r.chat.sent.map((m) => m.id),
+    [OUT, OUT],
+  );
   assert.match(r.chat.sent.find((m) => /conflict/.test(m.text))!.text, /- T-31 \(KONF-31\) claudepilot\/portal#31 head/);
   assert.match(r.chat.sent.find((m) => /no pull request/.test(m.text))!.text, /- T-32 \(KONF-32\) claudepilot\/portal$/m);
   assert.equal(r.engine.snapshot().actions.filter((a) => a.kind === 'skipped').length, 0, 'none is an orphan');
 });
 
-test('T-3198: the holder\'s crew root ended (no continuation) or a person stopped it: its alerts are dropped, never sent to the gate or a peer', async () => {
+test("T-3198: the holder's crew root ended (no continuation) or a person stopped it: its alerts are dropped, never sent to the gate or a peer", async () => {
   for (const how of ['ended', 'stopped'] as const) {
     const r = rig();
     outsideCrew(r);

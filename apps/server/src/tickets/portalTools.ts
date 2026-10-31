@@ -724,7 +724,12 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     input: z.object({
       id: ticketIdArg,
       repo: z.string().max(TICKET_MERGE_LIMITS.repo).optional().describe('owner/name as the forge spells it. Needed to record.'),
-      pr: z.number().int().positive().optional().describe('The pull request number. Needed for every state but no_pr and merged (a fast-forward merge has none).'),
+      pr: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('The pull request number. Needed for every state but no_pr and merged (a fast-forward merge has none).'),
       pr_head: z.string().max(64).optional().describe('The PR’s head now: the full 40-character sha. Needed for every state but no_pr.'),
       state: z.enum(TICKET_MERGE_STATES).optional().describe('ready, merged, conflict, waiting, no_pr or failed. Leave out to read.'),
       reason: z.string().max(TICKET_MERGE_LIMITS.reason).optional().describe('One line, e.g. why it failed.'),
@@ -739,7 +744,12 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       }
       const m = tickets.recordMergeStatus(caller, args.id, { repo: args.repo, pr: args.pr, prHead: args.pr_head, state: args.state, reason: args.reason }, { sessionId: args.session_id });
       ctx.affected(`ticket:${stable(ctx, args.id)}`);
-      return { summary: `Recorded ${m.repo}${m.pr ? `#${m.pr}` : ''} ${m.state} for ${args.id}.`, id: stable(ctx, args.id), key: tickets.keyOf(callerOf(ctx), stable(ctx, args.id)) ?? stable(ctx, args.id), merge: view(m) };
+      return {
+        summary: `Recorded ${m.repo}${m.pr ? `#${m.pr}` : ''} ${m.state} for ${args.id}.`,
+        id: stable(ctx, args.id),
+        key: tickets.keyOf(callerOf(ctx), stable(ctx, args.id)) ?? stable(ctx, args.id),
+        merge: view(m),
+      };
     },
   });
 

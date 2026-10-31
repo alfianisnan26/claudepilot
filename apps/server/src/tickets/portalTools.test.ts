@@ -1072,8 +1072,13 @@ test('ticket_merge_status (T-2014, FR36e): the merge-gate lead and a worker it s
   }
 });
 
-test('ticket_merge_status (T-3198): the lead whose crew holds the ticket and a worker it started record (holder_lead, holder_lead_worker); another lead and a worker\'s worker are refused; merged may name its head with no PR, ready may not', async () => {
-  const GATE = 'eeeeeeee-0401', HOLDER = 'eeeeeeee-0501', HOLDER2 = 'eeeeeeee-0502', HW = 'eeeeeeee-0510', HWW = 'eeeeeeee-0511', OTHER = 'eeeeeeee-0601';
+test("ticket_merge_status (T-3198): the lead whose crew holds the ticket and a worker it started record (holder_lead, holder_lead_worker); another lead and a worker's worker are refused; merged may name its head with no PR, ready may not", async () => {
+  const GATE = 'eeeeeeee-0401',
+    HOLDER = 'eeeeeeee-0501',
+    HOLDER2 = 'eeeeeeee-0502',
+    HW = 'eeeeeeee-0510',
+    HWW = 'eeeeeeee-0511',
+    OTHER = 'eeeeeeee-0601';
   const r = await rig({ mergeGates: () => [{ tag: 'konfersi-migration', gates: [GATE] }] });
   const audits: { kind: string; detail?: Record<string, unknown> }[] = [];
   r.tickets.onAudit = (e) => void audits.push(e);
@@ -1088,35 +1093,72 @@ test('ticket_merge_status (T-3198): the lead whose crew holds the ticket and a w
     patch(HW, { parentId: HOLDER });
     patch(HWW, { parentId: HW });
     // A PILOT ticket that kept the program's tag, held by the ClaudePilot lead's builder: no lead of the program's crew holds it.
-    const held = r.tickets.create(UI, { summary: 'a pilot ticket', workspaceId: ws, tags: ['konfersi-migration'], assignee: { kind: 'session', sessionId: HW } }).id;
-    const untagged = r.tickets.create(UI, { summary: 'no program tag', workspaceId: ws, tags: ['frontend'], assignee: { kind: 'session', sessionId: HOLDER } }).id;
+    const held = r.tickets.create(UI, {
+      summary: 'a pilot ticket',
+      workspaceId: ws,
+      tags: ['konfersi-migration'],
+      assignee: { kind: 'session', sessionId: HW },
+    }).id;
+    const untagged = r.tickets.create(UI, {
+      summary: 'no program tag',
+      workspaceId: ws,
+      tags: ['frontend'],
+      assignee: { kind: 'session', sessionId: HOLDER },
+    }).id;
     const head = (c: string) => c.repeat(40);
     const rec = async (t: { secret: string }, id: string, over: Record<string, unknown> = {}) =>
-      (await r.h.call(t.secret, 'ticket_merge_status', { id, repo: 'claudepilot/portal', pr: 7, pr_head: head('a'), state: 'ready', ...over })).result?.structuredContent;
+      (
+        await r.h.call(t.secret, 'ticket_merge_status', {
+          id,
+          repo: 'claudepilot/portal',
+          pr: 7,
+          pr_head: head('a'),
+          state: 'ready',
+          ...over,
+        })
+      ).result?.structuredContent;
     const code = async (t: { secret: string }, id: string, over: Record<string, unknown> = {}) => (await rec(t, id, over))?.error?.code;
 
-    assert.equal(await code(other, held), 'FORBIDDEN', 'a lead that is neither the gate nor the holder\'s');
-    assert.equal(await code(hww, held), 'FORBIDDEN', 'a worker\'s worker of the holder\'s lead');
+    assert.equal(await code(other, held), 'FORBIDDEN', "a lead that is neither the gate nor the holder's");
+    assert.equal(await code(hww, held), 'FORBIDDEN', "a worker's worker of the holder's lead");
     assert.equal(await code(gate, untagged), 'FORBIDDEN', 'the gate of a program the ticket is not in');
     const refused = audits.filter((a) => a.kind === 'ticket.merge_status_refused');
-    assert.deepEqual(refused.map((a) => a.detail?.sessionId), [OTHER, HWW, GATE], 'each refusal is audited');
+    assert.deepEqual(
+      refused.map((a) => a.detail?.sessionId),
+      [OTHER, HWW, GATE],
+      'each refusal is audited',
+    );
     assert.equal(await code(holder, held, { pr: undefined }), 'VALIDATION_FAILED', 'ready without its PR is still refused');
-    assert.equal(await code(holder, held, { pr: undefined, pr_head: undefined, state: 'merged' }), 'VALIDATION_FAILED', 'merged names its head');
+    assert.equal(
+      await code(holder, held, { pr: undefined, pr_head: undefined, state: 'merged' }),
+      'VALIDATION_FAILED',
+      'merged names its head',
+    );
     assert.deepEqual(r.tickets.mergeStatus(UI, held), []);
 
     assert.equal((await rec(holder, held)).merge.state, 'ready');
     assert.equal((await rec(hw, held, { state: 'waiting' })).merge.state, 'waiting');
     assert.equal((await rec(gate, held, { state: 'ready' })).merge.state, 'ready', 'the program gate still records');
-    assert.equal((await rec(holder, untagged, { state: 'ready' })).merge.state, 'ready', 'the holder\'s lead records outside any program too');
+    assert.equal(
+      (await rec(holder, untagged, { state: 'ready' })).merge.state,
+      'ready',
+      "the holder's lead records outside any program too",
+    );
     const ff = await rec(holder, held, { repo: 'claudepilot/claudepilot', pr: undefined, pr_head: head('b'), state: 'merged' });
-    assert.deepEqual([ff.merge.pr, ff.merge.pr_head, ff.merge.state], [null, head('b'), 'merged'], 'a fast-forward merge: merged with the head alone');
+    assert.deepEqual(
+      [ff.merge.pr, ff.merge.pr_head, ff.merge.state],
+      [null, head('b'), 'merged'],
+      'a fast-forward merge: merged with the head alone',
+    );
     assert.doesNotMatch(ff.summary, /#null|#-/);
     // A continuation of the holder's lead is that lead.
     const cont = await r.agent(ws, HOLDER2, 'ClaudePilot lead, continued');
     patch(HOLDER2, { continuedFrom: HOLDER });
     assert.equal((await rec(cont, held, { state: 'merged' })).merge.state, 'merged');
     assert.deepEqual(
-      audits.filter((a) => a.kind === 'ticket.merge_status').map((a) => [a.detail?.why, a.detail?.sessionId, a.detail?.state, a.detail?.pr]),
+      audits
+        .filter((a) => a.kind === 'ticket.merge_status')
+        .map((a) => [a.detail?.why, a.detail?.sessionId, a.detail?.state, a.detail?.pr]),
       [
         ['holder_lead', HOLDER, 'ready', 7],
         ['holder_lead_worker', HW, 'waiting', 7],

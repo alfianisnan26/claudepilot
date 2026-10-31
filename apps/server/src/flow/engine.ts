@@ -484,14 +484,24 @@ export class FlowEngine {
       for (const [l, items] of byLead) {
         const n = items.length;
         const r = resolveOf(l);
-        const sent = await this.#tell(c, cond, l, r.head, r.why, [...new Set(items.map((i) => i.t.id))], [
-          cond === 'conflict'
-            ? `${FLOW_PREFIX} the merge gate recorded a conflict on ${plural(n, 'pull request')} of your unit (program ${p.name}). Send ${n === 1 ? 'it' : 'each'} back to its builder for a rebase onto the base branch; QA then verifies the new head:`
-            : `${FLOW_PREFIX} the merge gate recorded no pull request for ${plural(n, 'ticket')} of your unit in review (program ${p.name}). Open the PR for each (or have its builder open it), or say on the ticket why not:`,
-          ...items.slice(0, FLOW_LIMITS.ticketsPerMessage).map((i) => `- ${ref(i.t)} ${i.pr.repo}${i.pr.pr ? `#${i.pr.pr}` : ''}${i.pr.prHead ? ` head ${i.pr.prHead}` : ''}`),
-          ...more(n),
-          'Answered already (contained in another PR, superseded, rebased)? Say so on the ticket, or record it with ticket_merge_status: an alert on the same record waits once the ticket is answered.',
-        ]);
+        const sent = await this.#tell(
+          c,
+          cond,
+          l,
+          r.head,
+          r.why,
+          [...new Set(items.map((i) => i.t.id))],
+          [
+            cond === 'conflict'
+              ? `${FLOW_PREFIX} the merge gate recorded a conflict on ${plural(n, 'pull request')} of your unit (program ${p.name}). Send ${n === 1 ? 'it' : 'each'} back to its builder for a rebase onto the base branch; QA then verifies the new head:`
+              : `${FLOW_PREFIX} the merge gate recorded no pull request for ${plural(n, 'ticket')} of your unit in review (program ${p.name}). Open the PR for each (or have its builder open it), or say on the ticket why not:`,
+            ...items
+              .slice(0, FLOW_LIMITS.ticketsPerMessage)
+              .map((i) => `- ${ref(i.t)} ${i.pr.repo}${i.pr.pr ? `#${i.pr.pr}` : ''}${i.pr.prHead ? ` head ${i.pr.prHead}` : ''}`),
+            ...more(n),
+            'Answered already (contained in another PR, superseded, rebased)? Say so on the ticket, or record it with ticket_merge_status: an alert on the same record waits once the ticket is answered.',
+          ],
+        );
         if (sent) for (const i of items.slice(0, FLOW_LIMITS.ticketsPerMessage)) c.st.items[itemKey(cond, i)] = c.now;
       }
       if (orphans.length && !c.hold && !this.#limited(c, cond, `program-${p.name}`)) {
