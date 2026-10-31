@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ReporterAnchor, ReporterDeploymentState } from '@portal/contracts';
-import { countBySeverity, cropBox, deployMark, deploymentText, envStrip, pathnameOf, samePage } from './shared';
+import { readFileSync } from 'node:fs';
+import { countBySeverity, cropBox, deployLine, deployMark, deploymentText, envStrip, pathnameOf, samePage, shotCaption } from './shared';
 import { deployCurl, emptyRow, originError, siteErrors, siteOf, sitesValid, snippet, targetsValid } from './sites';
 
 const row = (over: Partial<ReturnType<typeof emptyRow>> = {}) => ({ ...emptyRow(), origin: 'https://stg.konfersi.com', environment: 'stg', repo: 'platform/konfersi-landing-page', branch: 'stg', ...over });
@@ -121,4 +122,26 @@ test('the crop box on a full-page shot uses document coordinates; none for a ful
   assert.equal(cropBox({ w: 390, h: 3000 }, anchor({ mode: 'full' }), null), null);
   assert.equal(cropBox({ w: 390, h: 169 }, anchor(), null), null, 'the image has the crop’s aspect: it is the crop');
   assert.equal(cropBox({ w: 0, h: 0 }, anchor(), null), null);
+});
+
+// PILOT-1111 copy: the card listed "Deployed" over "Unknown"; each environment now says what it is.
+test('deployLine: one line per environment, with the reason in words', () => {
+  const d = (over: Partial<ReporterDeploymentState>): ReporterDeploymentState =>
+    ({ environment: 'stg', status: 'unknown', reason: null, fixCommit: null, currentCommit: null, confidence: 'pipeline', ...over }) as ReporterDeploymentState;
+  assert.equal(deployLine(d({ reason: 'no-fix-commit' })), 'stg: unknown (no fix commit yet)');
+  assert.equal(deployLine(d({ environment: 'uat', status: 'deployed', currentCommit: 'abcdef1234' })), 'uat: deployed (live abcdef1)');
+  assert.equal(deployLine(d({ status: 'not-deployed' })), 'stg: not yet');
+  assert.equal(deployLine(d({ status: 'unknown' })), 'stg: unknown');
+});
+
+test('shotCaption: "Shot n · path", the root named', () => {
+  assert.equal(shotCaption(1, '/'), 'Shot 1 · / (home)');
+  assert.equal(shotCaption(2, 'https://stg.example/pricing/?x=1'), 'Shot 2 · /pricing');
+});
+
+test('ticket keys never wrap in the panel', () => {
+  const src = (f: string) => readFileSync(new URL(`../../embed/${f}`, import.meta.url), 'utf8');
+  assert.match(src('TicketsTab.tsx'), /whitespace-nowrap tabular-nums">\{t\.key\}/);
+  assert.match(src('ReportTab.tsx'), /whitespace-nowrap">\{d\.key\}/);
+  assert.match(src('OtherTabs.tsx'), /font-semibold whitespace-nowrap text-accent underline/);
 });

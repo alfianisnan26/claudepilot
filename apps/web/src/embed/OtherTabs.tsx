@@ -65,7 +65,7 @@ export function SessionsTab() {
                         {' · '}
                         <button
                           type="button"
-                          className="font-semibold text-accent underline"
+                          className="font-semibold whitespace-nowrap text-accent underline"
                           onClick={() => {
                             select(s.ticketKey);
                             setTab('tickets');
@@ -178,7 +178,11 @@ export function SettingsTab() {
                 onBlur={() => setRecording(null)}
                 onKeyDown={(e) => {
                   if (recording !== k) return;
-                  if (e.key === 'Escape') return setRecording(null);
+                  if (e.key === 'Escape') {
+                    // Esc cancels the recording only; the panel's Esc-to-close skips a key a control used.
+                    e.preventDefault();
+                    return setRecording(null);
+                  }
                   const combo = hotkeyOf(e);
                   if (!combo) return;
                   e.preventDefault();

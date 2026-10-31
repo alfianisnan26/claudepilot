@@ -17,12 +17,14 @@ import {
   ticketBucketRef,
   type Actor,
   type ReporterConfig,
+  type ReporterConnectClaim,
   type ReporterConnectMessage,
   type ReporterDeployment,
   type ReporterTicketQuery,
   type TicketReporterEvidence,
   type UpdateReporterConfigRequest,
 } from '@portal/contracts';
+import { createHash } from 'node:crypto';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { stream } from 'hono/streaming';
@@ -148,10 +150,25 @@ export interface ReporterWidgetDeps {
   userLabel?: (userId: string) => string;
   clientKey: (c: Context) => string;
   audit?: (kind: string, detail: Record<string, unknown>, actor: string) => void;
+  /** The clock of the held approvals (tests); Date.now by default. */
+  now?: () => number;
 }
 
 const NONCE = /^[A-Za-z0-9_-]{16,128}$/;
 const notFound = () => new AppError('NOT_FOUND', 'Not found.');
+/** How long an approval the popup could not hand over waits for the panel to claim it. */
+export const CONNECT_HOLD_MS = 2 * 60_000;
+const HELD_MAX = 500;
+/** The nonce of a verifier: base64url(SHA-256(verifier)), what the panel put in the popup's URL. */
+export const connectNonceOf = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
+
+interface HeldApproval {
+  bucket: string;
+  origin: string;
+  who: Actor & { userId: string };
+  label: string;
+  expiresAt: number;
+}
 
 /** Same-origin only: a browser names the origin on a non-GET request, and `sec-fetch-site` on every one; a foreign page is refused. */
 function sameOrigin(c: Context, portalOrigin: string): boolean {
@@ -175,6 +192,14 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   const r = new Hono<Vars>();
   const perToken = new RateLimiter(900, 10 * 60_000);
   const connects = new RateLimiter(20, 10 * 60_000);
+  // The panel polls every two seconds while its popup is open (at most ten minutes): 300 a window per client, with room.
+  const claims = new RateLimiter(600, 10 * 60_000);
+  const now = deps.now ?? Date.now;
+  const held = new Map<string, HeldApproval>();
+  const sweep = () => {
+    const t = now();
+    for (const [k, v] of held) if (v.expiresAt <= t) held.delete(k);
+  };
   const statusHits = new RateLimiter(300, 10 * 60_000);
   const streams = new Map<string, number>();
 
@@ -274,13 +299,46 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     if (!who) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (connects.blocked(who.userId)) throw new AppError('RATE_LIMITED', 'Too many connects. Wait a few minutes.');
     connects.fail(who.userId);
-    const body = await jsonBody<{ bucket: string; origin: string; nonce: string }>(c);
+    const body = await jsonBody<{ bucket: string; origin: string; nonce: string; hold: boolean }>(c);
     const site = normalizeOrigin(body.origin ?? '');
     if (typeof body.nonce !== 'string' || !NONCE.test(body.nonce) || !site || typeof body.bucket !== 'string') throw notFound();
     const label = deps.userLabel?.(who.userId) ?? 'Owner';
+    if (body.hold === true) {
+      // The popup lost its opener: keep the approval (not a token) for the panel to claim with its verifier. Minting waits for the claim.
+      const bucket = body.bucket.toUpperCase();
+      if (!service.allowedSite(bucket, site)) throw notFound();
+      sweep();
+      if (held.size >= HELD_MAX) held.delete(held.keys().next().value!);
+      held.set(body.nonce, { bucket, origin: site, who, label, expiresAt: now() + CONNECT_HOLD_MS });
+      deps.audit?.('reporter.connect-held', { bucket, origin: site }, actorString(who));
+      return c.json(success({ held: true }));
+    }
     const t = service.mint(body.bucket, site, who, label);
     deps.audit?.('reporter.connected', { bucket: t.bucketKey, origin: site, tokenId: t.id }, actorString(who));
     return c.json(success<ReporterConnectMessage>({ type: 'pilot-reporter:connected', nonce: body.nonce, token: t.token, expiresAt: t.expiresAt, bucketKey: t.bucketKey, actorLabel: t.actorLabel }));
+  });
+
+  // The panel claims a held approval: same-origin, JSON, no cookie and no token; the verifier proves it is the panel that made the nonce.
+  // Unknown, not yet approved, expired, already claimed, another bucket or origin: all the same `pending` (nothing to learn by probing).
+  r.post('/connect/claim', tooLarge(2 * 1024), async (c) => {
+    c.header('Cache-Control', 'no-store');
+    if (!sameOrigin(c, deps.portalOrigin(c))) throw notFound();
+    if (!/^application\/json/i.test(c.req.header('content-type') ?? '')) throw notFound();
+    const ip = deps.clientKey(c);
+    if (claims.blocked(ip)) throw new AppError('RATE_LIMITED', 'Too many requests.');
+    claims.fail(ip);
+    const body = await jsonBody<{ bucket: string; origin: string; verifier: string }>(c);
+    const pending = () => c.json(success<ReporterConnectClaim>({ pending: true }));
+    if (typeof body.verifier !== 'string' || !NONCE.test(body.verifier) || body.verifier.length < 32 || typeof body.bucket !== 'string') return pending();
+    const site = normalizeOrigin(body.origin ?? '');
+    const nonce = connectNonceOf(body.verifier);
+    const h = held.get(nonce);
+    if (!h || !site || h.origin !== site || h.bucket !== body.bucket.toUpperCase()) return pending();
+    held.delete(nonce);
+    if (h.expiresAt <= now()) return pending();
+    const t = service.mint(h.bucket, h.origin, h.who, h.label);
+    deps.audit?.('reporter.connected', { bucket: t.bucketKey, origin: h.origin, tokenId: t.id, via: 'claim' }, actorString(h.who));
+    return c.json(success<ReporterConnectClaim>({ type: 'pilot-reporter:connected', nonce, token: t.token, expiresAt: t.expiresAt, bucketKey: t.bucketKey, actorLabel: t.actorLabel }));
   });
 
   /* ----- The panel API (bearer) ----- */
