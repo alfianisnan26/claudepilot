@@ -78,9 +78,10 @@ ping, gone; checked every second, closed after 5 minutes, at most 2 per token), 
   workspace; and one the token's person may `view` (reads) or `operate` (send) through the seam. Anything else, an unknown id or no chat is
   the same 404, checked before any count.
 - **What it shows: never more than the portal shows the owner.** The person's and the assistant's text (redacted when stored, and again on the
-  way out with `chat/redact.ts`), a tool call as its name and one line of its input (a command, a path; at most 120 characters), an approval
-  as one line, an error as one line, images by reference. Sub-agent lines, thinking, tool output, costs, system notes, a move's context and
-  side questions are left out (`reporter/chat.ts`).
+  way out with `chat/redact.ts`), a tool call as its name and one line of its input (a command, a path; at most 120 characters) with its call
+  id, a tool result as `tool_result` with that id and `ok` (a failure carries its first line, redacted, at most 160 characters; a success
+  carries nothing), an approval as one line, an error as one line, images by reference. Sub-agent lines, thinking, tool output, costs,
+  system notes, a move's context and side questions are left out (`reporter/chat.ts`).
 - **Sending.** The chat controller's own `send` (the path the portal's composer uses), as `portal-mcp:<token id>` named
   `<person> (reporter, <origin>)`: the transcript and Claude see that the message came through the widget on that site, not typed in the
   portal. Decided on the record (2026-10-31): the panel runs inside someone else's page, so its messages are framed like the reporter's

@@ -729,12 +729,17 @@ export interface ReporterSession {
 export interface ReporterChatMessage {
   seq: number;
   at: string;
-  kind: 'user' | 'assistant' | 'tool' | 'approval' | 'error';
+  kind: 'user' | 'assistant' | 'tool' | 'tool_result' | 'approval' | 'error';
+  /** For `tool_result`: empty when the tool succeeded, else its error as one short redacted line (never its output). */
   text: string;
   /** For `user`: who sent it when it was not the owner at the keyboard (a reporter, a ticket, another session). */
   from: string | null;
   /** For `tool`: the tool's name; `text` is one line of what it was given (a command, a path), cut short. */
   tool: string | null;
+  /** For `tool` and `tool_result`: the call's id, which joins a result to its call (the panel folds a run of calls into one row). */
+  toolId?: string | null;
+  /** For `tool_result`: false when the tool failed. */
+  ok?: boolean;
   /** Images on the line, served by `REPORTER_ROUTES.sessionBlob` with the bearer token. */
   images: { url: string; mediaType: string; width: number | null; height: number | null }[];
 }
