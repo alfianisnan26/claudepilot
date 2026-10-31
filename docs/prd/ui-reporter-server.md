@@ -69,10 +69,11 @@ per hour.
   `repro.spec.ts` from the first capture's interaction trail.
 - Validation: screenshots by magic bytes (PNG, JPEG, WebP) within 8 MB; the evidence parsed against `ReporterEvidence` (schema version, list
   caps refused, strings capped), every string redacted with `chat/redact.ts` plus JWTs and long `prefix_<base62>` keys; query values replaced;
-  input values always `[masked]`; app state keys that look secret are redacted.
+  input values always `[masked]`; app state keys that look secret are redacted. The optional `captureGaps` (what the DOM screenshot
+  could not draw, at most 10, one line of 200 characters each) is kept when present; older SDKs send none.
 - The description is written by the server: the reporter's words on top, then where (site, environment, repo, domain, path, route, build
-  commit, branch, version, device), a section per capture (URL, device, area and element, console errors, failed requests, LCP, UI check
-  findings, attachment ids), steps to reproduce, and a deployment footer that the server rewrites when the state changes.
+  commit, branch, version, device), a section per capture (URL, device, "Not captured: ..." when the shot has gaps, area and element,
+  console errors, failed requests, LCP, UI check findings, attachment ids), steps to reproduce, and a deployment footer that the server rewrites when the state changes.
 
 ## Direct to a session
 

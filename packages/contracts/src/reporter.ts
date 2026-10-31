@@ -36,6 +36,8 @@ export const REPORTER_LIMITS = {
   /** Duplicate candidates offered. */
   duplicateCandidates: 5,
   componentNodes: 400,
+  /** What the DOM screenshot could not draw, per capture (the SDK sends at most 10). */
+  captureGaps: 10,
   /** Characters of one console line or one stringified value. */
   textChars: 2000,
   /** Token lifetime. */
@@ -400,6 +402,12 @@ export interface ReporterEvidence {
    * replaced, plus the top stack frame's file and function), for duplicate detection.
    */
   errorSignatures: string[];
+  /**
+   * What the DOM screenshot could not draw (a cross-origin image without CORS, a WebGL canvas, another site's frame), in plain words,
+   * at most REPORTER_LIMITS.captureGaps; absent when the shot is complete or was taken with precise capture (the tab's own pixels).
+   * Optional and additive: older SDKs do not send it.
+   */
+  captureGaps?: string[];
 }
 
 /**

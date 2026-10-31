@@ -478,6 +478,10 @@ export function parseEvidence(bytes: Buffer): ReporterEvidence {
   }
   if (!isObj(raw)) throw invalid('evidence', 'The evidence is an object.');
   if (raw.schema !== REPORTER_EVIDENCE_SCHEMA) throw invalid('evidence.schema', `This portal reads evidence schema ${REPORTER_EVIDENCE_SCHEMA}.`);
+  // One line each (quoted in the ticket description), capped and redacted like every string; empty ones dropped.
+  const captureGaps = list(raw.captureGaps, REPORTER_LIMITS.captureGaps, 'captureGaps', (x, i) => lineOrNull(x, 200, `captureGaps[${i}]`)).items.filter(
+    (g): g is string => !!g,
+  );
   const dom = isObj(raw.dom) ? { selector: strOrNull(raw.dom.selector, 500, 'dom.selector'), path: str(raw.dom.path, 1000, 'dom.path'), snippet: str(raw.dom.snippet, T, 'dom.snippet') } : null;
   return {
     schema: REPORTER_EVIDENCE_SCHEMA,
@@ -497,6 +501,7 @@ export function parseEvidence(bytes: Buffer): ReporterEvidence {
     interactions: list(raw.interactions, REPORTER_LIMITS.interactionEntries, 'interactions', interaction).items,
     checks: checks(raw.checks),
     errorSignatures: list(raw.errorSignatures, 50, 'errorSignatures', (x, i) => str(x, 300, `errorSignatures[${i}]`)).items,
+    ...(captureGaps.length ? { captureGaps } : {}),
   };
 }
 

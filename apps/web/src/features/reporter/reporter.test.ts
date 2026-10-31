@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ReporterAnchor, ReporterDeploymentState } from '@portal/contracts';
 import { readFileSync } from 'node:fs';
-import { countBySeverity, cropBox, deployLine, deployMark, deploymentText, envStrip, pathnameOf, samePage, shotCaption } from './shared';
+import { countBySeverity, cropBox, deployLine, deployMark, deploymentText, envStrip, gapsLine, pathnameOf, samePage, shotCaption } from './shared';
 import { deployCurl, emptyRow, originError, siteErrors, siteOf, sitesValid, snippet, targetsValid } from './sites';
 
 const row = (over: Partial<ReturnType<typeof emptyRow>> = {}) => ({ ...emptyRow(), origin: 'https://stg.konfersi.com', environment: 'stg', repo: 'platform/konfersi-landing-page', branch: 'stg', ...over });
@@ -144,4 +144,11 @@ test('ticket keys never wrap in the panel', () => {
   assert.match(src('TicketsTab.tsx'), /whitespace-nowrap tabular-nums">\{t\.key\}/);
   assert.match(src('ReportTab.tsx'), /whitespace-nowrap">\{d\.key\}/);
   assert.match(src('OtherTabs.tsx'), /font-semibold whitespace-nowrap text-accent underline/);
+});
+
+test('the evidence viewer names what the screenshot could not draw, in one line; nothing when the shot is complete', () => {
+  assert.equal(gapsLine({ captureGaps: ['image not readable (no CORS): cdn.example', 'canvas: drawn blank (WebGL without a kept buffer, or empty)'] }), 'Not captured: image not readable (no CORS): cdn.example; canvas: drawn blank (WebGL without a kept buffer, or empty)');
+  assert.equal(gapsLine({ captureGaps: [] }), null);
+  assert.equal(gapsLine({ captureGaps: [' '] }), null);
+  assert.equal(gapsLine({}), null, 'an older SDK sends none');
 });
