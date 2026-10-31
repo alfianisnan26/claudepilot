@@ -98,6 +98,21 @@ export function reportProblem(target: ReporterReportTarget, title: string, quest
   return null;
 }
 
+/**
+ * Where the panel goes once a report is filed: a direct ask opens the chat with that session (its ticket as a chip, a delivery error shown
+ * with Retry, which re-sends the question and the first shot as a chat message); a ticket shows the compact Filed row.
+ */
+export function afterFiled(
+  target: ReporterReportTarget,
+  res: { key: string; sessionDelivery?: { error: string | null } },
+  question: string,
+  shot: Blob | null,
+): { kind: 'chat'; open: { sessionId: string; ticketKey: string; failed: { reason: string } | null; retry: { text: string; image: Blob | null } } } | { kind: 'filed'; key: string } {
+  if (target.kind === 'ticket') return { kind: 'filed', key: res.key };
+  const err = res.sessionDelivery?.error ?? null;
+  return { kind: 'chat', open: { sessionId: target.sessionId, ticketKey: res.key, failed: err ? { reason: err } : null, retry: { text: question.trim(), image: shot } } };
+}
+
 /** The destination the person chose last (per bucket): the form starts on it when that session is still offered. */
 export const choiceKey = (bucket: string) => `pilot-reporter:destination:${bucket}`;
 export function parseChoice(raw: string | null): ReporterReportTarget | null {

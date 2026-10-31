@@ -17,7 +17,7 @@ import { SEVERITIES, countBySeverity, shotCaption } from '@/features/reporter/sh
 import type { ReporterClient } from './api';
 import { usePanel, type Capture } from './context';
 import { Icon, type IconName } from './icons';
-import { elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
+import { afterFiled, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
 import { pickTarget, proposedSummary, sentText, ticketsFor } from './model';
 import { Viewer } from './Viewer';
 import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './ui';
@@ -437,17 +437,12 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
       const failed: string[] = [];
       for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(res.key, id, kind, blob), c)));
       refresh();
-      if (target.kind === 'session') {
-        // A direct ask goes straight into the chat with that session: the delivered message and the reply live.
-        const err = res.sessionDelivery?.error ?? null;
-        openChat({ sessionId: target.sessionId, ticketKey: res.key, failed: err ? { reason: err } : null, retry: { text: description.trim(), image: capture.screenshot } });
-        if (failed.length) notify(`Upload failed: ${failed.join(', ')}.`, 'error');
-        setCapture(null);
-        return;
-      }
+      // A direct ask goes straight into the chat with that session (the delivered message and the reply live); a ticket shows Filed.
+      const next = afterFiled(target, res, description, capture.screenshot);
       if (failed.length) notify(`${res.key} filed; upload failed: ${failed.join(', ')}.`, 'error');
       setCapture(null);
-      onFiled(res.key);
+      if (next.kind === 'chat') openChat(next.open);
+      else onFiled(next.key);
     } catch (e) {
       setError((e as Error).message);
     } finally {

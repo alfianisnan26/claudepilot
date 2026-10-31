@@ -154,7 +154,8 @@ export function windowRange(count: number, scrollTop: number, viewport: number, 
   if (count <= 0) return { start: 0, end: 0 };
   const first = Math.floor(Math.max(0, scrollTop) / rowPx);
   const visible = Math.ceil(Math.max(viewport, rowPx) / rowPx);
-  const start = Math.max(0, first - overscan);
-  const end = Math.min(count, first + visible + overscan);
+  // Scrolled past the end (a list that just got shorter): the last rows, never a start beyond the list.
+  const start = Math.min(Math.max(0, first - overscan), Math.max(0, count - visible - overscan));
+  const end = Math.min(count, Math.max(start, first) + visible + overscan);
   return { start, end };
 }

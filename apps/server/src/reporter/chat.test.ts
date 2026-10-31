@@ -39,7 +39,7 @@ test('a direct-report target, a session on a bucket ticket and one in the defaul
     const key = h.service.createTicket(ctx, { summary: 'on a ticket', captures: [capture()], build: build(), sdkVersion: '1' }, PORTAL).key;
     h.chat.add('onticket', 'working', { ticketId: h.tickets.resolve({ kind: 'system' }, key)! });
     // In the default workspace.
-    h.store.db.prepare('UPDATE ticket_buckets SET default_workspace_id = ? WHERE key = ?').run('docker/konf-ws', 'KONF');
+    h.store.db!.prepare('UPDATE ticket_buckets SET default_workspace_id = ? WHERE key = ?').run('docker/konf-ws', 'KONF');
     h.chat.add('inws', 'idle', { workspaceId: 'docker/konf-ws' });
     // Neither: another workspace, and a session on a ticket of another bucket.
     h.chat.add('stranger', 'idle', { workspaceId: 'docker/elsewhere' });

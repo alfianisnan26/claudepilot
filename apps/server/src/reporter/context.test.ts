@@ -18,7 +18,7 @@ test('/me returns the client address and its family; a widget ticket stores it a
     const id = h.tickets.resolve({ kind: 'system' }, key)!;
     const ev = h.service.evidence(id)!;
     assert.equal(ev.reporterIp, '127.0.0.1', 'what the portal saw, not what the body claimed');
-    const desc = (h.store.db.prepare('SELECT description FROM tickets WHERE number = ?').get(Number(id.slice(2))) as { description: string }).description;
+    const desc = (h.store.db!.prepare('SELECT description FROM tickets WHERE number = ?').get(Number(id.slice(2))) as { description: string }).description;
     assert.match(desc, /- Reporter IP: `127\.0\.0\.1` \(as the portal saw it\)/);
   } finally {
     h.done();

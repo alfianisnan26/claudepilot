@@ -142,8 +142,11 @@ test('shotCaption: "Shot n · path", the root named', () => {
 test('ticket keys never wrap in the panel', () => {
   const src = (f: string) => readFileSync(new URL(`../../embed/${f}`, import.meta.url), 'utf8');
   assert.match(src('TicketsTab.tsx'), /whitespace-nowrap tabular-nums">\{t\.key\}/);
-  assert.match(src('ReportTab.tsx'), /whitespace-nowrap">\{d\.key\}/);
-  assert.match(src('OtherTabs.tsx'), /font-semibold whitespace-nowrap text-accent underline/);
+  assert.match(src('ReportTab.tsx'), /whitespace-nowrap tabular-nums">\{d\.key\}/, 'the duplicate banner');
+  assert.match(src('ReportTab.tsx'), /whitespace-nowrap tabular-nums">\{ticketKey\}/, 'the Filed row');
+  // The session row's second line (status · key) is one truncated line: a key never breaks onto its own.
+  assert.match(src('OtherTabs.tsx'), /block truncate text-\[12px\] text-muted">\s*\{s\.status\}\s*\{s\.ticketKey/);
+  assert.match(src('ChatView.tsx'), /whitespace-nowrap text-accent tabular-nums/, 'the chat header’s ticket chip');
 });
 
 test('the evidence viewer names what the screenshot could not draw, in one line; nothing when the shot is complete', () => {
