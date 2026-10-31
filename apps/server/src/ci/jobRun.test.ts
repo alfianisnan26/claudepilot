@@ -1006,8 +1006,9 @@ test('gate-job.sh: the token Secret is made once, already owned by the suspended
   assert.equal(r.code, 0, r.out);
   const calls = readFileSync(join(w.root, 'calls.log'), 'utf8').split('\n').filter(Boolean);
   const at = (re: RegExp) => calls.findIndex((c) => re.test(c));
-  const order = [/ apply -f -$/, / get job claudepilot-gate-\S+ -o jsonpath=\{\.metadata\.uid\}/, / create secret generic claudepilot-gate-\S+ --from-file=node-auth-token=\/dev\/stdin --dry-run=client -o json$/, / create -f -$/, / patch job claudepilot-gate-\S+ --type merge -p \{"spec":\{"suspend":false\}\}$/].map(at);
-  assert.ok(order.every((i, n) => i >= 0 && (n === 0 || i > order[n - 1]!)), calls.join('\n'));
+  // The dry run and the create are two stages of one pipeline: they start together, so their lines come in either order.
+  const [apply, uid, dry, create, resume] = [/ apply -f -$/, / get job claudepilot-gate-\S+ -o jsonpath=\{\.metadata\.uid\}/, / create secret generic claudepilot-gate-\S+ --from-file=node-auth-token=\/dev\/stdin --dry-run=client -o json$/, / create -f -$/, / patch job claudepilot-gate-\S+ --type merge -p \{"spec":\{"suspend":false\}\}$/].map(at) as [number, number, number, number, number];
+  assert.ok(apply >= 0 && uid > apply && dry > uid && create > uid && resume > Math.max(dry, create), calls.join('\n'));
   assert.ok(!calls.some((c) => / (patch|get|replace|apply -f \S+) secrets?\b/.test(c) || / get secret/.test(c)), 'no Secret is read, patched or replaced');
   const token = readFileSync(join(w.root, 'token'), 'utf8');
   assert.ok(!calls.some((c) => c.includes(token)), 'the token is never an argument');
