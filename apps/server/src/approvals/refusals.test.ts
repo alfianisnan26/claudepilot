@@ -125,14 +125,15 @@ test('the same refused call in the same workspace is one card with a count; each
   assert.equal(other.count, 3);
   assert.equal(Date.parse(other.expiresAt), h.clock.now + 30 * MIN, 'a repeat keeps the card alive another 30 minutes');
   assert.equal(h.approvals.pending(person).length, 1, 'one card in the queue');
-  // The id the guard printed for a repeat answers its own session (approval_get), with the card; never another session.
-  assert.equal(h.approvals.ownOne('chat-b', otherId).id, first.id);
+  // The id the guard printed for a repeat answers its own session (approval_get), with the card; never another session. A session that
+  // only filed a repeat sees it under its own id (T-3206); the first asker's repeat answers with its own card.
+  assert.equal(h.approvals.ownOne('chat-b', otherId).id, otherId);
   assert.equal(h.approvals.ownOne('chat-a', againId).id, first.id);
   assert.throws(() => h.approvals.ownOne('chat-c', otherId), /not found|No such/i);
   assert.throws(() => h.approvals.ownOne('chat-b', againId), /not found|No such/i);
   assert.deepEqual(
     h.approvals.listOwn('chat-b').map((x) => x.id),
-    [first.id],
+    [otherId],
   );
   // A repeat id pulled again (a restart re-reading the file) is in use: nothing more is counted.
   assert.throws(() => refuse(h.approvals, 'chat-b', p, { id: otherId }), /in use/);
@@ -264,4 +265,179 @@ test('Needs you: a refused call is in the refusal group with its count, and sort
     [refusal, bypassLike].sort(attentionOrder).map((i) => i.id),
     [echo.id, r.id],
   );
+});
+
+// T-3206 (PILOT-1109): follow-ups of T-3114.
+const bash = (command: string, description: string, cwd = '/w/repo') => ({ tool: 'Bash', input: { command, description }, cwd, form: 'settings' });
+const repeatRows = (h: { store: Store }, approvalId?: string) =>
+  Number(
+    (
+      (approvalId
+        ? h.store.db!.prepare('SELECT count(*) AS n FROM approval_repeats WHERE approval_id = ?').get(approvalId)
+        : h.store.db!.prepare('SELECT count(*) AS n FROM approval_repeats').get()) as { n: number }
+    ).n,
+  );
+
+test('T-3206: the fold ignores the free-text description of a call; another command, input, folder or form is its own card', async () => {
+  const h = await harness();
+  const a = refuse(h.approvals, 'chat-a', bash('git -C /x log -1', 'Show the last commit'));
+  h.clock.now += MIN;
+  const b = refuse(h.approvals, 'chat-a', bash('git -C /x log -1', 'Check the newest commit again'));
+  assert.equal(b.id, a.id, 'same command, another description: folded');
+  assert.equal(b.count, 2);
+  assert.equal(h.approvals.pending(person).length, 1, 'one card live');
+  // The card keeps the first call exactly (the one-time pass hashes it).
+  assert.equal((h.approvals.getFor(person, a.id).payload.input as { description: string }).description, 'Show the last commit');
+  // Anything else of the call still tells two calls apart.
+  const others = [
+    bash('git -C /x log -2', 'Show the last commit'),
+    bash('git -C /x log -1', 'Show the last commit', '/w/other'),
+    { ...bash('git -C /x log -1', 'Show the last commit'), form: 'policy' },
+    { tool: 'Bash', input: { command: 'git -C /x log -1', description: 'Show the last commit', timeout: 5000 }, cwd: '/w/repo', form: 'settings' },
+    { tool: 'Read', input: { file_path: '/etc/claudepilot/x', description: 'Show the last commit' }, cwd: '/w/repo', form: 'settings' },
+  ];
+  const ids = others.map((p) => refuse(h.approvals, 'chat-a', p).id);
+  assert.equal(new Set([a.id, ...ids]).size, 6, 'a different command, folder, form, other input or tool: a card each');
+  // A Read without a description folds with the same Read that has one.
+  const read = refuse(h.approvals, 'chat-a', { tool: 'Read', input: { file_path: '/etc/claudepilot/x' }, cwd: '/w/repo', form: 'settings' });
+  assert.equal(read.id, ids[4]);
+  assert.equal(read.count, 2);
+});
+
+test('T-3206: a session that only filed a repeat reads it under its own id, never the first asker, its id or its words', async () => {
+  const h = await harness();
+  const first = refuse(h.approvals, 'chat-a', bash('git -C /x log -1', 'first asker words'), { id: newId() });
+  h.clock.now += MIN;
+  const r1 = newId();
+  refuse(h.approvals, 'chat-b', bash('git -C /x log -1', 'second words'), { id: r1 });
+  h.clock.now += MIN;
+  const r2 = newId();
+  refuse(h.approvals, 'chat-b', bash('git -C /x log -1', 'third words'), { id: r2 });
+  const leaks = (v: unknown) => {
+    const s = JSON.stringify(v);
+    return [first.id, 'chat-a', 'first asker words'].filter((x) => s.includes(x));
+  };
+  // approval_list: the card once, under the session's first repeat id, as its own.
+  const listed = h.approvals.listOwn('chat-b');
+  assert.deepEqual(
+    listed.map((x) => x.id),
+    [r1],
+  );
+  const seen = listed[0]!;
+  assert.equal(seen.requesterSession, 'chat-b');
+  assert.equal(seen.requesterTitle, 'Agent chat-b');
+  assert.equal(seen.status, 'pending');
+  assert.equal(seen.count, 3);
+  assert.equal((seen.payload.input as { command: string }).command, 'git -C /x log -1');
+  assert.deepEqual(leaks(listed), []);
+  // approval_get on either of its repeat ids: that id, as its own.
+  for (const id of [r1, r2]) {
+    const one = h.approvals.ownOne('chat-b', id);
+    assert.equal(one.id, id);
+    assert.equal(one.requesterSession, 'chat-b');
+    assert.deepEqual(leaks(one), []);
+  }
+  // The card's own id is the same 404 as a missing one.
+  const err = (id: string) => {
+    try {
+      h.approvals.ownOne('chat-b', id);
+      return null;
+    } catch (e) {
+      return { code: (e as { code?: string }).code, message: (e as Error).message };
+    }
+  };
+  assert.ok(err(first.id));
+  assert.deepEqual(err(first.id), err(newId()));
+  // The first asker still sees its card under the card's id.
+  const own = h.approvals.listOwn('chat-a');
+  assert.deepEqual(
+    own.map((x) => [x.id, x.requesterSession]),
+    [[first.id, 'chat-a']],
+  );
+  // After a Deny, the repeat asker reads the outcome under its own id.
+  await h.approvals.deny(person, first.id, 'no');
+  const decided = h.approvals.ownOne('chat-b', r1);
+  assert.equal(decided.status, 'denied');
+  assert.equal(decided.result?.message, 'no');
+  assert.deepEqual(leaks(decided), []);
+});
+
+test('T-3206: a looping retry keeps a refused-call card alive at most 2 hours from its creation', async () => {
+  const h = await harness();
+  const p = call('echo loop > .claude/settings.json');
+  const t0 = h.clock.now;
+  const first = refuse(h.approvals, 'chat-a', p);
+  let last = first;
+  for (let i = 0; i < 4; i++) {
+    h.clock.now += 25 * MIN;
+    last = refuse(h.approvals, 'chat-a', p);
+    assert.equal(last.id, first.id);
+  }
+  // At 100 minutes a retry would move it to 130: it stops at 120.
+  assert.equal(Date.parse(last.expiresAt), t0 + 120 * MIN);
+  h.clock.now = t0 + 115 * MIN;
+  assert.equal(Date.parse(refuse(h.approvals, 'chat-a', p).expiresAt), t0 + 120 * MIN);
+  h.clock.now = t0 + 120 * MIN;
+  assert.equal(h.approvals.pending(person).length, 0, 'the card ends at 2 hours');
+  // The next try is a new card with its own 30 minutes.
+  const fresh = refuse(h.approvals, 'chat-a', p);
+  assert.notEqual(fresh.id, first.id);
+  assert.equal(fresh.count, 1);
+  assert.equal(Date.parse(fresh.expiresAt), h.clock.now + 30 * MIN);
+});
+
+test('T-3206: the repeats of a decided or expired card are pruned by the sweep 15 minutes after its end; a live card keeps them', async () => {
+  const h = await harness();
+  const t0 = h.clock.now;
+  const d = call('echo d > .claude/settings.json');
+  const decided = refuse(h.approvals, 'chat-a', d);
+  const dRep = newId();
+  refuse(h.approvals, 'chat-b', d, { id: dRep });
+  refuse(h.approvals, 'chat-a', d);
+  const e = call('echo e > .claude/settings.json');
+  const lapsing = refuse(h.approvals, 'chat-a', e, { ttlMinutes: 5 });
+  refuse(h.approvals, 'chat-b', e, { ttlMinutes: 5 });
+  const l = call('echo l > .claude/settings.json');
+  const live = refuse(h.approvals, 'chat-c', l);
+  refuse(h.approvals, 'chat-c', l);
+  assert.equal(repeatRows(h), 4);
+  await h.approvals.deny(person, decided.id, 'no');
+  // Right after the decision the repeat id still answers its session (the message named it).
+  h.approvals.expire();
+  assert.equal(repeatRows(h, decided.id), 2);
+  assert.equal(h.approvals.ownOne('chat-b', dRep).status, 'denied');
+  // 15 minutes after the decision, the sweep (a read of the queue) drops them; the card expired 10 minutes ago keeps its row for now.
+  h.clock.now = t0 + 15 * MIN;
+  h.approvals.expire();
+  assert.equal(repeatRows(h, decided.id), 0);
+  assert.equal(repeatRows(h, lapsing.id), 1);
+  assert.throws(() => h.approvals.ownOne('chat-b', dRep), /not found|No such/i);
+  // 15 minutes after its expiry, a new refusal filing prunes too (no read of the queue needed).
+  h.clock.now = t0 + 20 * MIN;
+  refuse(h.approvals, 'chat-a', call('echo n > .claude/settings.json'));
+  assert.equal(repeatRows(h, lapsing.id), 0);
+  assert.equal(repeatRows(h, live.id), 1, 'a live card keeps its repeats');
+  assert.equal(h.approvals.getFor(person, live.id).count, 2);
+});
+
+test('T-3206: a card folded from two sessions follows its first asker; a live repeat asker is not told and its next try is a new card', async () => {
+  const h = await harness();
+  const p = call('echo f > .claude/settings.json');
+  const first = refuse(h.approvals, 'chat-a', p);
+  const rep = newId();
+  refuse(h.approvals, 'chat-b', p, { id: rep });
+  // The repeat asker's end expires nothing: the card is the first asker's.
+  assert.equal(h.approvals.expireForSession('chat-b'), 0);
+  assert.equal(h.approvals.getFor(person, first.id).status, 'pending');
+  // The first asker ends: the card expires, and nobody is messaged (chat-b is still live, by decision: the PRD's "follows its first asker").
+  assert.equal(h.approvals.expireForSession('chat-a'), 1);
+  assert.deepEqual(h.sent, []);
+  assert.equal(h.approvals.getFor(person, first.id).status, 'expired');
+  assert.equal(h.approvals.pending(person).length, 0);
+  // chat-b can still read the end under its id, and its next try is a card of its own.
+  assert.equal(h.approvals.ownOne('chat-b', rep).status, 'expired');
+  const next = refuse(h.approvals, 'chat-b', p);
+  assert.notEqual(next.id, first.id);
+  assert.equal(next.requesterSession, 'chat-b');
+  assert.equal(next.count, 1);
 });
