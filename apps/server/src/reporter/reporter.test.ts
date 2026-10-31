@@ -544,3 +544,23 @@ test('describe: the footer and every untrusted line render as text', () => {
   assert.ok(!text.includes('[click](javascript'), 'a note cannot become a link');
   assert.match(text, /<!-- reporter:deployments -->/);
 });
+
+test('events: a streamed line when the bucket changes; the stream ends when the token is revoked', async () => {
+  const h = await reporterHarness();
+  try {
+    const t = h.mint().token;
+    const res = await h.call('/reporter/v1/events', { token: t });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') ?? '', /ndjson/);
+    const reader = res.body!.getReader();
+    const next = async () => new TextDecoder().decode((await reader.read()).value ?? new Uint8Array());
+    assert.match(await next(), /"hello"/);
+    await h.postJson('/reporter/v1/tickets', t, { summary: 'change', captures: [capture()], build: build(), sdkVersion: '1' });
+    assert.match(await next(), /"changed"/);
+    h.service.revoke(h.service.verify(t)!.id, 'test');
+    const end = await reader.read();
+    assert.equal(end.done, true, 'a revoked token ends its stream');
+  } finally {
+    h.done();
+  }
+});

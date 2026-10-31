@@ -281,6 +281,8 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   const api = new Hono<Vars>();
   const guarded = ['/me', '/tickets', '/tickets/*', '/reviews', '/reviews/*', '/duplicates', '/events', '/session-targets', '/observed-build', '/sessions', '/knowledge', '/knowledge/*'];
   for (const p of guarded) api.use(p, async (c, next) => {
+    // '/tickets' and '/tickets/*' may both match one path: the token is checked (and counted) once.
+    if (c.get('reporter')) return next();
     c.header('Cache-Control', 'no-store');
     if (!sameOrigin(c, deps.portalOrigin(c))) throw notFound();
     const secret = /^Bearer\s+(\S+)$/i.exec(c.req.header('authorization') ?? '')?.[1];
