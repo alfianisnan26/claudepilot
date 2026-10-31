@@ -77,6 +77,7 @@ test('describe: the capture section names what the screenshot could not draw in 
     fixCommits: [],
   });
   const lines = describeTicket(input(ev)).split('\n').filter((l) => l.includes('Not captured'));
-  assert.deepEqual(lines, ['- Not captured: image not readable (no CORS): cdn.example; canvas: drawn blank']);
+  // Page text is untrusted Markdown: inline() escapes its punctuation.
+  assert.deepEqual(lines, ['- Not captured: image not readable \\(no CORS\\): cdn.example; canvas: drawn blank']);
   assert.ok(!describeTicket(input(parseEvidence(bytes(evidence())))).includes('Not captured'), 'a complete shot says nothing');
 });
