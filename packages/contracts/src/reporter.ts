@@ -199,6 +199,21 @@ export interface ReporterConnectMessage {
   actorLabel: string;
 }
 
+/**
+ * The connect popup's answer when it cannot hand the token to `window.opener` (the opener was lost: signing in inside the popup goes
+ * through the portal's pages, whose Cross-Origin-Opener-Policy cuts the popup off from the panel). The approval is held on the server for
+ * two minutes, keyed by the nonce; the panel claims it ONCE with the secret the nonce was derived from (nonce = base64url(SHA-256(verifier))),
+ * which never left the panel. No token travels in a URL.
+ */
+export interface ReporterConnectClaimRequest {
+  bucket: string;
+  origin: string;
+  verifier: string;
+}
+
+/** Not approved yet (or unknown, expired, already claimed: the same answer), or the connect message. */
+export type ReporterConnectClaim = { pending: true } | ReporterConnectMessage;
+
 /** Where on the page a ticket points. Coordinates are CSS pixels in document space (scroll included). */
 export interface ReporterAnchor {
   /** URL path plus search, no hash; callouts show on pages whose path matches. */
@@ -789,6 +804,7 @@ export const REPORTER_ROUTES = {
   embed: '/reporter/v1/embed', // GET page (iframe) ?bucket=&origin= ; frame-ancestors = that origin when allowed
   status: '/reporter/v1/status', // GET ?bucket=&origin= (panel, same-origin, no token): ReporterStatus for the panel's ready message
   connect: '/reporter/v1/connect', // GET page (popup) ?bucket=&origin=&nonce=; POST approve (cookie, same-origin)
+  connectClaim: '/reporter/v1/connect/claim', // POST ReporterConnectClaimRequest (panel, same-origin, no token) -> ReporterConnectClaim
   me: '/reporter/v1/me', // GET
   tickets: '/reporter/v1/tickets', // GET ReporterTicketQuery -> ReporterTicketList, POST
   ticket: '/reporter/v1/tickets/:key', // GET

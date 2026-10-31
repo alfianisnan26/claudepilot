@@ -81,6 +81,7 @@ export async function reporterHarness(opts: { now?: () => Date } = {}) {
       signedIn: () => (signedIn ? (ownerActor() as Actor & { userId: string }) : null),
       userLabel: () => 'Owner',
       clientKey: () => '127.0.0.1',
+      ...(opts.now ? { now: () => opts.now!().getTime() } : {}),
     }) as never,
   );
   const portalTokens = new Map<string, { actor: Actor; label: string }>();

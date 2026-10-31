@@ -2,6 +2,7 @@ import {
   REPORTER_ROUTES,
   type ReporterAddCapturesRequest,
   type ReporterAddCommentRequest,
+  type ReporterConnectClaim,
   type ReporterConnectMessage,
   type ReporterCreateTicketRequest,
   type ReporterCreateTicketResponse,
@@ -117,6 +118,27 @@ export function parseConnectMessage(data: unknown, nonce: string, bucket: string
   return { type: d.type, nonce: d.nonce, token: d.token, expiresAt: d.expiresAt, bucketKey: d.bucketKey, actorLabel: typeof d.actorLabel === 'string' ? d.actorLabel.slice(0, 120) : '' };
 }
 
+const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+/**
+ * A connect attempt's secret and its public nonce: nonce = base64url(SHA-256(verifier)). The nonce rides in the popup's URL; the verifier
+ * never leaves this frame and is what claims an approval the popup could not hand over (its opener was lost). Null without WebCrypto
+ * (an insecure context): connect then works only through the opener.
+ */
+export async function connectPair(): Promise<{ verifier: string; nonce: string } | null> {
+  const c = typeof crypto !== 'undefined' ? crypto : null;
+  if (!c?.subtle || !c.getRandomValues) return null;
+  const verifier = b64url(c.getRandomValues(new Uint8Array(32)));
+  const nonce = b64url(new Uint8Array(await c.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
+  return { verifier, nonce };
+}
+
+/** The few characters the popup shows too (server: reporter/pages.ts connectCode), so the person can match the window to this panel. */
+export const connectCode = (nonce: string): string => nonce.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
+
+/** A unique window name per attempt: a fixed name would reuse (navigate) a window an earlier attempt left open. */
+export const connectWindowName = (nonce: string): string => `pilot-reporter-connect-${nonce.replace(/[^A-Za-z0-9]/g, '').slice(0, 16)}`;
+
 /** `/reporter/v1/tickets/:key` with `{ key }` filled in (encoded). */
 export function fill(route: string, params: Record<string, string>): string {
   return route.replace(/:([a-zA-Z]+)/g, (_, k: string) => encodeURIComponent(params[k] ?? ''));
@@ -130,6 +152,8 @@ const listOf = <T,>(v: unknown, field: string): T[] => {
 
 export interface ReporterClient {
   status(bucket: string, origin: string): Promise<ReporterStatus>;
+  /** A connect approval the popup held for this panel (no token needed), or `pending`. */
+  claimConnect(bucket: string, origin: string, verifier: string): Promise<ReporterConnectClaim>;
   me(): Promise<ReporterMe>;
   /** Revokes this token on the server (sign out); best effort. */
   revoke(): Promise<unknown>;
@@ -196,6 +220,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
   const R = REPORTER_ROUTES;
   return {
     status: (bucket, origin) => call('GET', `${R.status}?${new URLSearchParams({ bucket, origin })}`),
+    claimConnect: (bucket, origin, verifier) => call('POST', R.connectClaim, { bucket, origin, verifier }),
     me: () => call('GET', R.me),
     revoke: () => call('DELETE', R.me),
     tickets: async (q) => {

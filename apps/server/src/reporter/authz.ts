@@ -30,6 +30,10 @@ export const REPORTER_WIDGET_POLICIES = {
   'GET /reporter/v1/status': { kind: 'public', why: 'Whether a bucket and origin may use the widget; one answer for every refusal, so nothing is enumerated.' },
   'GET /reporter/v1/connect': { kind: 'public', why: 'The connect popup: a signed-in person sees what they approve, anyone else a sign-in link. Minting is the POST.' },
   'POST /reporter/v1/connect': { kind: 'signed-in', audit: 'reporter.connected' },
+  'POST /reporter/v1/connect/claim': {
+    kind: 'public',
+    why: 'The panel claims an approval the popup held (its opener was lost): same-origin only, one use, two minutes, and only with the verifier whose SHA-256 is the nonce the person approved; anything else is the same `pending`.',
+  },
   'GET /reporter/v1/me': { kind: 'bearer', why: TOKEN },
   'DELETE /reporter/v1/me': { kind: 'bearer', why: `${TOKEN} Sign out: the token revokes itself, nothing else.` },
   'GET /reporter/v1/tickets': { kind: 'bearer', why: TOKEN },
