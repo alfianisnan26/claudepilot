@@ -188,7 +188,9 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`pilot.ai.isnan.me`)
+    # pilot.dev.isnan.me is a second address for this portal: Caddy on the owner's Mac (deploy/compose.yaml) forwards it here with
+    # SNI pilot.ai.isnan.me and the Host kept, so the portal's same-host Origin check holds for either name.
+    - match: Host(`pilot.ai.isnan.me`) || Host(`pilot.dev.isnan.me`)
       kind: Rule
       services:
         - name: claudepilot-portal

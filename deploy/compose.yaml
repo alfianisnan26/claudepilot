@@ -1,63 +1,28 @@
-# Production portal behind Caddy (HTTPS). Built once from the repo; rebuild to deploy changes:
-#   docker compose -f deploy/compose.yaml up -d --build
+# pilot.dev.isnan.me on the owner's Mac: Caddy (HTTPS) in front of the k3s portal. The portal, its database, sessions and
+# workspaces are the cluster's (deploy/k3s); nothing else runs here. From the devcontainer:
+#   docker --context host compose -p claudepilot -f deploy/compose.yaml up -d --build
 name: claudepilot
 
 services:
-  portal:
-    build:
-      context: ..
-      dockerfile: Dockerfile
-      secrets: [node_auth_token]
-    image: claudepilot-portal:latest
-    restart: unless-stopped
-    environment:
-      PORTAL_SERVER_CODE: ${PORTAL_SERVER_CODE:-}
-      # Only Caddy reaches the portal, so its X-Forwarded-For is the client address (sign-in rate limit).
-      PORTAL_TRUST_PROXY: "true"
-      PORTAL_DOCKER_SOCKET: /var/run/docker.sock
-      PORTAL_K8S_ENABLED: "false"
-      # Connect (docs/prd/targets-connect.md): targets enrolled from the web, agents that dial out to this portal. ON (set
-      # PORTAL_CONNECT_ENABLED to "false" to switch it off). Its full acceptance and abuse suite (docs/open-items.md, T6) has not run yet.
-      # Targets reach the portal at this address (through Caddy).
-      PORTAL_CONNECT_URL: https://${PORTAL_DOMAIN:-pilot.dev.isnan.me}
-      # With PORTAL_TLS=internal Caddy's own CA signs the certificate, so agents need its root certificate: the wizard's "Private CA"
-      # option embeds this file. Copy it once (a public certificate, not a secret) into the data volume:
-      #   docker cp claudepilot-caddy-1:/data/caddy/pki/authorities/local/root.crt ./root.crt  (then into the portal's /data/connect-ca.pem)
-      PORTAL_CONNECT_CA_FILE: /data/connect-ca.pem
-    volumes:
-      - portal-data:/data
-      - portal-secrets:/secrets
-      # Workspaces run on this host's Docker. Access to the socket is root on the host.
-      - /var/run/docker.sock:/var/run/docker.sock
-    expose: ["3000"]
-
   caddy:
     build:
       context: .
       dockerfile: caddy.Dockerfile
     image: claudepilot-caddy:latest
     restart: unless-stopped
-    depends_on:
-      portal:
-        condition: service_healthy
     environment:
       PORTAL_DOMAIN: ${PORTAL_DOMAIN:-pilot.dev.isnan.me}
       PORTAL_TLS: ${PORTAL_TLS:-internal}
+      # The cluster's ingress (Traefik); pilot.ai.isnan.me resolves to it on the local network.
+      PORTAL_UPSTREAM: ${PORTAL_UPSTREAM:-192.168.100.5}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
     volumes:
       - caddy-data:/data
       - caddy-config:/config
 
-secrets:
-  node_auth_token:
-    environment: NODE_AUTH_TOKEN
-
 volumes:
-  portal-data:
-  portal-secrets:
   caddy-data:
   caddy-config:
