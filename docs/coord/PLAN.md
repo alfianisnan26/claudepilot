@@ -149,6 +149,7 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
    dir and delete it to re-run. Anything that adds a column holding sealed values must be listed in ENCRYPTED_COLUMNS.
    The tickets block (A3b, 40-49) is full since T-1974 took 49 (2026-10-21); tickets migrations overflow to 785+ (785-787, 794, 795 and 796 used; 788 is
    T-975's on its branch): take the next free number there after checking integration and the open branches.
+   The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900 used, 2026-10-31).
 6. Dependencies: run `npm install` only under `flock COORD/npm.lock npm install ...`, then re-run the typecheck. Prefer no new dependencies; say in your
    report which you added and why. Never edit `@isnanme/*` packages in node_modules.
 7. Docker is ONE shared daemon. Give everything your prefix. A portal lists every `claudepilot-*` managed container, so other agents' workspaces show up in
