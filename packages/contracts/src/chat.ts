@@ -53,19 +53,20 @@ export function modeWithin(mode: ChatPermissionMode, cap: ChatPermissionMode): b
 }
 
 /**
- * The mode a worker starts in (PILOT-996, D-103; T-2997, PILOT-1025). The one asked wins (whether it may be asked is
- * {@link workerModeAllowed}'s). Unasked: Bypass only when the parent is in Bypass NOW (`parentInBypass`: the portal's live check of the
- * parent, its policy and capability, never the stored mode alone), entered through the portal's gated inherit path; a parent whose stored
- * mode says Bypass without that gives Auto. Otherwise Auto while `sessions.autonomousAuto` is on; off, the parent's mode, else Auto, where a
- * parent in `default` (a person answers its cards) hands on dontAsk: a worker never waits on a person nobody asked for (D-62).
+ * The mode a worker starts in (PILOT-996, D-103; T-2997, PILOT-1025). A parent in Bypass NOW (`parentInBypass`: the portal's live check of
+ * the parent, its policy and capability, never the stored mode alone) hands on Bypass, entered through the portal's gated inherit path,
+ * when no mode or Auto is asked (owner, T-2997 comment 50003: "if bypass is on lead, should bypass"); a narrower mode asked by name
+ * (plan, dontAsk, default, acceptEdits) wins (whether it may be asked is {@link workerModeAllowed}'s). A parent whose stored mode says
+ * Bypass without that gives Auto. Otherwise Auto while `sessions.autonomousAuto` is on; off, the parent's mode, else Auto, where a parent in
+ * `default` (a person answers its cards) hands on dontAsk: a worker never waits on a person nobody asked for (D-62).
  */
 export function workerMode(
   asked: ChatPermissionMode | null | undefined,
   parent: ChatPermissionMode | null | undefined,
   ctx: { parentInBypass?: boolean; autonomousAuto?: boolean } = {},
 ): ChatPermissionMode {
+  if (ctx.parentInBypass === true && (!asked || asked === 'auto')) return 'bypassPermissions';
   if (asked) return asked;
-  if (ctx.parentInBypass === true) return 'bypassPermissions';
   if (parent === 'bypassPermissions') return 'auto';
   if (ctx.autonomousAuto === true) return 'auto';
   if (parent === 'default') return 'dontAsk';

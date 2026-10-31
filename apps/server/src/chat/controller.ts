@@ -4295,6 +4295,11 @@ export class ChatController {
     return session && this.#autoAllowed(session) ? 'auto' : 'dontAsk';
   }
 
+  /** T-2997 (PILOT-1025): whether the Bypass policy allows Bypass now (a spawn says so when a Bypass parent's worker gets Auto instead). */
+  bypassPolicyOn(): boolean {
+    return this.#bypassAllowed();
+  }
+
   /** T-2997 (PILOT-1025): whether `sessions.autonomousAuto` is on now (a spawn's unasked mode and its Auto by name read it). */
   autonomousAutoOn(): boolean {
     return this.#autonomousAutoOn();
