@@ -6,8 +6,11 @@
 import { AppError } from '@isnanme/core';
 import {
   REPORTER_EVIDENCE_SCHEMA,
+  REPORTER_ANNOTATION_COLORS,
   REPORTER_LIMITS,
   type ReporterAnchor,
+  type ReporterAnnotation,
+  type ReporterAnnotationColor,
   type ReporterBuildInfo,
   type ReporterCaptureInput,
   type ReporterCheckFinding,
@@ -255,7 +258,67 @@ export function cleanCapture(raw: unknown, origin: string, field = 'capture'): R
   // A capture is of a page of the site the token was made for, never of somewhere else.
   if (page.origin !== origin) throw invalid(`${field}.pageUrl`, 'The page is not on this site.');
   const note = raw.note === null || raw.note === undefined ? null : str(raw.note, REPORTER_LIMITS.commentChars, `${field}.note`) || null;
-  return { captureId: raw.captureId, pageUrl: redactUrl(page.toString()).slice(0, 2000), anchor: cleanAnchor(raw.anchor, `${field}.anchor`), note };
+  const annotations = cleanAnnotations(raw.annotations, `${field}.annotations`);
+  return { captureId: raw.captureId, pageUrl: redactUrl(page.toString()).slice(0, 2000), anchor: cleanAnchor(raw.anchor, `${field}.anchor`), note, ...(annotations.length ? { annotations } : {}) };
+}
+
+/* ---------- Annotations ---------- */
+
+/** A coordinate in image pixels: finite, within a screenshot's reach (a full-page shot is tall), kept to one decimal. */
+const coord = (v: unknown, field: string) => Math.round(num(v, field, { min: -100_000, max: 100_000 }) * 10) / 10;
+const color = (v: unknown, field: string): ReporterAnnotationColor => oneOf(v, REPORTER_ANNOTATION_COLORS, field);
+const width = (v: unknown, field: string) => Math.round(num(v, field, { min: 0.5, max: 1000 }) * 10) / 10;
+
+function points(v: unknown, field: string, count: { min: number; max: number }): number[] {
+  if (!Array.isArray(v)) throw invalid(field, `${field} is a flat list of x, y numbers.`);
+  if (v.length % 2 !== 0 || v.length < count.min * 2 || v.length > count.max * 2) throw invalid(field, `${field} holds ${count.min === count.max ? count.min : `${count.min} to ${count.max}`} points.`);
+  return v.map((x, i) => coord(x, `${field}[${i}]`));
+}
+
+function annoRect(v: unknown, field: string) {
+  const r = rect(v, field);
+  // Normalised (a drag up or left gives a negative size in the editor) and bounded like a coordinate.
+  return { x: coord(r.x, `${field}.x`), y: coord(r.y, `${field}.y`), w: coord(r.w, `${field}.w`), h: coord(r.h, `${field}.h`) };
+}
+
+/**
+ * The marks of a capture (ReporterAnnotation), checked one by one: a known type, a colour of the palette, coordinates in range, the per-mark
+ * and per-capture point caps, text without control characters, capped and redacted (chat/redact.ts and the page shapes). Over a cap is
+ * refused (the editor caps before it sends). Absent or empty: no marks.
+ */
+export function cleanAnnotations(raw: unknown, field = 'annotations'): ReporterAnnotation[] {
+  const L = REPORTER_LIMITS;
+  let total = 0;
+  const out = list(raw, L.annotations, field, (x, i): ReporterAnnotation => {
+    const f = `${field}[${i}]`;
+    if (!isObj(x)) throw invalid(f, 'A mark is { type, ... }.');
+    const type = oneOf(x.type, ['pen', 'highlight', 'line', 'arrow', 'rect', 'ellipse', 'blur', 'text', 'step'] as const, `${f}.type`);
+    if (type === 'blur') return { type, rect: annoRect(x.rect, `${f}.rect`) };
+    if (type === 'rect' || type === 'ellipse') return { type, rect: annoRect(x.rect, `${f}.rect`), color: color(x.color, `${f}.color`), width: width(x.width, `${f}.width`) };
+    const n = type === 'pen' || type === 'highlight' ? { min: 1, max: L.annotationPoints / 2 } : type === 'line' || type === 'arrow' ? { min: 2, max: 2 } : { min: 1, max: 1 };
+    const pts = points(x.points, `${f}.points`, n);
+    total += pts.length;
+    if (total > L.annotationPointsTotal) throw invalid(field, `The marks hold more than ${L.annotationPointsTotal} numbers.`);
+    const base = { points: pts, color: color(x.color, `${f}.color`), width: width(x.width, `${f}.width`) };
+    if (type === 'text') {
+      const text = str(x.text, L.annotationTextChars, `${f}.text`).trim();
+      if (!text) throw invalid(`${f}.text`, 'A text mark needs its text.');
+      return { type, ...base, text };
+    }
+    if (type === 'step') return { type, ...base, n: Math.round(num(x.n, `${f}.n`, { min: 1, max: 999 })) };
+    return { type, ...base };
+  }).items;
+  return out;
+}
+
+/** True when the marks pixelate an area: the screenshot uploaded is then the flattened image, and no original may be stored. */
+export const hasBlur = (marks: readonly ReporterAnnotation[] | null | undefined): boolean => !!marks?.some((m) => m.type === 'blur');
+
+/** The annotated image: PNG or WebP only (what a canvas exports), by its magic bytes, within the screenshot cap. */
+export function checkAnnotated(bytes: Buffer, declared: string | undefined): 'image/png' | 'image/webp' {
+  const type = checkScreenshot(bytes, declared);
+  if (type !== 'image/png' && type !== 'image/webp') throw invalid('annotated', 'An annotated image is a PNG or WebP image.');
+  return type;
 }
 
 /* ---------- Screenshots ---------- */

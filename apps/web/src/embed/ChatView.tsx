@@ -1,11 +1,13 @@
 import { REPORTER_LIMITS, type ReporterChatMessage, type ReporterChatState } from '@portal/contracts';
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { chatStatus, mergeLines, newUuid, sessionTitle } from './chatModel';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { chatItems, chatStatus, mergeLines, newUuid, runtimeLine, sessionTitle } from './chatModel';
 import { Composer } from './Composer';
 import { usePanel, type ChatOpen } from './context';
 import { useBottomList } from './hooks';
 import { Icon } from './icons';
 import { Md } from './markdown';
+import { RuntimeSheet } from './RuntimeSheet';
+import { ToolActivity } from './ToolActivity';
 import { AuthImg, IconBtn, Notice } from './ui';
 import { Viewer } from './Viewer';
 
@@ -41,6 +43,8 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
   const [pending, setPending] = useState<{ uuid: string; text: string }[]>([]);
   const [view, setView] = useState<string | null>(null);
   const [lateFail, setLateFail] = useState<string | null>(null);
+  const [info, setInfo] = useState(false);
+  const closeInfo = useCallback(() => setInfo(false), []);
   const lastSeq = useRef(0);
   const loadingOlder = useRef(false);
   const list = useRef<HTMLDivElement>(null);
@@ -177,20 +181,33 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
   const st = chatStatus(session);
   const ended = session?.state === 'ended';
   const ticketKey = open.ticketKey ?? session?.ticketKey ?? null;
+  const busy = st.tone === 'busy' || st.tone === 'wait';
+  const line = runtimeLine(session?.runtime);
+  // Tool calls fold into activity rows once per batch of lines (mergeLines keeps the array when a batch adds nothing).
+  const items = useMemo(() => chatItems(lines, busy), [lines, busy]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-1 border-b border-line pr-12 pl-1">
+      <header className="flex shrink-0 items-center gap-1 border-b border-line pr-1 pl-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={onBack} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-semibold" title={session?.title}>
+        {/* The title and one info line (a state dot, then model · Claude · context); a tap opens the session's runtime. */}
+        <button
+          type="button"
+          onClick={() => setInfo(true)}
+          disabled={!session}
+          aria-haspopup="dialog"
+          aria-label={`${session ? sessionTitle(session.title) : 'Session'}: ${[st.word, line].filter(Boolean).join(', ')}. Session info`}
+          className="flex min-h-11 min-w-0 flex-1 flex-col justify-center rounded-xl px-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        >
+          <span className="block w-full truncate text-[14px] font-semibold" title={session?.title}>
             {session ? sessionTitle(session.title) : 'Session'}
-          </p>
-          <p className="flex items-center gap-1.5 text-[12px] text-muted">
-            <span aria-hidden="true" className={`size-2 rounded-full ${st.tone === 'busy' ? 'bg-flame' : st.tone === 'wait' ? 'bg-gold' : st.tone === 'off' ? 'bg-line-strong' : 'bg-accent'}`} />
-            {st.word}
-          </p>
-        </div>
+          </span>
+          <span data-testid="runtime-line" className="flex w-full min-w-0 items-center gap-1.5 text-[12px] text-muted">
+            <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${st.tone === 'busy' ? 'bg-flame' : st.tone === 'wait' ? 'bg-gold' : st.tone === 'off' ? 'bg-line-strong' : 'bg-accent'}`} />
+            {/* The dot says the state (its word is in the label and the sheet), so the line has room for model · Claude · context at 390 px. */}
+            <span className="min-w-0 truncate" title={st.word}>{line || st.word}</span>
+          </span>
+        </button>
         {ticketKey && (
           <button
             type="button"
@@ -252,9 +269,7 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
         {before !== null && <p className="py-2 text-center text-[12px] text-muted">Scroll up for older</p>}
         {session && !lines.length && !pending.length && <p className="py-8 text-center text-[13.5px] text-muted">No messages yet.</p>}
         <ol className="flex flex-col gap-1.5">
-          {lines.map((m) => (
-            <Line key={m.seq} m={m} onImage={setView} />
-          ))}
+          {items.map((it) => (it.type === 'activity' ? <ToolActivity key={it.key} item={it} /> : <Line key={it.key} m={it.m} onImage={setView} />))}
           {pending.map((p) => (
             <li key={p.uuid} className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-accent-soft px-3 py-2 text-[14px] break-words whitespace-pre-line opacity-70">
               {p.text}
@@ -307,11 +322,12 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
         />
       )}
       {view && <Viewer src={view} alt="Image" onClose={() => setView(null)} />}
+      {info && session && <RuntimeSheet runtime={session.runtime} status={st.word} onClose={closeInfo} />}
     </div>
   );
 }
 
-/** One line: the person's and the assistant's text as bubbles, a tool call as one muted line, an approval or an error as a marked line. */
+/** One line: the person's and the assistant's text as bubbles, an approval or an error as a marked line. */
 const Line = memo(function Line({ m, onImage }: { m: ReporterChatMessage; onImage: (url: string) => void }) {
   const { client } = usePanel();
   const images = m.images.length ? (
@@ -323,14 +339,8 @@ const Line = memo(function Line({ m, onImage }: { m: ReporterChatMessage; onImag
       ))}
     </span>
   ) : null;
-  if (m.kind === 'tool')
-    return (
-      <li className="flex min-w-0 items-center gap-1.5 px-1 text-[12px] text-muted">
-        <Icon name="terminal" className="size-3.5 shrink-0" />
-        <span className="shrink-0 font-semibold">{m.tool}</span>
-        {m.text && <span className="min-w-0 truncate font-mono">{m.text}</span>}
-      </li>
-    );
+  // Tool calls and results are folded into activity rows (ToolActivity); a stray one is not a line.
+  if (m.kind === 'tool' || m.kind === 'tool_result') return null;
   if (m.kind === 'approval' || m.kind === 'error')
     return (
       <li className={`flex items-start gap-1.5 rounded-xl px-2 py-1.5 text-[12.5px] break-words ${m.kind === 'error' ? 'bg-danger-soft text-danger' : 'bg-gold-soft text-ink'}`}>

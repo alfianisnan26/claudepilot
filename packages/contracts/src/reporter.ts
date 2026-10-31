@@ -63,6 +63,14 @@ export const REPORTER_LIMITS = {
   commentChars: 4000,
   /** Draft reviews one person keeps open per bucket. */
   draftReviews: 10,
+  /** Marks (ReporterAnnotation) on one capture. */
+  annotations: 200,
+  /** Numbers in one mark's `points` (x, y pairs: a pen stroke of 2,000 points). */
+  annotationPoints: 4000,
+  /** Numbers in all `points` of one capture. */
+  annotationPointsTotal: 40000,
+  /** Characters of one text mark. */
+  annotationTextChars: 300,
   /** A draft review untouched this long is discarded (its files too). */
   draftDays: 30,
 } as const;
@@ -462,7 +470,36 @@ export interface ReporterCaptureInput {
   anchor: ReporterAnchor;
   /** What this shot shows, when the person wrote a line for it. */
   note: string | null;
+  /**
+   * The marks drawn on the screenshot (annotation editor), when there are any. With a `blur` among them the screenshot uploaded IS the
+   * flattened image and no `annotated` attachment is accepted; without, the original goes as `screenshot` and the flattened one as `annotated`.
+   */
+  annotations?: ReporterAnnotation[];
 }
+
+/**
+ * The annotation editor's palette (PILOT-1111, owner 2026-10-31): five fixed high-contrast colours, red first (the default). The server
+ * refuses any other value, so a mark can never carry free text in its colour.
+ */
+export const REPORTER_ANNOTATION_COLORS = ['#ef233c', '#ffd60a', '#2dc653', '#1e88ff', '#ffffff'] as const;
+export type ReporterAnnotationColor = (typeof REPORTER_ANNOTATION_COLORS)[number];
+
+export type ReporterAnnotationType = 'pen' | 'highlight' | 'line' | 'arrow' | 'rect' | 'ellipse' | 'blur' | 'text' | 'step';
+export const REPORTER_ANNOTATION_TYPES: readonly ReporterAnnotationType[] = ['pen', 'highlight', 'line', 'arrow', 'rect', 'ellipse', 'blur', 'text', 'step'];
+
+/**
+ * One mark of the annotation editor, in the SCREENSHOT's pixel coordinates (independent of how big it was shown). `points` is flat
+ * (x0, y0, x1, y1, ...): a pen or highlighter stroke (2+ points), a line or an arrow (exactly 2: from, to), a text or a step marker (exactly 1:
+ * the text's top-left, the circle's centre). `rect` is a rectangle, an ellipse's box, or an area that is pixelated (blur). `width` is the
+ * stroke width in image pixels; for text the font size, for a step the circle's radius. Kept as vector data on the capture; the flattened
+ * image is uploaded beside it (kind `annotated`), or, when a blur is present, INSTEAD of the original (which then never leaves the device).
+ */
+export type ReporterAnnotation =
+  | { type: 'pen' | 'highlight' | 'line' | 'arrow'; points: number[]; color: ReporterAnnotationColor; width: number }
+  | { type: 'rect' | 'ellipse'; rect: { x: number; y: number; w: number; h: number }; color: ReporterAnnotationColor; width: number }
+  | { type: 'blur'; rect: { x: number; y: number; w: number; h: number } }
+  | { type: 'text'; points: number[]; color: ReporterAnnotationColor; width: number; text: string }
+  | { type: 'step'; points: number[]; color: ReporterAnnotationColor; width: number; n: number };
 
 /** How a submitted review becomes tickets. The server splits, in one transaction. */
 export type ReporterFileMode = 'single' | 'per-page' | 'per-capture';
@@ -514,6 +551,10 @@ export interface ReporterReviewComment extends ReporterCapture {
   body: string;
   updatedAt: string;
   screenshotUrl: string | null;
+  /** The annotated image (marks drawn in), when one was uploaded; thumbnails prefer it. Additive. */
+  annotatedUrl?: string | null;
+  /** How many marks the shot carries (0 or absent: none). Additive. */
+  marks?: number;
 }
 
 export interface ReporterReview {
@@ -596,7 +637,28 @@ export interface ReporterMe {
    */
   clientIp?: string | null;
   clientIpFamily?: 4 | 6 | null;
+  /** The portal release that answers (its image tag, PORTAL_RELEASE baked in at build); null when the server does not know it. Additive. */
+  portalRelease?: string | null;
 }
+
+/**
+ * Whether an address is private, loopback or cluster-internal (10/8, 172.16/12, 192.168/16, 127/8, fc00::/7, ::1, and those as IPv4-mapped
+ * IPv6). In the cluster, k3s's service load balancer rewrites the source before Traefik, so the portal sees a pod address (10.42.x.x) rather
+ * than the reporter's: such an address is labelled, never shown as the client's public IP.
+ */
+export function isInternalIp(ip: string | null | undefined): boolean {
+  const a = (ip ?? '').trim().toLowerCase().replace(/^::ffff:(?=(?:\d{1,3}\.){3}\d{1,3}$)/, '');
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(a);
+  if (v4) {
+    const [x, y] = [Number(v4[1]), Number(v4[2])];
+    return x === 10 || x === 127 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168);
+  }
+  if (!a.includes(':') || !/^[0-9a-f:]+$/.test(a)) return false;
+  return a === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(a);
+}
+
+/** An address as the reporter shows it: an internal one says so ("10.42.1.7 (internal: behind the cluster proxy)"). */
+export const reporterIpText = (ip: string) => (isInternalIp(ip) ? `${ip} (internal: behind the cluster proxy)` : ip);
 
 /** POST /reporter/v1/observed-build body: the build the page declared; the server records it for the SITE's repo and environment. */
 export interface ReporterObservedBuildRequest {
@@ -691,7 +753,7 @@ export interface ReporterTicket {
   /** The portal page of this ticket. */
   url: string;
   /** The ticket's captures, in order; empty when it did not come from the widget. */
-  captures: (ReporterCapture & { screenshotUrl: string | null })[];
+  captures: (ReporterCapture & { screenshotUrl: string | null; annotatedUrl?: string | null; marks?: number })[];
   build: ReporterBuildInfo | null;
   phase: ReporterWorkPhase;
   fix: ReporterFixInfo | null;
@@ -729,12 +791,17 @@ export interface ReporterSession {
 export interface ReporterChatMessage {
   seq: number;
   at: string;
-  kind: 'user' | 'assistant' | 'tool' | 'approval' | 'error';
+  kind: 'user' | 'assistant' | 'tool' | 'tool_result' | 'approval' | 'error';
+  /** For `tool_result`: empty when the tool succeeded, else its error as one short redacted line (never its output). */
   text: string;
   /** For `user`: who sent it when it was not the owner at the keyboard (a reporter, a ticket, another session). */
   from: string | null;
   /** For `tool`: the tool's name; `text` is one line of what it was given (a command, a path), cut short. */
   tool: string | null;
+  /** For `tool` and `tool_result`: the call's id, which joins a result to its call (the panel folds a run of calls into one row). */
+  toolId?: string | null;
+  /** For `tool_result`: false when the tool failed. */
+  ok?: boolean;
   /** Images on the line, served by `REPORTER_ROUTES.sessionBlob` with the bearer token. */
   images: { url: string; mediaType: string; width: number | null; height: number | null }[];
 }
@@ -752,6 +819,31 @@ export interface ReporterChatState {
   /** The ticket of the bucket it works on, when it works on one. */
   ticketKey: string | null;
   url: string;
+  /** What it runs with, as the portal's chat header shows it (the same session record and usage snapshot). Additive. */
+  runtime?: ReporterChatRuntime;
+}
+
+/** A plan window of the Claude a session runs on (the portal's usage snapshot): percent used and when it resets; null where unknown. */
+export interface ReporterUsageWindow {
+  usedPct: number | null;
+  resetsAt: string | null;
+}
+
+/**
+ * A session's runtime for the panel's chat header: model and effort, permission mode, the Claude it runs on by the portal's display name
+ * (never an email, account or plan id, token or credential), the context window, its cost so far, and that Claude's plan windows. Every
+ * value is the portal's own; null when the portal has none ("unavailable", never a guess).
+ */
+export interface ReporterChatRuntime {
+  model: string | null;
+  effort: string | null;
+  mode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions' | null;
+  claude: string | null;
+  context: { usedTokens: number; windowTokens: number | null } | null;
+  /** What Claude Code reported the session cost (list price: for a plan not a bill). */
+  costUsd: number | null;
+  /** The Claude's plan windows; null when it has no plan reading (signed out, an API key, not read yet). */
+  plan: { session: ReporterUsageWindow | null; week: ReporterUsageWindow | null } | null;
 }
 
 /**
@@ -795,7 +887,11 @@ export interface TicketReporterEvidence {
   fixCommits: string[];
   deployments: ReporterDeploymentState[];
   createdAt: string;
-  captures: (ReporterCapture & { screenshotAttachmentId: string | null; evidenceAttachmentId: string | null })[];
+  /**
+   * `annotatedAttachmentId`: the flattened image with the marks (absent or null: none, or the marks included a blur, so the screenshot itself
+   * is the flattened one and no original was ever stored). `annotations`: the marks as vector data. Both additive.
+   */
+  captures: (ReporterCapture & { screenshotAttachmentId: string | null; evidenceAttachmentId: string | null; annotatedAttachmentId?: string | null; annotations?: ReporterAnnotation[] })[];
   /** The reporter's address as the portal saw it when the ticket was filed (added by the server); null for older tickets. Additive. */
   reporterIp?: string | null;
 }
@@ -877,7 +973,13 @@ export type ReporterPanelMessage =
   | { type: 'pilot-reporter:target'; target: ReporterReportTarget }
   /** The open tickets of this bucket anchored on the current path; replaces what is drawn. Empty when signed out. */
   | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
-  | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }
+  | {
+      type: 'pilot-reporter:settings';
+      calloutsVisible: boolean;
+      hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string>;
+      /** The panel's effective theme, so the SDK's Close drawn over it can match (it cannot see the panel's colours). Additive. */
+      theme?: 'light' | 'dark';
+    }
   | { type: 'pilot-reporter:highlight'; key: string }
   /**
    * Showcase (owner, 2026-10-31: show and focus the tickets of this page so the issue is plain to see): scroll to the capture's area,
@@ -920,14 +1022,16 @@ export const REPORTER_ROUTES = {
   tickets: '/reporter/v1/tickets', // GET ReporterTicketQuery -> ReporterTicketList, POST
   ticket: '/reporter/v1/tickets/:key', // GET
   captures: '/reporter/v1/tickets/:key/captures', // POST ReporterAddCapturesRequest
-  attach: '/reporter/v1/tickets/:key/attachments', // POST raw body; x-reporter-capture: <captureId>; x-reporter-kind: screenshot | evidence
+  attach: '/reporter/v1/tickets/:key/attachments', // POST raw body; x-reporter-capture: <captureId>; x-reporter-kind: screenshot | evidence | annotated
   file: '/reporter/v1/tickets/:key/captures/:captureId/screenshot', // GET
+  annotatedFile: '/reporter/v1/tickets/:key/captures/:captureId/annotated', // GET the flattened image with the marks
   reviews: '/reporter/v1/reviews', // GET ?status=draft (the author's own), POST start
   review: '/reporter/v1/reviews/:id', // GET, PATCH {title}, DELETE (discard)
   reviewComments: '/reporter/v1/reviews/:id/comments', // POST
   reviewComment: '/reporter/v1/reviews/:id/comments/:captureId', // PATCH, DELETE
   reviewAttach: '/reporter/v1/reviews/:id/attachments', // POST raw body; x-reporter-capture; x-reporter-kind
   reviewFile: '/reporter/v1/reviews/:id/comments/:captureId/screenshot', // GET
+  reviewAnnotatedFile: '/reporter/v1/reviews/:id/comments/:captureId/annotated', // GET
   reviewSubmit: '/reporter/v1/reviews/:id/submit', // POST
   ticketComments: '/reporter/v1/tickets/:key/comments', // GET (marks read), POST {body} (the reporter's reply, on the ticket timeline)
   duplicates: '/reporter/v1/duplicates', // POST ReporterDuplicateQuery -> { candidates: ReporterDuplicateCandidate[] }
