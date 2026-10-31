@@ -239,7 +239,10 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       // Mode first. A narrowing mode asked by name and not confirmed ends the worker before it gets any instruction (fail closed); any other
       // is said, not fatal. Bypass not kept (the policy, the parent left it) falls back to Auto where the worker may run in it, else dontAsk
       // (T-2997), so the worker never waits on a person.
-      const setMode = async (m: ChatPermissionMode) => {
+      // T-3215 (PILOT-1112, folds PILOT-1025): a worker never runs in default (it starts in it) unless default was asked by name: another
+      // mode refused (its Claude has no Auto, say) falls back to dontAsk, and with dontAsk refused too the worker is ended before any
+      // instruction, since in default it would wait on a person nobody is there to be.
+      const setMode = async (m: ChatPermissionMode): Promise<void> => {
         try {
           await chat.control(child.id, 'mode', { mode: m }, { actor: ctx.actor });
           applied.push(`mode ${m}`);
@@ -248,7 +251,18 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
             await chat.end(child.id).catch(() => undefined);
             throw new AppError('CONFLICT', `The worker could not be confirmed in ${args.mode} mode (${whyOf(e)}), so it was ended before it got any instruction. Try again.`);
           }
-          unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
+          if (m === 'default') return void unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
+          try {
+            await chat.control(child.id, 'mode', { mode: 'dontAsk' }, { actor: ctx.actor });
+          } catch (e2) {
+            await chat.end(child.id).catch(() => undefined);
+            throw new AppError(
+              'CONFLICT',
+              `The worker could not be confirmed in ${m} mode (${whyOf(e)}) nor in dontAsk (${whyOf(e2)}), so it was ended before it got any instruction: in default it would wait on a person.`,
+            );
+          }
+          applied.push('mode dontAsk');
+          unconfirmed.push(`mode ${m}: ${whyOf(e)}, dontAsk instead`);
         }
       };
       const applyMode = async () => {
