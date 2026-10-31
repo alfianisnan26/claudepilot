@@ -51,3 +51,4 @@ export * from './codespaces.js';
 export * from './schedules.js';
 export * from './vscode.js';
 export * from './approvals.js';
+export * from './reporter.js';

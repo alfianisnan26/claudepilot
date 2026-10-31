@@ -1,79 +1,31 @@
-# orchestrator status (2026-10-18 08:13 UTC, session 355881a3; older entries: git history)
+# orchestrator status (2026-10-31 08:06 UTC, session cce0f6be; older entries: git history)
 ## DONE
-- CLOSED 07:00 (stale since the 06:4x session end put them back in the queue): T-611 (ff4eaf47, QA PWG #8715, blind APPROVE
-  #8537), T-1049 (6c30af2d in b32, QA PWG #10771); T-524 08:05 (OOM pinned, master max 74% over a busy hour).
+- T-2997 (PILOT-1025) and T-3225 (PILOT-1117) released: deploy #613 (rmvw1zfv0e2e698) passed on fc7b77eb, portal 2026.10.31-3 (not started by this chat).
+- T-3114 released in #606 (a8c7384e), live-checked; ready to close (blocked by T-3220).
 
-## IN FLIGHT (4 workers max while pod >85% mem, coordinator T-595 12506; c691df71 ENDED, a3554d40 ending after WIP push)
-- DEPLOY #365 (62a44a10, prod) ran with gate=false: on T-731 11343; incident T-1082 and its post-mortem are the coordinator's.
-- BATCH 34: premerge/b34 037f7e4b (pushed) = integration 5e84f4d7 + T-971 H1 (+fmt f6983797) + T-976 (+fmt 99f8bb69) + T-425
-  2b57efce + T-565 55f5aa8e; app.ts conflict (T-976 setSessionCookie vs T-968 healManager): kept both; pack fresh. QC#1 expired in queue
-  (3600 s, ran nothing); gate#2 on 037f7e4b GREEN; QC#3 FAILED format (26 batch files) + lint (old lines). Merged integration ->
-  d7ade65b; fmt 3896f232 (T-595 12101) -> QC#4 FAIL (controller.ts fmt; routeAuthz read 0 PRD rows) -> a6fec61b keeps
-  authorization.md + .prettierignore (12153) -> controller fmt 20a93647 -> QC#5 then gate#3 (b12yyln1h) -> land -> T-731. T-969 joins the next batch after V5. Rule until the queue drains: ONE Job per lane.
-- T-968 (coordinator builds S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only). S1-token 5ccfb52c rc0, QA PWG #11312
-  -> fix a8fca5a3 (2a0edbd8, Job b1gahci5o) -> re-check c691df71; blind PWG 11365 (K8 -> test ccef3ef4, own Job;
-  K12 = a8fca5a3). S2 e605c835 Job bno2lrpwq. S2b blind PWG 11302 -> last_error
-  untrusted fix e605c835 (Job after a8fca5a3) -> delta c691df71 + blind d9f18599. Integration holds c6c4a589 (FAILED security
-  review; fixes on coord/T-968-gm): no deploy until T-731 says so.
-- T-1083 URGENT (D-84: job-run places Jobs on the cluster or the owner's Mac) -> 2a0edbd8, ahead of T-1079. Plan 11383:
-  S1a d01b5949 (blind d9f18599). S1b door /jobrun/mac/* on agents.verify (coordinator #11498; NO table, NO migration: my
-  05:25 table acceptance was wrong, 12153; block released) -> S1b-1 rebuilt 4850a1c8 (lead read OK; Job, then blind); S1b-3 design
-  #12152. Blind per slice. agent.json diff as text to the coordinator after the blind PASS.
-- T-1079 (Konfersi stg release docs per module, vault 98af7d16def1, reuse releaseReport.ts) 2a0edbd8 building now, Job last.
-- 2a0edbd8 Jobs: T-921 db1d8d19 rc0, QA PWG #11350 (J1, J4 survive) -> tests (11368) -> delta c691df71 -> blind; T-257 d34f47b2 rc1 (test bug) -> fix e22ae23d, Job after T-968's two;
-  T-976 fmt re-run baov0fphs (patch lost to $OUT), T-968 a8fca5a3 b1gahci5o, T-565 bzq96a9ey on 59451a5f running.
-- T-1033 53527bfa QA mutants #11449: D1, D2 SURVIVED -> same builder 2a0edbd8 (tests + default 3600 s, decision #11467).
-- T-119 S1a 11e16382, S2a bd1a5c90 (Jobs queued) -> S1b API (blind: authz route), 3753d3c2, sonnet. S1b-2 = option A. T-980 dbb1bd76 rc0 8/8, 4 killed -> QA.
-- T-968 S1 delta a8fca5a3 QA PASS #11509; K8 ccef3ef4 rc0 7/7 (#11646); S1 fmt 79c2d25c check bsrlhcxps; S2 needs fmt (#11732). T-523 + T-402 audits -> a3554d40.
-- 76845676: S0b aaa9169f rc1 (5/77) -> fix 0574c38c Job b6gqnybcc (double cookie was S0b's own merge, not T-976; 403->404
-  test edits per review 10681 #5: blind checks them) -> S0c merged by lead 4eb2866a (ticket/T-1043-s0c-v2); c646941f rc1 (RESOLVEFORBIDDEN survived) -> test 1abba511 Job (#12551) -> T-1065+T-1084
-  -> T-1094 ac31a578 (lost-touch keeps mode record; tests unrun; blind). T-968 managers fmt 2ce4d72e by6q1yxv9; T-1079 S3a/S3b.
-- a3554d40 Pilot tools 401 since the recovery (FOR THE COORDINATOR T-595 #12036): T-402 rc0 105/105, T-523 covered by
-  T-1033; now T-980 gaps (repo_id same 404, workspace_id mismatch, P3/P4/P8 tests; #12376; T-1261 split) + T-1076 proof.
-  T-961 green 128/128; T-1076 fix cae18cd6 proof bdo9erb2x queued. T-975 FIX2 3a21e02a delta QA PWG #11446 -> blind d9f18599.
-- 3753d3c2: T-971 d8189e5f Job bpwzt2g06 (B10, M11 fixed); T-634 0f4ffde6 QA PWG #11432 -> C2 test; T-356 N8 Job.
-- d9f18599 = sole QA/blind; adds c691df71's queue: T-1033 D1/D2 (bwyypm3wd), T-1083 M1-M6, T-634, T-980 delta. Blind: S1a d01b5949, T-1043 S0b delta f30675f5, T-968 S1-token 2ce4d72e + S2b, S1b-1 4850a1c8 after its
-  Job; then T-1065, T-975, T-969 V5, T-970.
-- T-975 FIX2 tests (a3554d40) -> delta c691df71 -> blind (mig 788). T-970 5a0fa697 rc0 -> QA; image build FOR THE COORDINATOR.
-- T-565 9d1d1203 QA PWG (cfbdbfb0, T5 survived) -> T5 fix 59451a5f Job b7aafa4e rc0, QA PWG; blind PWG (T-595) -> README 55f5aa8e -> READY, into batch 34;
-  image tag + bucket versioning at apply FOR THE COORDINATOR.
-- T-1065 3258ec46 QA PWG #11410 (prose colon over-cut, PRD line) + T-1084 (token-shaped literal valueRedact.test.ts:9)
-  -> 76845676 -> blind d9f18599. T-980 fix dbb1bd76 (bpc5x0blu) -> QA c691df71.
-- T-356 S1 e03d7f21 QA PWG #11120 (N7 `/` guard authz.ts:171 survived) -> N7 test 3753d3c2 (11380) -> delta -> blind; lead reads authz.
+## IN FLIGHT (all wait on a blind review from another unit)
+- T-3206 (PILOT-1109) refusal fold follow-ups: dfa82cb9, self-test claudepilot-job-f1e83470 pass 40; REVIEW-ASK c50404.
+- T-3233 (PILOT-1119) pass ignores a Bash description: 0d1bbd66 (on T-3206), self-test claudepilot-job-d9b2054d pass 111; REVIEW-ASK c50432; merge also held for the coordinator's wall answer.
+- T-3215 (PILOT-1112) spawn stuck starting: 591fcd34, self-test claudepilot-job-6b856e90 pass 48.
+- T-3222 + T-3207 (PILOT-1116/1110) queued worker shows planned mode, stale-row test, PRD: b95ea140 (on T-3215), self-test claudepilot-job-ce549d7b + claudepilot-job-605a1c00; REVIEW-ASK c50520.
+- T-3220 (PILOT-1115) keep-going heir for tickets: 180cc150; REVIEW-ASK c50398.
 
-## DECISIONS (binding)
-- 08:13 coordinator: pod at 10 GB limit (D-85 Konfersi leads): at most 4 live workers while pod >85% mem (T-595 12506).
-- D-81: same builder through all fixes; one QA re-checks; blind only for security/auth/rules/infra/migrations/money/uat/prod.
-- Coordinator order: T-948 > T-1043 MU2 S0 (D-82, blind review per slice) > T-968 (D-80) > T-971 H1+H2, T-974, T-975, T-565.
-- The coordinator runs all deploys; I start none. I gate with gate-job.sh before every merge and tell T-731 when a batch lands.
-- Owner order 2026-10-18: WIP 2 per lane (one slice on a Job, one worked); never hold lanes. At most 3 Jobs at once, gates first.
-  D-75 stays: one Job per commit.
-- D-78: only production/uat go to a person; all else "FOR THE COORDINATOR:" on the ticket. D-70 feed lanes by session_message.
-- D-61 nothing heavy in the pod; D-66 the lead runs QC at premerge (lanes' allow lists refuse it, T-586).
-- The pipeline gate stays on; only the owner's own word turns it off (T-731 10699).
-- D-84 (owner, 04:45): Jobs load-balance onto the owner's Mac; the gate, --pool-env, images and --big stay on the cluster (T-1083).
-- 03:15 owner order (T-968 11240): coordinator builds T-968 S1 runtime/S3/S4/S6; this crew lands S1-token + S2 only.
+## DECISIONS
+- 06:05 the predecessor 4ee04b70's tickets fell back by title to b3fead22; adopt refused (live). Filed T-3220; progress goes on T-3220.
+- 06:22 no deploy started by this chat: releases go to production with approval auto (T-2893, T-3004); deploys are the coordinator's.
+- 06:45 T-3206 prunes repeats in the sweep (15 min after the card ends), not at decision (c50385).
+- 07:07 T-3233 touches the guard's pass hash (ruleGuard.ts): merge waits for review AND the coordinator's wall confirmation (c50432).
+- 07:38 T-3222 option (A), display only; planned mode never read by a permission check (c50492).
+- Model: all builders Opus sub-agents (T-3206 CP-B3206, T-3233 CP-B3233, T-3222/3207 CP-B3222); T-3225 sonnet.
 
-## FOR THE COORDINATOR (D-78; each also on its ticket)
-- Incident T-1082 (deploy #365 gate=false): its post-mortem and the check that refuses gate=false without the owner.
-- Job capacity: queue timeouts and Pending on memory (T-595 10932, 11197, 11282, 11285).
-- T-961 PriorityClasses if Argo can't create them; T-974 remove the text-matching `git -C` denies (after T-425 lands).
-- T-565 (now mine, 11482): name the backup bucket and its secret (BACKUP_S3_*). T-257 DECISIONS row (11198).
-- T-948: PORT_PROXY_HOST_SUFFIX and the claudepilot-app-ports route. T-976: live Traefik X-Forwarded-Proto (10855).
-- T-1058 pre-push hook for the context-pack check. T-382 DOM test library; T-1032 QC format skips readFileSync files.
-- a3554d40 Pilot tools 401 (T-595 12036); `git apply <job-out patch>` for 2a0edbd8 (T-968).
+## FOR THE COORDINATOR
+- Relay REVIEW-ASKs to T-84: T-3206, T-3233, T-3215, T-3222/3207, T-3220, and the predecessor's T-3173, T-2966/2967 (own lineage, I may not review them).
+- T-3233: confirm ruleGuard.ts passOfCall is crew-changeable, or needs a person.
+- T-3225: run publish.mjs --only=skills,persona --apply from fc7b77eb or later.
+- Move b3fead22's tickets from 4ee04b70 to cce0f6be; close T-2997 on deploy #613.
 
-## NEEDS A HUMAN (production and uat only, D-62/D-78)
-- T-93 Konfersi production (owner checklist). T-610 pre-deploy read-only prod count (through the coordinator).
+## NEEDS A HUMAN
+- none
 
-## NEXT (in order, as slots free)
-1. Batch 34 (format commits, + T-425, T-969); then T-1043 S0b, T-968 S1-token/S2 landing, T-975, T-565.
-2. T-1042 (after T-976 is live), T-30 (XL), T-33, T-379 S3 (paused), T-105, T-1031.
-
-LESSONS: dontAsk lanes run Bash only in their spawn worktree and refuse git merge/restore: the lead pushes the merge (with
-markers) to a new branch; the lane resolves it by Edit. Never run prettier on files tests read with readFileSync. Run
-`context-pack.sh --check HEAD` after every merge. Landing is two commands: (1) `git diff --stat <gated> origin/integration --
-. ':!docs/dev-sessions/status'` and read it, (2) push only if it is empty. A mutant line must prove it was applied, on a
-GREEN base. The status file: Edit/Write ONLY. Full ids and hashes. Migration numbers: check integration AND lane branches.
-gate-job.sh runs in the background (timeout 7200000). `git -C` is refused by the guard: cd instead. A Job has no $OUT:
-write a patch to the repo root and name it with `--artifacts fmt.patch --out job-out/` (job-run.sh:27; lost 74feba75).
+## NEXT
+- Merge order on review passes: T-3215 -> T-3222/3207; T-3206 -> T-3233; T-3220. Then the open PILOT queue (rest is walls or watchdog).

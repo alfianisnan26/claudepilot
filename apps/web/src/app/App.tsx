@@ -19,6 +19,7 @@ import { GlanceRoot } from '@/features/glance/Root';
 import { NotificationsPage } from '@/features/notify/NotificationsPage';
 import { NotifyRoot } from '@/features/notify/Root';
 import { LoginPage } from '@/features/auth/LoginPage';
+import { connectReturnPath } from '@/features/auth/next';
 import { PoolsHub } from '@/features/pools/PoolsHub';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { POOL_TABS } from '@/features/pools/registry';
@@ -224,6 +225,12 @@ function SignedOutOnly({ children }: { children: ReactNode }) {
   if (state.status === 'loading') return <Splash />;
   if (state.status === 'unreachable') return <Unreachable />;
   if (state.status === 'in' || state.status === 'member') {
+    // The UI reporter's connect popup sent the person here to sign in: back to it (a server page, so a full load).
+    const back = connectReturnPath(new URLSearchParams(location.search).get('next'));
+    if (back) {
+      window.location.replace(back);
+      return <Splash />;
+    }
     const from = (location.state as { from?: string } | null)?.from;
     return <Navigate to={from?.startsWith('/admin') ? from : HOME} replace />;
   }
