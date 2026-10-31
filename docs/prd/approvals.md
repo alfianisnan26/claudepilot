@@ -20,13 +20,13 @@ Deny stores the reason. Either way the agent gets a chat message (actor `portal:
 
 ## Kinds
 
-| Kind | Payload | Allow does |
-| --- | --- | --- |
-| `test.echo` | `{ text }` (≤ 200) | Stores `{ ok: true, output: { text } }`. For tests and trying the flow. |
-| `session.bypass` | `{ sessionId }` | Enters Bypass on that session through the same gated path as the Bypass dialog (`enterBypass`): policy, capable session, fresh server code. The person's click is the acknowledgement. Audited as `bypass.entered` with `via: 'approval'` and the `approvalId`. |
-| `pool.secret_set` | `{ pool (id), name, expose?, baseRevision }` | Sets one secret in a secrets pool, with the value the person types on Allow. Result `{ pool, name, revision, expose }`, never the value. |
-| `jobrun.pool_env` | `{ name, args (the run's exact argv), cwd }` | Issues a one-time pass for that exact run (T-2889, below): result `{ ok: true, output: { pass, until, used } }`, no name or value. Filed by job-run.sh for a deny-listed `--pool-env` NAME; never a value. |
-| `guard.refusal` | `{ tool, input (the tool input, content fields as `sha256:<hex>`), cwd, form }` | Issues a one-time pass for that exact call, as above. Filed by the rule guard for a refused call. |
+| Kind              | Payload                                                                         | Allow does                                                                                                                                                                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test.echo`       | `{ text }` (≤ 200)                                                              | Stores `{ ok: true, output: { text } }`. For tests and trying the flow.                                                                                                                                                                                         |
+| `session.bypass`  | `{ sessionId }`                                                                 | Enters Bypass on that session through the same gated path as the Bypass dialog (`enterBypass`): policy, capable session, fresh server code. The person's click is the acknowledgement. Audited as `bypass.entered` with `via: 'approval'` and the `approvalId`. |
+| `pool.secret_set` | `{ pool (id), name, expose?, baseRevision }`                                    | Sets one secret in a secrets pool, with the value the person types on Allow. Result `{ pool, name, revision, expose }`, never the value.                                                                                                                        |
+| `jobrun.pool_env` | `{ name, args (the run's exact argv), cwd }`                                    | Issues a one-time pass for that exact run (T-2889, below): result `{ ok: true, output: { pass, until, used } }`, no name or value. Filed by job-run.sh for a deny-listed `--pool-env` NAME; never a value.                                                      |
+| `guard.refusal`   | `{ tool, input (the tool input, content fields as `sha256:<hex>`), cwd, form }` | Issues a one-time pass for that exact call, as above. Filed by the rule guard for a refused call.                                                                                                                                                               |
 
 ### From a refusal (T-2885)
 

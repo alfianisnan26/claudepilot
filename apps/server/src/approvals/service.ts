@@ -27,7 +27,15 @@ import {
 } from '@portal/contracts';
 import { findSecret } from '../portalmcp/sanitize.js';
 import { mayDecide, NO_APPROVAL } from './authz.js';
-import { APPROVAL_KIND_DEFS, type ApprovalChat, type ApprovalDelivery, type ApprovalDeps, type ApprovalKindDef, type ApprovalPools, type ApprovalRequester } from './kinds.js';
+import {
+  APPROVAL_KIND_DEFS,
+  type ApprovalChat,
+  type ApprovalDelivery,
+  type ApprovalDeps,
+  type ApprovalKindDef,
+  type ApprovalPools,
+  type ApprovalRequester,
+} from './kinds.js';
 import { canonicalJson, cleanRefusal, PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom } from './pass.js';
 
 type Row = {
@@ -142,7 +150,9 @@ export class Approvals {
     if (!db) return [];
     const now = this.#now();
     const rows = db
-      .prepare(`SELECT result FROM approvals WHERE workspace = ? AND status = 'allowed' AND decided_at > ? AND kind IN (${PASS_KINDS.map(() => '?').join(', ')}) ORDER BY decided_at, id`)
+      .prepare(
+        `SELECT result FROM approvals WHERE workspace = ? AND status = 'allowed' AND decided_at > ? AND kind IN (${PASS_KINDS.map(() => '?').join(', ')}) ORDER BY decided_at, id`,
+      )
       .all(workspaceId, this.#iso(now - PASS_TTL_MS - 60_000), ...PASS_KINDS) as { result: string | null }[];
     const out: { pass: string; until: number }[] = [];
     for (const r of rows) {
@@ -157,7 +167,9 @@ export class Approvals {
     const db = this.#o.db();
     if (!db || !PASS_HASH.test(pass)) return false;
     const rows = db
-      .prepare(`SELECT id, result FROM approvals WHERE workspace = ? AND status = 'allowed' AND decided_at > ? AND kind IN (${PASS_KINDS.map(() => '?').join(', ')})`)
+      .prepare(
+        `SELECT id, result FROM approvals WHERE workspace = ? AND status = 'allowed' AND decided_at > ? AND kind IN (${PASS_KINDS.map(() => '?').join(', ')})`,
+      )
       .all(workspaceId, this.#iso(this.#now() - PASS_TTL_MS - 60_000), ...PASS_KINDS) as { id: string; result: string | null }[];
     let hit = false;
     for (const r of rows) {
@@ -289,7 +301,10 @@ export class Approvals {
     const def: ApprovalKindDef = APPROVAL_KIND_DEFS[req.kind];
     // T-2885 review M2: a refused file call's content is never stored, and the rest is redacted (approvals/pass.ts cleanRefusal).
     const parsed = def.schema.safeParse(req.kind === 'guard.refusal' ? cleanRefusal(req.payload) : req.payload);
-    if (!parsed.success) throw new AppError('VALIDATION_FAILED', `The payload does not fit ${req.kind}.`, { details: { payload: parsed.error.issues.map((i) => i.message).join('; ') } });
+    if (!parsed.success)
+      throw new AppError('VALIDATION_FAILED', `The payload does not fit ${req.kind}.`, {
+        details: { payload: parsed.error.issues.map((i) => i.message).join('; ') },
+      });
     const payload = parsed.data;
     const json = JSON.stringify(payload);
     if (Buffer.byteLength(json) > APPROVAL_PAYLOAD_MAX_BYTES) throw new AppError('VALIDATION_FAILED', 'The payload is too large.');
@@ -343,7 +358,16 @@ export class Approvals {
         `INSERT INTO approvals (id, kind, payload, requester_session, workspace, tier, reason, status, created_at, expires_at)
          VALUES (?, ?, ?, ?, ?, 'T2', ?, 'pending', ?, ?)`,
       )
-      .run(id, req.kind, json, requester?.sessionId ?? null, requester?.workspaceId ?? null, reason, this.#iso(now), this.#iso(now + ttl * 60_000));
+      .run(
+        id,
+        req.kind,
+        json,
+        requester?.sessionId ?? null,
+        requester?.workspaceId ?? null,
+        reason,
+        this.#iso(now),
+        this.#iso(now + ttl * 60_000),
+      );
     this.#o.changed?.();
     return this.#toApproval(this.#row(id)!);
   }
@@ -352,7 +376,9 @@ export class Approvals {
   pendingCount(sessionId: string, kinds: readonly string[]): number {
     if (!kinds.length) return 0;
     const r = this.#db()
-      .prepare(`SELECT count(*) AS n FROM approvals WHERE requester_session = ? AND status = 'pending' AND expires_at > ? AND kind IN (${kinds.map(() => '?').join(', ')})`)
+      .prepare(
+        `SELECT count(*) AS n FROM approvals WHERE requester_session = ? AND status = 'pending' AND expires_at > ? AND kind IN (${kinds.map(() => '?').join(', ')})`,
+      )
       .get(sessionId, this.#iso(), ...kinds) as { n: number };
     return Number(r.n);
   }
@@ -360,7 +386,9 @@ export class Approvals {
   /** The queue a person decides from (pending, not expired, oldest first). Anyone else: empty. */
   pending(actor: Actor): Approval[] {
     if (!mayDecide(actor)) return [];
-    const rows = this.#db().prepare("SELECT * FROM approvals WHERE status = 'pending' AND expires_at > ? ORDER BY created_at, id").all(this.#iso()) as Row[];
+    const rows = this.#db()
+      .prepare("SELECT * FROM approvals WHERE status = 'pending' AND expires_at > ? ORDER BY created_at, id")
+      .all(this.#iso()) as Row[];
     return rows.map((r) => this.#toApproval(r));
   }
 
@@ -374,7 +402,9 @@ export class Approvals {
   /** What a session asked, newest first; another session's request is NOT_FOUND (`ownOne`). */
   listOwn(sessionId: string, limit = 50): Approval[] {
     const own = (
-      this.#db().prepare('SELECT * FROM approvals WHERE requester_session = ? ORDER BY created_at DESC, id DESC LIMIT ?').all(sessionId, limit) as Row[]
+      this.#db()
+        .prepare('SELECT * FROM approvals WHERE requester_session = ? ORDER BY created_at DESC, id DESC LIMIT ?')
+        .all(sessionId, limit) as Row[]
     ).map((r) => this.#toApproval(r));
     // T-3114: also the cards a repeat of this session was folded into; T-3206: another asker's card shows once, under this session's first
     // repeat id and as its own (`#repeatView`), never under the card's id. Its own card is listed above already.
@@ -428,7 +458,9 @@ export class Approvals {
   pendingRows(nowMs: number): Approval[] {
     const db = this.#o.db();
     if (!db) return [];
-    const rows = db.prepare("SELECT * FROM approvals WHERE status = 'pending' AND expires_at > ? ORDER BY created_at, id").all(this.#iso(nowMs)) as Row[];
+    const rows = db
+      .prepare("SELECT * FROM approvals WHERE status = 'pending' AND expires_at > ? ORDER BY created_at, id")
+      .all(this.#iso(nowMs)) as Row[];
     return rows.map((r) => this.#toApproval(r));
   }
 
@@ -447,15 +479,30 @@ export class Approvals {
    * `value`: what the person typed, for a kind that needs one (pool.secret_set). It lives in this call only: it goes to the executor and
    * nowhere else (not the row, the result, a message or a log); a value for a kind that takes none is refused.
    */
-  async allow(actor: Actor, id: string, opts: { sessionToken?: string | undefined; decidedBy?: string; value?: string | undefined } = {}): Promise<Approval> {
+  async allow(
+    actor: Actor,
+    id: string,
+    opts: { sessionToken?: string | undefined; decidedBy?: string; value?: string | undefined } = {},
+  ): Promise<Approval> {
     const { row, def } = this.#pendingOr404(actor, id);
-    if (opts.value !== undefined && !approvalNeedsValue(def.kind)) throw new AppError('VALIDATION_FAILED', 'This request takes no value.', { details: { value: 'Not used.' } });
+    if (opts.value !== undefined && !approvalNeedsValue(def.kind))
+      throw new AppError('VALIDATION_FAILED', 'This request takes no value.', { details: { value: 'Not used.' } });
     const payload = JSON.parse(row.payload) as Record<string, unknown>;
-    const ctx = { approvalId: id, actor, sessionToken: opts.sessionToken, value: opts.value, workspaceId: row.workspace, now: this.#now(), ...this.deps };
+    const ctx = {
+      approvalId: id,
+      actor,
+      sessionToken: opts.sessionToken,
+      value: opts.value,
+      workspaceId: row.workspace,
+      now: this.#now(),
+      ...this.deps,
+    };
     def.precheck?.(payload, ctx);
     const at = this.#iso();
     const claimed = this.#db()
-      .prepare("UPDATE approvals SET status = 'allowed', decided_by = ?, decided_at = ? WHERE id = ? AND status = 'pending' AND expires_at > ?")
+      .prepare(
+        "UPDATE approvals SET status = 'allowed', decided_by = ?, decided_at = ? WHERE id = ? AND status = 'pending' AND expires_at > ?",
+      )
       .run(opts.decidedBy ?? 'ui', at, id, at);
     if (Number(claimed.changes) !== 1) throw new AppError('CONFLICT', 'This request was already decided or expired.');
     let result: ApprovalResult;
@@ -467,7 +514,8 @@ export class Approvals {
       result = { ok: false, message: e instanceof AppError ? e.message : 'The run failed.' };
     }
     // Belt and braces: whatever an executor says, the typed value never reaches the row or the asking agent.
-    if (opts.value && JSON.stringify(result).includes(opts.value)) result = { ok: result.ok, message: result.ok ? 'Done.' : 'The run failed.' };
+    if (opts.value && JSON.stringify(result).includes(opts.value))
+      result = { ok: result.ok, message: result.ok ? 'Done.' : 'The run failed.' };
     this.#db().prepare('UPDATE approvals SET result = ? WHERE id = ?').run(JSON.stringify(result), id);
     this.#o.changed?.();
     // T-2889: a pass is in the stored result now; deliver its workspace so the passes file holds it.
@@ -488,11 +536,14 @@ export class Approvals {
     const { row } = this.#pendingOr404(actor, id);
     const reason = (reasonIn ?? '').replace(/\s+/g, ' ').trim().slice(0, APPROVAL_REASON_MAX) || 'Denied.';
     // The reason is stored and sent to an agent: a pasted credential would land in both (review nit 4, T-2867).
-    if (findSecret(reason)) throw new AppError('VALIDATION_FAILED', 'The reason may not hold a secret.', { details: { reason: 'Looks like a secret.' } });
+    if (findSecret(reason))
+      throw new AppError('VALIDATION_FAILED', 'The reason may not hold a secret.', { details: { reason: 'Looks like a secret.' } });
     const at = this.#iso();
     const result: ApprovalResult = { ok: false, message: reason };
     const r = this.#db()
-      .prepare("UPDATE approvals SET status = 'denied', decided_by = ?, decided_at = ?, result = ? WHERE id = ? AND status = 'pending' AND expires_at > ?")
+      .prepare(
+        "UPDATE approvals SET status = 'denied', decided_by = ?, decided_at = ?, result = ? WHERE id = ? AND status = 'pending' AND expires_at > ?",
+      )
       .run(decidedBy, at, JSON.stringify(result), row.id, at);
     if (Number(r.changes) !== 1) throw new AppError('CONFLICT', 'This request was already decided or expired.');
     this.#o.changed?.();

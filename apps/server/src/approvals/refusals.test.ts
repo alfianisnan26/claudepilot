@@ -268,7 +268,12 @@ test('Needs you: a refused call is in the refusal group with its count, and sort
 });
 
 // T-3206 (PILOT-1109): follow-ups of T-3114.
-const bash = (command: string, description: string, cwd = '/w/repo') => ({ tool: 'Bash', input: { command, description }, cwd, form: 'settings' });
+const bash = (command: string, description: string, cwd = '/w/repo') => ({
+  tool: 'Bash',
+  input: { command, description },
+  cwd,
+  form: 'settings',
+});
 const repeatRows = (h: { store: Store }, approvalId?: string) =>
   Number(
     (
@@ -293,13 +298,23 @@ test('T-3206: the fold ignores the free-text description of a call; another comm
     bash('git -C /x log -2', 'Show the last commit'),
     bash('git -C /x log -1', 'Show the last commit', '/w/other'),
     { ...bash('git -C /x log -1', 'Show the last commit'), form: 'policy' },
-    { tool: 'Bash', input: { command: 'git -C /x log -1', description: 'Show the last commit', timeout: 5000 }, cwd: '/w/repo', form: 'settings' },
+    {
+      tool: 'Bash',
+      input: { command: 'git -C /x log -1', description: 'Show the last commit', timeout: 5000 },
+      cwd: '/w/repo',
+      form: 'settings',
+    },
     { tool: 'Read', input: { file_path: '/etc/claudepilot/x', description: 'Show the last commit' }, cwd: '/w/repo', form: 'settings' },
   ];
   const ids = others.map((p) => refuse(h.approvals, 'chat-a', p).id);
   assert.equal(new Set([a.id, ...ids]).size, 6, 'a different command, folder, form, other input or tool: a card each');
   // A Read without a description folds with the same Read that has one.
-  const read = refuse(h.approvals, 'chat-a', { tool: 'Read', input: { file_path: '/etc/claudepilot/x' }, cwd: '/w/repo', form: 'settings' });
+  const read = refuse(h.approvals, 'chat-a', {
+    tool: 'Read',
+    input: { file_path: '/etc/claudepilot/x' },
+    cwd: '/w/repo',
+    form: 'settings',
+  });
   assert.equal(read.id, ids[4]);
   assert.equal(read.count, 2);
 });
