@@ -1,5 +1,5 @@
 import { Badge, chipClass } from '@isnanme/ui';
-import { TICKET_API, type ReporterEvidence, type TicketReporterEvidence } from '@portal/contracts';
+import { TICKET_API, reporterIpText, type ReporterEvidence, type TicketReporterEvidence } from '@portal/contracts';
 import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Card } from '@/components/Card';
@@ -124,7 +124,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
           </Row>
         )}
         <Row label="IP">
-          {evidence.reporterIp ? <span className="break-all tabular-nums">{evidence.reporterIp}</span> : <span className="text-muted">Unknown</span>}
+          {evidence.reporterIp ? <span className="break-all tabular-nums">{reporterIpText(evidence.reporterIp)}</span> : <span className="text-muted">Unknown</span>}
         </Row>
         <Row label="Fix">
           {evidence.fixCommits.length ? <span className="break-all tabular-nums">{evidence.fixCommits.map((c) => shortCommit(c)).join(', ')}</span> : <span className="text-muted">No fix commit yet</span>}

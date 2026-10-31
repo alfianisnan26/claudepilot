@@ -31,7 +31,7 @@ Code: `apps/server/src/reporter/` (`service.ts`, `routes.ts`, `validate.ts`, `de
 | --- | --- |
 | `GET /reporter.js` | `vendor/reporter.js`, the SDK build vendored by `scripts/vendor-reporter.sh <sdk commit>` (clones alfianisnan26/pilot-reporter at that commit, `npm ci`, builds, checks the build equals the committed `dist/reporter.js`; `vendor/VERSION` = `<package version>+<short commit>`), `text/javascript`, 5 minutes cache, ETag, `Cross-Origin-Resource-Policy: cross-origin`. |
 | `GET /axe.js` | `vendor/axe.min.js`, axe-core pinned by the same script (`vendor/AXE_VERSION`, licence in `vendor/axe-core.LICENSE`); 404 if it is missing: the SDK then records `checks.ran = false` with the reason. |
-| `GET /embed?bucket=&origin=` | The panel: `apps/web/dist/embed.html` (a placeholder when the web app was built without it). CSP `frame-ancestors <origin>` exactly, when the origin is a site of that enabled bucket. Otherwise an empty page with `frame-ancestors 'none'` and `X-Frame-Options: DENY`. |
+| `GET /embed?bucket=&origin=` | The panel: `apps/web/dist/embed.html` (a placeholder when the web app was built without it). CSP `frame-ancestors <origin>` exactly, when the origin is a site of that enabled bucket, with `Cross-Origin-Embedder-Policy: require-corp` and `Cross-Origin-Resource-Policy: cross-origin` so a site that isolates itself (COEP require-corp, the Konfersi Lab) can frame it (the panel loads only its own origin; `/assets/*` also answer `Cross-Origin-Resource-Policy: cross-origin`). Otherwise an empty page with `frame-ancestors 'none'` and `X-Frame-Options: DENY`. |
 | `GET /status?bucket=&origin=` | `ReporterStatus` for the panel's `ready`; every refusal reads the same (disabled, no site, no name). |
 | `GET /connect?bucket=&origin=&nonce=` | The popup. Not signed in: a sign-in link. Signed in and allowed: what is approved (bucket, site, environment, repo, person) and Connect. Its script POSTs same-origin and posts `ReporterConnectMessage` to `window.opener` with targetOrigin = the portal's own origin. |
 | `POST /connect` | Needs the portal cookie, `Origin` of the portal, JSON; refuses an origin not on the list (404). Rate limited per person. |
@@ -66,7 +66,12 @@ Every route of `REPORTER_ROUTES` under `/reporter/v1` from `me` down. No `Access
 - `GET /me` also returns `clientIp` and `clientIpFamily` (4 or 6): the request's address as the portal sees it, by the app's one rule
   (`clientAddress.ts`): the trusted proxy's LAST `X-Forwarded-For` entry when `PORTAL_TRUST_PROXY=true`, else the socket; a header a client
   sets is never believed. The same address is stored as `reporter_ip` on each widget ticket's evidence record (migration 902), named in the
-  description's "Where" section ("Reporter IP") and in the owner's Evidence viewer. The page never sends it.
+  description's "Where" section ("Reporter IP") and in the owner's Evidence viewer. The page never sends it. A private, loopback or cluster
+  address (10/8, 172.16/12, 192.168/16, 127/8, fc00::/7, ::1; `isInternalIp` in contracts) is labelled "<ip> (internal: behind the cluster
+  proxy)" in the Context view, the description and the Evidence viewer: in k3s the service load balancer rewrites the source before
+  Traefik, so the portal sees a pod address, never presented as the reporter's public IP.
+- `GET /me` also returns `portalRelease`: the image's release tag (`PORTAL_RELEASE`, baked in by `deploy/k3s-build` from the build's
+  tag; only a plain tag is believed), null when the server does not know it (the panel then says "unknown").
 
 ### Chat in the widget (PILOT-1111)
 

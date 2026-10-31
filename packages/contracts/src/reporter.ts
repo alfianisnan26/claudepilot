@@ -596,7 +596,28 @@ export interface ReporterMe {
    */
   clientIp?: string | null;
   clientIpFamily?: 4 | 6 | null;
+  /** The portal release that answers (its image tag, PORTAL_RELEASE baked in at build); null when the server does not know it. Additive. */
+  portalRelease?: string | null;
 }
+
+/**
+ * Whether an address is private, loopback or cluster-internal (10/8, 172.16/12, 192.168/16, 127/8, fc00::/7, ::1, and those as IPv4-mapped
+ * IPv6). In the cluster, k3s's service load balancer rewrites the source before Traefik, so the portal sees a pod address (10.42.x.x) rather
+ * than the reporter's: such an address is labelled, never shown as the client's public IP.
+ */
+export function isInternalIp(ip: string | null | undefined): boolean {
+  const a = (ip ?? '').trim().toLowerCase().replace(/^::ffff:(?=(?:\d{1,3}\.){3}\d{1,3}$)/, '');
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(a);
+  if (v4) {
+    const [x, y] = [Number(v4[1]), Number(v4[2])];
+    return x === 10 || x === 127 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168);
+  }
+  if (!a.includes(':') || !/^[0-9a-f:]+$/.test(a)) return false;
+  return a === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(a);
+}
+
+/** An address as the reporter shows it: an internal one says so ("10.42.1.7 (internal: behind the cluster proxy)"). */
+export const reporterIpText = (ip: string) => (isInternalIp(ip) ? `${ip} (internal: behind the cluster proxy)` : ip);
 
 /** POST /reporter/v1/observed-build body: the build the page declared; the server records it for the SITE's repo and environment. */
 export interface ReporterObservedBuildRequest {

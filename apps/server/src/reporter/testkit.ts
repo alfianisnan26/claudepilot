@@ -75,7 +75,7 @@ export class FakeGit implements ReporterGit {
   }
 }
 
-export async function reporterHarness(opts: { now?: () => Date } = {}) {
+export async function reporterHarness(opts: { now?: () => Date; release?: string } = {}) {
   const h = await ticketsHarness({ now: opts.now });
   // KONF may be seeded already; OTHER is ours.
   for (const [key, name] of [['KONF', 'Konfersi'], ['OTHER', 'Other']] as const) if (!h.tickets.bucketOwner(key)) h.tickets.createBucket(UI, { key, name });
@@ -105,6 +105,7 @@ export async function reporterHarness(opts: { now?: () => Date } = {}) {
       signedIn: () => (signedIn ? (ownerActor() as Actor & { userId: string }) : null),
       userLabel: () => 'Owner',
       clientKey: () => '127.0.0.1',
+      release: opts.release ?? null,
       ...(opts.now ? { now: () => opts.now!().getTime() } : {}),
     }) as never,
   );

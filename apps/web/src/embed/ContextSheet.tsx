@@ -29,7 +29,7 @@ export function ContextSheet({ section, onClose }: { section: 'context' | 'carri
     me,
     actorLabel,
     sdkVersion,
-    portalRelease: null,
+    portalRelease: me?.portalRelease ?? null,
   });
   const carries = carriesRows(hostContext?.counts ?? null);
   useEffect(() => {
