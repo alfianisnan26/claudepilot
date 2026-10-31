@@ -304,3 +304,8 @@ export function targetNotice(wanted: ReporterReportTarget | null | undefined, ta
   if (!targets.some((t) => t.available)) return 'No target session is available now: this goes in as a ticket.';
   return null;
 }
+
+/** Esc closes the panel, unless a control already used the key (preventDefault) or an IME is composing. */
+export function closesPanel(e: Pick<KeyboardEvent, 'key' | 'defaultPrevented' | 'isComposing'>): boolean {
+  return e.key === 'Escape' && !e.defaultPrevented && !e.isComposing;
+}

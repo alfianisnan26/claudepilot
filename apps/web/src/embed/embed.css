@@ -3,6 +3,7 @@
 @import '@isnanme/tokens/tailwind.css';
 @source './';
 @source '../features/reporter/shared.ts';
+@source '../components/LogoMark.tsx';
 
 html,
 body {
