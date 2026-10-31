@@ -66,6 +66,7 @@ async function rig(n: number) {
   const app = new Hono();
   app.use(async (c, next) => {
     (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+    (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' });
     await next();
   });
   app.route('/', createChatRoutes(controller));

@@ -201,7 +201,7 @@ test('policy (T-2360 review HIGH): an admin token and a manager token without us
     );
     // The founding user's manager and admin token read the portal.
     assert.equal(metricsReach(ctx({ kind: 'manager', userId: 'u_owner' }), h.lab).reach, 'portal');
-    assert.equal(metricsReach(ctx({ kind: 'user' }), h.lab).reach, 'portal');
+    assert.equal(metricsReach(ctx({ kind: 'user', userId: 'u_owner' }), h.lab).reach, 'portal');
     // An authz layer that withholds `usage`: the admin's token and the founding user's manager are refused too.
     const was = useAuthz({
       ...singleOwner,
@@ -210,7 +210,7 @@ test('policy (T-2360 review HIGH): an admin token and a manager token without us
     });
     try {
       assert.throws(
-        () => metricsReach(ctx({ kind: 'user' }), h.lab),
+        () => metricsReach(ctx({ kind: 'user', userId: 'u_owner' }), h.lab),
         (e: any) => e.code === 'NOT_FOUND',
       );
       assert.throws(
