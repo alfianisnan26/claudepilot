@@ -54,12 +54,14 @@ export function toChatMessage(ev: ChatEvent, blobUrl: (blobId: string) => string
       return { ...base, kind: 'assistant', text: cut(redact(ev.text ?? ''), CHAT_TEXT_MAX) };
     case 'tool_use':
       if (ev.handoffId) return null;
-      return { ...base, images: [], kind: 'tool', tool: cut(oneLine(ev.toolName ?? 'tool'), 60), text: toolLine(ev.toolInput), toolId: ev.toolUseId ?? null };
+      return { ...base, images: [], kind: 'tool', tool: cut(oneLine(ev.toolName ?? 'tool'), 60), text: toolLine(ev.toolInput) || cut(oneLine(redact(ev.text ?? '')), CHAT_TOOL_LINE_MAX), toolId: ev.toolUseId ?? null };
     case 'tool_result': {
       // Only whether it failed, joined to its call by id (a result stored without one cannot be joined: left out). The output never comes.
       if (!ev.toolUseId) return null;
       const ok = !ev.isError;
-      const error = ok ? '' : cut(oneLine(redact((ev.text ?? '').split('\n').find((l) => l.trim()) ?? '')), CHAT_TOOL_ERROR_MAX) || 'Failed';
+      // "Exit code 2" says little alone: the first two lines that say something ("Exit code 2 · ls: cannot access …").
+      const head = (ev.text ?? '').split('\n').filter((l) => l.trim()).slice(0, 2).map((l) => l.trim()).join(' · ');
+      const error = ok ? '' : cut(oneLine(redact(head)), CHAT_TOOL_ERROR_MAX) || 'Failed';
       return { ...base, images: [], kind: 'tool_result', text: error, toolId: ev.toolUseId, ok };
     }
     case 'request': {

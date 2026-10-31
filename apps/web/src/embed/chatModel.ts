@@ -192,7 +192,8 @@ export function filterChips<P extends { status: string; priority: string[]; type
 /**
  * What the chat list renders: a line as it is, or a run of tool calls folded into one activity row, as the portal's transcript does
  * (features/chat: `buildRows` joins each result to its call and folds runs of read-only calls, Activity.tsx shows a turn's work as one row).
- * The panel keeps every text line in the open (it has no turn ends to tell a note from a reply), so a run is the calls between two of them.
+ * The panel keeps every text line in the open (it has no turn ends to tell a note from a reply), so a run is the calls between two of them;
+ * approval lines are left out (the banner shows a pending one).
  */
 export type ChatItem =
   | { type: 'line'; key: string; m: ReporterChatMessage }
@@ -223,7 +224,9 @@ function asEvent(m: ReporterChatMessage): ChatEvent {
  */
 export function chatItems(lines: readonly ReporterChatMessage[], busy: boolean): ChatItem[] {
   const bySeq = new Map(lines.map((m) => [m.seq, m]));
-  const rows = buildRows(lines.map(asEvent), true);
+  // Approvals are not rows, as in the portal's transcript (its approvals dock has them): a pending one is the chat's banner with "Answer in
+  // pilot", and an answered one would split its tool's run in two.
+  const rows = buildRows(lines.filter((m) => m.kind !== 'approval').map(asEvent), true);
   const out: ChatItem[] = [];
   let run: TranscriptRow[] = [];
   const flush = () => {
@@ -242,7 +245,7 @@ export function chatItems(lines: readonly ReporterChatMessage[], busy: boolean):
     if (m) out.push({ type: 'line', key: `l${m.seq}`, m });
   }
   flush();
-  // The newest run is live while the session works and no text came after it (an approval it waits on does not end it).
+  // The newest run is live while the session works and no text came after it.
   if (busy)
     for (let i = out.length - 1; i >= 0; i--) {
       const it = out[i]!;

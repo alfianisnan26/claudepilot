@@ -56,6 +56,8 @@ const chatLines = [
   tl(18, 2, 'Bash', 'npm run build'),
   { seq: 19, at: ago(2), kind: 'approval', text: 'Run a command: npm run build', from: null, tool: null, images: [] },
 ];
+// QA_CHAT_FIXTURE: a JSON file of panel lines (a real session's, as the server's toChatMessages gives them) instead of the fixture above.
+if (process.env.QA_CHAT_FIXTURE) chatLines.splice(0, chatLines.length, ...JSON.parse((await import('node:fs')).readFileSync(process.env.QA_CHAT_FIXTURE, 'utf8')));
 const chatSession = {
   id: 's1', title: 'mo-T-2430 Konfersi lead', state: 'waiting', waiting: 1, waitingFor: 'Run a command: npm run build', lastSeq: 19, ticketKey: 'KONF-12', url: '#',
   runtime: { model: 'claude-opus-5-5', effort: 'high', mode: 'acceptEdits', claude: 'Work', context: { usedTokens: 84_000, windowTokens: 200_000 }, costUsd: 1.25, plan: { session: { usedPct: 42, resetsAt: new Date(Date.now() + 185 * 60_000).toISOString() }, week: { usedPct: 12, resetsAt: new Date(Date.now() + 4 * 86_400_000).toISOString() } } },
@@ -278,7 +280,7 @@ try {
       check(`${label} sessions`, await b.eval(AUDIT));
       await sleepShot(b, `reporter-${label}-sessions`);
       await b.clickText('Konfersi lead');
-      await b.waitFor(`document.body.innerText.includes('fixed')`, 8000, 'the chat');
+      await b.waitFor(`document.body.innerText.includes(${JSON.stringify(process.env.QA_CHAT_WAIT ?? 'fixed')})`, 8000, 'the chat');
       await sleep(500);
       check(`${label} chat`, await b.eval(AUDIT));
       const chatText = await b.eval('document.body.innerText');

@@ -199,11 +199,12 @@ test('toChatMessage: a tool result says only whether it failed, joined to its ca
   assert.equal(c.toolId, 'call-1');
   const ok = toChatMessage({ seq: 2, at: 'x', kind: 'tool_result', toolUseId: 'call-1', text: 'all 12 tests passed\nsrc/secret-output.ts' }, url)!;
   assert.deepEqual({ kind: ok.kind, ok: ok.ok, text: ok.text, toolId: ok.toolId }, { kind: 'tool_result', ok: true, text: '', toolId: 'call-1' }, 'no output');
-  const failed = toChatMessage({ seq: 3, at: 'x', kind: 'tool_result', toolUseId: 'call-1', isError: true, text: `\n  exit 1: token ${secretish()} rejected\nline two of the output` }, url)!;
+  const failed = toChatMessage({ seq: 3, at: 'x', kind: 'tool_result', toolUseId: 'call-1', isError: true, text: `\n  exit 1: token ${secretish()} rejected\n\nls: cannot access x\nline three of the output` }, url)!;
   assert.equal(failed.ok, false);
   assert.ok(failed.text.startsWith('exit 1: token'), failed.text);
   assert.ok(!failed.text.includes(secretish()), 'redacted');
-  assert.ok(!failed.text.includes('line two') && failed.text.length <= 160, 'one short line');
+  assert.ok(failed.text.endsWith(' · ls: cannot access x'), `the first two lines that say something: ${failed.text}`);
+  assert.ok(!failed.text.includes('line three') && failed.text.length <= 160, 'one short line');
   assert.equal(toChatMessage({ seq: 4, at: 'x', kind: 'tool_result', toolUseId: 'call-1', isError: true, text: '' }, url)!.text, 'Failed');
   assert.equal(toChatMessage({ seq: 5, at: 'x', kind: 'tool_result', text: 'no id' }, url), null, 'a result without its call id cannot be joined: left out');
   assert.equal(toChatMessage({ seq: 6, at: 'x', kind: 'tool_result', toolUseId: 'c', agentLabel: 'explorer' }, url), null, 'a sub-agent’s result stays out');
@@ -263,4 +264,10 @@ test('planOf: the usage snapshot’s session and week windows as they stand; no 
   assert.equal(planOf({ runsOn: 'key', unavailable: null, windows: [] }), null);
   assert.equal(planOf(null), null);
   assert.deepEqual(planOf({ runsOn: 'plan', unavailable: null, windows: [w('session', null)] }), { session: { usedPct: null, resetsAt: null }, week: null });
+});
+
+test('toChatMessage: a call whose input has no field the panel reads falls back to the line the portal row shows (an Agent call’s description)', () => {
+  const m = toChatMessage({ seq: 1, at: 'x', kind: 'tool_use', toolName: 'Agent', toolUseId: 'a1', text: `QA agent 1 (sonnet) ${secretish()}`, toolInput: {} }, (b) => b)!;
+  assert.ok(m.text.startsWith('QA agent 1 (sonnet)'), m.text);
+  assert.ok(!m.text.includes(secretish()), 'redacted');
 });

@@ -60,6 +60,12 @@ test('chatItems: running only while the session works and the run is the newest 
   const approval: ReporterChatMessage = { ...base, seq: 6, at: at(6), kind: 'approval', text: 'Run a command: npm test' };
   const [waiting] = activities(chatItems([...lines, approval], true));
   assert.ok(waiting!.live, 'an approval the run waits on does not end it');
+  const split = chatItems([call(1, 'Bash', 'npm test'), { ...approval, seq: 2 }, done(3, 'c1'), call(4, 'Read', '/a.ts')], false);
+  assert.deepEqual(
+    split.map((i) => (i.type === 'line' ? i.m.kind : `activity:${i.steps.length}`)),
+    ['activity:2'],
+    'approval lines are not rows (as in the portal transcript): they never split a run',
+  );
   assert.notEqual(live!.sig, idle!.sig);
 });
 
