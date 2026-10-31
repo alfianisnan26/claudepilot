@@ -43,11 +43,46 @@ const API = {
   'POST /reporter/v1/duplicates': { candidates: [{ key: 'KONF-12', summary: 'Hero button text is cut off on small phones', status: 'open', reasons: ['same-area'], score: 0.8, url: '#', thumbnailUrl: null }] },
 };
 
+/**
+ * A stand-in host page (the SDK's part): frames the panel as the SDK does, answers `ready` with `hello`, and answers a capture request
+ * with a drawn screenshot and an evidence bundle, so the bridge and the report form run end to end.
+ */
+const HOST_PAGE = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><body style="margin:0">
+<iframe id="panel" style="position:fixed;left:0;right:0;bottom:0;width:100%;height:92vh;border:0"></iframe>
+<script>
+const f = document.getElementById('panel');
+window.got = [];
+f.src = '/reporter/v1/embed?bucket=KONF&origin=' + encodeURIComponent(location.origin);
+const build = { version: '1.2.0', commit: '${'b'.repeat(40)}', branch: 'stg', environment: 'stg', builtAt: null, repo: 'platform/konfersi-landing-page' };
+const anchor = { path: '/', selector: 'main h1', relative: null, rect: { x: 20, y: 300, w: 200, h: 80 }, viewport: { w: 390, h: 844, dpr: 1 }, mode: 'crop' };
+const evidence = () => ({ schema: 1, sdkVersion: '0.1.0', capturedAt: new Date().toISOString(),
+  page: { url: '${HOST}/', origin: '${HOST}', host: 'stg.konfersi.example', path: '/', search: '', hash: '', title: 'Home', referrer: '', lang: 'en', route: null, historyLength: 1 },
+  device: { userAgent: navigator.userAgent, browser: { name: null, version: null }, os: { name: null, version: null }, mobile: true, touch: true, screen: { w: 390, h: 844, dpr: 1, orientation: null }, viewport: { w: 390, h: 844 }, hardwareConcurrency: null, deviceMemoryGb: null, connection: { effectiveType: null, downlinkMbps: null, rttMs: null, saveData: null }, timezone: null, locale: null },
+  state: { scroll: { x: 0, y: 0, maxY: 0 }, visibility: 'visible', online: true, colorScheme: 'light', reducedMotion: false, focused: null, storageKeys: { local: [], session: [], cookies: [] }, app: null },
+  build, anchor, dom: null, components: [], framework: null, console: [{ ts: 1, level: 'error', text: 'TypeError: x is undefined' }], network: [],
+  performance: { navigation: { ttfbMs: null, domContentLoadedMs: null, loadMs: null, type: null }, vitals: { lcpMs: null, cls: null, inpMs: null, fcpMs: null }, longTasks: { count: 0, totalMs: 0 }, memory: { usedJsHeapBytes: null, totalJsHeapBytes: null } },
+  interactions: [], checks: { ran: true, findings: [{ source: 'target-size', rule: 'target-size', severity: 'serious', message: 'Button is 32x32', selector: 'main button', help: null }] }, errorSignatures: ['TypeError: x is undefined'] });
+addEventListener('message', async (e) => {
+  if (e.source !== f.contentWindow || e.origin !== location.origin) return;
+  const m = e.data; window.got.push(m.type);
+  if (m.type === 'pilot-reporter:ready' && !window.said) { window.said = 1; f.contentWindow.postMessage({ type: 'pilot-reporter:hello', bridge: 1, sdkVersion: '0.1.0', page: { url: '${HOST}/', title: 'Home' }, build }, location.origin); }
+  if (m.type === 'pilot-reporter:capture-request') {
+    const c = document.createElement('canvas'); c.width = 390; c.height = 844; const g = c.getContext('2d'); g.fillStyle = '#eef'; g.fillRect(0, 0, 390, 844); g.fillStyle = '#c33'; g.fillRect(20, 300, 200, 80);
+    const buf = await (await new Promise((r) => c.toBlob(r, 'image/png'))).arrayBuffer();
+    f.contentWindow.postMessage({ type: 'pilot-reporter:capture-result', requestId: m.requestId, screenshot: buf, mediaType: 'image/png', evidence: evidence() }, location.origin, [buf]);
+  }
+});
+</script>`;
+
 const standIn = {
   name: 'qa:reporter-stand-in',
   configureServer(server) {
     server.middlewares.use((req, res, next) => {
       const path = req.url.split('?')[0];
+      if (path === '/__qa-host') {
+        res.setHeader('content-type', 'text/html');
+        return res.end(HOST_PAGE);
+      }
       if (path === '/reporter/v1/embed') {
         req.url = `/embed.html${req.url.slice(path.length)}`;
         return next();
@@ -147,6 +182,30 @@ try {
     } finally {
       await b.close();
     }
+  }
+
+  // Framed by the stand-in host: ready, settings and callouts reach the host; a capture comes back as the report form.
+  const b = await Browser.launch({ width: 390, height: 844, mobile: true });
+  try {
+    await b.setViewport(390, 844, true);
+    const frame = `document.getElementById('panel').contentDocument`;
+    await b.goto(`${base}/__qa-host`, 2500);
+    await b.eval(`${frame}.defaultView.localStorage.setItem('pilot-reporter:token:KONF:' + location.origin, JSON.stringify({ token: '${token}', expiresAt: new Date(Date.now() + 36e5).toISOString(), actorLabel: 'Owner', bucketKey: 'KONF' }))`);
+    await b.goto(`${base}/__qa-host`, 3000);
+    await b.waitFor(`window.got.includes('pilot-reporter:callouts') && window.got.includes('pilot-reporter:settings')`, 10000, 'ready, settings and callouts from the panel');
+    await b.eval(`${frame}.querySelector('[role=tab][aria-label=Report]').click()`);
+    await sleep(400);
+    await b.eval(`[...${frame}.querySelectorAll('button')].find((x) => /Snap|Full page/.test(x.textContent)).click()`);
+    await b.waitFor(`${frame}.body.innerText.includes('File ticket') && ${frame}.body.innerText.includes('Looks like KONF-12')`, 10000, 'the report form with the capture and a duplicate');
+    await sleep(500);
+    const a = await b.eval(AUDIT.replaceAll('document.', `${frame}.`));
+    check('framed report form', a);
+    const text = await b.eval(`${frame}.body.innerText`);
+    if (!/1 serious/.test(text)) failures.push('framed report form: the UI check chip is missing');
+    await b.shot('reporter-390-framed-report', { full: false });
+    console.log('host got', await b.eval(`window.got.join(',')`));
+  } finally {
+    await b.close();
   }
 } finally {
   await server.close();
