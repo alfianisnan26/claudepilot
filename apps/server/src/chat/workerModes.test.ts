@@ -546,10 +546,14 @@ test('T-2997: a lead whose stored mode says Bypass but which is not in Bypass no
     const a = await r.h.agentToken('docker/ws1', lead);
     for (const on of [true, false]) {
       r.s.controller.autonomousAuto = () => on;
-      const w = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: `Worker ${on}` })));
+      const raw = await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: `Worker ${on}` }));
+      const w = spawned(raw) as Spawned & { bypass?: string };
       assert.deepEqual([w.applied, w.unconfirmed], [['mode auto'], []], `Auto for agents ${on}`);
       const worker = r.s.controller.get(w.id)!;
       assert.deepEqual([worker.mode, worker.bypassCapable, worker.state === 'ended'], ['auto', false, false], `Auto for agents ${on}`);
+      // T-3207: the policy is on but the lead's row is stale: the result and its summary say so (the reason branch nothing covered).
+      assert.equal(w.bypass, 'Bypass not inherited: you are not in Bypass now as the portal sees it, auto instead', `Auto for agents ${on}`);
+      assert.match(raw.result!.content![0]!.text, /Bypass not inherited: you are not in Bypass now as the portal sees it, auto instead\./, 'the summary says why');
     }
     // The controller's own gate says the same to a direct create asking to inherit: no capability, no entry.
     const direct = await r.s.controller.create({ workspaceId: 'docker/ws1', title: 'Direct' }, { actor: `session:${lead}`, parentId: lead, inheritBypass: true });
