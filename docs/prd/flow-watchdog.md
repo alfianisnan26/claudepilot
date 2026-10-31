@@ -173,4 +173,10 @@ After every round the watchdog publishes the live topic `keepgoing` (the same wa
   where no key is known) and the card's action line shows them; an action saved before has none and shows the ids.
 - **Idle.** A lead's cap counts workers that work (working, starting, busy, running agents or waiting on a person), not ones merely live; its unit's
   open work is the tickets not dispatched plus those whose holder ended or sat idle `flow.idleAfterMin`.
+- **Outside tickets (T-3198).** A program ticket held by a session whose crew root is no lead of the program (on 2026-10-30 the claudepilot
+  lead held `konfersi-migration` tickets, and their merge rows went to the Konfersi gate, their asks to Konfersi peers) is that crew root's to
+  move: every alert about it (merge rows of any basis, `conflict` and `no_pr`, QA-ASK and REVIEW-ASK) goes to the holder's crew root,
+  through the same send, rate limit and holds, never to the gate or a peer. A root that is gone, closed or held drops the alert for that
+  round (`flow.skipped`); it is never sent elsewhere. Unheld tickets and the counts are unchanged. That root, or a worker it started, may
+  record the ticket's merge status (tickets PRD FR36e), and a fast-forward merge with no PR is recorded `merged` with `pr_head` alone.
 

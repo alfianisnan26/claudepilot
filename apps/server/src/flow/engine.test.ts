@@ -331,9 +331,13 @@ test('the program’s leads: an explicit group, else the first group whose leads
   for (const id of [LEAD_A, LEAD_B, D, E]) g.chat.put(id, { state: 'working' });
   g.tickets.add(12, { holder: D });
   g.tickets.verdict('T-12', { role: 'qa', verdict: 'pass', commit: sha('a'), at: ago(g, 25) });
+  g.tickets.add(13, { holder: LEAD_A });
+  g.tickets.verdict('T-13', { role: 'qa', verdict: 'pass', commit: sha('b'), at: ago(g, 25) });
   await g.engine.round();
   assert.deepEqual(g.engine.snapshot().programs[0]!.leads, [LEAD_A, LEAD_B]);
-  assert.equal(g.chat.sent[0]!.id, LEAD_B);
+  assert.equal(g.chat.sent.find((m) => m.text.includes('T-13 '))!.id, LEAD_B, 'a ticket of the group goes to its merge gate');
+  // T-3198: D leads no team of this program: its ticket is outside, and the alert goes to D, never to the gate.
+  assert.equal(g.chat.sent.find((m) => m.text.includes('T-12 '))!.id, D);
 });
 
 test('parsePrograms: fields checked, malformed ones dropped (fail closed)', () => {
@@ -1021,4 +1025,107 @@ test('#2: giteaPrPort reads Gitea\'s pull request (token in a header only), and 
   assert.equal(await p.pr('../etc', 7), null);
   assert.equal(await p.pr('konfersi/api', 0), null);
   assert.equal(calls.length, 2);
+});
+
+/** T-3198: the ClaudePilot lead's crew (a lead of no team of the program) holding PILOT tickets that kept the program's tag. */
+const OUT = 'ffffffff-0000-0000-0000-00000000000f';
+function outsideCrew(r: ReturnType<typeof rig>) {
+  crew(r);
+  r.chat.put(OUT, { state: 'working', lastActivityAt: ago(r, 1) });
+  r.chat.put('wo', { parentId: OUT, state: 'ended' });
+}
+/** A HIGH ticket of `holder` with its PR recorded ready, the self-test 25 min ago, and (when `reviewed`) a review PASS on that head. */
+function high(r: ReturnType<typeof rig>, n: number, holder: string, reviewed: boolean) {
+  r.tickets.add(n, { holder, tags: ['konfersi-migration', 'risk-high'] });
+  r.tickets.merged(`T-${n}`, { repo: 'claudepilot/portal', pr: n, prHead: sha('a'), state: 'ready', reason: null });
+  r.tickets.comment(`T-${n}`, `Self-test: claudepilot-job-${n} on ${sha('a')} pass 9`, 25);
+  if (reviewed) r.tickets.verdict(`T-${n}`, { role: 'review', verdict: 'pass', commit: sha('a'), at: ago(r, 25) });
+}
+
+test('T-3198: an outside HIGH ticket with its self-test and a review PASS: the merge alert goes to the holder\'s crew root, never the gate', async () => {
+  const r = rig();
+  outsideCrew(r);
+  high(r, 3006, 'wo', true);
+  high(r, 70, 'wb', true); // inside: the gate, as before
+  await r.engine.round();
+  const toOut = r.chat.sent.filter((m) => m.id === OUT);
+  assert.equal(toOut.length, 1);
+  assert.match(toOut[0]!.text, /Your crew holds it and no lead of the program does/);
+  assert.match(toOut[0]!.text, new RegExp(`- T-3006 \\(KONF-3006\\) claudepilot/portal#3006 self-test \\+ review PASS on the PR head ${sha('a')}`));
+  assert.doesNotMatch(toOut[0]!.text, /T-70 /);
+  const toGate = r.chat.sent.filter((m) => m.id === LEAD_A);
+  assert.equal(toGate.length, 1);
+  assert.match(toGate[0]!.text, /- T-70 /);
+  assert.doesNotMatch(toGate[0]!.text, /T-3006|Your crew holds/);
+  assert.equal(r.chat.sent.filter((m) => m.text.includes('T-3006')).length, 1, 'nobody else hears of it');
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 2, 'the card counts both, as before');
+  const told = r.engine.snapshot().actions.find((a) => a.sessionId === OUT)!;
+  assert.deepEqual([told.condition, told.kind, told.tickets], ['merge', 'told', ['T-3006']]);
+  assert.match(told.note, /crew holds these tickets/);
+});
+
+test('T-3198: an outside ticket\'s review and QA asks go to the holder\'s crew root, never round robin to a peer lead', async () => {
+  const r = rig();
+  outsideCrew(r);
+  high(r, 980, 'wo', false); // self-tested, no review: a REVIEW-ASK
+  r.tickets.add(1063, { holder: 'wo' }); // no verdict for 2 h: a QA-ASK
+  r.tickets.add(20, { holder: 'wb' }); // inside: a peer of B, as before
+  await r.engine.round();
+  const toOut = r.chat.sent.filter((m) => m.id === OUT);
+  assert.equal(toOut.length, 1, 'one message: both asks');
+  assert.match(toOut[0]!.text, /QA-ASK for tickets your crew holds[\s\S]*- T-1063 \(KONF-1063\) head unknown held by wo/);
+  assert.match(toOut[0]!.text, /REVIEW-ASK \(D-102\) for tickets your crew holds[\s\S]*- T-980 \(KONF-980\) head/);
+  for (const m of r.chat.sent.filter((x) => x.id !== OUT)) assert.doesNotMatch(m.text, /T-980|T-1063/);
+  const peer = r.chat.sent.find((m) => m.text.includes('T-20 '))!;
+  assert.ok(peer && peer.id !== LEAD_B && peer.id !== OUT, 'an inside ticket still goes to a peer lead');
+  assert.equal(r.engine.snapshot().programs[0]!.counts.qa, 3, 'the card counts all three, as before');
+});
+
+test('T-3198: an outside ticket\'s conflict and no_pr go to the holder\'s crew root, not to a unit lead or the gate', async () => {
+  const r = rig();
+  outsideCrew(r);
+  r.tickets.add(31, { holder: 'wo' });
+  r.tickets.merged('T-31', { repo: 'claudepilot/portal', pr: 31, prHead: sha('a'), state: 'conflict', reason: null });
+  r.tickets.add(32, { holder: 'wo' });
+  r.tickets.merged('T-32', { repo: 'claudepilot/portal', pr: null, prHead: null, state: 'no_pr', reason: null });
+  await r.engine.round();
+  assert.deepEqual(r.chat.sent.map((m) => m.id), [OUT, OUT]);
+  assert.match(r.chat.sent.find((m) => /conflict/.test(m.text))!.text, /- T-31 \(KONF-31\) claudepilot\/portal#31 head/);
+  assert.match(r.chat.sent.find((m) => /no pull request/.test(m.text))!.text, /- T-32 \(KONF-32\) claudepilot\/portal$/m);
+  assert.equal(r.engine.snapshot().actions.filter((a) => a.kind === 'skipped').length, 0, 'none is an orphan');
+});
+
+test('T-3198: the holder\'s crew root ended (no continuation) or a person stopped it: its alerts are dropped, never sent to the gate or a peer', async () => {
+  for (const how of ['ended', 'stopped'] as const) {
+    const r = rig();
+    outsideCrew(r);
+    if (how === 'ended') r.chat.patch(OUT, { state: 'ended' });
+    else r.chat.stopped.add(OUT);
+    high(r, 3006, 'wo', true); // merge
+    high(r, 980, 'wo', false); // review ask
+    r.tickets.add(31, { holder: 'wo' });
+    r.tickets.merged('T-31', { repo: 'claudepilot/portal', pr: 31, prHead: sha('b'), state: 'conflict', reason: null });
+    await r.engine.round();
+    assert.equal(r.chat.sent.length, 0, `${how}: nobody is told`);
+    const skipped = r.engine.snapshot().actions.filter((a) => a.kind === 'skipped');
+    assert.deepEqual(skipped.map((a) => a.condition).sort(), ['conflict', 'merge', 'qa'], `${how}: each recorded once as skipped`);
+  }
+});
+
+test('T-3198: an outside ticket recorded merged with its head and no PR (a fast-forward merge) is skipped; nothing prints #null', async () => {
+  const asked: string[] = [];
+  const r = rig({ prs: { pr: async (repo, n) => (asked.push(`${repo}#${n}`), null) } });
+  outsideCrew(r);
+  high(r, 3006, 'wo', true);
+  r.tickets.merged('T-3006', { repo: 'claudepilot/portal', pr: null, prHead: sha('a'), state: 'merged', reason: null, min: 1 });
+  high(r, 3007, 'wo', true);
+  r.tickets.merged('T-3007', { repo: 'claudepilot/claudepilot', pr: null, prHead: sha('a'), state: 'merged', reason: null, min: 1 });
+  r.tickets.merged('T-3007', { repo: 'claudepilot/portal', pr: null, prHead: null, state: 'no_pr', reason: null, min: 0 });
+  await r.engine.round();
+  assert.deepEqual(asked, [], 'a merged record is never read from the forge');
+  assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 0);
+  assert.equal(r.chat.sent.filter((m) => m.text.includes('T-3006')).length, 0, 'merged: skipped');
+  const all = r.chat.sent.map((m) => m.text).join('\n');
+  assert.doesNotMatch(all, /#null|#undefined/);
+  assert.match(all, /- T-3007 \(KONF-3007\) claudepilot\/portal$/m, 'its other repo still has no PR');
 });
