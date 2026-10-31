@@ -12,6 +12,7 @@ import {
   SESSION_GRANT_API,
   SESSION_SHARE_PRESETS,
   SSO_API,
+  type Actor,
   type AddPortalTeamMemberRequest,
   type CreatePortalTeamRequest,
   type PortalTeamDetail,
@@ -33,7 +34,7 @@ import { SsoError, type SsoProviders } from './sso.js';
 import type { PortalTeams } from './teams.js';
 import type { PortalUsers } from './users.js';
 
-type Env = { Bindings: HttpBindings; Variables: { token: string } };
+type Env = { Bindings: HttpBindings; Variables: { token: string; actor: Actor } };
 
 export interface IdentityRouteDeps {
   portal: Portal;

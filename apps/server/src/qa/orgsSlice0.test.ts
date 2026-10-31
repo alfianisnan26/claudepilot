@@ -71,6 +71,10 @@ test('a second admin is itself on HTTP (its own audit rows) and on sockets; the 
     assert.deepEqual([row.actor, row.userId, row.subject], [`user:${second}`, second, `user:${third}`], 'the audit names the admin who acted, not the owner');
     assert.equal((await t.call('PATCH', `/api/admin/users/${third}`, { displayName: 'Third' }, admin2)).status, 200);
     assert.equal(t.audit.find((r) => r.kind === 'account.updated')!.userId, second);
+    // Identity's own rows (teams, shares, SSO providers) name the admin too.
+    assert.equal((await t.call('POST', '/api/admin/teams', { name: 'Ops' }, admin2)).status, 201);
+    const team = t.audit.find((r) => r.kind === 'team.created')!;
+    assert.deepEqual([team.actor, team.userId], [`user:${second}`, second]);
 
     // D-82: the second admin keeps full access (it reads the admin app like the owner).
     assert.equal((await t.call('GET', '/api/admin/users', undefined, admin2)).status, 200);

@@ -283,10 +283,19 @@ export function createApp(
   }, 60 * 60_000);
   sweep.unref?.();
   /** Gap 2 (owner, 2026-10-17): account and sign-in events in the platform audit (no password, an unknown email only as a fingerprint). */
-  // Organizations slice 0 (P1): `by` is who acted (the request's actor), so an admin's row names that admin; null: nobody signed in (a sign-in).
-  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info', by: Actor | null = null) => {
+  // Organizations slice 0 (P1): `by` is who acted (the request's actor, or the account id identity/routes.ts passes), so an admin's row names
+  // that admin as the user it acts as (`user:<id>`; the founder account is `u_owner`); null: nobody signed in (a sign-in, the server code).
+  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info', by: Actor | string | null = null) => {
     try {
-      platform?.audit.record({ kind, actor: by ? actorString(by) : 'ui', userId: by ? actorUserId(by) : null, subject: subject ? `user:${subject}` : null, detail, severity });
+      let who: Actor | null = typeof by === 'string' ? { kind: 'user', userId: by, loginSessionId: 'legacy', via: 'ui' } : by;
+      if (typeof by === 'string') {
+        try {
+          who = { kind: 'user', userId: users.principalOf(by), loginSessionId: 'legacy', via: 'ui' };
+        } catch {
+          // the account as itself
+        }
+      }
+      platform?.audit.record({ kind, actor: who ? actorString(who) : 'ui', userId: who ? actorUserId(who) : null, subject: subject ? `user:${subject}` : null, detail, severity });
     } catch {
       // the audit must never break a sign-in
     }
