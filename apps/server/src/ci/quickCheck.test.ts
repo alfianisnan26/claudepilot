@@ -282,7 +282,7 @@ test('T-857: a file the package test:scripts glob matches runs with node --test,
   assert.equal(last(bad.stdout), 'QUICK CHECK FAILED: test:be/scripts/a.check.mjs (node --test)');
 });
 
-test("T-3101: a package with its own scripts/test.mjs entry runs the file through it (extensionless imports need its bundle)", () => {
+test('T-3101: a package with its own scripts/test.mjs entry runs the file through it (extensionless imports need its bundle)', () => {
   const f = fixture(0);
   pkg(f, 'lab', '{}\n', {
     'scripts/test.mjs': `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(f.log)}, 'entry ' + process.argv.slice(2).join(' ') + '\\n');\n`,
@@ -294,6 +294,26 @@ test("T-3101: a package with its own scripts/test.mjs entry runs the file throug
   assert.match(r.stdout, /::: test:lab\/src\/x\.test\.ts \(scripts\/test\.mjs\) ok/);
   const tools = readFileSync(f.log, 'utf8');
   assert.match(tools, /^entry src\/x\.test\.ts$/m);
+  assert.doesNotMatch(tools, /vitest/);
+});
+
+test('the order: a declared runner wins over the T-2975 routing, which wins over the installed tools', () => {
+  const f = fixture(0);
+  pkg(f, 'lab', '{}\n', {
+    'scripts/test.mjs': `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(f.log)}, 'entry ' + process.argv.slice(2).join(' ') + '\\n');\n`,
+    'src/a.check.mjs': 'x\n',
+  });
+  pkg(f, 'be', JSON.stringify({ scripts: { 'test:scripts': 'node --test scripts/*.check.mjs' } }), {
+    'tools/y.check.mjs': "import { test } from 'node:test';\ntest('ok', () => {});\n",
+  });
+  tool(join(f.work, 'lab/node_modules/.bin/vitest'), `echo "vitest $*" >> ${f.log}; exit 0`);
+  tool(join(f.work, 'be/node_modules/.bin/vitest'), `echo "vitest $*" >> ${f.log}; exit 1`);
+  const r = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'lab/src/a.check.mjs', '--test', 'be/tools/y.check.mjs']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: test:lab\/src\/a\.check\.mjs \(scripts\/test\.mjs\) ok/);
+  assert.match(r.stdout, /::: test:be\/tools\/y\.check\.mjs \(node --test\) ok/);
+  const tools = readFileSync(f.log, 'utf8');
+  assert.match(tools, /^entry src\/a\.check\.mjs$/m);
   assert.doesNotMatch(tools, /vitest/);
 });
 
