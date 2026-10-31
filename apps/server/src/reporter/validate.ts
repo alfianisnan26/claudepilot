@@ -236,7 +236,7 @@ export function cleanAnchor(raw: unknown, field = 'anchor'): ReporterAnchor {
     relative: rel,
     rect: rect(raw.rect, `${field}.rect`),
     viewport: { w: num(vp.w, `${field}.viewport.w`, { min: 0, max: 20000 }), h: num(vp.h, `${field}.viewport.h`, { min: 0, max: 20000 }), dpr: num(vp.dpr, `${field}.viewport.dpr`, { min: 0, max: 10 }) },
-    mode: oneOf(raw.mode, ['full', 'crop'] as const, `${field}.mode`),
+    mode: oneOf(raw.mode, ['viewport', 'full', 'crop'] as const, `${field}.mode`),
   };
 }
 

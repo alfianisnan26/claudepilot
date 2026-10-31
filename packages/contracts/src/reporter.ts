@@ -44,6 +44,12 @@ export const REPORTER_LIMITS = {
   tokenHours: 12,
   /** Tickets a token may file per hour. */
   ticketsPerHour: 30,
+  /** Chat messages a token may send to sessions in ten minutes (chat in the widget). */
+  chatMessagesPer10Min: 20,
+  /** Characters of one chat message from the widget. */
+  chatChars: 8000,
+  /** Lines of a chat page (the newest first loaded, older on scroll up). */
+  chatPage: 40,
   /** Captures (screenshot + evidence + anchor) on one ticket. */
   capturesPerTicket: 20,
   /** Comments (captures) on one draft review. */
@@ -227,8 +233,15 @@ export interface ReporterAnchor {
   /** The selection in document coordinates at capture time; the fallback when the selector no longer matches. */
   rect: { x: number; y: number; w: number; h: number };
   viewport: { w: number; h: number; dpr: number };
-  mode: 'full' | 'crop';
+  mode: ReporterCaptureMode;
 }
+
+/**
+ * What a capture covers: `viewport` only what was on screen ("Screen", the default), `full` the whole page ("Whole page", desktop), `crop`
+ * an area the person drew. `viewport` is additive (2026-10-31): a reader that knows only `full` and `crop` shows it like `full`.
+ */
+export type ReporterCaptureMode = 'viewport' | 'full' | 'crop';
+export const REPORTER_CAPTURE_MODES: readonly ReporterCaptureMode[] = ['viewport', 'full', 'crop'];
 
 export interface ReporterConsoleEntry {
   ts: number;
@@ -696,6 +709,61 @@ export interface ReporterSession {
   url: string;
 }
 
+/**
+ * One line of a session's conversation as the panel shows it (PILOT-1111, chat in the widget). Less than the portal shows the owner, never
+ * more: the person's and the assistant's text (already redacted when stored, redacted again on the way out), a tool call as its name and
+ * one short line, an approval as a line that says one waits (answered in pilot only), and images by reference. Sub-agent lines, thinking,
+ * tool output, costs and system notes are left out.
+ */
+export interface ReporterChatMessage {
+  seq: number;
+  at: string;
+  kind: 'user' | 'assistant' | 'tool' | 'approval' | 'error';
+  text: string;
+  /** For `user`: who sent it when it was not the owner at the keyboard (a reporter, a ticket, another session). */
+  from: string | null;
+  /** For `tool`: the tool's name; `text` is one line of what it was given (a command, a path), cut short. */
+  tool: string | null;
+  /** Images on the line, served by `REPORTER_ROUTES.sessionBlob` with the bearer token. */
+  images: { url: string; mediaType: string; width: number | null; height: number | null }[];
+}
+
+/** The session's state as the panel needs it: busy, waiting on an approval (answered in pilot, never here), or ended. */
+export interface ReporterChatState {
+  id: string;
+  title: string;
+  state: 'starting' | 'idle' | 'working' | 'waiting' | 'interrupted' | 'ended';
+  /** Open approvals and what the oldest asks ("Run a command: npm test"); the panel links out to answer them. */
+  waiting: number;
+  waitingFor: string | null;
+  /** The last stored event; the live stream and `?after=` resume after it. */
+  lastSeq: number;
+  /** The ticket of the bucket it works on, when it works on one. */
+  ticketKey: string | null;
+  url: string;
+}
+
+/**
+ * `GET REPORTER_ROUTES.sessionMessages?before=<seq>&limit=<n>` (a page counted back from the newest: `before` absent) or `?after=<seq>` (what
+ * came after). `items` oldest first; `before` is the cursor of the next older page (null when there is none).
+ */
+export interface ReporterChatPage {
+  items: ReporterChatMessage[];
+  before: number | null;
+  session: ReporterChatState;
+}
+
+/** `POST REPORTER_ROUTES.sessionMessages`: a message to the session as the token's person, optionally with the current capture. */
+export interface ReporterChatSendRequest {
+  /** The client's id for it (a UUID), so a retry is not sent twice. */
+  uuid: string;
+  text: string;
+  image?: { mediaType: 'image/png' | 'image/jpeg' | 'image/webp'; dataBase64: string } | null;
+}
+
+/** A line of the live stream (`REPORTER_ROUTES.sessionStream`, NDJSON): new lines and the state, or a keep-alive. */
+export type ReporterChatStreamLine = { type: 'hello'; session: ReporterChatState } | { type: 'update'; items: ReporterChatMessage[]; session: ReporterChatState } | { type: 'ping' } | { type: 'gone' };
+
 export interface ReporterNoteHit {
   path: string;
   title: string;
@@ -764,7 +832,7 @@ export type ReporterHostMessage =
   | { type: 'pilot-reporter:capture-result'; requestId: string; screenshot: ArrayBuffer; mediaType: 'image/png' | 'image/jpeg' | 'image/webp'; evidence: ReporterEvidence; target?: ReporterReportTarget }
   | { type: 'pilot-reporter:capture-cancelled'; requestId: string; reason: 'user' | 'error'; message?: string }
   /** A capture the person started with a hotkey: the panel opens on the report form with it. */
-  | { type: 'pilot-reporter:capture-started'; requestId: string; mode: 'full' | 'crop'; target?: ReporterReportTarget }
+  | { type: 'pilot-reporter:capture-started'; requestId: string; mode: ReporterCaptureMode; target?: ReporterReportTarget }
   | { type: 'pilot-reporter:panel-opened' }
   | { type: 'pilot-reporter:callout-clicked'; key: string; captureId: string }
   /** The showcase moved (Prev / Next on the caption card) or ended. */
@@ -777,7 +845,7 @@ export type ReporterHostMessage =
 export type ReporterPanelMessage =
   | { type: 'pilot-reporter:ready'; bridge: typeof REPORTER_BRIDGE_VERSION; status: ReporterStatus; connected: boolean; actorLabel: string | null }
   /** `target` (optional): the panel's current Ticket | Session choice, the default of the capture toolbar's switch. */
-  | { type: 'pilot-reporter:capture-request'; requestId: string; mode: 'full' | 'crop'; precise: boolean; target?: ReporterReportTarget }
+  | { type: 'pilot-reporter:capture-request'; requestId: string; mode: ReporterCaptureMode; precise: boolean; target?: ReporterReportTarget }
   /** The panel's Ticket | Session choice changed (and once after ready): the next capture toolbar starts on it. */
   | { type: 'pilot-reporter:target'; target: ReporterReportTarget }
   /** The open tickets of this bucket anchored on the current path; replaces what is drawn. Empty when signed out. */
@@ -794,6 +862,11 @@ export type ReporterPanelMessage =
   | { type: 'pilot-reporter:focus-clear' }
   /** Comments in the open draft review: the widget button shows the count as a badge (0 hides it). */
   | { type: 'pilot-reporter:tray'; count: number }
+  /**
+   * The panel shows something full screen (the screenshot viewer): on a phone the SDK raises its sheet to full height while `expanded`,
+   * and puts it back after. Additive (2026-10-31): an SDK that does not know it ignores it and the viewer fills the sheet as it is.
+   */
+  | { type: 'pilot-reporter:expand'; expanded: boolean }
   | { type: 'pilot-reporter:close' };
 
 export type ReporterBridgeMessage = ReporterHostMessage | ReporterPanelMessage;
@@ -841,6 +914,15 @@ export const REPORTER_ROUTES = {
    */
   observedBuild: '/reporter/v1/observed-build',
   sessions: '/reporter/v1/sessions', // GET
+  /**
+   * Chat in the widget (PILOT-1111), only for a session of the token's bucket (linked to one of its tickets, in its default workspace, or one
+   * of its direct-report targets); any other id is the same 404. GET a page (ReporterChatPage), POST ReporterChatSendRequest (rate limited).
+   */
+  sessionMessages: '/reporter/v1/sessions/:id/messages',
+  /** GET ?after=<seq>: NDJSON ReporterChatStreamLine while the panel shows the chat (fetch with the bearer token; closed after 5 minutes). */
+  sessionStream: '/reporter/v1/sessions/:id/stream',
+  /** GET an image a line of that session shows (images only). */
+  sessionBlob: '/reporter/v1/sessions/:id/blobs/:blobId',
   knowledge: '/reporter/v1/knowledge', // GET ?q=
   note: '/reporter/v1/knowledge/note', // GET ?path=
 } as const;

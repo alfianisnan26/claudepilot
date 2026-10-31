@@ -99,7 +99,7 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
     if (e.page.route) lines.push(`- Route: ${code(e.page.route, 200)}`);
     lines.push(`- Device: ${deviceLine(e)}`);
     if (e.captureGaps?.length) lines.push(`- Not captured: ${e.captureGaps.map((g) => inline(g, 200)).join('; ')}`);
-    lines.push(`- Area: ${e.anchor.mode === 'crop' ? 'crop' : 'full page'} at x ${Math.round(e.anchor.rect.x)}, y ${Math.round(e.anchor.rect.y)}, ${Math.round(e.anchor.rect.w)}x${Math.round(e.anchor.rect.h)}${e.anchor.selector ? `, element ${code(e.anchor.selector, 200)}` : ''}`);
+    lines.push(`- Area: ${areaWord(e.anchor.mode)} at x ${Math.round(e.anchor.rect.x)}, y ${Math.round(e.anchor.rect.y)}, ${Math.round(e.anchor.rect.w)}x${Math.round(e.anchor.rect.h)}${e.anchor.selector ? `, element ${code(e.anchor.selector, 200)}` : ''}`);
     const errors = e.console.filter((x) => x.level === 'error');
     const failed = e.network.filter((n) => n.error !== undefined || (n.status !== null && n.status >= 400));
     lines.push(`- Console errors: ${errors.length}; failed requests: ${failed.length}; LCP: ${e.performance.vitals.lcpMs === null ? 'unknown' : `${Math.round(e.performance.vitals.lcpMs)} ms`}`);
@@ -240,4 +240,9 @@ export function buildRepro(e: ReporterEvidence, siteOrigin?: string): ReporterRe
     '',
   ].join('\n');
   return { steps, playwright };
+}
+
+/** How a capture's area reads in the ticket: a crop, what was on screen, or the whole page (an unknown mode reads as the whole page). */
+export function areaWord(mode: string): string {
+  return mode === 'crop' ? 'crop' : mode === 'viewport' ? 'screen (what was visible)' : 'full page';
 }

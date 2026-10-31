@@ -59,8 +59,17 @@ import {
   type TicketType,
   type UpdateReporterConfigRequest,
   type UserId,
+  sessionRef,
+  type ChatEvent,
+  type ChatEventPage,
+  type ReporterChatMessage,
+  type ReporterChatPage,
+  type ReporterChatSendRequest,
+  type ReporterChatState,
 } from '@portal/contracts';
 import { can } from '../authz/seam.js';
+import { CHAT_UUID, toChatMessages } from './chat.js';
+import { readFileSync } from 'node:fs';
 import type { Store } from '../store/store.js';
 import { putTicketFile, readTicketFile, removeTicketFile } from '../tickets/files.js';
 import type { Caller, Tickets } from '../tickets/service.js';
@@ -92,12 +101,23 @@ export interface ReporterChatSession {
   workspaceId: string;
   ticketId: string | null;
   lastActivityAt: string;
+  /** The last stored event (chat in the widget resumes after it). */
+  lastSeq?: number;
+  /** Open approvals and what the oldest asks. */
+  waiting?: number;
+  waitingFor?: string | null;
 }
 
 export interface ReporterChat {
   get(id: string): ReporterChatSession | null;
   list(filter?: { workspaceId?: string; ticketId?: string }): ReporterChatSession[];
   send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel: string; attachments?: unknown }): Promise<void>;
+  /** Chat in the widget: a page counted back from `before` (the newest when null), oldest first (the portal's own transcript page). */
+  historyPage?(id: string, before: number | null, limit: number): ChatEventPage;
+  /** The events after `after`, oldest first, at most `limit`. */
+  history?(id: string, after: number, limit?: number): ChatEvent[];
+  /** A stored file the session links (an image a line shows), or null. */
+  blobFile?(id: string, blobId: string): { path: string; mediaType: string; size: number } | null;
 }
 
 export interface ReporterKnowledge {
@@ -1727,6 +1747,124 @@ export class ReporterService {
     // The default workspace may be stored by its stable id or its key; a list by an id the chat does not know is just empty.
     if (ws) for (const s of chat.list({ workspaceId: ws })) add(s);
     return [...out.values()].filter((s) => s.status !== 'ended').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 50);
+  }
+
+  /* ---------- Chat in the widget (PILOT-1111) ---------- */
+
+  /**
+   * A session of the token's bucket: linked to one of its tickets, in its default workspace, or one of its direct-report targets, and one
+   * the token's person may `verb` through the seam. Anything else (another bucket's session, an unknown id, no chat) is the same 404.
+   */
+  #bucketSession(ctx: ReporterTokenCtx, id: string, verb: 'view' | 'operate'): ReporterChatSession {
+    if (typeof id !== 'string' || !SESSION_ID.test(id)) throw notFound();
+    const s = this.#session(id);
+    if (!s) throw notFound();
+    let mine = this.config(ctx.bucketKey).sessionTargets.some((t) => t.sessionId === s.id || t.sessionId === id);
+    if (!mine && s.ticketId && /^T-\d+$/.test(s.ticketId)) {
+      const row = this.#db.prepare('SELECT bucket_key FROM tickets WHERE number = ?').get(Number(s.ticketId.slice(2))) as { bucket_key: string } | undefined;
+      mine = row?.bucket_key === ctx.bucketKey;
+    }
+    if (!mine) {
+      const ws = this.#defaultWorkspace(ctx.bucketKey);
+      mine = !!ws && s.workspaceId === ws;
+    }
+    if (!mine || !can(this.#actor(ctx.id, ctx.actorUser), verb, sessionRef(s.id)).allow) throw notFound();
+    return s;
+  }
+
+  #chatState(ctx: ReporterTokenCtx, s: ReporterChatSession, base: string): ReporterChatState {
+    let ticketKey: string | null = null;
+    if (s.ticketId && /^T-\d+$/.test(s.ticketId)) {
+      const row = this.#db.prepare('SELECT number, bucket_key, bucket_number FROM tickets WHERE number = ?').get(Number(s.ticketId.slice(2))) as
+        | { number: number; bucket_key: string; bucket_number: number | null }
+        | undefined;
+      if (row && row.bucket_key === ctx.bucketKey) ticketKey = keyOf(row);
+    }
+    const states = ['starting', 'idle', 'working', 'waiting', 'interrupted', 'ended'] as const;
+    const state = (states as readonly string[]).includes(s.state) ? (s.state as ReporterChatState['state']) : 'idle';
+    return {
+      id: s.id,
+      title: redactText(s.title).slice(0, 200),
+      state,
+      waiting: s.waiting ?? 0,
+      waitingFor: s.waitingFor ? redactText(s.waitingFor).slice(0, 200) : null,
+      lastSeq: s.lastSeq ?? 0,
+      ticketKey,
+      url: `${base}/admin/sessions/${encodeURIComponent(s.id)}`,
+    };
+  }
+
+  #blobUrl(base: string, sessionId: string) {
+    return (blobId: string) => `${base}/reporter/v1/sessions/${encodeURIComponent(sessionId)}/blobs/${encodeURIComponent(blobId)}`;
+  }
+
+  /** The session's state alone (the live stream checks it every second). */
+  chatState(ctx: ReporterTokenCtx, id: string, base: string): ReporterChatState {
+    return this.#chatState(ctx, this.#bucketSession(ctx, id, 'view'), base);
+  }
+
+  /** A page of the session's conversation counted back from `before` (the newest when absent), or what came after `after`. */
+  chatPage(ctx: ReporterTokenCtx, id: string, q: { before?: string; after?: string; limit?: string }, base: string): ReporterChatPage {
+    const s = this.#bucketSession(ctx, id, 'view');
+    const chat = this.deps.chat!;
+    const url = this.#blobUrl(base, s.id);
+    const num = (v: string | undefined) => (v !== undefined && /^\d{1,15}$/.test(v) ? Number(v) : null);
+    const limit = Math.min(Math.max(num(q.limit) ?? REPORTER_LIMITS.chatPage, 1), 100);
+    const after = num(q.after);
+    if (after !== null) {
+      // The tail after `after`, bounded: a panel far behind gets the newest and loads the older ones by page.
+      const events = chat.history ? chat.history(s.id, after, 400) : [];
+      return { items: toChatMessages(events, url).slice(-limit * 2), before: null, session: this.#chatState(ctx, s, base) };
+    }
+    if (!chat.historyPage) return { items: [], before: null, session: this.#chatState(ctx, s, base) };
+    // A page of events can hold only lines the panel leaves out (tool output, thinking): read back until it has some, at most four pages.
+    let before = num(q.before);
+    const items: ReporterChatMessage[] = [];
+    for (let i = 0; i < 4 && items.length < limit; i++) {
+      const page = chat.historyPage(s.id, before, limit * 2);
+      items.unshift(...toChatMessages(page.events, url));
+      before = page.more ? page.before : null;
+      if (before === null) break;
+    }
+    return { items, before, session: this.#chatState(ctx, s, base) };
+  }
+
+  /**
+   * A message to the session from the panel: the same path the portal's composer uses (the chat controller's send), sent as the token's
+   * person through the reporter (`portal-mcp:<token id>`, named "<person> (reporter, <origin>)"), so the transcript says where it came from.
+   * An ended session refuses it (409); a session waiting on an approval takes it as the portal does (it is queued for the next turn).
+   */
+  async chatSend(ctx: ReporterTokenCtx, id: string, raw: Partial<ReporterChatSendRequest>): Promise<{ uuid: string }> {
+    const s = this.#bucketSession(ctx, id, 'operate');
+    if (s.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    const uuid = typeof raw.uuid === 'string' && CHAT_UUID.test(raw.uuid) ? raw.uuid : null;
+    if (!uuid) throw invalid('uuid', 'Expected a UUID.');
+    const text = this.#cleanText(raw.text, 'text', REPORTER_LIMITS.chatChars).trim();
+    if (!text) throw invalid('text', 'Write a message.');
+    let attachments: { name: string; mediaType: string; dataBase64: string }[] | undefined;
+    if (raw.image) {
+      const img = raw.image as { mediaType?: unknown; dataBase64?: unknown };
+      const type = img.mediaType === 'image/png' || img.mediaType === 'image/jpeg' || img.mediaType === 'image/webp' ? img.mediaType : null;
+      if (!type || typeof img.dataBase64 !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(img.dataBase64)) throw invalid('image', 'Expected a png, jpeg or webp image as base64.');
+      // The model's own limit on one image (the direct report keeps to it too).
+      if (img.dataBase64.length > Math.ceil(3_750_000 / 3) * 4) throw invalid('image', 'That image is too large to send in a chat.');
+      attachments = [{ name: `capture.${type.split('/')[1]}`, mediaType: type, dataBase64: img.dataBase64 }];
+    }
+    await this.deps.chat!.send(s.id, uuid, text, { actor: `portal-mcp:${ctx.id}`, actorLabel: `${ctx.actorLabel || 'Reporter'} (reporter, ${ctx.origin})`, attachments });
+    return { uuid };
+  }
+
+  /** An image a line of the session shows: images only (anything else is the same 404). */
+  chatBlob(ctx: ReporterTokenCtx, id: string, blobId: string): { bytes: Buffer; type: string } {
+    const s = this.#bucketSession(ctx, id, 'view');
+    if (typeof blobId !== 'string' || !/^[a-f0-9]{16,128}$/i.test(blobId)) throw notFound();
+    const f = this.deps.chat?.blobFile?.(s.id, blobId) ?? null;
+    if (!f || !/^image\/(png|jpeg|gif|webp)$/.test(f.mediaType) || f.size > REPORTER_LIMITS.screenshotBytes) throw notFound();
+    try {
+      return { bytes: readFileSync(f.path), type: f.mediaType };
+    } catch {
+      throw notFound();
+    }
   }
 
   sessionTargets(ctx: ReporterTokenCtx): (ReporterSessionTarget & { status: string; available: boolean; reason: string | null })[] {

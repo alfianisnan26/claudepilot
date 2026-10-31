@@ -4,7 +4,7 @@
 
 import { Hono } from 'hono';
 import { isAppError } from '@isnanme/core';
-import { REPORTER_EVIDENCE_SCHEMA, type Actor, type ReporterEvidence } from '@portal/contracts';
+import { REPORTER_EVIDENCE_SCHEMA, type Actor, type ChatEvent, type ReporterEvidence } from '@portal/contracts';
 import { ownerActor } from '../authz/seam.js';
 import { ticketsHarness, UI } from '../tickets/testkit.js';
 import { createReporterOwnerRoutes, createReporterWidgetRoutes } from './routes.js';
@@ -31,6 +31,30 @@ export class FakeChat implements ReporterChat {
   async send(id: string, _uuid: string, text: string, opts: { actor: string; actorLabel: string; attachments?: unknown }) {
     if (this.fail) throw this.fail;
     this.sent.push({ id, text, opts });
+  }
+  /** Stored transcripts per session (chat in the widget); `push` keeps the session's lastSeq in step. */
+  events = new Map<string, ChatEvent[]>();
+  blobs = new Map<string, { path: string; mediaType: string; size: number }>();
+  push(id: string, ev: Omit<ChatEvent, 'seq' | 'at'> & { at?: string }) {
+    const list = this.events.get(id) ?? [];
+    const seq = (list.at(-1)?.seq ?? 0) + 1;
+    list.push({ at: new Date().toISOString(), ...ev, seq } as ChatEvent);
+    this.events.set(id, list);
+    const s = this.sessions.get(id);
+    if (s) s.lastSeq = seq;
+    return seq;
+  }
+  historyPage(id: string, before: number | null, limit: number) {
+    const older = (this.events.get(id) ?? []).filter((e) => before === null || e.seq < before);
+    const events = older.slice(-limit);
+    const more = older.length > events.length;
+    return { events, more, before: more ? events[0]!.seq : null };
+  }
+  history(id: string, after: number, limit = 400) {
+    return (this.events.get(id) ?? []).filter((e) => e.seq > after).slice(-limit);
+  }
+  blobFile(_id: string, blobId: string) {
+    return this.blobs.get(blobId) ?? null;
   }
 }
 

@@ -178,7 +178,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
       {capture && (
         <div className="mt-4 flex flex-col gap-3">
           <p className="text-[12.5px] text-muted tabular-nums">
-            {capture.index} of {evidence.captures.length} · {capture.anchor.mode === 'crop' ? 'crop' : 'full'} · {capture.anchor.viewport.w}×{capture.anchor.viewport.h}
+            {capture.index} of {evidence.captures.length} · {capture.anchor.mode === 'crop' ? 'crop' : capture.anchor.mode === 'viewport' ? 'screen' : 'full'} · {capture.anchor.viewport.w}×{capture.anchor.viewport.h}
           </p>
           {capture.screenshotAttachmentId ? (
             <a href={TICKET_API.attachment(ticketId, Number(capture.screenshotAttachmentId))} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden rounded-xl border border-line bg-surface-2">
