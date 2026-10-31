@@ -106,7 +106,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
         });
       }
       const addOns = poolService.checkAddOns(wanted);
-      const created = await workspaces.create({ name: args.name, target: args.target, cpus: args.cpus, memoryMb: args.memory_mb });
+      const created = await workspaces.create({ name: args.name, target: args.target, cpus: args.cpus, memoryMb: args.memory_mb }, actorOfPrincipal(ctx.principal));
       // A new workspace has no sign-in of its own yet, so no override confirmation is needed (as in the UI).
       if (poolId) accountPools.assign(created.id, { poolId }, { existing: false });
       for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));

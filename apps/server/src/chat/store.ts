@@ -2,7 +2,6 @@
 // and never a secret — only allowlisted fields of each event are kept, every stored text passes the
 // credential redactor (redact.ts), and large text is truncated.
 
-import { tokenAccount } from '../identity/accountGate.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
 import type {
   WorkspaceClaude,
@@ -605,7 +604,8 @@ export class ChatStore {
 
   /** The email account a Portal MCP token was minted from (identity/accountGate.ts), for a session that token starts. */
   tokenAccount(tokenId: string): string | null {
-    return tokenAccount(this.#db(), 'pmcp', tokenId);
+    const r = this.#db().prepare("SELECT account_id FROM token_accounts WHERE kind = 'pmcp' AND token_id = ?").get(tokenId) as { account_id: string } | undefined;
+    return r?.account_id ?? null;
   }
 
   /** T-968: the person's General Manager session (the newest that is not ended), or null. */

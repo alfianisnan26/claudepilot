@@ -10,6 +10,7 @@
 
 import { AppError } from '@isnanme/core';
 import { FOUNDING_USER_ID, type ChatSession, type ManagerStatus } from '@portal/contracts';
+import { asUser } from '../authz/seam.js';
 import { type ChatController, MANAGER_RUNTIME_ID } from '../chat/controller.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import type { ExecSession } from '../workspaces/runtime.js';
@@ -63,7 +64,11 @@ export class ManagerService {
   async prepare(ownerId: string): Promise<ManagerStatus> {
     const all = await this.workspaces.list().catch(() => []);
     if (!all.some((w) => w.id === MANAGER_RUNTIME_ID))
-      await this.workspaces.create({ target: MANAGER_RUNTIME.target, name: MANAGER_RUNTIME.name, cpus: MANAGER_RUNTIME.cpus, memoryMb: MANAGER_RUNTIME.memoryMb });
+      // Review m4: made for the person who enabled their manager (their rights, checked now), not as the founding user by default.
+      await this.workspaces.create(
+        { target: MANAGER_RUNTIME.target, name: MANAGER_RUNTIME.name, cpus: MANAGER_RUNTIME.cpus, memoryMb: MANAGER_RUNTIME.memoryMb },
+        asUser(ownerId, 'manager:prepare'),
+      );
     return this.status(ownerId);
   }
 

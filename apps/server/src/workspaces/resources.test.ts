@@ -7,7 +7,7 @@ import { after, before, test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import { workspaceRef, workspaceResourcesProblem, type Actor, type Workspace, type WorkspaceTarget } from '@portal/contracts';
 import { createApp } from '../app.js';
-import { clearResolvers, registerResolver } from '../authz/seam.js';
+import { clearResolvers, registerResolver, ownerActor } from '../authz/seam.js';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import type { JsonFile } from '../jsonFile.js';
 import { Portal } from '../portal.js';
@@ -102,14 +102,14 @@ test('values: quantities read back in cores and MiB; bounds; a request never abo
 test('Kubernetes: stored on the record; at the next restart nothing moves until a start applies them; across a portal restart', async () => {
   const w = await world();
   try {
-    const first = await w.ws.resourcesOf(REF);
+    const first = await w.ws.resourcesOf(REF, ownerActor());
     assert.deepEqual(first.live, { cpus: 4, memoryMb: 8192, cpuRequest: 4, memoryRequestMb: 8192 }, 'what the Deployment has');
     assert.deepEqual([first.wanted, first.pending, first.running], [null, false, true], 'an existing workspace keeps what it has until someone applies');
 
     const podsWere = pods(w.fake);
     const writes = () => w.fake.requests.filter((r) => r.method !== 'GET').length;
     const w0 = writes();
-    const set = await w.ws.setResources(REF, { apply: 'next_restart', cpus: 6, memoryMb: 12288, cpuRequest: 1, memoryRequestMb: 2048 });
+    const set = await w.ws.setResources(REF, { apply: 'next_restart', cpus: 6, memoryMb: 12288, cpuRequest: 1, memoryRequestMb: 2048 }, ownerActor());
     assert.deepEqual([set.outcome, set.pending, set.fit?.state], ['pending', true, 'fits']);
     assert.deepEqual(set.wanted, { cpus: 6, memoryMb: 12288, cpuRequest: 1, memoryRequestMb: 2048 });
     assert.equal(set.live.cpus, 4, 'the Deployment is not touched');
@@ -122,14 +122,14 @@ test('Kubernetes: stored on the record; at the next restart nothing moves until 
 
     // A portal restart: still pending, from the record.
     const again = w.make();
-    assert.deepEqual([(await again.ws.resourcesOf(REF)).pending, (await again.ws.resourcesOf(REF)).wanted?.cpus], [true, 6]);
+    assert.deepEqual([(await again.ws.resourcesOf(REF, ownerActor())).pending, (await again.ws.resourcesOf(REF, ownerActor())).wanted?.cpus], [true, 6]);
 
     await again.ws.stop('kd-kube', 'box');
     assert.equal(resourcesOf(w.fake)?.limits?.cpu, '4', 'a stop applies nothing');
     await again.ws.start('kd-kube', 'box');
     assert.deepEqual(resourcesOf(w.fake), { limits: { cpu: '6', memory: '12288Mi' }, requests: { cpu: '1', memory: '2048Mi' } }, 'the start wrote them before it scaled up');
     assert.equal(deploymentOf(w.fake).spec.replicas, 1);
-    const after = await again.ws.resourcesOf(REF);
+    const after = await again.ws.resourcesOf(REF, ownerActor());
     assert.deepEqual([after.pending, after.live.cpus, after.problem, typeof after.appliedAt], [false, 6, null, 'string']);
     assert.equal((await again.ws.list()).find((x) => x.id === REF)!.cpus, 6, 'the list shows the new limit');
     assert.deepEqual(again.audit.map((e) => [e.kind, e.actor, (e.detail as Record<string, unknown>).outcome]), [['workspace.resources', 'system:workspaces', 'applied']]);
@@ -145,7 +145,7 @@ test('Kubernetes: apply now, the in-place resize refused (a QoS class change): t
     let pulled = 0;
     w.ws.hooks.beforeStop = async () => void pulled++;
     // requests = limits today (Guaranteed); lower requests would make it Burstable, which the API server refuses to do in place.
-    const done = await w.ws.setResources(REF, { apply: 'now', cpuRequest: 0.5, memoryRequestMb: 1024 });
+    const done = await w.ws.setResources(REF, { apply: 'now', cpuRequest: 0.5, memoryRequestMb: 1024 }, ownerActor());
     assert.deepEqual([done.outcome, done.pending, done.running, done.how], ['applied', false, true, 'restarted']);
     assert.match(done.resizeRefused ?? '', /the cluster refused the in-place resize: .*Pod QOS Class may not change/);
     assert.deepEqual(done.live, { cpus: 4, memoryMb: 8192, cpuRequest: 0.5, memoryRequestMb: 1024 }, 'left-out values keep what it had');
@@ -161,7 +161,7 @@ test('Kubernetes: apply now, the in-place resize refused (a QoS class change): t
     );
     assert.match(String((w.audit[0]!.detail as Record<string, unknown>).resizeRefused), /QOS/);
 
-    const same = await w.ws.setResources(REF, { apply: 'now', cpuRequest: 0.5 });
+    const same = await w.ws.setResources(REF, { apply: 'now', cpuRequest: 0.5 }, ownerActor());
     assert.equal(same.outcome, 'unchanged');
     assert.deepEqual(pods(w.fake), now, 'no restart for nothing');
     assert.equal(w.audit.length, 1);
@@ -181,7 +181,7 @@ test('T-3081: apply now resizes the running pod in place (no restart) and writes
   try {
     const before = pods(w.fake);
     const podName = before[0]!;
-    const done = await w.ws.setResources(REF, { apply: 'now', ...BIGGER });
+    const done = await w.ws.setResources(REF, { apply: 'now', ...BIGGER }, ownerActor());
     assert.deepEqual([done.outcome, done.how, done.resizeRefused, done.running], ['applied', 'resized', null, true]);
 
     // The resize call: a JSON Patch of the workspace container's resources on the pod's `resize` subresource.
@@ -210,7 +210,7 @@ test('T-3081: apply now resizes the running pod in place (no restart) and writes
       w.audit.map((e) => [(e.detail as Record<string, unknown>).outcome, (e.detail as Record<string, unknown>).restarted, (e.detail as Record<string, unknown>).how, (e.detail as Record<string, unknown>).resizeRefused]),
       [['applied', false, 'resized', null]],
     );
-    assert.deepEqual((await w.ws.resourcesOf(REF)).live, BIGGER, 'what the Deployment has');
+    assert.deepEqual((await w.ws.resourcesOf(REF, ownerActor())).live, BIGGER, 'what the Deployment has');
 
     // The change survives a restart: the next pod is made with the new values.
     await w.ws.stop('kd-kube', 'box');
@@ -227,7 +227,7 @@ test('T-3081: the resize refused by the kubelet (Infeasible) or the Role (403) f
   try {
     const first = pods(w.fake);
     w.fake.resizeVerdict = () => 'Infeasible';
-    const infeasible = await w.ws.setResources(REF, { apply: 'now', ...BIGGER });
+    const infeasible = await w.ws.setResources(REF, { apply: 'now', ...BIGGER }, ownerActor());
     assert.deepEqual([infeasible.how, /the node cannot resize it in place: Node did not have enough resources/.test(infeasible.resizeRefused ?? '')], ['restarted', true]);
     assert.notDeepEqual(pods(w.fake), first, 'the pod restarted');
     assert.deepEqual(podOf(w.fake).spec.containers.find((c) => c.name === 'workspace')!.resources, BIGGER_RESOURCES, 'with the new values');
@@ -235,7 +235,7 @@ test('T-3081: the resize refused by the kubelet (Infeasible) or the Role (403) f
     w.fake.resizeVerdict = () => null;
     w.fake.resizeRefusal = { code: 403, reason: 'Forbidden', message: 'pods "x" is forbidden: cannot patch resource "pods/resize"' };
     const second = pods(w.fake);
-    const forbidden = await w.ws.setResources(REF, { apply: 'now', ...BIGGER, memoryMb: 9000, memoryRequestMb: 9000 });
+    const forbidden = await w.ws.setResources(REF, { apply: 'now', ...BIGGER, memoryMb: 9000, memoryRequestMb: 9000 }, ownerActor());
     assert.equal(forbidden.how, 'restarted');
     assert.match(forbidden.resizeRefused ?? '', /cannot patch resource "pods\/resize"/);
     assert.notDeepEqual(pods(w.fake), second, 'the pod restarted');
@@ -244,7 +244,7 @@ test('T-3081: the resize refused by the kubelet (Infeasible) or the Role (403) f
     w.fake.resizeRefusal = null;
     w.fake.resizeVerdict = () => 'Deferred';
     const third = pods(w.fake);
-    const deferred = await w.ws.setResources(REF, { apply: 'now', ...BIGGER });
+    const deferred = await w.ws.setResources(REF, { apply: 'now', ...BIGGER }, ownerActor());
     assert.deepEqual([deferred.how, deferred.resizeRefused], ['resized', null], 'accepted: the kubelet applies it when there is room');
     assert.deepEqual(pods(w.fake), third, 'no restart');
     assert.deepEqual(resourcesOf(w.fake), BIGGER_RESOURCES, 'and persisted');
@@ -264,21 +264,21 @@ test('Kubernetes: refused while a CI run is running there, when it does not fit 
     const spec = JSON.stringify(resourcesOf(w.fake));
     const asked: string[] = [];
     w.ws.hooks.runningCi = (id) => (asked.push(id), 1);
-    const ci = await refusal(w.ws.setResources(REF, { apply: 'now', cpuRequest: 1 }));
+    const ci = await refusal(w.ws.setResources(REF, { apply: 'now', cpuRequest: 1 }, ownerActor()));
     assert.equal(ci.code, 'CONFLICT');
     assert.match(ci.message, /A CI run is running in this workspace/);
     assert.deepEqual(asked, [REF], 'asked about the workspace by its key');
     // At the next restart is fine during a run: nothing restarts now.
-    assert.equal((await w.ws.setResources(REF, { apply: 'next_restart', cpuRequest: 1 })).outcome, 'pending');
+    assert.equal((await w.ws.setResources(REF, { apply: 'next_restart', cpuRequest: 1 }, ownerActor())).outcome, 'pending');
     w.ws.hooks.runningCi = () => 0;
 
-    const big = await refusal(w.ws.setResources(REF, { apply: 'now', cpus: 8, cpuRequest: 6, memoryRequestMb: 2048 }));
+    const big = await refusal(w.ws.setResources(REF, { apply: 'now', cpus: 8, cpuRequest: 6, memoryRequestMb: 2048 }, ownerActor()));
     assert.equal(big.code, 'CONFLICT');
     assert.match(big.message, /does not fit on n1 .*the other pods request 3000m and 4096Mi, this one would ask 6000m and 2048Mi, the node can allocate 8000m and 16384Mi/);
     assert.equal(big.details?.fit, big.message);
 
     w.fake.clusterReads = false;
-    const blind = await refusal(w.ws.setResources(REF, { apply: 'now', cpuRequest: 1 }));
+    const blind = await refusal(w.ws.setResources(REF, { apply: 'now', cpuRequest: 1 }, ownerActor()));
     assert.deepEqual([blind.code, /could not be checked: the portal may not read/.test(blind.message)], ['CONFLICT', true], 'unavailable is refused, never guessed');
     assert.deepEqual(pods(w.fake), podsWere);
     assert.equal(JSON.stringify(resourcesOf(w.fake)), spec, 'the Deployment is untouched');
@@ -291,7 +291,7 @@ test('Kubernetes: refused while a CI run is running there, when it does not fit 
     await w.ws.start('kd-kube', 'box');
     assert.equal(deploymentOf(w.fake).spec.replicas, 1, 'it started');
     assert.deepEqual(resourcesOf(w.fake)?.requests, undefined, 'it started as it was (requests = limits)');
-    const state = await w.ws.resourcesOf(REF);
+    const state = await w.ws.resourcesOf(REF, ownerActor());
     assert.equal(state.pending, true);
     assert.match(state.problem ?? '', /does not fit on n1/);
   } finally {
@@ -302,11 +302,11 @@ test('Kubernetes: refused while a CI run is running there, when it does not fit 
 test('validation: bounds and requests per field; when must be said; a target without resources says so', async () => {
   const w = await world();
   try {
-    const above = await refusal(w.ws.setResources(REF, { apply: 'now', cpuRequest: 5 }));
+    const above = await refusal(w.ws.setResources(REF, { apply: 'now', cpuRequest: 5 }, ownerActor()));
     assert.deepEqual([above.code, above.details?.cpuRequest], ['VALIDATION_FAILED', 'Not above the CPU limit.']);
-    assert.equal((await refusal(w.ws.setResources(REF, { apply: 'now', memoryMb: 100 }))).details?.memoryMb?.startsWith('Whole MiB'), true);
-    assert.equal((await refusal(w.ws.setResources(REF, { cpus: 2 } as never))).details?.apply, 'now or next_restart.');
-    assert.equal((await refusal(w.ws.setResources(REF, { apply: 'now', cpus: '2' as never }))).code, 'VALIDATION_FAILED');
+    assert.equal((await refusal(w.ws.setResources(REF, { apply: 'now', memoryMb: 100 }, ownerActor()))).details?.memoryMb?.startsWith('Whole MiB'), true);
+    assert.equal((await refusal(w.ws.setResources(REF, { cpus: 2 } as never, ownerActor()))).details?.apply, 'now or next_restart.');
+    assert.equal((await refusal(w.ws.setResources(REF, { apply: 'now', cpus: '2' as never }, ownerActor()))).code, 'VALIDATION_FAILED');
     assert.equal(resourcesOf(w.fake)?.limits?.cpu, '4');
   } finally {
     await w.close();
@@ -315,7 +315,7 @@ test('validation: bounds and requests per field; when must be said; a target wit
   const docker = { target: t, check: async () => undefined, list: async () => [{ id: 'docker/api', name: 'api', target: 'docker', image: 'i', status: 'running', createdAt: '2026-10-01T00:00:00.000Z' }] } as unknown as Runtime;
   const ws = new Workspaces([docker], saved);
   await ws.list();
-  assert.match((await refusal(ws.setResources('docker/api', { apply: 'now', cpus: 2 }))).message, /Only a Kubernetes workspace/);
+  assert.match((await refusal(ws.setResources('docker/api', { apply: 'now', cpus: 2 }, ownerActor()))).message, /Only a Kubernetes workspace/);
 });
 
 test('authz: operate on the workspace through the seam; an agent cannot, even in its own workspace; a read token cannot; not yours is the same 404 as unknown', async () => {

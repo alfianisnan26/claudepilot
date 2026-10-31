@@ -2,6 +2,7 @@
 // manager a Host single made by the real factory over a FakeLink to T2's host service. The workspace lists Running; the tunnel drops:
 // Unreachable with `lastSeenAt`, a 503 "Target unreachable", chat told the target is down; it returns: chat and delivery are told,
 // the workspace is Running again. Quota hooks reach Connect's canCreate.
+import { ownerActor } from '../../authz/seam.js';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,7 +49,7 @@ test('wireConnect: a Host single through the manager, across an outage', async (
     const t = (await workspaces.targets()).find((x) => x.id === 'cx3-box')!;
     assert.deepEqual([t.kind, t.source, t.role, t.available], ['local', 'enrolled', 'single', true]);
     // A single has nothing to create (as This machine): the create fails in the background and stays as an error until removed.
-    await workspaces.create({ name: 'x', target: 'cx3-box' });
+    await workspaces.create({ name: 'x', target: 'cx3-box' }, ownerActor());
     assert.deepEqual(asked, ['cx3-box']);
     await new Promise((r) => setTimeout(r, 20));
     assert.match((await workspaces.list()).find((x) => x.name === 'x')!.detail!, /Start it instead/);

@@ -3,6 +3,7 @@
 // serves its last list as `unreachable`; scanned ones are skipped as before; a create carries `node` into the runtime and the pending
 // entry and goes through `beforeCreate`; a call that meets an outage is a 503 "Target unreachable (since …)"; `resume()` waits for
 // `settled` before judging a pending create on a target that is not there yet.
+import { ownerActor } from '../../authz/seam.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AppError } from '@isnanme/core';
@@ -97,12 +98,12 @@ test('create carries node into the runtime and the pending entry, after beforeCr
     asked.push([t, n]);
     if (n === 'full') throw new AppError('LIMIT_REACHED', 'Full.');
   };
-  const w = await m.create({ name: 'x1', target: 'cx3-c', node: 'n2' });
+  const w = await m.create({ name: 'x1', target: 'cx3-c', node: 'n2' }, ownerActor());
   assert.equal(w.node, 'n2');
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(e.state.creates[0]!.node, 'n2');
-  await assert.rejects(m.create({ name: 'x2', target: 'cx3-c', node: 'full' }), /Full/);
-  await assert.rejects(m.create({ name: 'x3', target: 'cx3-c', node: '../x' }), /Pick a node/);
+  await assert.rejects(m.create({ name: 'x2', target: 'cx3-c', node: 'full' }, ownerActor()), /Full/);
+  await assert.rejects(m.create({ name: 'x3', target: 'cx3-c', node: '../x' }, ownerActor()), /Pick a node/);
   assert.deepEqual(asked, [['cx3-c', 'n2'], ['cx3-c', 'full']]);
 });
 

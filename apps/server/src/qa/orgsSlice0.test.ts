@@ -126,10 +126,11 @@ test('Portal MCP tokens (and VS Code ones) are bound to who minted them; a token
     const B = 'u_userB-000002';
     const mintA = module.createToken({ label: 'a-script', scope: 'admin' }, 'http://p/mcp', `user:${A}`);
     const mintB = module.createToken({ label: 'b-editor', scope: 'operate' }, 'http://p/mcp', `user:${B}`, { client: 'vscode', instance: 'inst-b' });
-    const legacy = module.createToken({ label: 'old-ui', scope: 'read' }, 'http://p/mcp'); // `ui`: the founding user
-    assert.deepEqual([mintA.token.ownerId, mintB.token.ownerId, legacy.token.ownerId], [A, B, FOUNDING_USER_ID]);
+    const founder = module.createToken({ label: 'founder', scope: 'read' }, 'http://p/mcp', `user:${FOUNDING_USER_ID}`);
+    assert.deepEqual([mintA.token.ownerId, mintB.token.ownerId, founder.token.ownerId], [A, B, FOUNDING_USER_ID]);
+    assert.throws(() => module.createToken({ label: 'legacy-ui', scope: 'read' }, 'http://p/mcp', 'ui'), /signed-in person/, 'review m4: no `ui` mint');
     assert.throws(() => module.createToken({ label: 'from-token', scope: 'read' }, 'http://p/mcp', 'portal-mcp:ptk_x'), /signed-in person/, 'no person, no token');
-    assert.equal(module.createToken({ label: 'by-a-token', scope: 'read' }, 'http://p/mcp', 'portal-mcp:ptk_x', undefined, B).token.ownerId, B, 'an admin token mints for its own person');
+    assert.equal(module.createToken({ label: 'by-a-token', scope: 'read' }, 'http://p/mcp', 'portal-mcp:ptk_x', undefined, { ownerId: B }).token.ownerId, B, 'an admin token mints for its own person');
 
     const actorFor = (secret: string) => {
       const v = module.tokens.verify(secret);

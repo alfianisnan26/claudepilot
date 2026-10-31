@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import { isStableWorkspaceId, workspaceRef, type Actor, type Workspace, type WorkspaceTarget } from '@portal/contracts';
-import { clearResolvers, registerResolver } from '../authz/seam.js';
+import { clearResolvers, registerResolver, ownerActor } from '../authz/seam.js';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import type { JsonFile } from '../jsonFile.js';
 import { MIGRATIONS } from '../store/migrations.js';
@@ -126,7 +126,7 @@ test('Kubernetes: an existing workspace keeps its Deployment and volume after th
     assert.deepEqual(objects(), before, 'nothing was made, renamed or removed');
 
     // A new workspace: named from its id, labelled with its name.
-    const created = await ws.create({ name: 'fresh', target: 'kd-kube' });
+    const created = await ws.create({ name: 'fresh', target: 'kd-kube' }, ownerActor());
     assert.match(created.stableId ?? '', STABLE);
     const rn = `ws-${created.stableId!.slice(3)}`;
     assert.equal(created.runtimeName, rn);
@@ -141,9 +141,9 @@ test('Kubernetes: an existing workspace keeps its Deployment and volume after th
     assert.equal((fake.deployments.get(rn)!.spec as { replicas: number }).replicas, 0, 'calls by name reach the stored runtime name');
 
     // Both forms of the id resolve to the same workspace.
-    assert.equal((await ws.get(created.stableId!)).id, 'kd-kube/fresh');
-    assert.equal((await ws.get('kd-kube/fresh')).stableId, created.stableId);
-    assert.equal((await ws.get(migrated.id)).runtimeName, 'ws-kohi-event');
+    assert.equal((await ws.get(created.stableId!, ownerActor())).id, 'kd-kube/fresh');
+    assert.equal((await ws.get('kd-kube/fresh', ownerActor())).stableId, created.stableId);
+    assert.equal((await ws.get(migrated.id, ownerActor())).runtimeName, 'ws-kohi-event');
 
     // A restart: the same ids and runtime names, read back from the store.
     const ws2 = new Workspaces([kubeRuntimeOn(fake)], saved, {}, new WorkspaceIdentities(store));
@@ -170,8 +170,8 @@ test('get: either form of the id, decided on the workspace and never on the stri
   assert.match(api.stableId ?? '', STABLE);
   assert.equal(findWorkspace(all, api.stableId!), api, 'one resolver for both forms');
   assert.equal(findWorkspace(all, NOBODY), null);
-  assert.equal((await ws.get(api.stableId!)).id, 'docker/api');
-  assert.equal((await ws.get('docker/api')).stableId, api.stableId);
+  assert.equal((await ws.get(api.stableId!, ownerActor())).id, 'docker/api');
+  assert.equal((await ws.get('docker/api', ownerActor())).stableId, api.stableId);
 
   const refusal = async (p: Promise<unknown>) => {
     try {

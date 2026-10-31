@@ -7,7 +7,7 @@ import { after, before, test } from 'node:test';
 import { isAppError } from '@isnanme/core';
 import { rememberWorkspaceLabelMap, rememberWorkspaceLabels, WORKSPACE_LABEL_MAX, workspaceDisplayName, workspaceLabel, workspaceLabelProblem, workspaceRef, type Actor, type Workspace, type WorkspaceTarget } from '@portal/contracts';
 import { createApp } from '../app.js';
-import { clearResolvers, registerResolver } from '../authz/seam.js';
+import { clearResolvers, registerResolver, ownerActor } from '../authz/seam.js';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import type { JsonFile } from '../jsonFile.js';
 import { Portal } from '../portal.js';
@@ -75,7 +75,7 @@ test('Kubernetes: a rename changes the label only; nothing reaches the cluster; 
     const writes = () => fake.requests.filter((r) => r.method !== 'GET').length;
     const w0 = writes();
 
-    const res = await ws.rename('kd-kube/kohi-event', '  isnan-pod ');
+    const res = await ws.rename('kd-kube/kohi-event', '  isnan-pod ', ownerActor());
     assert.deepEqual(res, { id: 'kd-kube/kohi-event', stableId: before!.stableId, name: 'kohi-event', label: 'isnan-pod', previous: 'kohi-event' });
     assert.equal(writes(), w0, 'a rename sends nothing to the cluster');
     assert.deepEqual(objects(), was, 'no Deployment or claim made, renamed or removed');
@@ -88,13 +88,13 @@ test('Kubernetes: a rename changes the label only; nothing reaches the cluster; 
       'the id, the key, the runtime name stay; the label changed',
     );
     for (const ref of [before!.stableId!, 'kd-kube/kohi-event', 'kd-kube/isnan-pod', 'kd-kube/ISNAN-POD'])
-      assert.equal((await ws.get(ref)).stableId, before!.stableId, ref);
+      assert.equal((await ws.get(ref, ownerActor())).stableId, before!.stableId, ref);
     await ws.stop('kd-kube', 'kohi-event');
     assert.equal((fake.deployments.get('ws-kohi-event')!.spec as { replicas: number }).replicas, 0, 'calls by the key still reach the same Deployment');
     await ws.start('kd-kube', 'kohi-event');
 
     // Again, by the stable id: the label before stays an alias.
-    await ws.rename(before!.stableId!, 'Isnan Pod');
+    await ws.rename(before!.stableId!, 'Isnan Pod', ownerActor());
     for (const ref of ['kd-kube/isnan-pod', 'kd-kube/kohi-event', 'kd-kube/Isnan Pod']) assert.equal(ws.resolve(ref)?.id, before!.stableId, ref);
     assert.deepEqual(
       audit.map((e) => [e.kind, e.actor, e.subject, e.detail]),
@@ -104,7 +104,7 @@ test('Kubernetes: a rename changes the label only; nothing reaches the cluster; 
       ],
     );
     // The same label again changes nothing and writes no audit row.
-    assert.equal((await ws.rename('kd-kube/isnan-pod', 'Isnan Pod')).previous, 'Isnan Pod');
+    assert.equal((await ws.rename('kd-kube/isnan-pod', 'Isnan Pod', ownerActor())).previous, 'Isnan Pod');
     assert.equal(audit.length, 2);
 
     // A restart: the label and every alias come back from the store.
@@ -114,7 +114,7 @@ test('Kubernetes: a rename changes the label only; nothing reaches the cluster; 
     assert.deepEqual(ws2.identities.labels(), { 'kd-kube/kohi-event': 'Isnan Pod' });
 
     // Back to the name it was made with: no label of its own any more, and the old labels still resolve.
-    await ws2.rename('kd-kube/isnan-pod', 'kohi-event');
+    await ws2.rename('kd-kube/isnan-pod', 'kohi-event', ownerActor());
     assert.equal((await ws2.list())[0]!.label, 'kohi-event');
     assert.deepEqual(ws2.identities.labels(), {});
     assert.equal(ws2.resolve('kd-kube/isnan-pod')?.id, before!.stableId);
@@ -128,26 +128,26 @@ test('Kubernetes: a rename changes the label only; nothing reaches the cluster; 
 test('a label is unique on its target: another workspace’s name, label or former label is refused, whatever the case; another target is free', async () => {
   const ws = new Workspaces([listing('docker', ['api', 'web']), listing('lab', ['box'])], saved);
   await ws.list();
-  await ws.rename('docker/api', 'front');
-  const taken = await refusal(ws.rename('docker/web', 'front'));
+  await ws.rename('docker/api', 'front', ownerActor());
+  const taken = await refusal(ws.rename('docker/web', 'front', ownerActor()));
   assert.deepEqual(taken, ['CONFLICT', '“front” is already a workspace on docker. Pick another name.']);
-  await assert.rejects(ws.rename('docker/web', 'FRONT'), code('CONFLICT'), 'case does not make it another label');
-  await assert.rejects(ws.rename('docker/web', ' front '), code('CONFLICT'));
-  await assert.rejects(ws.rename('docker/web', 'api'), code('CONFLICT'), 'the name another workspace was made with');
-  await ws.rename('docker/api', 'back');
-  await assert.rejects(ws.rename('docker/web', 'front'), code('CONFLICT'), 'a label it had still answers to it while it lives');
-  await assert.rejects(ws.create({ name: 'front', target: 'docker' }), code('CONFLICT'), 'nor can a new workspace take it');
-  await ws.rename('lab/box', 'front');
-  assert.equal((await ws.get('lab/front')).id, 'lab/box', 'the same label on another target is another workspace');
+  await assert.rejects(ws.rename('docker/web', 'FRONT', ownerActor()), code('CONFLICT'), 'case does not make it another label');
+  await assert.rejects(ws.rename('docker/web', ' front ', ownerActor()), code('CONFLICT'));
+  await assert.rejects(ws.rename('docker/web', 'api', ownerActor()), code('CONFLICT'), 'the name another workspace was made with');
+  await ws.rename('docker/api', 'back', ownerActor());
+  await assert.rejects(ws.rename('docker/web', 'front', ownerActor()), code('CONFLICT'), 'a label it had still answers to it while it lives');
+  await assert.rejects(ws.create({ name: 'front', target: 'docker' }, ownerActor()), code('CONFLICT'), 'nor can a new workspace take it');
+  await ws.rename('lab/box', 'front', ownerActor());
+  assert.equal((await ws.get('lab/front', ownerActor())).id, 'lab/box', 'the same label on another target is another workspace');
   // A removed workspace frees every name it had.
   ws.identities.retire('docker', 'api');
-  await ws.rename('docker/web', 'front');
+  await ws.rename('docker/web', 'front', ownerActor());
   assert.equal(ws.resolve('docker/front')?.legacyId, 'docker/web');
 
   for (const bad of ['', '   ', 'x'.repeat(WORKSPACE_LABEL_MAX + 1), 'two\nlines', 'a/b', 'evil‮txt', 42, null]) {
-    await assert.rejects(ws.rename('docker/web', bad), (e) => isAppError(e) && e.code === 'VALIDATION_FAILED' && typeof (e.details as { label?: unknown })?.label === 'string', JSON.stringify(bad));
+    await assert.rejects(ws.rename('docker/web', bad, ownerActor()), (e) => isAppError(e) && e.code === 'VALIDATION_FAILED' && typeof (e.details as { label?: unknown })?.label === 'string', JSON.stringify(bad));
   }
-  await assert.rejects(ws.rename(NOBODY, 'x'), code('NOT_FOUND'));
+  await assert.rejects(ws.rename(NOBODY, 'x', ownerActor()), code('NOT_FOUND'));
 });
 
 test('authz: decided on the workspace through the seam; not yours is the same 404 as unknown; read is not enough; an agent only its own', async () => {
@@ -173,7 +173,7 @@ test('authz: decided on the workspace through the seam; not yours is the same 40
   } finally {
     clearResolvers();
   }
-  assert.equal((await ws.get('docker/web')).label, 'web', 'the refused rename changed nothing');
+  assert.equal((await ws.get('docker/web', ownerActor())).label, 'web', 'the refused rename changed nothing');
   const reader: Actor = { kind: 'token', userId: 'u_owner', tokenId: 't1', scope: 'read' };
   await assert.rejects(ws.rename('docker/api', 'x', reader), code('FORBIDDEN'), 'a read token may not rename');
   const agent: Actor = { kind: 'agent', userId: 'u_owner', tokenId: 't2', sessionId: 's1', workspaceId: 'docker/api' };
