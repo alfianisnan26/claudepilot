@@ -57,6 +57,9 @@ test('chatItems: running only while the session works and the run is the newest 
   assert.ok(!idle!.live, 'an idle session runs nothing (a call whose result never came is not spinning forever)');
   const [older] = activities(chatItems([...lines, text(5)], true));
   assert.ok(!older!.live, 'a run with text after it is done');
+  const approval: ReporterChatMessage = { ...base, seq: 6, at: at(6), kind: 'approval', text: 'Run a command: npm test' };
+  const [waiting] = activities(chatItems([...lines, approval], true));
+  assert.ok(waiting!.live, 'an approval the run waits on does not end it');
   assert.notEqual(live!.sig, idle!.sig);
 });
 

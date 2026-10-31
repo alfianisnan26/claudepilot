@@ -928,7 +928,13 @@ export type ReporterPanelMessage =
   | { type: 'pilot-reporter:target'; target: ReporterReportTarget }
   /** The open tickets of this bucket anchored on the current path; replaces what is drawn. Empty when signed out. */
   | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
-  | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }
+  | {
+      type: 'pilot-reporter:settings';
+      calloutsVisible: boolean;
+      hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string>;
+      /** The panel's effective theme, so the SDK's Close drawn over it can match (it cannot see the panel's colours). Additive. */
+      theme?: 'light' | 'dark';
+    }
   | { type: 'pilot-reporter:highlight'; key: string }
   /**
    * Showcase (owner, 2026-10-31: show and focus the tickets of this page so the issue is plain to see): scroll to the capture's area,

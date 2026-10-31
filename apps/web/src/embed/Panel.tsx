@@ -103,6 +103,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const [tick, setTick] = useState(0);
   const [toast, setToast] = useState<{ text: string; tone: 'info' | 'error' | 'ok'; id: number } | null>(null);
   const coarse = useMemo(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, []);
+  const theme = usePanelTheme();
 
   const readPref = (name: string) => {
     try {
@@ -196,10 +197,10 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const sendReady = useCallback(() => {
     if (!status) return;
     post({ type: 'pilot-reporter:ready', bridge: REPORTER_BRIDGE_VERSION, status, connected, actorLabel: connected ? (token?.actorLabel ?? null) : null });
-    post({ type: 'pilot-reporter:settings', calloutsVisible, hotkeys });
+    post({ type: 'pilot-reporter:settings', calloutsVisible, hotkeys, theme });
     const t = targetMessage(choiceRef.current);
     if (t) post(t);
-  }, [status, connected, token, calloutsVisible, hotkeys, post]);
+  }, [status, connected, token, calloutsVisible, hotkeys, theme, post]);
   useEffect(() => sendReady(), [sendReady]);
 
   // A stored token is checked once: a 401 signs out (onUnauthorized), anything else keeps it.
@@ -761,4 +762,17 @@ export function TitleRow({ name, env, where, onContext, divided = false }: { nam
       )}
     </header>
   );
+}
+
+/** The panel's effective theme (its colours follow the system's in the frame), kept current: the host is told it with the settings. */
+export function usePanelTheme(): 'light' | 'dark' {
+  const query = useMemo(() => (typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null), []);
+  const [dark, setDark] = useState(() => !!query?.matches);
+  useEffect(() => {
+    if (!query) return;
+    const on = (e: MediaQueryListEvent) => setDark(e.matches);
+    query.addEventListener?.('change', on);
+    return () => query.removeEventListener?.('change', on);
+  }, [query]);
+  return dark ? 'dark' : 'light';
 }

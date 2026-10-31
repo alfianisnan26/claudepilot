@@ -190,7 +190,7 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-1 border-b border-line pr-1 pl-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={onBack} />
-        {/* The title and one info line (status · model · Claude · context); a tap opens the session's runtime. */}
+        {/* The title and one info line (a state dot, then model · Claude · context); a tap opens the session's runtime. */}
         <button
           type="button"
           onClick={() => setInfo(true)}
@@ -204,7 +204,8 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
           </span>
           <span data-testid="runtime-line" className="flex w-full min-w-0 items-center gap-1.5 text-[12px] text-muted">
             <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${st.tone === 'busy' ? 'bg-flame' : st.tone === 'wait' ? 'bg-gold' : st.tone === 'off' ? 'bg-line-strong' : 'bg-accent'}`} />
-            <span className="min-w-0 truncate">{[st.word, line].filter(Boolean).join(' · ')}</span>
+            {/* The dot says the state (its word is in the label and the sheet), so the line has room for model · Claude · context at 390 px. */}
+            <span className="min-w-0 truncate" title={st.word}>{line || st.word}</span>
           </span>
         </button>
         {ticketKey && (

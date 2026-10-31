@@ -203,7 +203,7 @@ export type ChatItem =
       rows: TranscriptRow[];
       /** Every call in order, the runs opened up. */
       steps: ToolPair[];
-      /** The session still works on this run (it is the newest thing in the chat): calls without a result are running. */
+      /** The session still works on this run (the newest run, no text after it): calls without a result are running. */
       live: boolean;
       /** Changes whenever what the row shows changes: memoised rows compare it, not the arrays. */
       sig: string;
@@ -242,8 +242,16 @@ export function chatItems(lines: readonly ReporterChatMessage[], busy: boolean):
     if (m) out.push({ type: 'line', key: `l${m.seq}`, m });
   }
   flush();
-  const last = out.at(-1);
-  if (busy && last?.type === 'activity') last.live = true;
+  // The newest run is live while the session works and no text came after it (an approval it waits on does not end it).
+  if (busy)
+    for (let i = out.length - 1; i >= 0; i--) {
+      const it = out[i]!;
+      if (it.type === 'activity') {
+        it.live = true;
+        break;
+      }
+      if (it.m.kind === 'user' || it.m.kind === 'assistant') break;
+    }
   for (const it of out)
     if (it.type === 'activity') it.sig = `${it.live ? 1 : 0}|${it.steps.map((s) => `${s.call.seq}:${s.result ? (s.result.isError ? 'x' : 'o') : '-'}`).join(',')}`;
   return out;

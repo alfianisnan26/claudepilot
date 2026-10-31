@@ -38,17 +38,31 @@ const tickets = [
 tickets[0].captures = tickets[0].captures.map((c) => ({ ...c, screenshotUrl: `/reporter/v1/tickets/KONF-12/captures/${c.captureId}/screenshot` }));
 const SHOT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844"><rect width="390" height="844" fill="#eef1f6"/><rect width="390" height="64" fill="#1b2533"/><text x="20" y="40" font-family="sans-serif" font-size="22" fill="#fff">KONFERSI</text><text x="20" y="200" font-family="sans-serif" font-size="30" font-weight="700" fill="#1b2533">Run better events</text><rect x="20" y="300" width="200" height="80" rx="12" fill="#c33"/><text x="40" y="350" font-family="sans-serif" font-size="20" fill="#fff">Book a dem</text></svg>`;
 const ago = (m) => new Date(Date.now() - m * 60_000).toISOString();
+// Tool calls fold into activity rows like the portal chat's (PILOT-1111): a finished run with read-only calls folded and one failure, then
+// text, then a run still going (an edit, a sub-agent, a build waiting for its result).
+const tl = (seq, m, tool, text, id = `c${seq}`) => ({ seq, at: ago(m), kind: 'tool', text, from: null, tool, toolId: id, images: [] });
+const tr = (seq, m, id, error) => ({ seq, at: ago(m), kind: 'tool_result', text: error ?? '', from: null, tool: null, toolId: id, ok: !error, images: [] });
 const chatLines = [
   { seq: 1, at: ago(30), kind: 'user', text: 'Why is the hero button cut off on small phones?', from: 'Owner (reporter, https://stg.konfersi.example)', tool: null, images: [{ url: '/reporter/v1/sessions/s1/blobs/' + 'a'.repeat(64), mediaType: 'image/svg+xml', width: 390, height: 844 }] },
-  { seq: 2, at: ago(29), kind: 'tool', text: 'grep -rn "Book a demo" src/components', from: null, tool: 'Bash', images: [] },
-  { seq: 3, at: ago(29), kind: 'tool', text: 'src/components/Hero.tsx', from: null, tool: 'Read', images: [] },
-  { seq: 4, at: ago(28), kind: 'assistant', text: 'The button has a fixed `width: 160px` and the label wraps at 390 px. I will switch it to `min-width` with padding and check iOS Safari.', from: null, tool: null, images: [] },
-  { seq: 5, at: ago(2), kind: 'approval', text: 'Run a command: npm run build', from: null, tool: null, images: [] },
+  tl(2, 29.8, 'Bash', 'grep -rn "Book a demo" src/components'), tr(3, 29.7, 'c2'),
+  tl(4, 29.6, 'Read', '/home/node/work/konfersi-landing-page/src/components/Hero.tsx'), tr(5, 29.5, 'c4'),
+  tl(6, 29.5, 'Read', '/home/node/work/konfersi-landing-page/src/components/Button.tsx'), tr(7, 29.4, 'c6'),
+  tl(8, 29.4, 'Grep', 'min-width'), tr(9, 29.3, 'c8'),
+  tl(10, 29.3, 'Bash', 'npx playwright test hero --project=iphone-13-mini'), tr(11, 29, 'c10', 'Error: browserType.launch: Executable does not exist at /ms-playwright/webkit-2104'),
+  tl(12, 29, 'mcp__playwright__browser_take_screenshot', ''), tr(13, 28.5, 'c12'),
+  { seq: 14, at: ago(28), kind: 'assistant', text: 'The button has a fixed `width: 160px` and the label wraps at 390 px. I will switch it to `min-width` with padding and check iOS Safari.', from: null, tool: null, images: [] },
+  tl(15, 27, 'Edit', '/home/node/work/konfersi-landing-page/src/components/Hero.tsx'), tr(16, 26.9, 'c15'),
+  tl(17, 26.8, 'Task', 'Check the hero on the smallest supported phones'),
+  tl(18, 2, 'Bash', 'npm run build'),
+  { seq: 19, at: ago(2), kind: 'approval', text: 'Run a command: npm run build', from: null, tool: null, images: [] },
 ];
-const chatSession = { id: 's1', title: 'mo-T-2430 Konfersi lead', state: 'waiting', waiting: 1, waitingFor: 'Run a command: npm run build', lastSeq: 5, ticketKey: 'KONF-12', url: '#' };
+const chatSession = {
+  id: 's1', title: 'mo-T-2430 Konfersi lead', state: 'waiting', waiting: 1, waitingFor: 'Run a command: npm run build', lastSeq: 19, ticketKey: 'KONF-12', url: '#',
+  runtime: { model: 'claude-opus-5-5', effort: 'high', mode: 'acceptEdits', claude: 'Work', context: { usedTokens: 84_000, windowTokens: 200_000 }, costUsd: 1.25, plan: { session: { usedPct: 42, resetsAt: new Date(Date.now() + 185 * 60_000).toISOString() }, week: { usedPct: 12, resetsAt: new Date(Date.now() + 4 * 86_400_000).toISOString() } } },
+};
 const API = {
   'GET /reporter/v1/status': { site: { origin: HOST, environment: 'stg', repo: 'platform/konfersi-landing-page', label: null, branch: 'stg' }, enabled: true, bucketKey: 'KONF', bucketName: 'Konfersi', calloutsDefault: true, sdkVersion: '0.1.0' },
-  'GET /reporter/v1/me': { bucketKey: 'KONF', origin: HOST, actorLabel: 'Owner', expiresAt: now, clientIp: '203.0.113.7', clientIpFamily: 4 },
+  'GET /reporter/v1/me': { bucketKey: 'KONF', origin: HOST, actorLabel: 'Owner', expiresAt: now, clientIp: '10.42.1.7', clientIpFamily: 4, portalRelease: '2026.10.31-5' },
   'GET /reporter/v1/tickets': { items: tickets, nextCursor: null, counts: { status: { open: 1, done: 1 }, priority: { high: 2 }, type: { bug: 2 }, onPath: 2 } },
   'GET /reporter/v1/tickets/KONF-12': tickets[0],
   'GET /reporter/v1/tickets/KONF-12/comments': [
@@ -97,6 +111,7 @@ addEventListener('message', async (e) => {
   if (e.source !== f.contentWindow || e.origin !== location.origin) return;
   const m = e.data; window.got.push(m.type);
   if (m.type === 'pilot-reporter:tray') window.lastTray = m;
+  if (m.type === 'pilot-reporter:settings') window.lastSettings = m;
   if (m.type === 'pilot-reporter:ready' && !window.said) { window.said = 1; f.contentWindow.postMessage({ type: 'pilot-reporter:hello', bridge: 1, sdkVersion: '0.1.0', page: { url: '${HOST}/', title: 'Home' }, build }, location.origin);
     const ev = evidence(); f.contentWindow.postMessage({ type: 'pilot-reporter:context', page: ev.page, device: ev.device, build, counts: { console: 4, consoleErrors: 1, network: 23, networkFailed: 1, interactions: 6 } }, location.origin); }
   if (m.type === 'pilot-reporter:capture-request') {
@@ -176,6 +191,17 @@ const check = (name, a) => {
   console.log(`${name}: overflow ${a.overflow}px, small ${a.small.length}`);
 };
 
+/** The tool-grouping shots (PILOT-1111) also go to their own folder when QA_TOOL_SHOTS is set. */
+const shotTo = async (b, name) => {
+  await sleep(350);
+  const dir = process.env.QA_TOOL_SHOTS;
+  if (!dir) return b.shot(`reporter-tools-${name}`);
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  mkdirSync(dir, { recursive: true });
+  const { data } = await b.send('Page.captureScreenshot', { format: 'png' });
+  writeFileSync(`${dir}/${name}.png`, Buffer.from(data, 'base64'));
+};
+
 const sleepShot = async (b, name, opts) => {
   await sleep(350);
   return b.shot(name, opts);
@@ -211,6 +237,7 @@ try {
       }
       await sleep(600);
       check(`${label} list`, await b.eval(AUDIT));
+      if ((await b.eval(`document.querySelector('[data-testid=bucket-name]')?.textContent`)) !== 'Konfersi') failures.push(`${label} list: the project name is not the title`);
       const rows = await b.eval(`[...document.querySelectorAll('[data-row]')].map((r) => r.dataset.row).join(',')`);
       if (!/thumb/.test(rows) || !/text/.test(rows)) failures.push(`${label} list: expected thumbnail and text rows, got ${rows}`);
       if (await b.eval(`[...document.querySelectorAll('[data-row=text] [role=img], [data-row=text] img, [data-row=text] .skeleton')].length`)) failures.push(`${label} list: a text row has a placeholder`);
@@ -258,6 +285,36 @@ try {
       if (!/Answer in pilot/.test(chatText)) failures.push(`${label} chat: no approval banner`);
       if (/mo-T-2430/.test(chatText)) failures.push(`${label} chat: the internal prefix shows`);
       await sleepShot(b, `reporter-${label}-chat`);
+      // Tool activity rows (PILOT-1111): collapsed buttons with a label, opening to one line per call; the run still going shimmers.
+      const groups = await b.eval(`[...document.querySelectorAll('li > button[aria-expanded]')].map((x) => [x.getAttribute('aria-expanded'), x.getAttribute('aria-label')])`);
+      if (groups.length !== 2 || groups.some(([e]) => e !== 'false')) failures.push(`${label} chat: expected two collapsed activity rows, got ${JSON.stringify(groups)}`);
+      if (!/6 steps, 1 failed\. Latest: playwright · browser_take_screenshot/.test(groups[0]?.[1] ?? '')) failures.push(`${label} chat: first activity label ${groups[0]?.[1]}`);
+      if (!/3 steps, running\. Latest: Bash npm run build/.test(groups[1]?.[1] ?? '')) failures.push(`${label} chat: live activity label ${groups[1]?.[1]}`);
+      if (/browserType\.launch/.test(await b.eval('document.body.innerText'))) failures.push(`${label} chat: an error shows while collapsed`);
+      await shotTo(b, `${label}-collapsed`);
+      await b.eval(`document.querySelectorAll('li > button[aria-expanded]')[0].click()`);
+      await sleep(300);
+      await b.eval(`[...document.querySelectorAll('button[aria-expanded]')].find((x) => /files read/.test(x.textContent))?.click()`);
+      await b.eval(`document.querySelectorAll('li > button[aria-expanded]')[1].click()`);
+      await sleep(400);
+      const opened = await b.eval('document.body.innerText');
+      for (const want of ['2 files read · 1 search', 'Hero.tsx', 'browserType.launch', 'Agent: Check the hero', 'npm run build'])
+        if (!opened.includes(want)) failures.push(`${label} chat opened: missing "${want}"`);
+      if (await b.eval(`document.querySelectorAll('li > button[aria-expanded=true]').length`) !== 2) failures.push(`${label} chat: the rows did not open`);
+      check(`${label} chat tools`, await b.eval(AUDIT));
+      await shotTo(b, `${label}-expanded`);
+      // The runtime line under the title opens the session sheet.
+      const line = await b.eval(`document.querySelector('[data-testid=runtime-line]')?.textContent`);
+      if ((line ?? '').trim() !== 'Opus 5.5 · Work · 42%') failures.push(`${label} chat: runtime line "${line}"`);
+      await b.clickSel('[aria-haspopup=dialog]');
+      await sleep(400);
+      const sheet = await b.eval(`document.querySelector('[role=dialog][aria-label=Session]')?.innerText ?? ''`);
+      for (const want of ['Edit', 'Opus 5.5 · high', 'Work', '84k of 200k', '$1.25', '42% · resets in 3h']) if (!sheet.includes(want)) failures.push(`${label} session sheet: missing "${want}"`);
+      check(`${label} session sheet`, await b.eval(AUDIT));
+      await shotTo(b, `${label}-session-sheet`);
+      await b.key('Escape');
+      await sleep(300);
+      if (await b.eval(`!!document.querySelector('[role=dialog][aria-label=Session]')`)) failures.push(`${label} session sheet: Esc did not close it`);
       await b.focusSel('textarea[aria-label=Message]');
       await b.type('Thanks, and the icon too?');
       await sleepShot(b, `reporter-${label}-chat-typed`);
@@ -267,6 +324,9 @@ try {
       await b.clickSel('[aria-label=Context]');
       await sleep(400);
       check(`${label} context`, await b.eval(AUDIT));
+      const ctxText = await b.eval('document.body.innerText');
+      if (!/10\.42\.1\.7 \(internal: behind the cluster proxy\)/.test(ctxText)) failures.push(`${label} context: the internal address is not labelled`);
+      if (!/2026\.10\.31-5/.test(ctxText)) failures.push(`${label} context: the portal release is missing`);
       await sleepShot(b, `reporter-${label}-context`);
       await b.clickSel('[role=dialog] [aria-label=Back]');
       await sleep(300);
@@ -355,6 +415,8 @@ try {
       const tray = await b.eval('window.lastTray');
       if (!tray || tray.replies !== 1) failures.push(`framed ${label}: the tray message should carry replies = 1 (KONF-12 waits), got ${JSON.stringify(tray)}`);
       console.log('host got', await b.eval(`window.got.join(',')`));
+      const theme = await b.eval('window.lastSettings?.theme');
+      if (theme !== (dark ? 'dark' : 'light')) failures.push(`framed ${label}: settings theme ${theme}`);
     } finally {
       await b.close();
     }
