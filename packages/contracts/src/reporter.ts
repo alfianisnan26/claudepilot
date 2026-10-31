@@ -27,6 +27,12 @@ export const REPORTER_LIMITS = {
   evidenceBytes: 2 * 1024 * 1024,
   consoleEntries: 200,
   networkEntries: 200,
+  /** Interactions kept for the repro trail. */
+  interactionEntries: 50,
+  /** UI check findings per capture. */
+  checkFindings: 100,
+  /** Duplicate candidates offered. */
+  duplicateCandidates: 5,
   componentNodes: 400,
   /** Characters of one console line or one stringified value. */
   textChars: 2000,
@@ -209,6 +215,49 @@ export interface ReporterPageState {
   app: unknown;
 }
 
+/**
+ * One step of the interaction trail (owner, 2026-10-31: repro steps). Input VALUES are never recorded: `value` is "[masked]" for
+ * text and password fields, the option label for a select, "checked"/"unchecked" for a checkbox or radio.
+ */
+export interface ReporterInteraction {
+  ts: number;
+  kind: 'click' | 'input' | 'change' | 'submit' | 'navigate' | 'key' | 'scroll';
+  selector: string | null;
+  /** The element's accessible name or visible label, capped; what a person would call it ("Sign in" button). */
+  label: string | null;
+  value?: string;
+  /** For navigate: the path (query values redacted). For key: only Enter, Escape, Tab and arrows, never characters. */
+  detail?: string;
+}
+
+/** Steps to reproduce, built by the SERVER from the trail, the page and the device (so it improves without an SDK release). */
+export interface ReporterRepro {
+  steps: string[];
+  /** A Playwright test (TypeScript) at the capture's viewport and user agent, ending at the captured state, for agents to run. */
+  playwright: string;
+}
+
+/**
+ * Automatic UI checks on the cropped area (owner, 2026-10-31), against the ClaudePilot QA standard: axe-core (loaded on demand from
+ * {portal}/reporter/v1/axe.js at capture time, never at page load), touch targets under 44px, contrast, horizontal overflow, text
+ * cut off (ellipsis or clipped).
+ */
+export interface ReporterCheckFinding {
+  source: 'axe' | 'target-size' | 'contrast' | 'overflow' | 'truncation';
+  rule: string;
+  severity: 'critical' | 'serious' | 'moderate' | 'minor';
+  message: string;
+  selector: string | null;
+  help: string | null;
+}
+
+export interface ReporterChecks {
+  /** False when the checks could not run (axe failed to load, CSP); `error` says why. Never a silent empty list. */
+  ran: boolean;
+  error?: string;
+  findings: ReporterCheckFinding[];
+}
+
 /** The JSON attachment of a reported ticket. Every list is capped by REPORTER_LIMITS and redacted before it leaves the page. */
 export interface ReporterEvidence {
   schema: typeof REPORTER_EVIDENCE_SCHEMA;
@@ -226,6 +275,34 @@ export interface ReporterEvidence {
   console: ReporterConsoleEntry[];
   network: ReporterNetworkEntry[];
   performance: ReporterPerformance;
+  interactions: ReporterInteraction[];
+  checks: ReporterChecks;
+  /**
+   * Normalized signatures of the console errors and unhandled rejections in the buffer (message with numbers, ids and URLs
+   * replaced, plus the top stack frame's file and function), for duplicate detection.
+   */
+  errorSignatures: string[];
+}
+
+/**
+ * POST /reporter/v1/duplicates (owner, 2026-10-31): before filing, the panel asks for similar open tickets of the bucket: a capture
+ * on the same path whose area overlaps (IoU of the document rects, or the same selector), or the same error signature.
+ */
+export interface ReporterDuplicateQuery {
+  path: string;
+  anchor: ReporterAnchor;
+  errorSignatures: string[];
+}
+
+export interface ReporterDuplicateCandidate {
+  key: string;
+  summary: string;
+  status: TicketStatus;
+  reasons: ('same-area' | 'same-element' | 'same-error')[];
+  /** 0..1, higher is more alike. */
+  score: number;
+  url: string;
+  thumbnailUrl: string | null;
 }
 
 /**
@@ -373,6 +450,31 @@ export interface ReporterTicketList {
   counts: { status: Record<string, number>; priority: Record<string, number>; type: Record<string, number>; onPath: number };
 }
 
+/**
+ * Where the work on a ticket stands, as the callout colours it (owner, 2026-10-31: live status). `fixed` = closed done with a fix
+ * commit known; `deployed` = that commit is in the build the page declares (ReporterBuildInfo.commit is the fix commit or a
+ * descendant, decided by the server from the bucket's repos where it can tell; otherwise it stays `fixed`, never guessed).
+ */
+export type ReporterWorkPhase = 'open' | 'working' | 'review' | 'fixed' | 'deployed' | 'wont-do';
+
+export interface ReporterFixInfo {
+  commit: string | null;
+  branch: string | null;
+  environment: string | null;
+  at: string | null;
+}
+
+/** A comment on a reported ticket, as the panel shows it (owner, 2026-10-31: reply to the agent from the page). */
+export interface ReporterTicketComment {
+  id: string;
+  /** "You", an agent session's name, or a person. */
+  author: string;
+  authorKind: 'reporter' | 'agent' | 'person' | 'system';
+  /** Markdown, untrusted; the panel renders it sanitized. */
+  body: string;
+  createdAt: string;
+}
+
 /** A ticket as the widget sees it (the list, the callouts and the detail card). */
 export interface ReporterTicket {
   key: string;
@@ -387,6 +489,15 @@ export interface ReporterTicket {
   /** The ticket's captures, in order; empty when it did not come from the widget. */
   captures: (ReporterCapture & { screenshotUrl: string | null })[];
   build: ReporterBuildInfo | null;
+  phase: ReporterWorkPhase;
+  fix: ReporterFixInfo | null;
+  /** Comments since the reporter last replied or read; an agent's open question shows as a badge on the callout. */
+  unread: number;
+  awaitingReporter: boolean;
+  /** Steps to reproduce from the first capture's trail, when it had one. */
+  repro: ReporterRepro | null;
+  /** UI check findings per capture, counted by severity, for the list and the card. */
+  checkCounts: Record<ReporterCheckFinding['severity'], number>;
 }
 
 export interface ReporterSession {
@@ -435,6 +546,13 @@ export interface ReporterCallout {
    * muted) so the reviewer sees what they already marked while still reviewing.
    */
   pending?: boolean;
+  /** Colour and label of the marker; updates live. */
+  phase: ReporterWorkPhase;
+  /** "Fixed in abc1234 (stg)" on the card. */
+  fix: ReporterFixInfo | null;
+  /** A badge on the marker: someone asked the reporter something. */
+  awaitingReporter: boolean;
+  unread: number;
   index: number;
   total: number;
   anchor: ReporterAnchor;
@@ -505,6 +623,14 @@ export const REPORTER_ROUTES = {
   reviewAttach: '/reporter/v1/reviews/:id/attachments', // POST raw body; x-reporter-capture; x-reporter-kind
   reviewFile: '/reporter/v1/reviews/:id/comments/:captureId/screenshot', // GET
   reviewSubmit: '/reporter/v1/reviews/:id/submit', // POST
+  ticketComments: '/reporter/v1/tickets/:key/comments', // GET (marks read), POST {body} (the reporter's reply, on the ticket timeline)
+  duplicates: '/reporter/v1/duplicates', // POST ReporterDuplicateQuery -> { candidates: ReporterDuplicateCandidate[] }
+  axe: '/reporter/v1/axe.js', // GET, public, pinned axe-core, loaded by the SDK only at capture time
+  /**
+   * GET, a streamed response (fetch with the bearer token; not EventSource, which cannot send it) of changes to this bucket's
+   * reported tickets: phase, fix, comments. The panel re-sends callouts within seconds; it falls back to polling every 30 s.
+   */
+  events: '/reporter/v1/events',
   sessions: '/reporter/v1/sessions', // GET
   knowledge: '/reporter/v1/knowledge', // GET ?q=
   note: '/reporter/v1/knowledge/note', // GET ?path=
