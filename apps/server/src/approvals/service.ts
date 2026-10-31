@@ -74,6 +74,34 @@ export interface ApprovalCreate {
 /** T-3114: more refusal requests of one session wait than the outbox lets wait (OUTBOX_PENDING_MAX): the new one is dropped. */
 export const REFUSAL_CAP_MESSAGE = 'Too many refused calls of this session wait already.';
 
+/** T-3206: a repeat moves a refused call's expiry forward, but never past this long after the card was made (a looping retry). */
+export const REFUSAL_FOLD_MAX_LIFE_MS = 2 * 60 * 60_000;
+/**
+ * T-3206: the repeat rows of a decided or expired card are kept this long after its end, so the decision message's repeat id still answers
+ * `approval_get` while its outcome (a one-time pass lasts PASS_TTL_MS) matters; the sweep deletes them after that.
+ */
+export const REPEATS_KEEP_MS = PASS_TTL_MS;
+
+type RepeatRow = { id: string; approval_id: string; requester_session: string | null; created_at: string };
+
+/**
+ * T-3206: what makes two refusals "the same call" for the fold. Claude Code writes a new free-text `description` on most retries, so the
+ * key is the tool, its input WITHOUT `description` (the rest of the input in canonical JSON), the folder and the form. Only the fold uses
+ * it: the card stores the first call exactly, and its pass hashes that. Any other kind folds on its whole payload.
+ */
+export function refusalFoldKey(kind: string, payload: unknown): string {
+  return canonicalJson(kind === 'guard.refusal' ? withoutDescription(payload) : payload);
+}
+
+/** A refusal payload with its tool input's free-text `description` left out (anything else: unchanged). */
+function withoutDescription<T>(payload: T): T {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const p = payload as Record<string, unknown>;
+  if (!p.input || typeof p.input !== 'object' || Array.isArray(p.input)) return payload;
+  const { description: _free, ...input } = p.input as Record<string, unknown>;
+  return { ...p, input } as T;
+}
+
 export interface ApprovalsOptions {
   db: () => DatabaseSync | null;
   chat?: ApprovalChat | null;
@@ -187,24 +215,59 @@ export class Approvals {
     return Number(r.n);
   }
 
-  /** T-3114: the waiting refusal of this workspace with the same kind and payload (canonical JSON), or none. */
+  /** T-3114: the waiting refusal of this workspace with the same kind and the same call (`refusalFoldKey`, T-3206), or none. */
   #twin(kind: string, workspace: string | null, payload: unknown): Row | undefined {
-    const want = canonicalJson(payload);
+    const want = refusalFoldKey(kind, payload);
     const rows = this.#db()
       .prepare(
         "SELECT * FROM approvals WHERE kind = ? AND workspace IS ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id",
       )
       .all(kind, workspace, this.#iso()) as Row[];
-    return rows.find((r) => canonicalJson(JSON.parse(r.payload)) === want);
+    return rows.find((r) => refusalFoldKey(kind, JSON.parse(r.payload)) === want);
+  }
+
+  /**
+   * T-3206: the card as a session that only filed a repeat of it sees it: under its own repeat id, as its own ask (its session and title,
+   * its time), with nothing of the first asker: no id, no session, no reason, and no `description` (the first asker's words; the fold
+   * ignores it). The status, expiry, count and result are the card's.
+   */
+  #repeatView(card: Row, rep: RepeatRow): Approval {
+    const a = this.#toApproval(card);
+    return {
+      ...a,
+      id: rep.id,
+      payload: withoutDescription(a.payload),
+      requesterSession: rep.requester_session,
+      requesterTitle: rep.requester_session ? (this.chat?.get(rep.requester_session)?.title ?? null) : null,
+      reason: '',
+      createdAt: rep.created_at,
+    };
+  }
+
+  /**
+   * T-3206: the sweep. Deletes the repeat rows of every card that ended (decided, or past its expiry) more than REPEATS_KEEP_MS ago, and of a
+   * card that is gone. It walks approval_repeats (only live and recent repeats are left in it) with one key lookup per row. Returns how many.
+   */
+  #pruneRepeats(): number {
+    const cut = this.#iso(this.#now() - REPEATS_KEEP_MS);
+    const r = this.#db()
+      .prepare(
+        `DELETE FROM approval_repeats WHERE NOT EXISTS (
+           SELECT 1 FROM approvals a WHERE a.id = approval_repeats.approval_id
+             AND ((a.status = 'pending' AND a.expires_at > ?) OR (a.status != 'pending' AND coalesce(a.decided_at, a.expires_at) > ?)))`,
+      )
+      .run(cut, cut);
+    return Number(r.changes);
   }
 
   #row(id: string): Row | undefined {
     return this.#db().prepare('SELECT * FROM approvals WHERE id = ?').get(id) as Row | undefined;
   }
 
-  /** Marks what waited past its time `expired` (lazily, on each read of the queue). */
+  /** Marks what waited past its time `expired` (lazily, on each read of the queue), and prunes old repeats (T-3206). */
   expire(): number {
     const r = this.#db().prepare("UPDATE approvals SET status = 'expired' WHERE status = 'pending' AND expires_at <= ?").run(this.#iso());
+    this.#pruneRepeats();
     return Number(r.changes);
   }
 
@@ -255,16 +318,18 @@ export class Approvals {
     );
     const now = this.#now();
     const id = opts.id ?? `apr-${randomBytes(9).toString('hex')}`;
-    // T-3114: the same refused call again in the same workspace (same kind and payload) while its card waits: no second card. The repeat is
-    // recorded under the card (its id stays readable by the session that filed it), the count goes up, and the card lives another TTL
-    // from now, since an agent is still trying it. Before the cap: a repeat adds no card, so it never counts against the five.
+    // T-3114: the same refused call again in the same workspace (same kind and call, `refusalFoldKey`) while its card waits: no second card.
+    // The repeat is recorded under the card (its id stays readable by the session that filed it), the count goes up, and the card lives
+    // another TTL from now, since an agent is still trying it, but at most REFUSAL_FOLD_MAX_LIFE_MS after it was made (T-3206). Before the
+    // cap: a repeat adds no card, so it never counts against the five. Each filing also runs the repeats sweep (T-3206).
     if (refusal) {
+      this.#pruneRepeats();
       const twin = this.#twin(req.kind, requester?.workspaceId ?? null, payload);
       if (twin) {
         this.#db()
           .prepare('INSERT INTO approval_repeats (id, approval_id, requester_session, created_at) VALUES (?, ?, ?, ?)')
           .run(id, twin.id, requester?.sessionId ?? null, this.#iso(now));
-        const until = this.#iso(now + ttl * 60_000);
+        const until = this.#iso(Math.min(now + ttl * 60_000, Date.parse(twin.created_at) + REFUSAL_FOLD_MAX_LIFE_MS));
         if (until > twin.expires_at)
           this.#db().prepare("UPDATE approvals SET expires_at = ? WHERE id = ? AND status = 'pending'").run(until, twin.id);
         this.#o.changed?.();
@@ -308,24 +373,37 @@ export class Approvals {
 
   /** What a session asked, newest first; another session's request is NOT_FOUND (`ownOne`). */
   listOwn(sessionId: string, limit = 50): Approval[] {
-    // T-3114: also the cards a repeat of this session was folded into.
-    const rows = this.#db()
-      .prepare(
-        'SELECT * FROM approvals WHERE requester_session = ? OR id IN (SELECT approval_id FROM approval_repeats WHERE requester_session = ?) ORDER BY created_at DESC, id DESC LIMIT ?',
-      )
-      .all(sessionId, sessionId, limit) as Row[];
-    return rows.map((r) => this.#toApproval(r));
+    const own = (
+      this.#db().prepare('SELECT * FROM approvals WHERE requester_session = ? ORDER BY created_at DESC, id DESC LIMIT ?').all(sessionId, limit) as Row[]
+    ).map((r) => this.#toApproval(r));
+    // T-3114: also the cards a repeat of this session was folded into; T-3206: another asker's card shows once, under this session's first
+    // repeat id and as its own (`#repeatView`), never under the card's id. Its own card is listed above already.
+    const reps = this.#db()
+      .prepare('SELECT * FROM approval_repeats WHERE requester_session = ? ORDER BY created_at, id')
+      .all(sessionId) as RepeatRow[];
+    const seen = new Set<string>();
+    const theirs: Approval[] = [];
+    for (const rep of reps) {
+      if (seen.has(rep.approval_id)) continue;
+      seen.add(rep.approval_id);
+      const card = this.#row(rep.approval_id);
+      if (card && card.requester_session !== sessionId) theirs.push(this.#repeatView(card, rep));
+    }
+    return [...own, ...theirs]
+      .sort((a, b) => (a.createdAt === b.createdAt ? (a.id < b.id ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1))
+      .slice(0, limit);
   }
 
   ownOne(sessionId: string, id: string): Approval {
     const r = this.#row(id);
     if (r && r.requester_session === sessionId) return this.#toApproval(r);
-    // T-3114: the id the guard printed for a repeat answers with the card it was folded into, for the session that filed it only.
-    const rep = this.#db().prepare('SELECT approval_id FROM approval_repeats WHERE id = ? AND requester_session = ?').get(id, sessionId) as
-      { approval_id: string } | undefined;
+    // T-3114: the id the guard printed for a repeat answers with the card it was folded into, for the session that filed it only. T-3206:
+    // the first asker's own repeat answers with its card; any other session sees it under that repeat id, as its own (`#repeatView`).
+    const rep = this.#db().prepare('SELECT * FROM approval_repeats WHERE id = ? AND requester_session = ?').get(id, sessionId) as
+      RepeatRow | undefined;
     const card = rep ? this.#row(rep.approval_id) : undefined;
-    if (!card) throw new AppError('NOT_FOUND', NO_APPROVAL);
-    return this.#toApproval(card);
+    if (!rep || !card) throw new AppError('NOT_FOUND', NO_APPROVAL);
+    return card.requester_session === sessionId ? this.#toApproval(card) : this.#repeatView(card, rep);
   }
 
   /**
