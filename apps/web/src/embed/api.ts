@@ -1,6 +1,9 @@
 import {
   REPORTER_ROUTES,
   type ReporterAddCapturesRequest,
+  type ReporterChatPage,
+  type ReporterChatSendRequest,
+  type ReporterChatStreamLine,
   type ReporterAddCommentRequest,
   type ReporterConnectClaim,
   type ReporterConnectMessage,
@@ -184,6 +187,11 @@ export interface ReporterClient {
   blobUrl(url: string): Promise<string>;
   /** The events stream; resolves when it ends. */
   events(onEvent: (e: unknown) => void, signal: AbortSignal): Promise<void>;
+  /** Chat in the widget: a page of a session of this bucket (newest when `before` is null), or what came after `after`. */
+  chatPage(id: string, q: { before?: number | null; after?: number; limit?: number }): Promise<ReporterChatPage>;
+  chatSend(id: string, req: ReporterChatSendRequest): Promise<{ uuid: string }>;
+  /** The session's live stream (NDJSON lines); resolves when it ends. */
+  chatStream(id: string, after: number, onLine: (l: ReporterChatStreamLine) => void, signal: AbortSignal): Promise<void>;
 }
 
 export function createClient(opts: { token: () => string | null; onUnauthorized: () => void; fetchFn?: typeof fetch }): ReporterClient {
@@ -261,10 +269,25 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
       if (!res.ok) throw new ReporterApiError('ERROR', `Image failed (${res.status}).`, res.status);
       return URL.createObjectURL(await res.blob());
     },
-    events: async (onEvent, signal) => {
-      const res = await f(R.events, { headers: headers({ Accept: 'text/event-stream' }), credentials: 'omit', signal });
+    chatPage: (id, q) => {
+      const p = new URLSearchParams();
+      if (q.after !== undefined) p.set('after', String(q.after));
+      else if (q.before) p.set('before', String(q.before));
+      if (q.limit) p.set('limit', String(q.limit));
+      const qs = p.toString();
+      return call('GET', `${fill(R.sessionMessages, { id })}${qs ? `?${qs}` : ''}`);
+    },
+    chatSend: (id, req) => call('POST', fill(R.sessionMessages, { id }), req),
+    chatStream: (id, after, onLine, signal) => readLines(`${fill(R.sessionStream, { id })}?after=${after}`, (e) => onLine(e as ReporterChatStreamLine), signal),
+    events: (onEvent, signal) => readLines(R.events, onEvent, signal),
+  };
+
+  /** A streamed NDJSON response read line by line (fetch with the bearer token: EventSource cannot send it). */
+  async function readLines(url: string, onEvent: (e: unknown) => void, signal: AbortSignal): Promise<void> {
+    {
+      const res = await f(url, { headers: headers({ Accept: 'text/event-stream' }), credentials: 'omit', signal });
       if (res.status === 401) opts.onUnauthorized();
-      if (!res.ok || !res.body) throw new ReporterApiError('ERROR', `Events failed (${res.status}).`, res.status);
+      if (!res.ok || !res.body) throw new ReporterApiError(res.status === 404 ? 'NOT_FOUND' : 'ERROR', `Stream failed (${res.status}).`, res.status);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -276,6 +299,6 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
         buf = rest.length > 65_536 ? '' : rest;
         for (const e of events) onEvent(e);
       }
-    },
-  };
+    }
+  }
 }

@@ -847,7 +847,21 @@ export type ReporterHostMessage =
   | { type: 'pilot-reporter:focus-changed'; key: string; captureId: string }
   | { type: 'pilot-reporter:focus-ended' }
   /** The capture is not on this page, or its element is gone and the stored rect is off-screen. */
-  | { type: 'pilot-reporter:focus-missing'; key: string; captureId: string | null; reason: 'other-page' | 'not-found' };
+  | { type: 'pilot-reporter:focus-missing'; key: string; captureId: string | null; reason: 'other-page' | 'not-found' }
+  /**
+   * What the next report from this page would carry, for the panel's Context view (owner, 2026-10-31): sent after hello, on navigation, and
+   * at most once a second while the counts change. Additive: a panel that does not know it ignores it; the panel shows "unknown" without it.
+   */
+  | { type: 'pilot-reporter:context'; page: ReporterPageInfo; device: ReporterDeviceInfo; build: ReporterBuildInfo; counts: ReporterContextCounts };
+
+/** Live counts of what the SDK has buffered for the next report (the Context view's "What a ticket carries"). */
+export interface ReporterContextCounts {
+  console: number;
+  consoleErrors: number;
+  network: number;
+  networkFailed: number;
+  interactions: number;
+}
 
 /** Panel iframe -> host page (SDK). The SDK accepts these only from its iframe's contentWindow and only from the portal origin. */
 export type ReporterPanelMessage =

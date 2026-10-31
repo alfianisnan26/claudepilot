@@ -3,6 +3,7 @@ import {
   TICKET_PRIORITY_LABEL,
   TICKET_TYPE_LABEL,
   type ReporterCaptureInput,
+  type ReporterCaptureMode,
   type ReporterDuplicateCandidate,
   type ReporterFileMode,
   type ReporterReportTarget,
@@ -12,11 +13,13 @@ import {
   type TicketType,
 } from '@portal/contracts';
 import { useEffect, useState, type ReactNode } from 'react';
-import { SEVERITIES, countBySeverity, cropBox, shotCaption } from '@/features/reporter/shared';
+import { SEVERITIES, countBySeverity, shotCaption } from '@/features/reporter/shared';
 import type { ReporterClient } from './api';
 import { usePanel, type Capture } from './context';
-import { Icon } from './icons';
+import { Icon, type IconName } from './icons';
+import { elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
 import { pickTarget, proposedSummary, sentText, ticketsFor } from './model';
+import { Viewer } from './Viewer';
 import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './ui';
 
 const TYPES: TicketType[] = ['bug', 'feature', 'task', 'question'];
@@ -47,7 +50,11 @@ export function ReportTab() {
   const p = usePanel();
   const [view, setView] = useState<'home' | 'review' | 'submit'>('home');
   const [alone, setAlone] = useState(false);
-  useEffect(() => setAlone(false), [p.capture]);
+  const [filed, setFiled] = useState<string | null>(null);
+  useEffect(() => setAlone(false), [p.capture?.captureId]);
+  useEffect(() => {
+    if (p.capture) setFiled(null);
+  }, [p.capture]);
 
   if (p.pending && !p.capture)
     return (
@@ -56,26 +63,86 @@ export function ReportTab() {
         <p className="text-[14px] text-muted">Capturing…</p>
       </div>
     );
-  if (p.capture) return p.review && !alone ? <CommentForm capture={p.capture} onAlone={() => setAlone(true)} /> : <QuickForm capture={p.capture} />;
+  if (p.capture) return p.review && !alone ? <CommentForm capture={p.capture} onAlone={() => setAlone(true)} /> : <QuickForm onFiled={setFiled} />;
   if (view === 'submit' && p.review) return <SubmitForm onBack={() => setView('review')} onDone={() => setView('home')} />;
   if (view === 'review' && p.review) return <ReviewView onBack={() => setView('home')} onFinish={() => setView('submit')} />;
-  return <Home onOpenReview={() => setView('review')} />;
+  return (
+    <>
+      {filed && <Filed ticketKey={filed} onDone={() => setFiled(null)} />}
+      <Home onOpenReview={() => setView('review')} />
+    </>
+  );
 }
 
-function CaptureButtons() {
+/** After filing to the queue: the key (copy), View, Report another. No full-screen confirmation; the callout is on the page already. */
+export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => void }) {
+  const { select, setTab, notify } = usePanel();
+  return (
+    <div role="status" className="m-3 mb-0 flex flex-wrap items-center gap-1 rounded-2xl bg-accent-soft py-1 pr-1 pl-3">
+      <Icon name="check" className="size-4 text-accent" />
+      <span className="min-w-0 flex-1 text-[14px] font-semibold">
+        Filed <span className="whitespace-nowrap tabular-nums">{ticketKey}</span>
+      </span>
+      <IconBtn
+        icon="copy"
+        label={`Copy ${ticketKey}`}
+        onClick={() =>
+          void navigator.clipboard?.writeText(ticketKey).then(
+            () => notify('Copied', 'ok'),
+            () => notify('Copy is blocked here.', 'error'),
+          )
+        }
+      />
+      <Btn
+        tone="ghost"
+        onClick={() => {
+          select(ticketKey);
+          setTab('tickets');
+          onDone();
+        }}
+      >
+        View
+      </Btn>
+      <Btn tone="ghost" onClick={onDone}>
+        Report another
+      </Btn>
+    </div>
+  );
+}
+
+/**
+ * Screen (what is on screen, the default) | Whole page (desktop only) | Crop: one compact group, each starts that capture. `append` adds
+ * the shot to the report being written (the strip's "+").
+ */
+export function CaptureButtons({ append = false, onPicked }: { append?: boolean; onPicked?: () => void }) {
   const { coarse, requestCapture, pending } = usePanel();
   const [precise, setPrecise] = useState(false);
+  const go = (mode: ReporterCaptureMode) => {
+    requestCapture(mode, precise, append);
+    onPicked?.();
+  };
+  const modes: { mode: ReporterCaptureMode; label: string; icon: IconName }[] = [
+    { mode: 'viewport', label: 'Screen', icon: coarse ? 'camera' : 'scan' },
+    ...(coarse ? [] : [{ mode: 'full' as const, label: 'Whole page', icon: 'arrowUpDown' as const }]),
+    { mode: 'crop', label: 'Crop', icon: 'crop' },
+  ];
   return (
     <div className="flex flex-col gap-2">
-      <div className="grid grid-cols-2 gap-2">
-        <Btn icon={coarse ? 'camera' : 'scan'} tone="primary" disabled={!!pending} onClick={() => requestCapture('full', precise)}>
-          {coarse ? 'Snap' : 'Full page'}
-        </Btn>
-        <Btn icon="crop" tone="primary" disabled={!!pending} onClick={() => requestCapture('crop', precise)}>
-          Crop
-        </Btn>
+      <div role="group" aria-label="Capture" className="flex gap-0.5 rounded-xl bg-surface-2 p-0.5">
+        {modes.map((m, i) => (
+          <button
+            key={m.mode}
+            type="button"
+            disabled={!!pending}
+            onClick={() => go(m.mode)}
+            className={`inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[10px] px-2 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-50 ${i === 0 ? 'bg-primary text-primary-ink' : 'text-ink'}`}
+          >
+            <Icon name={m.icon} className="size-[18px]" />
+            {m.label}
+          </button>
+        ))}
       </div>
-      {!coarse && (
+      {!coarse && !append && (
         <label className="flex min-h-11 items-center gap-2 text-[13px] text-ink-soft">
           <input type="checkbox" checked={precise} onChange={(e) => setPrecise(e.target.checked)} className="size-5 accent-[var(--color-accent)]" />
           Precise (asks to share the tab)
@@ -123,22 +190,65 @@ function Home({ onOpenReview }: { onOpenReview: () => void }) {
   );
 }
 
-function Preview({ capture }: { capture: Capture }) {
-  const [big, setBig] = useState(false);
-  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
-  const box = size ? cropBox(size, capture.evidence.anchor, capture.evidence.state?.scroll ?? null) : null;
+/** The report's shots as a strip: tap opens the viewer, × removes one, "+" adds another (Screen or Crop). */
+function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (id: string) => void; canAdd: boolean }) {
+  const [view, setView] = useState<Capture | null>(null);
+  const [adding, setAdding] = useState(false);
   return (
-    <button type="button" onClick={() => setBig(!big)} aria-label={big ? 'Smaller' : 'View big'} className="relative block w-full overflow-hidden rounded-xl border border-line bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
-      <img
-        src={capture.previewUrl}
-        alt="Screenshot"
-        onLoad={(e) => setSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-        className={`w-full object-contain object-top ${big ? '' : 'max-h-40'}`}
-      />
-      {box && big && (
-        <span aria-hidden="true" className="absolute rounded-sm border-2 border-danger" style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%` }} />
+    <div>
+      <ul className="flex items-start gap-2 overflow-x-auto pt-1 pb-1">
+        {shots.map((c, i) => (
+          <li key={c.captureId} className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setView(c)}
+              aria-label={`View shot ${i + 1}`}
+              className="block size-20 overflow-hidden rounded-xl border border-line bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            >
+              <img src={c.previewUrl} alt="" className="size-full object-cover object-top" />
+            </button>
+            {onRemove && (
+              <button
+                type="button"
+                aria-label={`Remove shot ${i + 1}`}
+                onClick={() => onRemove(c.captureId)}
+                className="absolute -top-3 -right-3 inline-flex size-11 items-center justify-center focus-visible:outline-hidden"
+              >
+                <span className="inline-flex size-6 items-center justify-center rounded-full bg-ink text-bg shadow">
+                  <Icon name="x" className="size-3.5" />
+                </span>
+              </button>
+            )}
+          </li>
+        ))}
+        {canAdd && (
+          <li className="shrink-0">
+            <button
+              type="button"
+              aria-label="Add a shot"
+              aria-expanded={adding}
+              onClick={() => setAdding(!adding)}
+              className="inline-flex size-20 items-center justify-center rounded-xl border border-dashed border-line-strong text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            >
+              <Icon name="plus" />
+            </button>
+          </li>
+        )}
+      </ul>
+      {adding && (
+        <div className="mt-1">
+          <CaptureButtons append onPicked={() => setAdding(false)} />
+        </div>
       )}
-    </button>
+      {view && (
+        <Viewer
+          src={view.previewUrl}
+          alt={`Shot ${shots.indexOf(view) + 1}`}
+          crop={{ anchor: view.evidence.anchor, scroll: view.evidence.state?.scroll ?? null }}
+          onClose={() => setView(null)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -146,7 +256,7 @@ function ChecksChip({ capture }: { capture: Capture }) {
   const c = capture.evidence.checks;
   if (!c.ran) return <p className="text-[12.5px] text-muted">UI checks did not run{c.error ? `: ${c.error}` : ''}.</p>;
   const n = countBySeverity(c.findings);
-  if (!c.findings.length) return <p className="text-[12.5px] text-accent">UI checks: nothing found.</p>;
+  if (!c.findings.length) return null;
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-[12px]" title={c.findings.slice(0, 8).map((f) => f.message).join('\n')}>
       <span className="text-muted">Checks</span>
@@ -159,12 +269,13 @@ function ChecksChip({ capture }: { capture: Capture }) {
   );
 }
 
-/** "Looks like KONF-12": similar open tickets before filing; Add to it puts this shot on that ticket. */
-function Duplicates({ capture, onAdded }: { capture: Capture; onAdded: (key: string) => void }) {
+/** "Looks like KONF-12 · Add to it": one slim line above the send area, never a blocker. */
+function Duplicates({ shots, onAdded }: { shots: Capture[]; onAdded: (key: string) => void }) {
   const { client, notify, refresh } = usePanel();
+  const capture = shots[0]!;
   const [list, setList] = useState<ReporterDuplicateCandidate[]>([]);
   const [dismissed, setDismissed] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   useEffect(() => {
     let live = true;
     client
@@ -174,85 +285,86 @@ function Duplicates({ capture, onAdded }: { capture: Capture; onAdded: (key: str
       live = false;
     };
   }, [client, capture]);
-  if (dismissed || !list.length) return null;
-  const add = async (key: string) => {
-    setBusy(key);
+  const d = list[0];
+  if (dismissed || !d) return null;
+  const add = async () => {
+    setBusy(true);
     try {
-      await client.addCaptures(key, { captures: [captureInput(capture, null)] });
-      const failed = await uploadCapture((id, kind, blob) => client.attach(key, id, kind, blob), capture);
-      notify(failed.length ? `Added to ${key}; upload failed: ${failed.join(', ')}.` : `Added to ${key}.`, failed.length ? 'error' : 'ok');
+      await client.addCaptures(d.key, { captures: shots.map((c) => captureInput(c, null)) });
+      const failed: string[] = [];
+      for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(d.key, id, kind, blob), c)));
+      notify(failed.length ? `Added to ${d.key}; upload failed: ${failed.join(', ')}.` : `Added to ${d.key}.`, failed.length ? 'error' : 'ok');
       refresh();
-      onAdded(key);
+      onAdded(d.key);
     } catch (e) {
       notify((e as Error).message, 'error');
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
-  const REASON = { 'same-area': 'same area', 'same-element': 'same element', 'same-error': 'same error' } as const;
   return (
-    <section className="flex flex-col gap-2 rounded-2xl border border-gold bg-gold-soft p-2.5">
-      <h3 className="px-1 text-[13px] font-bold">Looks like {list[0]!.key}</h3>
-      {list.map((d) => (
-        <div key={d.key} className="flex items-start gap-2 rounded-xl bg-surface p-2">
-          <AuthImg client={client} src={d.thumbnailUrl} alt="" className="size-12 shrink-0 rounded-lg" />
-          <div className="min-w-0 flex-1">
-            <p className="text-[12px] text-muted tabular-nums">
-              <span className="whitespace-nowrap">{d.key}</span> · {d.reasons.map((r) => REASON[r]).join(', ')}
-            </p>
-            <p className="line-clamp-2 text-[13.5px] font-semibold break-words">{d.summary}</p>
-          </div>
-          <Btn busy={busy === d.key} disabled={!!busy} onClick={() => void add(d.key)} className="shrink-0">
-            Add to it
-          </Btn>
-        </div>
-      ))}
-      <Btn tone="ghost" onClick={() => setDismissed(true)}>
-        Still new
+    <div className="flex min-h-11 items-center gap-1 rounded-xl bg-gold-soft pl-3 text-[13px]" title={d.summary}>
+      <span className="min-w-0 flex-1 truncate">
+        Looks like <span className="font-semibold whitespace-nowrap tabular-nums">{d.key}</span>
+        <span className="text-muted"> · {d.summary}</span>
+      </span>
+      <Btn tone="ghost" busy={busy} onClick={() => void add()} className="shrink-0 text-accent">
+        Add to it
       </Btn>
-    </section>
+      <IconBtn icon="x" label="Still new" onClick={() => setDismissed(true)} />
+    </div>
   );
 }
 
-/** Ticket (the queue) or Session (urgent, straight to a lead); switchable any time before sending. */
-function TargetSwitch({ value, onChange }: { value: ReporterReportTarget; onChange: (t: ReporterReportTarget) => void }) {
+/**
+ * Where the report goes, right above the button: Queue (a ticket) | Ask lead now (a session). Session mode names the target with its live
+ * state (a picker when there are several) and says a ticket is kept for tracking. The SDK toolbar follows it (pilot-reporter:target).
+ */
+export function Destination({ value, onChange }: { value: ReporterReportTarget; onChange: (t: ReporterReportTarget) => void }) {
   const { targets } = usePanel();
   const usable = targets.filter((t) => t.available);
-  const reason = !targets.length ? 'No session is set up for direct reports in this bucket.' : !usable.length ? (targets[0]?.reason ?? 'No target session is available now.') : undefined;
+  const reason = !targets.length ? 'No lead session is set up for this bucket.' : !usable.length ? (targets[0]?.reason ?? 'No lead session is available now.') : undefined;
+  const current = value.kind === 'session' ? targets.find((t) => t.sessionId === value.sessionId) : undefined;
   return (
     <div className="flex flex-col gap-1.5">
       <Seg
-        label="Send to"
+        label="Destination"
         value={value.kind}
         onChange={(k) => onChange(k === 'ticket' ? { kind: 'ticket' } : { kind: 'session', sessionId: usable[0]!.sessionId })}
         options={[
-          { value: 'ticket', label: 'Ticket' },
-          { value: 'session', label: 'Session', disabled: !usable.length, hint: reason },
+          { value: 'ticket', label: 'Queue' },
+          { value: 'session', label: 'Ask lead now', disabled: !usable.length, hint: reason },
         ]}
       />
-      {reason && value.kind === 'ticket' && <p className="text-[12px] text-muted">{reason}</p>}
       {value.kind === 'session' && (
-        <>
-          {usable.length > 1 && (
-            <select aria-label="Session" value={value.sessionId} onChange={(e) => onChange({ kind: 'session', sessionId: e.target.value })} className={inputClass}>
+        <div className="flex min-h-11 items-center gap-2 px-1">
+          <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${current?.status === 'working' ? 'bg-flame' : current?.status === 'ended' ? 'bg-line-strong' : 'bg-accent'}`} />
+          {usable.length > 1 ? (
+            <select aria-label="Lead session" value={value.sessionId} onChange={(e) => onChange({ kind: 'session', sessionId: e.target.value })} className={`${inputClass} min-w-0 flex-1`}>
               {usable.map((t) => (
                 <option key={t.sessionId} value={t.sessionId}>
                   {t.label} · {t.status}
                 </option>
               ))}
             </select>
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-[13.5px]">
+              <span className="font-semibold">{current?.label ?? 'Lead'}</span>
+              <span className="text-muted"> · {current?.status ?? 'unknown'}</span>
+            </span>
           )}
-          <p className="text-[12px] text-ink-soft">Urgent: a ticket is filed and the session gets it in its chat right away.</p>
-        </>
+        </div>
       )}
+      {value.kind === 'session' && <p className="px-1 text-[12px] text-muted">A ticket is created for tracking.</p>}
     </div>
   );
 }
 
+/** Type and priority as one row of chips (Bug, Normal by default); a direct ask is always urgent, so priority hides then. */
 function TypePriority({ type, setType, priority, setPriority, urgent }: { type: TicketType; setType: (t: TicketType) => void; priority: TicketPriority; setPriority: (p: TicketPriority) => void; urgent: boolean }) {
   return (
-    <>
-      <div role="group" aria-label="Type" className="flex flex-wrap gap-1.5">
+    <div className="-mx-3 flex items-center gap-1.5 overflow-x-auto px-3 pb-0.5">
+      <div role="group" aria-label="Type" className="flex shrink-0 gap-1.5">
         {TYPES.map((t) => (
           <Chip key={t} on={type === t} onClick={() => setType(t)}>
             {TICKET_TYPE_LABEL[t]}
@@ -260,31 +372,36 @@ function TypePriority({ type, setType, priority, setPriority, urgent }: { type: 
         ))}
       </div>
       {!urgent && (
-        <div role="group" aria-label="Priority" className="flex flex-wrap gap-1.5">
-          {PRIORITIES.map((v) => (
-            <Chip key={v} on={priority === v} onClick={() => setPriority(v)}>
-              {TICKET_PRIORITY_LABEL[v]}
-            </Chip>
-          ))}
-        </div>
+        <>
+          <span aria-hidden="true" className="mx-0.5 h-6 w-px shrink-0 bg-line" />
+          <div role="group" aria-label="Priority" className="flex shrink-0 gap-1.5">
+            {PRIORITIES.map((v) => (
+              <Chip key={v} on={priority === v} onClick={() => setPriority(v)}>
+                {TICKET_PRIORITY_LABEL[v]}
+              </Chip>
+            ))}
+          </div>
+        </>
       )}
-    </>
+    </div>
   );
 }
 
 function Sticky({ children }: { children: ReactNode }) {
-  return <div className="sticky bottom-0 -mx-3 mt-auto flex gap-2 border-t border-line bg-bg px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">{children}</div>;
+  return <div className="sticky bottom-0 -mx-3 mt-auto flex flex-col gap-2 border-t border-line bg-bg px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">{children}</div>;
 }
 
-/** The quick path: one shot, one ticket. */
-function QuickForm({ capture }: { capture: Capture }) {
-  const { client, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build, hostTarget, setChoice } = usePanel();
-  const [summary, setSummary] = useState('');
+/** The quick path: the shots, one ticket (or a direct ask that opens the chat). */
+function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
+  const { client, shots, removeShot, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build, hostTarget, choice, setChoice, coarse, openChat, showContext } = usePanel();
+  const capture = shots[0]!;
+  const [summary, setSummary] = useState(() => suggestTitle(capture.evidence.page.title, elementLabel(capture.evidence)));
   const [description, setDescription] = useState('');
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [type, setType] = useState<TicketType>('bug');
   const [priority, setPriority] = useState<TicketPriority>('normal');
-  // Preselected from the capture toolbar's Ticket | Session switch (host message), when it said one.
-  const [target, setTarget] = useState<ReporterReportTarget>(() => pickTarget(capture.target ?? hostTarget, targets));
+  // The capture toolbar's choice when it said one, else the person's last choice.
+  const [target, setTarget] = useState<ReporterReportTarget>(() => pickTarget(capture.target ?? hostTarget ?? choice, targets));
   useEffect(() => {
     if (capture.target) setTarget(pickTarget(capture.target, targets));
     // A new capture's choice only; the person's own switch afterwards wins.
@@ -293,13 +410,16 @@ function QuickForm({ capture }: { capture: Capture }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (target.kind === 'session' && !targets.some((t) => t.sessionId === target.sessionId && t.available)) setTarget({ kind: 'ticket' });
+    if (target.kind === 'session' && targets.length && !targets.some((t) => t.sessionId === target.sessionId && t.available)) setTarget({ kind: 'ticket' });
   }, [targets, target]);
-  // The SDK's capture toolbar follows this form's switch.
+  // The SDK's capture toolbar follows this form's switch (and remembers it).
   useEffect(() => setChoice(target), [target, setChoice]);
+  const asking = target.kind === 'session';
+  const button = sendButton(target, targets);
 
   const submit = async () => {
-    if (!summary.trim()) return setError('Write a short summary.');
+    const problem = reportProblem(target, summary, description);
+    if (problem) return setError(problem);
     setBusy(true);
     setError(null);
     try {
@@ -307,20 +427,27 @@ function QuickForm({ capture }: { capture: Capture }) {
         summary: summary.trim(),
         description,
         type,
-        priority: target.kind === 'session' ? 'urgent' : priority,
+        priority: asking ? 'urgent' : priority,
         tags: [],
-        captures: [captureInput(capture, null)],
+        captures: shots.map((c) => captureInput(c, null)),
         build: capture.evidence.build,
         sdkVersion: sdkVersion || capture.evidence.sdkVersion,
         target,
       });
-      const failed = await uploadCapture((id, kind, blob) => client.attach(res.key, id, kind, blob), capture);
-      const msg = sentText([res.key], target, res.sessionDelivery, failed);
-      notify(msg.text, msg.tone);
-      setCapture(null);
+      const failed: string[] = [];
+      for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(res.key, id, kind, blob), c)));
       refresh();
-      select(res.key);
-      setTab('tickets');
+      if (target.kind === 'session') {
+        // A direct ask goes straight into the chat with that session: the delivered message and the reply live.
+        const err = res.sessionDelivery?.error ?? null;
+        openChat({ sessionId: target.sessionId, ticketKey: res.key, failed: err ? { reason: err } : null, retry: { text: description.trim(), image: capture.screenshot } });
+        if (failed.length) notify(`Upload failed: ${failed.join(', ')}.`, 'error');
+        setCapture(null);
+        return;
+      }
+      if (failed.length) notify(`${res.key} filed; upload failed: ${failed.join(', ')}.`, 'error');
+      setCapture(null);
+      onFiled(res.key);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -348,36 +475,63 @@ function QuickForm({ capture }: { capture: Capture }) {
         void submit();
       }}
     >
-      <div className="flex items-center gap-1">
-        <IconBtn icon="x" label="Discard shot" onClick={() => setCapture(null)} />
+      <div className="-mt-1 flex items-center gap-1">
+        <IconBtn icon="x" label="Discard" onClick={() => setCapture(null)} />
         <h2 className="flex-1 text-[15px] font-bold">Report</h2>
         <Btn tone="ghost" icon="messageSquare" disabled={busy} onClick={() => void toReview()}>
           Review
         </Btn>
       </div>
-      <Preview capture={capture} />
-      <ChecksChip capture={capture} />
-      <Duplicates
-        capture={capture}
-        onAdded={(key) => {
-          setCapture(null);
-          select(key);
-          setTab('tickets');
-        }}
+      <ShotStrip shots={shots} onRemove={shots.length > 1 ? removeShot : undefined} canAdd={shots.length < 6} />
+      <input
+        autoFocus={!coarse}
+        value={summary}
+        onChange={(e) => setSummary(e.target.value)}
+        maxLength={200}
+        aria-label="Title"
+        placeholder="Title"
+        className={`${inputClass} font-semibold`}
       />
-      <Field label="Summary">
-        <input autoFocus value={summary} onChange={(e) => setSummary(e.target.value)} maxLength={200} className={inputClass} placeholder="What is wrong here?" />
-      </Field>
-      <Field label="Details">
-        <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} maxLength={8000} className={`${inputClass} resize-y`} />
-      </Field>
-      <TypePriority type={type} setType={setType} priority={priority} setPriority={setPriority} urgent={target.kind === 'session'} />
-      <TargetSwitch value={target} onChange={setTarget} />
+      {asking ? (
+        <textarea
+          autoFocus
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          maxLength={8000}
+          required
+          aria-label="Your question"
+          placeholder="Your question"
+          className={`${inputClass} resize-y`}
+        />
+      ) : detailsOpen || description ? (
+        <textarea autoFocus value={description} onChange={(e) => setDescription(e.target.value)} rows={3} maxLength={8000} aria-label="Details" placeholder="Details (optional)" className={`${inputClass} resize-y`} />
+      ) : (
+        <button type="button" onClick={() => setDetailsOpen(true)} className={`${inputClass} text-left text-muted`}>
+          Details (optional)
+        </button>
+      )}
+      <TypePriority type={type} setType={setType} priority={priority} setPriority={setPriority} urgent={asking} />
+      <ChecksChip capture={capture} />
       {error && <Notice tone="error">{error}</Notice>}
       <Sticky>
-        <Btn type="submit" tone={target.kind === 'session' ? 'danger' : 'primary'} busy={busy} className="flex-1" icon="send">
-          {target.kind === 'session' ? 'Send now' : 'File ticket'}
-        </Btn>
+        <Duplicates
+          shots={shots}
+          onAdded={(key) => {
+            setCapture(null);
+            select(key);
+            setTab('tickets');
+          }}
+        />
+        <Destination value={target} onChange={setTarget} />
+        <div className="flex items-center gap-1">
+          <Btn type="submit" tone={button.tone === 'urgent' ? 'danger' : 'primary'} busy={busy} className="min-w-0 flex-1" icon="send">
+            <span className="truncate">{button.label}</span>
+          </Btn>
+          <Btn tone="ghost" onClick={() => showContext('carries')} className="shrink-0 text-[13px] text-muted">
+            What’s sent
+          </Btn>
+        </div>
       </Sticky>
     </form>
   );
@@ -422,26 +576,19 @@ function CommentForm({ capture, onAlone }: { capture: Capture; onAlone: () => vo
           File alone
         </Btn>
       </div>
-      <p className="text-[12.5px] text-muted">
-        {review.title || 'Draft review'} · {review.comments.length + 1}
-      </p>
-      <Preview capture={capture} />
+      <ShotStrip shots={[capture]} canAdd={false} />
+      <textarea autoFocus value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={REPORTER_LIMITS.commentChars} aria-label="Comment" className={`${inputClass} resize-y`} placeholder="What should change here?" />
       <ChecksChip capture={capture} />
-      <Duplicates
-        capture={capture}
-        onAdded={() => {
-          setCapture(null);
-        }}
-      />
-      <Field label="Comment">
-        <textarea autoFocus value={body} onChange={(e) => setBody(e.target.value)} rows={4} maxLength={REPORTER_LIMITS.commentChars} className={`${inputClass} resize-y`} placeholder="What should change here?" />
-      </Field>
       {full && <Notice tone="error">This review is full ({REPORTER_LIMITS.reviewComments} comments). Finish it first.</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       <Sticky>
-        <Btn type="submit" tone="primary" busy={busy} disabled={full} className="flex-1" icon="plus">
-          Add comment
-        </Btn>
+        <Duplicates shots={[capture]} onAdded={() => setCapture(null)} />
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-[12.5px] text-muted tabular-nums">{review.comments.length} comments</span>
+          <Btn type="submit" tone="primary" busy={busy} disabled={full} className="flex-1" icon="plus">
+            Add comment
+          </Btn>
+        </div>
       </Sticky>
     </form>
   );
@@ -544,10 +691,12 @@ function ReviewView({ onBack, onFinish }: { onBack: () => void; onFinish: () => 
         </div>
       ) : (
         <Sticky>
+          <div className="flex gap-2">
           <Btn tone="ghost" icon="trash2" onClick={() => setConfirm(true)} aria-label="Discard review" />
           <Btn tone="primary" disabled={!comments.length} onClick={onFinish} className="flex-1">
-            Finish review
+            {comments.length} {comments.length === 1 ? 'comment' : 'comments'} · Finish review
           </Btn>
+          </div>
         </Sticky>
       )}
     </div>
@@ -571,10 +720,19 @@ function CommentRow(props: {
   onDelete: () => void;
 }) {
   const { c, client } = props;
+  const [view, setView] = useState(false);
   return (
     <li className="rounded-2xl border border-dashed border-line-strong p-2">
       <div className="flex items-start gap-2">
-        <button type="button" onClick={props.onShow} aria-label={`Show comment ${c.index} on the page`} className="shrink-0 rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
+        <button
+          type="button"
+          onClick={() => {
+            props.onShow();
+            if (c.screenshotUrl) setView(true);
+          }}
+          aria-label={`View comment ${c.index}`}
+          className="shrink-0 rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        >
           <AuthImg client={client} src={c.screenshotUrl} alt="" className="size-14 rounded-lg" />
         </button>
         <div className="min-w-0 flex-1">
@@ -605,6 +763,7 @@ function CommentRow(props: {
           </>
         )}
       </div>
+      {view && c.screenshotUrl && <Viewer src={c.screenshotUrl} alt={shotCaption(c.index, c.anchor.path)} crop={{ anchor: c.anchor, scroll: null }} onClose={() => setView(false)} />}
     </li>
   );
 }
@@ -717,9 +876,9 @@ function SubmitForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
           </Field>
         </>
       )}
-      <TargetSwitch value={target} onChange={setTarget} />
       {error && <Notice tone="error">{error}</Notice>}
       <Sticky>
+        <Destination value={target} onChange={setTarget} />
         <Btn type="submit" tone={target.kind === 'session' ? 'danger' : 'primary'} busy={busy} className="flex-1" icon="send">
           {mode === 'existing' ? `Add to ${existing || 'ticket'}` : count === 1 ? (target.kind === 'session' ? 'Send now' : 'Submit') : `Submit ${count} tickets`}
         </Btn>

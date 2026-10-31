@@ -11,11 +11,14 @@ import {
   type TicketPriority,
   type TicketType,
 } from '@portal/contracts';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { appendPage, refreshLimit, reuseRows, rowThumb, windowRange } from './chatModel';
 import { SEVERITIES, deployLine, pathnameOf, shortCommit, shotCaption } from '@/features/reporter/shared';
 import { usePanel } from './context';
 import { Icon } from './icons';
-import { Md } from './markdown';
+import { Composer } from './Composer';
+import { Thread } from './Thread';
+import { Viewer } from './Viewer';
 import {
   SORT_LABEL,
   activeFilterCount,
@@ -39,6 +42,12 @@ export function TicketsTab() {
   return p.selected ? <TicketDetail key={p.selected} ticketKey={p.selected} /> : <TicketList />;
 }
 
+/** The list as last shown per bucket and query (rows, cursor, scroll): back from a ticket it is there at once, where it was. */
+const listCache = new Map<string, { list: ReporterTicketList; scrollTop: number }>();
+const WINDOW_FROM = 60;
+const ROW_PX = 84;
+const scroller = () => document.getElementById('panel-main');
+
 function TicketList() {
   const { client, bucket, page, tick, select, focus, status, post, focused } = usePanel();
   const [prefs, setPrefsState] = useState<ListPrefs>(() => {
@@ -56,11 +65,16 @@ function TicketList() {
       // per-viewer convenience only
     }
   };
-  const [list, setList] = useState<ReporterTicketList | null>(null);
+  const path = page ? safePathname(page.url) : null;
+  const query = useMemo(() => buildQuery(prefs, path), [prefs, path]);
+  const cacheKey = `${bucket}|${JSON.stringify(query)}`;
+  const [list, setList] = useState<ReporterTicketList | null>(() => listCache.get(cacheKey)?.list ?? null);
   const [failed, setFailed] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
   const [sheet, setSheet] = useState<'filter' | 'sort' | null>(null);
   const [q, setQ] = useState(prefs.q);
-  const path = page ? safePathname(page.url) : null;
+  const listRef = useRef(list);
+  listRef.current = list;
 
   // Search waits for a pause in typing.
   useEffect(() => {
@@ -68,12 +82,26 @@ function TicketList() {
     return () => clearTimeout(t);
   }, [q, prefs.q]);
 
+  // The first page, and on a change event the rows already loaded (so the pages scrolled through stay); unchanged rows keep their objects.
+  const keyRef = useRef(cacheKey);
   useEffect(() => {
     let live = true;
-    client.tickets(buildQuery(prefs, path)).then(
+    let loaded = listRef.current?.items.length ?? 0;
+    if (keyRef.current !== cacheKey) {
+      // Another query: its own cached rows or nothing, never the last query's.
+      keyRef.current = cacheKey;
+      const c = listCache.get(cacheKey)?.list ?? null;
+      setList(c);
+      listRef.current = c;
+      loaded = c?.items.length ?? 0;
+    }
+    client.tickets({ ...query, limit: refreshLimit(loaded) }).then(
       (l) => {
         if (!live) return;
-        setList(l);
+        setList((cur) => {
+          const items = reuseRows(cur?.items ?? null, l.items);
+          return cur && items === cur.items && cur.nextCursor === l.nextCursor ? cur : { ...l, items };
+        });
         setFailed(null);
       },
       (e: Error) => live && setFailed(e.message),
@@ -81,7 +109,39 @@ function TicketList() {
     return () => {
       live = false;
     };
-  }, [client, prefs, path, tick]);
+  }, [client, query, cacheKey, tick]);
+  // Back from a ticket: where the list was.
+  useLayoutEffect(() => {
+    const top = listCache.get(cacheKey)?.scrollTop;
+    if (top) scroller()?.scrollTo({ top });
+    // once, on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (list) listCache.set(cacheKey, { list, scrollTop: listCache.get(cacheKey)?.scrollTop ?? 0 });
+  }, [list, cacheKey]);
+
+  // The next page when the end of the list comes into view.
+  const loadMore = useCallback(() => {
+    const cur = listRef.current;
+    if (!cur?.nextCursor || more) return;
+    setMore(true);
+    client.tickets({ ...query, cursor: cur.nextCursor }).then(
+      (l) => {
+        setList((c) => (c ? { ...c, items: appendPage(c.items, l.items), nextCursor: l.nextCursor } : c));
+        setMore(false);
+      },
+      () => setMore(false),
+    );
+  }, [client, query, more]);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = end.current;
+    if (!el || typeof IntersectionObserver !== 'function') return;
+    const io = new IntersectionObserver((e) => e.some((x) => x.isIntersecting) && loadMore(), { root: scroller(), rootMargin: '400px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [loadMore, list?.nextCursor]);
 
   // Play all: every capture on this page, top to bottom; the host's caption card can also end it.
   const [play, setPlay] = useState<{ items: { key: string; captureId: string }[]; at: number } | null>(null);
@@ -104,11 +164,21 @@ function TicketList() {
   const filters = activeFilterCount(prefs);
   const grouped = prefs.scope === 'grouped' ? groupByPage(items) : null;
 
-  const open = (t: ReporterTicket) => {
-    const here = path ? capturesHere(t, path)[0] : undefined;
-    focus(t.key, here?.captureId ?? null);
-    select(t.key);
-  };
+  // One handler for every row (stable), so a memoised row re-renders only when its ticket changed.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const open = useCallback(
+    (key: string) => {
+      const t = itemsRef.current.find((x) => x.key === key);
+      if (!t) return;
+      const c = listCache.get(cacheKey);
+      if (c) c.scrollTop = scroller()?.scrollTop ?? 0;
+      const here = path ? capturesHere(t, path)[0] : undefined;
+      focus(t.key, here?.captureId ?? null);
+      select(t.key);
+    },
+    [cacheKey, path, focus, select],
+  );
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -190,34 +260,69 @@ function TicketList() {
               <h2 className="px-1 text-[12.5px] font-semibold break-all text-muted">{g.path || 'No page'}</h2>
               <ul className="flex flex-col gap-1">
                 {g.items.map((t) => (
-                  <Row key={t.key} t={t} path={path} env={env} onOpen={() => open(t)} />
+                  <Row key={t.key} t={t} path={path} env={env} onOpen={open} />
                 ))}
               </ul>
             </section>
           ))
-        : list && (
-            <ul className="flex flex-col gap-1">
-              {items.map((t) => (
-                <Row key={t.key} t={t} path={path} env={env} onOpen={() => open(t)} />
-              ))}
-            </ul>
-          )}
+        : list && <Rows items={items} path={path} env={env} onOpen={open} />}
+      {list?.nextCursor && (
+        <div ref={end} className="flex min-h-11 items-center justify-center">
+          {more ? <span className="text-[12.5px] text-muted">Loading…</span> : <Btn tone="ghost" onClick={loadMore}>More</Btn>}
+        </div>
+      )}
     </div>
   );
 }
 
-function Row({ t, path, env, onOpen }: { t: ReporterTicket; path: string | null; env: string | null; onOpen: () => void }) {
+/** The rows; a long list renders only the rows near the scrolled-to range (spacers keep its length). */
+function Rows({ items, path, env, onOpen }: { items: ReporterTicket[]; path: string | null; env: string | null; onOpen: (key: string) => void }) {
+  const [range, setRange] = useState(() => ({ start: 0, end: Math.min(items.length, WINDOW_FROM) }));
+  const ul = useRef<HTMLUListElement>(null);
+  const windowed = items.length > WINDOW_FROM;
+  useEffect(() => {
+    if (!windowed) return;
+    const el = scroller();
+    if (!el) return;
+    const update = () => {
+      const top = el.scrollTop - (ul.current?.offsetTop ?? 0);
+      setRange((cur) => {
+        const r = windowRange(items.length, top, el.clientHeight, ROW_PX);
+        return r.start === cur.start && r.end === cur.end ? cur : r;
+      });
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    return () => el.removeEventListener('scroll', update);
+  }, [windowed, items.length]);
+  const { start, end } = windowed ? range : { start: 0, end: items.length };
+  return (
+    <ul ref={ul} className="flex flex-col gap-1">
+      {start > 0 && <li aria-hidden="true" style={{ height: start * ROW_PX }} />}
+      {items.slice(start, end).map((t) => (
+        <Row key={t.key} t={t} path={path} env={env} onOpen={onOpen} />
+      ))}
+      {end < items.length && <li aria-hidden="true" style={{ height: (items.length - end) * ROW_PX }} />}
+    </ul>
+  );
+}
+
+/**
+ * One ticket: key · priority, the summary on two lines, the status chip, the unread dot. A small thumbnail on the left ONLY when the ticket
+ * has a screenshot (fixed 48 px box, lazy): a ticket filed elsewhere is a compact text row with no placeholder. Memoised.
+ */
+export const Row = memo(function Row({ t, path, env, onOpen }: { t: ReporterTicket; path: string | null; env: string | null; onOpen: (key: string) => void }) {
   const { client } = usePanel();
-  const here = path ? capturesHere(t, path) : [];
-  const thumb = (here[0] ?? t.captures[0])?.screenshotUrl ?? null;
+  const thumb = rowThumb(t, path ? capturesHere(t, path) : []);
   return (
     <li>
       <button
         type="button"
-        onClick={onOpen}
-        className="flex w-full items-start gap-3 rounded-xl p-2 text-left hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        onClick={() => onOpen(t.key)}
+        data-row={thumb ? 'thumb' : 'text'}
+        className="flex min-h-11 w-full items-start gap-3 rounded-xl px-2 py-2 text-left hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
       >
-        <AuthImg client={client} src={thumb} alt="" className="size-14 shrink-0 rounded-lg" />
+        {thumb && <AuthImg client={client} src={thumb} alt="" className="size-12 shrink-0 rounded-lg" />}
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex items-center gap-1.5 text-[12px] text-muted">
             <span className="font-semibold whitespace-nowrap tabular-nums">{t.key}</span>
@@ -225,8 +330,8 @@ function Row({ t, path, env, onOpen }: { t: ReporterTicket; path: string | null;
             <span>{TICKET_PRIORITY_LABEL[t.priority]}</span>
             {t.captures.length > 1 && <span className="rounded-full bg-surface-2 px-1.5 tabular-nums">{t.captures.length} shots</span>}
             {t.target.kind === 'session' && <span className="font-semibold text-danger">Urgent</span>}
-            {t.awaitingReporter && <span className="ml-auto size-2 rounded-full bg-danger" aria-label="Waiting for your reply" />}
-            {!t.awaitingReporter && t.unread > 0 && <span className="ml-auto rounded-full bg-accent px-1.5 text-[11px] font-bold text-primary-ink tabular-nums">{t.unread}</span>}
+            {t.awaitingReporter && <span className="ml-auto size-2 shrink-0 rounded-full bg-danger" aria-label="Waiting for your reply" />}
+            {!t.awaitingReporter && t.unread > 0 && <span className="ml-auto size-2 shrink-0 rounded-full bg-accent" aria-label={`${t.unread} unread`} />}
           </span>
           <span className="line-clamp-2 text-[14px] font-semibold break-words">{t.summary}</span>
           <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -237,7 +342,7 @@ function Row({ t, path, env, onOpen }: { t: ReporterTicket; path: string | null;
       </button>
     </li>
   );
-}
+});
 
 function SheetFrame({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
@@ -357,12 +462,14 @@ function Group({ label, children }: { label: string; children: ReactNode }) {
 
 /** The ticket card: status, where it stands per environment, its captures (each one focusable on the page) and the thread. */
 function TicketDetail({ ticketKey }: { ticketKey: string }) {
-  const { client, select, page, focus, missing, origin, tick, status, post } = usePanel();
+  const { client, select, page, focus, missing, origin, tick, status, post, coarse, openChat } = usePanel();
   const [t, setT] = useState<ReporterTicket | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [thread, setThread] = useState<ReporterTicketComment[] | null>(null);
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
+  const [view, setView] = useState<ReporterTicket['captures'][number] | null>(null);
+  const jumpRef = useRef<(() => void) | null>(null);
   const path = page ? safePathname(page.url) : null;
 
   useEffect(() => {
@@ -373,8 +480,8 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
     );
     // Reading the thread marks it read.
     client.comments(ticketKey).then(
-      (c) => live && setThread(c),
-      () => live && setThread([]),
+      (c) => live && setThread((cur) => (cur && JSON.stringify(cur) === JSON.stringify(c) ? cur : c)),
+      () => live && setThread((cur) => cur ?? []),
     );
     return () => {
       live = false;
@@ -392,6 +499,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
       await client.reply(ticketKey, reply.trim());
       setReply('');
       setThread(await client.comments(ticketKey));
+      requestAnimationFrame(() => jumpRef.current?.());
     } catch (e) {
       setFailed((e as Error).message);
     } finally {
@@ -404,11 +512,132 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
   const missingCapture = missingHere?.captureId ? t?.captures.find((c) => c.captureId === missingHere.captureId) : undefined;
   const otherPage = missingHere?.reason === 'other-page' ? (missingCapture ?? (t && path ? t.captures.find((c) => pathnameOf(c.anchor.path) !== pathnameOf(path)) : undefined)) : undefined;
   const otherHref = otherPage ? samePageHref(origin, otherPage.anchor.path) : null;
-  const orderedThread = useMemo(() => [...(thread ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [thread]);
+
+  const info = t && (
+    <div className="flex flex-col gap-3 pb-3">
+      <div>
+        <h2 className="text-[16px] font-bold break-words">{t.summary}</h2>
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+          <PhaseChip phase={t.phase} />
+          <span>{TICKET_STATUS_LABEL[t.status]}</span>
+          <span>{TICKET_PRIORITY_LABEL[t.priority]}</span>
+          {t.site && <span>reported on {t.site.environment}</span>}
+        </div>
+      </div>
+
+      {t.target.kind === 'session' && (
+        <Notice tone={t.target.status === 'delivery-failed' ? 'error' : 'info'}>
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span className="min-w-0 flex-1">
+              {t.target.status === 'delivery-failed' ? (
+                <>
+                  <strong>{t.target.label}</strong> did not get this report; the ticket is kept in the queue.
+                </>
+              ) : (
+                <>
+                  Sent to <strong>{t.target.label}</strong> · {t.target.status}
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => t.target.kind === 'session' && openChat({ sessionId: t.target.sessionId, ticketKey: t.key })}
+              className="inline-flex min-h-11 items-center gap-1 font-semibold text-accent"
+            >
+              <Icon name="messageSquare" className="size-4" />
+              Chat
+            </button>
+          </span>
+        </Notice>
+      )}
+      {t.site?.declaredMismatch && (
+        <Notice tone="error">
+          The page declared {t.site.declaredMismatch.repo ?? t.site.repo} / {t.site.declaredMismatch.environment ?? t.site.environment}; the site record says {t.site.repo} / {t.site.environment}.
+        </Notice>
+      )}
+
+      <section className="rounded-2xl border border-line p-3">
+        <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Deployments</h3>
+        {t.deployments.length === 0 ? (
+          <p className="text-[13px] text-muted">No environment of this repo is known yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-[13px]">
+            {t.deployments.map((d) => (
+              <li
+                key={d.environment}
+                className={`break-words ${d.environment === env ? 'font-semibold' : ''} ${d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}`}
+              >
+                {deployLine(d)}
+              </li>
+            ))}
+          </ul>
+        )}
+        {t.fixCommits.length > 0 && <p className="mt-1.5 text-[12px] break-all text-muted">Fix {t.fixCommits.map((c) => shortCommit(c)).join(', ')}</p>}
+      </section>
+
+      {SEVERITIES.some((s) => t.checkCounts[s] > 0) && (
+        <p className="flex flex-wrap gap-1.5 text-[12px]">
+          {SEVERITIES.filter((s) => t.checkCounts[s] > 0).map((s) => (
+            <span key={s} className={`rounded-full px-2 py-0.5 font-semibold ${s === 'critical' || s === 'serious' ? 'bg-danger-soft text-danger' : 'bg-surface-2 text-ink-soft'}`}>
+              {t.checkCounts[s]} {s}
+            </span>
+          ))}
+        </p>
+      )}
+
+      {t.captures.length > 0 && (
+        <section>
+          <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Shots</h3>
+          <ul className="flex gap-2 overflow-x-auto pb-1">
+            {t.captures.map((c) => (
+              <li key={c.captureId} className="shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    focus(t.key, c.captureId);
+                    if (c.screenshotUrl) setView(c);
+                  }}
+                  className="flex w-28 flex-col gap-1 rounded-xl p-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+                  aria-label={`View shot ${c.index}`}
+                >
+                  <AuthImg client={client} src={c.screenshotUrl} alt={`Shot ${c.index}`} className="h-20 w-full rounded-lg" />
+                  <span className="truncate text-[11.5px] text-muted">{shotCaption(c.index, c.anchor.path)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {missingHere && (
+        <Notice tone="info">
+          {missingHere.reason === 'other-page' ? 'That shot is on another page.' : 'That area is not on the page any more.'}
+          {otherHref && (
+            <button type="button" className="ml-2 font-semibold text-accent underline" onClick={() => window.open(otherHref, '_top')}>
+              Open that page
+            </button>
+          )}
+        </Notice>
+      )}
+
+      {t.repro && t.repro.steps.length > 0 && (
+        <details className="rounded-2xl border border-line p-3">
+          <summary className="flex min-h-11 cursor-pointer items-center text-[13px] font-semibold">Steps</summary>
+          <ol className="mt-2 list-decimal pl-5 text-[13px]">
+            {t.repro.steps.map((s, i) => (
+              <li key={i} className="break-words">
+                {s}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+      <h3 className="text-[12.5px] font-semibold text-muted">Thread</h3>
+    </div>
+  );
 
   return (
-    <div className="flex flex-col gap-3 p-3">
-      <div className="flex items-center gap-1">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-1 px-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={back} />
         <span className="flex-1 text-[13px] font-semibold text-muted tabular-nums">{ticketKey}</span>
         {t && (
@@ -417,123 +646,20 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
           </a>
         )}
       </div>
-      {failed && <Notice tone="error">{failed}</Notice>}
-      {!t && !failed && <div className="skeleton h-40 rounded-2xl" aria-busy="true" />}
+      {failed && (
+        <div className="px-3">
+          <Notice tone="error">{failed}</Notice>
+        </div>
+      )}
+      {!t && !failed && <div className="skeleton mx-3 h-40 rounded-2xl" aria-busy="true" />}
       {t && (
         <>
-          <div>
-            <h2 className="text-[16px] font-bold break-words">{t.summary}</h2>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
-              <PhaseChip phase={t.phase} />
-              <span>{TICKET_STATUS_LABEL[t.status]}</span>
-              <span>{TICKET_PRIORITY_LABEL[t.priority]}</span>
-              {t.site && <span>reported on {t.site.environment}</span>}
-            </div>
-          </div>
-
-          {t.target.kind === 'session' &&
-            (t.target.status === 'delivery-failed' ? (
-              <Notice tone="error">
-                <strong>{t.target.label}</strong> did not get this report; the ticket is kept in the queue.
-              </Notice>
-            ) : (
-              <Notice tone="info">
-                Sent to <strong>{t.target.label}</strong> · {t.target.status}
-              </Notice>
-            ))}
-          {t.site?.declaredMismatch && (
-            <Notice tone="error">
-              The page declared {t.site.declaredMismatch.repo ?? t.site.repo} / {t.site.declaredMismatch.environment ?? t.site.environment}; the site record says {t.site.repo} / {t.site.environment}.
-            </Notice>
-          )}
-
-          <section className="rounded-2xl border border-line p-3">
-            <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Deployments</h3>
-            {t.deployments.length === 0 ? (
-              <p className="text-[13px] text-muted">No environment of this repo is known yet.</p>
-            ) : (
-              <ul className="flex flex-col gap-1 text-[13px]">
-                {t.deployments.map((d) => (
-                  <li
-                    key={d.environment}
-                    className={`break-words ${d.environment === env ? 'font-semibold' : ''} ${d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}`}
-                  >
-                    {deployLine(d)}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {t.fixCommits.length > 0 && <p className="mt-1.5 text-[12px] break-all text-muted">Fix {t.fixCommits.map((c) => shortCommit(c)).join(', ')}</p>}
-          </section>
-
-          {SEVERITIES.some((s) => t.checkCounts[s] > 0) && (
-            <p className="flex flex-wrap gap-1.5 text-[12px]">
-              {SEVERITIES.filter((s) => t.checkCounts[s] > 0).map((s) => (
-                <span key={s} className={`rounded-full px-2 py-0.5 font-semibold ${s === 'critical' || s === 'serious' ? 'bg-danger-soft text-danger' : 'bg-surface-2 text-ink-soft'}`}>
-                  {t.checkCounts[s]} {s}
-                </span>
-              ))}
-            </p>
-          )}
-
-          {t.captures.length > 0 && (
-            <section>
-              <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Shots</h3>
-              <ul className="flex gap-2 overflow-x-auto pb-1">
-                {t.captures.map((c) => (
-                  <li key={c.captureId} className="shrink-0">
-                    <button type="button" onClick={() => focus(t.key, c.captureId)} className="flex w-28 flex-col gap-1 rounded-xl p-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden" aria-label={`Show shot ${c.index} on the page`}>
-                      <AuthImg client={client} src={c.screenshotUrl} alt={`Shot ${c.index}`} className="h-20 w-full rounded-lg" />
-                      <span className="truncate text-[11.5px] text-muted">{shotCaption(c.index, c.anchor.path)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-          {missingHere && (
-            <Notice tone="info">
-              {missingHere.reason === 'other-page' ? 'That shot is on another page.' : 'That area is not on the page any more.'}
-              {otherHref && (
-                <button type="button" className="ml-2 font-semibold text-accent underline" onClick={() => window.open(otherHref, '_top')}>
-                  Open that page
-                </button>
-              )}
-            </Notice>
-          )}
-
-          {t.repro && t.repro.steps.length > 0 && (
-            <details className="rounded-2xl border border-line p-3">
-              <summary className="flex min-h-11 cursor-pointer items-center text-[13px] font-semibold">Steps</summary>
-              <ol className="mt-2 list-decimal pl-5 text-[13px]">
-                {t.repro.steps.map((s, i) => (
-                  <li key={i} className="break-words">
-                    {s}
-                  </li>
-                ))}
-              </ol>
-            </details>
-          )}
-
-          <section className="flex flex-col gap-2">
-            <h3 className="text-[12.5px] font-semibold text-muted">Thread</h3>
-            {thread === null && <div className="skeleton h-16 rounded-xl" aria-busy="true" />}
-            {thread && orderedThread.length === 0 && <p className="text-[13px] text-muted">No comments yet.</p>}
-            {orderedThread.map((c) => (
-              <article key={c.id} className={`rounded-xl p-2.5 text-[13.5px] ${c.authorKind === 'reporter' ? 'bg-accent-soft' : 'bg-surface-2'}`}>
-                <p className="mb-1 text-[12px] font-semibold text-muted">
-                  {c.authorKind === 'agent' && <Icon name="bot" className="mr-1 inline size-3.5" />}
-                  {c.author}
-                </p>
-                <Md text={c.body} />
-              </article>
-            ))}
-            <div className="sticky bottom-0 flex items-end gap-2 bg-bg pt-1 pb-[env(safe-area-inset-bottom)]">
-              <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} maxLength={4000} placeholder="Reply" aria-label="Reply" className={`${inputClass} min-h-11 flex-1 resize-none`} />
-              <IconBtn icon="send" label="Send reply" disabled={!reply.trim() || sending} onClick={() => void send()} className="bg-primary text-primary-ink" />
-            </div>
-          </section>
+          <Thread comments={thread} header={info} startAtTop jumpRef={jumpRef} className="flex-1 px-3" />
+          <Composer value={reply} onChange={setReply} onSend={() => void send()} busy={sending} coarse={coarse} label="Reply" placeholder="Reply" />
         </>
+      )}
+      {view?.screenshotUrl && (
+        <Viewer src={view.screenshotUrl} alt={shotCaption(view.index, view.anchor.path)} crop={{ anchor: view.anchor, scroll: null }} onClose={() => setView(null)} />
       )}
     </div>
   );
