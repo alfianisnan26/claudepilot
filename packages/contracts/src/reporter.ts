@@ -34,6 +34,10 @@ export const REPORTER_LIMITS = {
   tokenHours: 12,
   /** Tickets a token may file per hour. */
   ticketsPerHour: 30,
+  /** Captures (screenshot + evidence + anchor) on one ticket. */
+  capturesPerTicket: 20,
+  /** Captures waiting in the panel's draft tray. */
+  draftCaptures: 30,
 } as const;
 
 /** Per-bucket switch and allowlist, set by the owner in the bucket's settings. Off until turned on. */
@@ -151,18 +155,53 @@ export interface ReporterEvidence {
   performance: ReporterPerformance;
 }
 
-/** POST /reporter/v1/tickets: the ticket; the screenshot and the evidence follow as attachments of the returned key. */
+/**
+ * One shot of a report: a screenshot, its evidence bundle and where on the page it points. A ticket holds one or more
+ * (owner, 2026-10-31: one ticket per screenshot, or many screenshots in one ticket, e.g. per page). The panel collects captures
+ * in a draft tray first, then files them as: one ticket per capture, one ticket for all, or one ticket per page path.
+ */
+export interface ReporterCaptureInput {
+  /** Made by the panel (a UUID); names the capture's attachments and its callout. */
+  captureId: string;
+  pageUrl: string;
+  anchor: ReporterAnchor;
+  /** What this shot shows, when the person wrote a line for it. */
+  note: string | null;
+}
+
+/** How the panel turns the draft tray into tickets; the panel splits, the server only sees each resulting create. */
+export type ReporterFileMode = 'per-capture' | 'single' | 'per-page';
+
+/**
+ * POST /reporter/v1/tickets: the ticket with its captures (1..capturesPerTicket); each capture's screenshot and evidence follow as
+ * attachments of the returned key, named by captureId.
+ */
 export interface ReporterCreateTicketRequest {
   summary: string;
   description: string;
   type?: TicketType;
   priority?: TicketPriority;
   tags?: string[];
-  anchor: ReporterAnchor;
-  pageUrl: string;
+  captures: ReporterCaptureInput[];
   appVersion: string | null;
   repo: string | null;
   sdkVersion: string;
+}
+
+/** POST /reporter/v1/tickets/:key/captures: add captures to an open ticket this bucket's widget filed ("add to existing"). */
+export interface ReporterAddCapturesRequest {
+  captures: ReporterCaptureInput[];
+}
+
+/** A capture as stored and shown. */
+export interface ReporterCapture {
+  captureId: string;
+  /** 1-based order on the ticket ("2 of 5" on a callout). */
+  index: number;
+  pageUrl: string;
+  anchor: ReporterAnchor;
+  note: string | null;
+  createdAt: string;
 }
 
 /** A ticket as the widget sees it (the list, the callouts and the detail card). */
@@ -176,12 +215,9 @@ export interface ReporterTicket {
   updatedAt: string;
   /** The portal page of this ticket. */
   url: string;
-  /** Set when the ticket came from the widget. */
-  anchor: ReporterAnchor | null;
-  pageUrl: string | null;
+  /** The ticket's captures, in order; empty when it did not come from the widget. */
+  captures: (ReporterCapture & { screenshotUrl: string | null })[];
   appVersion: string | null;
-  /** The screenshot, readable with the same token. */
-  screenshotUrl: string | null;
 }
 
 export interface ReporterSession {
@@ -200,17 +236,17 @@ export interface ReporterNoteHit {
   url: string;
 }
 
-/** What the server keeps per reported ticket (table reporter_ticket_evidence), shown in the ticket page's evidence viewer. */
+/**
+ * What the server keeps per reported ticket (tables reporter_ticket_evidence and reporter_ticket_captures), shown in the ticket
+ * page's evidence viewer: a strip of the captures, each with its screenshot, crop and evidence tabs.
+ */
 export interface TicketReporterEvidence {
-  pageUrl: string;
-  anchor: ReporterAnchor;
   appVersion: string | null;
   repo: string | null;
   sdkVersion: string;
   origin: string;
-  screenshotAttachmentId: string | null;
-  evidenceAttachmentId: string | null;
   createdAt: string;
+  captures: (ReporterCapture & { screenshotAttachmentId: string | null; evidenceAttachmentId: string | null })[];
 }
 
 /** Bumped when a bridge message changes shape; both sides send it in hello/ready and refuse another major. */
@@ -224,6 +260,10 @@ export interface ReporterCallout {
   priority: TicketPriority;
   /** The portal page of the ticket, opened in a new tab from the hover card. */
   url: string;
+  /** One callout per capture on this path; a ticket with several shows "index of total". */
+  captureId: string;
+  index: number;
+  total: number;
   anchor: ReporterAnchor;
 }
 
@@ -267,8 +307,9 @@ export const REPORTER_ROUTES = {
   me: '/reporter/v1/me', // GET
   tickets: '/reporter/v1/tickets', // GET ?status=open|all&path=, POST
   ticket: '/reporter/v1/tickets/:key', // GET
-  attach: '/reporter/v1/tickets/:key/attachments', // POST raw body; x-reporter-kind: screenshot | evidence
-  file: '/reporter/v1/tickets/:key/screenshot', // GET
+  captures: '/reporter/v1/tickets/:key/captures', // POST ReporterAddCapturesRequest
+  attach: '/reporter/v1/tickets/:key/attachments', // POST raw body; x-reporter-capture: <captureId>; x-reporter-kind: screenshot | evidence
+  file: '/reporter/v1/tickets/:key/captures/:captureId/screenshot', // GET
   sessions: '/reporter/v1/sessions', // GET
   knowledge: '/reporter/v1/knowledge', // GET ?q=
   note: '/reporter/v1/knowledge/note', // GET ?path=
