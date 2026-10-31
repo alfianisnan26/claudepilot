@@ -512,6 +512,56 @@ export interface ReporterSubmitReviewRequest {
 
 export interface ReporterSubmitReviewResponse {
   ticketKeys: string[];
+  /** With a session target: whether the chat message reached the session (the tickets exist either way). */
+  sessionDelivery?: ReporterSessionDelivery;
+}
+
+/** Whether a direct report's chat message reached the session. A failure keeps the ticket; the panel says so plainly. */
+export interface ReporterSessionDelivery {
+  sessionId: string;
+  delivered: boolean;
+  error: string | null;
+}
+
+/** POST /reporter/v1/tickets answer: the new ticket's key and page, plus the session delivery for a direct report. */
+export interface ReporterCreateTicketResponse {
+  key: string;
+  url: string;
+  sessionDelivery?: ReporterSessionDelivery;
+}
+
+/** GET /reporter/v1/me: who the token is (the panel shows actorLabel, signs out on 401). */
+export interface ReporterMe {
+  bucketKey: string;
+  origin: string;
+  actorLabel: string;
+  expiresAt: string;
+}
+
+/** POST /reporter/v1/observed-build body: the build the page declared; the server records it for the SITE's repo and environment. */
+export interface ReporterObservedBuildRequest {
+  build: ReporterBuildInfo;
+  pageUrl: string;
+}
+
+/** GET /reporter/v1/session-targets item: a direct-report target and that session's live state. */
+export interface ReporterSessionTargetStatus extends ReporterSessionTarget {
+  /** The session's title, when the server tells it. */
+  title?: string | null;
+  /** 'working', 'idle', 'waiting', 'asleep', 'ended'... as the chat reports it. */
+  status: string;
+  /** False when the session cannot take a message (ended, gone): the panel disables it with the reason. */
+  available: boolean;
+  reason: string | null;
+}
+
+/** GET /reporter/v1/knowledge/note?path= */
+export interface ReporterNote {
+  path: string;
+  title: string;
+  /** Markdown, untrusted; rendered sanitized. */
+  body: string;
+  url: string;
 }
 
 /**
