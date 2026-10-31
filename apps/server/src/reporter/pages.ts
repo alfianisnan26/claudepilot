@@ -136,7 +136,7 @@ button.p{background:#2563eb;border-color:#2563eb;color:#fff}#msg{min-height:1.4e
   const data = `data-bucket="${esc(v.bucketKey)}" data-origin="${esc(v.origin)}" data-nonce="${esc(v.nonce)}"`;
   return `${head}<h1>Connect reporter</h1><p>Let this site's reporter file tickets in <b>${esc(v.bucketName)}</b> as you, for ${REPORTER_LIMITS.tokenHours} hours.</p>
 <dl><dt>Site</dt><dd>${esc(v.origin)}</dd><dt>Environment</dt><dd>${esc(v.environment)} · ${esc(v.repo)}</dd><dt>You</dt><dd>${esc(v.person)}</dd><dt>Code (the panel shows the same)</dt><dd class="code">${esc(connectCode(v.nonce))}</dd></dl>
-<div class="row"><button class="p" id="ok" ${data}>Connect</button><button id="no">Cancel</button></div><p id="msg" role="status"></p>
+<div class="row"><button class="p" id="ok" ${data}>Approve</button><button id="no">Cancel</button></div><p id="msg" role="status"></p>
 <script nonce="${scriptNonceValue}">
 (function(){var ok=document.getElementById('ok'),no=document.getElementById('no'),msg=document.getElementById('msg');
 function opener(){var o=window.opener;if(!o||o.closed)return null;try{var x=o.location.origin;return x===location.origin?o:(x&&x!=='null'?false:null);}catch(e){return e&&e.name==='SecurityError'?false:null;}}

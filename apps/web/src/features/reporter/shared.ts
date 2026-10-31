@@ -54,6 +54,27 @@ export function deploymentText(d: ReporterDeploymentState): string {
   return `${d.environment}: unknown${d.reason ? `, ${DEPLOY_REASON[d.reason].toLowerCase()}` : ''}`;
 }
 
+const REASON_SHORT: Record<NonNullable<ReporterDeploymentState['reason']>, string> = {
+  'no-fix-commit': 'no fix commit yet',
+  'no-build-seen': 'no build seen yet',
+  'ancestry-unchecked': 'could not check the build',
+};
+
+/** One environment as the panel's ticket card lists it: "stg: unknown (no fix commit yet)", "uat: deployed (live abc1234)". */
+export function deployLine(d: ReporterDeploymentState): string {
+  const live = d.currentCommit ? `live ${d.currentCommit.slice(0, 7)}` : '';
+  const seen = isObserved(d) ? OBSERVED_NOTE : '';
+  const why = d.status === 'unknown' ? (d.reason ? REASON_SHORT[d.reason] : '') : [live, seen].filter(Boolean).join(', ');
+  const word = d.status === 'deployed' ? 'deployed' : d.status === 'not-deployed' ? 'not yet' : 'unknown';
+  return `${d.environment}: ${word}${why ? ` (${why})` : ''}`;
+}
+
+/** A capture's caption: "Shot 1 · /pricing", the root named ("Shot 1 · / (home)") so a lone slash reads as a page. */
+export function shotCaption(index: number, pathOrUrl: string): string {
+  const p = pathnameOf(pathOrUrl);
+  return `Shot ${index} · ${p === '/' ? '/ (home)' : p}`;
+}
+
 export const SEVERITIES: ReporterCheckFinding['severity'][] = ['critical', 'serious', 'moderate', 'minor'];
 
 export function countBySeverity(findings: ReporterCheckFinding[]): Record<ReporterCheckFinding['severity'], number> {

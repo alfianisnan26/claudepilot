@@ -65,7 +65,7 @@ export function SessionsTab() {
                         {' · '}
                         <button
                           type="button"
-                          className="font-semibold text-accent underline"
+                          className="font-semibold whitespace-nowrap text-accent underline"
                           onClick={() => {
                             select(s.ticketKey);
                             setTab('tickets');

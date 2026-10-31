@@ -12,7 +12,7 @@ import {
   type TicketType,
 } from '@portal/contracts';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { DEPLOY_REASON, OBSERVED_NOTE, SEVERITIES, isObserved, pathnameOf, shortCommit } from '@/features/reporter/shared';
+import { SEVERITIES, deployLine, pathnameOf, shortCommit, shotCaption } from '@/features/reporter/shared';
 import { usePanel } from './context';
 import { Icon } from './icons';
 import { Md } from './markdown';
@@ -220,7 +220,7 @@ function Row({ t, path, env, onOpen }: { t: ReporterTicket; path: string | null;
         <AuthImg client={client} src={thumb} alt="" className="size-14 shrink-0 rounded-lg" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex items-center gap-1.5 text-[12px] text-muted">
-            <span className="font-semibold tabular-nums">{t.key}</span>
+            <span className="font-semibold whitespace-nowrap tabular-nums">{t.key}</span>
             <span aria-hidden="true">·</span>
             <span>{TICKET_PRIORITY_LABEL[t.priority]}</span>
             {t.captures.length > 1 && <span className="rounded-full bg-surface-2 px-1.5 tabular-nums">{t.captures.length} shots</span>}
@@ -448,20 +448,17 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
           )}
 
           <section className="rounded-2xl border border-line p-3">
-            <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Deployed</h3>
+            <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Deployments</h3>
             {t.deployments.length === 0 ? (
-              <p className="text-[13px] text-muted">Unknown: no environment of this repo is known yet.</p>
+              <p className="text-[13px] text-muted">No environment of this repo is known yet.</p>
             ) : (
               <ul className="flex flex-col gap-1 text-[13px]">
                 {t.deployments.map((d) => (
-                  <li key={d.environment} className={`flex flex-wrap items-baseline gap-x-2 ${d.environment === env ? 'font-semibold' : ''}`}>
-                    <span className="w-12 shrink-0">{d.environment}</span>
-                    <span className={d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}>
-                      {d.status === 'deployed' ? (isObserved(d) ? 'Deployed*' : 'Deployed') : d.status === 'not-deployed' ? 'Not yet' : 'Unknown'}
-                    </span>
-                    <span className="min-w-0 text-[12px] font-normal break-words text-muted">
-                      {d.status === 'unknown' && d.reason ? DEPLOY_REASON[d.reason] : d.currentCommit ? `live ${shortCommit(d.currentCommit)}${isObserved(d) ? ` · ${OBSERVED_NOTE}` : ''}` : ''}
-                    </span>
+                  <li
+                    key={d.environment}
+                    className={`break-words ${d.environment === env ? 'font-semibold' : ''} ${d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}`}
+                  >
+                    {deployLine(d)}
                   </li>
                 ))}
               </ul>
@@ -487,9 +484,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
                   <li key={c.captureId} className="shrink-0">
                     <button type="button" onClick={() => focus(t.key, c.captureId)} className="flex w-28 flex-col gap-1 rounded-xl p-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden" aria-label={`Show shot ${c.index} on the page`}>
                       <AuthImg client={client} src={c.screenshotUrl} alt={`Shot ${c.index}`} className="h-20 w-full rounded-lg" />
-                      <span className="truncate text-[11.5px] text-muted">
-                        {c.index} · {pathnameOf(c.anchor.path)}
-                      </span>
+                      <span className="truncate text-[11.5px] text-muted">{shotCaption(c.index, c.anchor.path)}</span>
                     </button>
                   </li>
                 ))}

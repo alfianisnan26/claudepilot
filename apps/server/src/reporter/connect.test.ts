@@ -39,6 +39,7 @@ test('connect page: no dead end without an opener; it asks the server to hold th
     assert.ok(page.includes(connectCode(nonce)), 'the code the panel shows too');
     assert.match(page, /<svg class="mark"/, 'the pilot mark, inline (the CSP allows no other source)');
     assert.doesNotMatch(page, /<img/);
+    assert.match(page, /id="ok"[^>]*>Approve<\/button>/, 'the button says what it does');
   } finally {
     h.done();
   }
