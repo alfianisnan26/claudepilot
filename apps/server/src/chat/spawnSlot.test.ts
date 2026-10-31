@@ -159,7 +159,19 @@ test('T-3222: the planned mode skips no permission check: Auto planned while que
     const tails = r.s.ws.tails.length;
     r.caps.perWorkspace = 2;
     await until(() => r.s.ws.tails.length === tails + 1, 4000);
-    await until(() => r.s.controller.history(id).some((e) => e.kind === 'user' && e.text === 'Run the job.'), 4000);
+    // T-3215: Auto refused at start ends the worker before any instruction (never default unasked), and the lead is told why.
+    await until(
+      () =>
+        spawnReports(r.s).some(
+          (t) => t.includes(`Worker ${id} was ended before it got your instruction`) && t.includes('could not be confirmed in auto mode'),
+        ),
+      4000,
+    );
+    assert.equal(
+      r.s.controller.history(id).some((e) => e.kind === 'user' && e.text === 'Run the job.'),
+      false,
+      'no instruction reached it',
+    );
     const refused = r.s.controller.audit({ kind: 'mode.refused' }).filter((x) => x.sessionId === id);
     assert.deepEqual(
       refused.map((x) => x.detail),
@@ -176,13 +188,6 @@ test('T-3222: the planned mode skips no permission check: Auto planned while que
     );
     const now = r.s.controller.get(id)!;
     assert.deepEqual([now.mode, now.plannedMode], ['default', undefined], 'the real mode shows, not the planned Auto');
-    await until(
-      () =>
-        spawnReports(r.s).some((t) =>
-          t.includes(`Worker ${id} started with your instruction. Not confirmed: mode auto: Auto is off for this worker`),
-        ),
-      4000,
-    );
   } finally {
     await r.done();
   }
