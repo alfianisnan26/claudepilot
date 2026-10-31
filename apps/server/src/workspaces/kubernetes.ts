@@ -52,6 +52,9 @@ const ignore = (...codes: number[]) => (e: unknown) => {
   if (!codes.includes(codeOf(e) ?? 0)) throw e;
 };
 
+/** The init container that copies the image's home into a new volume. */
+const SEED_HOME = 'seed-home';
+
 /** Waiting reasons that won't fix themselves. */
 const STUCK = new Set(['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName', 'CrashLoopBackOff', 'CreateContainerConfigError']);
 
@@ -74,6 +77,13 @@ export interface KubernetesOptions {
   preferredNodes?: readonly string[];
   /** CPU and memory a create that names none gets. */
   defaults?: { cpus?: number; memoryMb?: number };
+  /**
+   * Whether a start puts `image` (and `imagePullSecret`) back on the workspace's Deployment when it has another (default no): a
+   * PORTAL_K8S_TARGETS target that names its own image, so a workspace made with another image follows the target's at its next start. Only
+   * while it is scaled to 0 (a start of a running workspace rolls nothing), and only the `workspace` and `seed-home` containers (a browser
+   * container keeps its own).
+   */
+  reapplyImage?: boolean;
   /** Whether a create first asks for the namespace (default yes). No for a PORTAL_K8S_TARGETS target: its namespace, quota and Role come from git. */
   manageNamespace?: boolean;
   /**
@@ -460,7 +470,7 @@ export class KubernetesRuntime implements Runtime {
               // A new PVC is empty: copy the image's home in once, like Docker does for a fresh volume.
               initContainers: [
                 {
-                  name: 'seed-home',
+                  name: SEED_HOME,
                   image: this.opts.image,
                   // --no-preserve=all: the new volume's top folder belongs to root on many storage classes (k3s local-path), and
                   // `cp -a` as uid 1000 fails to set that folder's times and mode ("Operation not permitted"); `tar` fails the
@@ -629,7 +639,38 @@ export class KubernetesRuntime implements Runtime {
     await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: fresh });
   }
 
-  start = async (name: string) => this.#scale(name, 1);
+  start = async (name: string) => {
+    if (this.opts.reapplyImage) await this.#reapplyImage(name);
+    return this.#scale(name, 1);
+  };
+
+  /** The target's image and pull secret on a stopped workspace's Deployment (`reapplyImage`); written only when something differs. */
+  async #reapplyImage(name: string): Promise<void> {
+    const object = this.#objectName(name);
+    let d: V1Deployment;
+    try {
+      d = await this.#apps.readNamespacedDeployment({ name: object, namespace: this.#ns });
+    } catch (e) {
+      if (codeOf(e) === 404) return; // the scale says it is not there
+      throw e;
+    }
+    const pod = d.spec?.template.spec;
+    if (!pod || d.metadata?.labels?.[LABEL.managed] !== 'true' || (d.spec?.replicas ?? 1) !== 0) return;
+    let changed = false;
+    for (const c of [...pod.containers, ...(pod.initContainers ?? [])]) {
+      if ((c.name === CONTAINER || c.name === SEED_HOME) && c.image !== this.opts.image) {
+        console.log(`[workspaces] ${this.target.id}/${name}: image ${c.image ?? '(none)'} -> ${this.opts.image} (${c.name})`);
+        c.image = this.opts.image;
+        changed = true;
+      }
+    }
+    const secret = this.opts.imagePullSecret;
+    if (secret && !pod.imagePullSecrets?.some((s) => s.name === secret)) {
+      pod.imagePullSecrets = [...(pod.imagePullSecrets ?? []), { name: secret }];
+      changed = true;
+    }
+    if (changed) await this.#apps.replaceNamespacedDeployment({ name: object, namespace: this.#ns, body: d });
+  }
   stop = async (name: string) => this.#scale(name, 0);
 
   async remove(name: string) {

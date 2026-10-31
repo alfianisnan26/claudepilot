@@ -64,6 +64,22 @@ test('bad JSON and wrong shapes are refused with a clear reason, never half unde
   refused('[{"id":"isnan","namespace":"a","storage":"lots"}]', /"storage"/);
   refused('[{"id":"isnan","namespace":"a","cpuRequest":"lots"}]', /"cpuRequest"/);
   refused('[{"id":"isnan","namespace":"a","memoryRequest":2}]', /"memoryRequest"/);
+  for (const image of ['', ' reg/ws:1', 'reg/ws:1 ', 'Reg.example/Team/ws:1', 'reg/ws:', 'reg//ws', 'reg/ws:1@sha256:abc', 'https://reg/ws:1'])
+    refused(JSON.stringify([{ id: 'isnan', namespace: 'a', image }]), /"image" is an image reference/);
+  refused('[{"id":"isnan","namespace":"a","image":1}]', /"image" is an image reference/);
+  refused('[{"id":"isnan","namespace":"a","imagePullSecret":"Pull Secret"}]', /"imagePullSecret" is a Secret name/);
+  refused('[{"id":"isnan","namespace":"a","imagePullSecret":true}]', /"imagePullSecret" is a Secret name/);
+});
+
+test('a target may name its own image and pull secret (image references of every usual shape)', () => {
+  const dev = 'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.13-1';
+  const digest = `ghcr.io/me/ws@sha256:${'a'.repeat(64)}`;
+  for (const image of [dev, 'workspace', 'workspace:latest', 'localhost:5000/ws:1', 'REGISTRY.example:443/team_a/ws__x:v1.2-rc.1', digest, `reg/ws:1@sha256:${'0'.repeat(64)}`]) {
+    const [t] = parseKubeTargets(JSON.stringify([{ id: 'isnan', namespace: 'a', image }]));
+    assert.equal(t!.image, image);
+  }
+  const [t] = parseKubeTargets(JSON.stringify([{ id: 'isnan', namespace: 'a', image: dev, imagePullSecret: 'regcred.int' }]));
+  assert.deepEqual(t, { id: 'isnan', label: 'isnan', namespace: 'a', image: dev, imagePullSecret: 'regcred.int' });
 });
 
 test('the built-in ids, duplicate ids and namespaces, and the `kubernetes` target’s namespace are refused', () => {
@@ -86,6 +102,73 @@ test('each target inherits the `kubernetes` settings and puts its own on top; it
   const [a, b] = kubeTargetOptions({ ...BASE, targets });
   assert.deepEqual(a, { ...BASE, namespace: 'isnan-workspaces', target: { id: 'isnan', label: 'isnan' }, manageNamespace: false });
   assert.deepEqual(b, { ...BASE, requests: { cpu: '1', memory: '5Gi' }, namespace: 'konfersi-workspaces', storage: '5Gi', storageClass: 'fast', nodeSelector: { zone: 'b' }, target: { id: 'konfersi', label: 'Konfersi' }, manageNamespace: false, preferredNodes: ['n3'], defaults: { cpus: 2 } });
+});
+
+test('a target’s own image and pull secret replace PORTAL_K8S_IMAGE’s and are put back at a start; one without keeps the base and is never rewritten', () => {
+  const [own, plain, secretOnly] = kubeTargetOptions({
+    ...BASE,
+    targets: [
+      { id: 'isnan', label: 'isnan', namespace: 'a', image: 'reg/dev:2', imagePullSecret: 'devpull' },
+      { id: 'kohilabs', label: 'kohilabs', namespace: 'b' },
+      { id: 'konfersi', label: 'konfersi', namespace: 'c', image: 'reg/dev:2' },
+    ],
+  });
+  assert.equal(own!.image, 'reg/dev:2');
+  assert.equal(own!.imagePullSecret, 'devpull');
+  assert.equal(own!.reapplyImage, true);
+  assert.equal(plain!.image, BASE.image);
+  assert.equal(plain!.imagePullSecret, BASE.imagePullSecret);
+  assert.equal(plain!.reapplyImage, undefined, 'a target on PORTAL_K8S_IMAGE starts as before');
+  assert.equal(secretOnly!.imagePullSecret, BASE.imagePullSecret, 'no pull secret of its own: the base one');
+});
+
+test('a target runtime: a new workspace gets the target image; a stopped one made with another image gets it back at its start, the browser container untouched', async () => {
+  const fake = await FakeKube.start({ namespace: 'img-workspaces' });
+  try {
+    // Made the way isnan and konfersi were: on the target with the PORTAL_K8S_IMAGE of the day, no pull secret; a browser container beside it.
+    const plainRt = runtimeOn(fake, { id: 'isnan', label: 'isnan', namespace: 'img-workspaces' });
+    await plainRt.create({ name: 'old', runtimeName: 'ws-old' }, () => undefined);
+    const old = deployment(fake, 'ws-old') as unknown as { spec: { replicas: number; template: { spec: { containers: { name: string; image: string }[]; initContainers: { name: string; image: string }[]; imagePullSecrets?: { name: string }[] } } } };
+    assert.equal(old.spec.template.spec.containers[0]!.image, 'reg/workspace:1');
+    old.spec.template.spec.containers.push({ name: 'browser', image: 'reg/browser:7' });
+
+    const rt = runtimeOn(fake, { id: 'isnan', label: 'isnan', namespace: 'img-workspaces', image: 'reg/dev:2', imagePullSecret: 'devpull' });
+    await rt.create({ name: 'fresh', runtimeName: 'ws-fresh' }, () => undefined);
+    const fresh = deployment(fake, 'ws-fresh') as unknown as typeof old;
+    assert.deepEqual([...fresh.spec.template.spec.initContainers, ...fresh.spec.template.spec.containers].map((c) => [c.name, c.image]), [['seed-home', 'reg/dev:2'], ['workspace', 'reg/dev:2']]);
+    assert.deepEqual(fresh.spec.template.spec.imagePullSecrets, [{ name: 'devpull' }]);
+
+    // A start of a running workspace rolls nothing.
+    const puts = () => fake.seen('PUT', '/apis/apps/v1/namespaces/img-workspaces/deployments/ws-old').length;
+    await rt.start('old');
+    assert.equal(puts(), 0, 'running: not rewritten');
+    assert.equal((deployment(fake, 'ws-old') as unknown as typeof old).spec.template.spec.containers[0]!.image, 'reg/workspace:1');
+
+    // Stop, start: the image is the target's, the pull secret is added, the browser keeps its own.
+    await rt.stop('old');
+    await rt.start('old');
+    const now = deployment(fake, 'ws-old') as unknown as typeof old;
+    assert.deepEqual(
+      [...now.spec.template.spec.initContainers, ...now.spec.template.spec.containers].map((c) => [c.name, c.image]),
+      [['seed-home', 'reg/dev:2'], ['workspace', 'reg/dev:2'], ['browser', 'reg/browser:7']],
+    );
+    assert.deepEqual(now.spec.template.spec.imagePullSecrets, [{ name: 'devpull' }]);
+    assert.equal(now.spec.replicas, 1);
+    assert.equal(puts(), 1);
+
+    // Already the target's: a stop and start writes nothing more.
+    await rt.stop('old');
+    await rt.start('old');
+    assert.equal(puts(), 1, 'nothing differs: not rewritten');
+
+    // A target on PORTAL_K8S_IMAGE never rewrites a workspace's image (a hand-set one stays until its target names one).
+    await rt.stop('old');
+    await plainRt.start('old');
+    assert.equal((deployment(fake, 'ws-old') as unknown as typeof old).spec.template.spec.containers[0]!.image, 'reg/dev:2');
+    assert.equal(puts(), 1);
+  } finally {
+    await fake.stop();
+  }
 });
 
 test('a target whose runtime cannot be made is left out, the others stay', () => {
@@ -138,7 +221,7 @@ after(async () => {
 });
 
 /** A runtime made like index.ts makes one (loadFromDefault), its kubeconfig pointing at `fake`. */
-function runtimeOn(fake: FakeKube, spec: KubeTargetSpec): KubernetesRuntime {
+function runtimeOn(fake: FakeKube, spec: KubeTargetSpec, base: { imagePullSecret?: string } = {}): KubernetesRuntime {
   const dir = tempDirectory('cp-kubetargets-');
   const file = join(dir, 'config');
   writeFileSync(
@@ -153,7 +236,7 @@ function runtimeOn(fake: FakeKube, spec: KubeTargetSpec): KubernetesRuntime {
     }),
   );
   process.env.KUBECONFIG = file;
-  const [opts] = kubeTargetOptions({ image: 'reg/workspace:1', storage: '10Gi', storageClass: 'local-path', nodeSelector: { 'isnan.me/pool': 'worker' }, targets: [spec] });
+  const [opts] = kubeTargetOptions({ image: 'reg/workspace:1', storage: '10Gi', storageClass: 'local-path', nodeSelector: { 'isnan.me/pool': 'worker' }, ...base, targets: [spec] });
   return new KubernetesRuntime({ ...opts!, fitCheck: false });
 }
 
@@ -264,6 +347,10 @@ test('deploy/k3s: PORTAL_K8S_TARGETS in portal.yaml parses, and each of its name
       ['kohilabs', 'k3s-master', { cpus: 4, memoryMb: 6144 }, { cpu: '500m', memory: '2Gi' }],
     ],
   );
+  // isnan and konfersi run the dev image (kubectl, chromium, shellcheck: what kohi-event runs); kohilabs keeps PORTAL_K8S_IMAGE.
+  const dev = 'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.13-1';
+  assert.deepEqual(targets.map((t) => [t.id, t.image]), [['isnan', dev], ['konfersi', dev], ['kohilabs', undefined]]);
+  assert.ok(env.find((e) => e.name === 'PORTAL_K8S_IMAGE')?.value, 'kohilabs and `kubernetes` have PORTAL_K8S_IMAGE');
 
   const oldRole = docs('deploy/k3s/rbac.yaml').find((d) => d.kind === 'Role' && d.metadata.namespace === oldNs)!;
   assert.ok(docs('deploy/k3s/namespace.yaml').some((d) => d.kind === 'Namespace' && d.metadata.name === oldNs), 'the old namespace is kept');
@@ -287,6 +374,39 @@ test('deploy/k3s: PORTAL_K8S_TARGETS in portal.yaml parses, and each of its name
     assert.equal(binding?.roleRef?.name, role?.metadata.name);
     assert.deepEqual(binding?.subjects, [{ kind: 'ServiceAccount', name: 'claudepilot-portal', namespace: 'isnan-claudepilot' }]);
   }
+});
+
+test('deploy/k3s/workspace-jobs-rbac.yaml: the org workspaces’ Job accounts, never pruned, no Secret read, guarded by the admission policy that fits gate-job.sh', () => {
+  const all = docs('deploy/k3s/workspace-jobs-rbac.yaml');
+  for (const d of all) assert.equal(d.metadata.annotations?.['argocd.argoproj.io/sync-options'], 'Delete=false,Prune=false', `${d.kind}/${d.metadata.name}: never pruned or deleted with the app`);
+  const accounts = ['ws-isnan-jobs', 'ws-konfersi-jobs'];
+  const sas = all.filter((d) => d.kind === 'ServiceAccount');
+  assert.deepEqual(sas.map((d) => [d.metadata.namespace, d.metadata.name, (d as unknown as { automountServiceAccountToken?: boolean }).automountServiceAccountToken]), accounts.map((n) => ['isnan-claudepilot', n, false]));
+  // The token Secrets are filled by the cluster: git holds no data.
+  for (const s of all.filter((d) => d.kind === 'Secret')) {
+    assert.equal((s as unknown as { type: string }).type, 'kubernetes.io/service-account-token');
+    assert.equal((s as unknown as { data?: unknown; stringData?: unknown }).data ?? (s as unknown as { stringData?: unknown }).stringData, undefined, `${s.metadata.name}: no data in git`);
+  }
+  // The Job Role: Secrets are created, patched and deleted, never read (gate-job.sh and job-run.sh need no more).
+  type Rule = { apiGroups: string[]; resources: string[]; verbs: string[] };
+  const role = all.find((d) => d.kind === 'Role' && d.metadata.name === 'claudepilot-ws-jobs')!;
+  const secretVerbs = (role.rules as Rule[]).filter((r) => r.resources.includes('secrets')).flatMap((r) => r.verbs);
+  assert.deepEqual(secretVerbs.sort(), ['create', 'delete', 'patch']);
+  const binding = all.find((d) => d.kind === 'RoleBinding' && d.metadata.name === 'claudepilot-ws-jobs')!;
+  assert.deepEqual(binding.subjects?.map((s) => s.name), accounts);
+  const gateJob = readFileSync(join(REPO, 'scripts/gate-job.sh'), 'utf8');
+  assert.doesNotMatch(gateJob, /kubectl[^\n]*\b(get|patch|replace|edit) secrets?\b/, 'gate-job.sh never reads or patches a Secret');
+  // The admission policy: enforced (Deny, Fail closed), matching exactly these accounts; the Job and Secret names gate-job.sh makes pass it.
+  const policy = all.find((d) => d.kind === 'ValidatingAdmissionPolicy')!;
+  const spec = policy.spec as { failurePolicy: string; matchConditions: { expression: string }[]; validations: { expression: string }[] };
+  assert.equal(spec.failurePolicy, 'Fail');
+  for (const a of accounts) assert.ok(spec.matchConditions[0]!.expression.includes(`system:serviceaccount:isnan-claudepilot:${a}`), a);
+  const pb = all.find((d) => d.kind === 'ValidatingAdmissionPolicyBinding')!.spec as { policyName: string; validationActions: string[] };
+  assert.equal(pb.policyName, policy.metadata.name);
+  assert.deepEqual(pb.validationActions, ['Deny']);
+  const nameRule = /matches\('([^']+)'\)/.exec(spec.validations.find((v) => v.expression.startsWith("request.resource.resource != 'jobs'"))!.expression)![1]!;
+  assert.match('claudepilot-gate-0123abc-9f0e', new RegExp(nameRule), 'a gate-job.sh name passes the policy');
+  assert.match(gateJob, /job=claudepilot-gate-\$sha-\$\(od -An -N2 -tx1/, 'gate-job.sh still names its Job claudepilot-gate-<7 hex>-<4 hex>');
 });
 
 test('deploy/k3s-build: the heavy Jobs keep away from workspace pods in every workspace namespace', () => {

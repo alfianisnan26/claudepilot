@@ -1,7 +1,8 @@
 // `PORTAL_K8S_TARGETS` (owner, 2026-10-31: one workspace per org, one namespace per org): more local Kubernetes targets beside the single
 // `kubernetes` one, which stays exactly as it was (`PORTAL_K8S_NAMESPACE`, id `kubernetes`). Each entry is its own KubernetesRuntime on the
 // same kubeconfig (the portal's in-cluster service account) in its own namespace; its workspaces are `<id>/<name>`. Image, pull secret,
-// storage and requests come from the `PORTAL_K8S_*` settings unless the entry names its own.
+// storage and requests come from the `PORTAL_K8S_*` settings unless the entry names its own. A target that names its own image puts it back
+// on a workspace at every start (KubernetesOptions.reapplyImage), so a workspace made before the image changed follows it at its next start.
 //
 // A JSON array, for example:
 //   [{"id":"isnan","namespace":"isnan-workspaces","label":"isnan","preferredNodes":["k3s-node2"],"cpus":4,"memoryMb":8192}]
@@ -9,7 +10,8 @@
 // preferredNodes (node names: a soft preference, and the nodes the New workspace dialog offers; a create naming one is pinned there, in place
 // of a `kubernetes.io/hostname` in nodeSelector), cpus, memoryMb (the limits a create that names none gets, and the dialog's preset),
 // cpuRequest, memoryRequest (what a pod reserves, at most its limits; replace PORTAL_K8S_CPU_REQUEST / PORTAL_K8S_MEMORY_REQUEST), storage,
-// storageClass. Anything else is refused, like a malformed value: the portal stops at start with the reason
+// storageClass, image (an image reference; replaces PORTAL_K8S_IMAGE for this target), imagePullSecret (a Secret name in the target's
+// namespace; replaces PORTAL_K8S_IMAGE_PULL_SECRET). Anything else is refused, like a malformed value: the portal stops at start with the reason
 // (as PORTAL_K8S_NODE_SELECTOR does), so a typo never silently drops an org's workspaces.
 
 import { connectTargetIdProblem } from '@portal/contracts';
@@ -32,11 +34,23 @@ export interface KubeTargetSpec {
   requests?: RequestOptions;
   storage?: string;
   storageClass?: string;
+  /** The workspace image of this target (new workspaces get it, a start puts it back); absent: PORTAL_K8S_IMAGE. */
+  image?: string;
+  /** The pull Secret for it, in the target's namespace; absent: PORTAL_K8S_IMAGE_PULL_SECRET. */
+  imagePullSecret?: string;
 }
 
-const KEYS = new Set(['id', 'namespace', 'label', 'nodeSelector', 'preferredNodes', 'cpus', 'memoryMb', 'cpuRequest', 'memoryRequest', 'storage', 'storageClass']);
+const KEYS = new Set(['id', 'namespace', 'label', 'nodeSelector', 'preferredNodes', 'cpus', 'memoryMb', 'cpuRequest', 'memoryRequest', 'storage', 'storageClass', 'image', 'imagePullSecret']);
 /** A namespace or a storage class: a DNS label, as the API server wants. */
 const DNS_LABEL = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
+/** A Secret name: a DNS subdomain. */
+const DNS_SUBDOMAIN = /^(?=.{1,253}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+/**
+ * An image reference as the container runtime takes it: `[host[:port]/]path[:tag][@sha256:digest]`, path components lowercase. A shape check
+ * (a typo or a stray space stops the portal at start), not a pull: whether the image exists is the cluster's answer at the first pull.
+ */
+const IMAGE_REF =
+  /^(?=.{1,255}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*(?::[0-9]{1,5})?\/)?[a-z0-9]+(?:(?:\.|_|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:\.|_|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?$/;
 const QUANTITY = /^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$/;
 
 const fail = (why: string): never => {
@@ -132,6 +146,14 @@ export function parseKubeTargets(text: string | undefined, taken: { namespaces?:
       if (typeof e.storageClass !== 'string' || !DNS_LABEL.test(e.storageClass)) fail(`${named}: "storageClass" is a storage class name.`);
       spec.storageClass = e.storageClass as string;
     }
+    if (e.image !== undefined) {
+      if (typeof e.image !== 'string' || !IMAGE_REF.test(e.image)) fail(`${named}: "image" is an image reference such as registry.example/team/workspace:1.0.`);
+      spec.image = e.image as string;
+    }
+    if (e.imagePullSecret !== undefined) {
+      if (typeof e.imagePullSecret !== 'string' || !DNS_SUBDOMAIN.test(e.imagePullSecret)) fail(`${named}: "imagePullSecret" is a Secret name.`);
+      spec.imagePullSecret = e.imagePullSecret as string;
+    }
     return spec;
   });
 }
@@ -143,9 +165,9 @@ export function parseKubeTargets(text: string | undefined, taken: { namespaces?:
 export function kubeTargetOptions(base: Omit<KubernetesOptions, 'namespace'> & { targets: readonly KubeTargetSpec[] }): KubernetesOptions[] {
   return base.targets.map((t) => ({
     namespace: t.namespace,
-    image: base.image,
+    image: t.image ?? base.image,
     storage: t.storage ?? base.storage,
-    ...(base.imagePullSecret ? { imagePullSecret: base.imagePullSecret } : {}),
+    ...((t.imagePullSecret ?? base.imagePullSecret) ? { imagePullSecret: t.imagePullSecret ?? base.imagePullSecret } : {}),
     ...((t.storageClass ?? base.storageClass) ? { storageClass: t.storageClass ?? base.storageClass } : {}),
     ...((t.nodeSelector ?? base.nodeSelector) ? { nodeSelector: t.nodeSelector ?? base.nodeSelector } : {}),
     ...(base.requests || t.requests ? { requests: { ...base.requests, ...t.requests } } : {}),
@@ -153,6 +175,8 @@ export function kubeTargetOptions(base: Omit<KubernetesOptions, 'namespace'> & {
     manageNamespace: false,
     ...(t.preferredNodes ? { preferredNodes: t.preferredNodes } : {}),
     ...(t.defaults ? { defaults: t.defaults } : {}),
+    // Its own image is put back at every start (a workspace made with the PORTAL_K8S_IMAGE of the day follows the target's).
+    ...(t.image ? { reapplyImage: true } : {}),
   }));
 }
 

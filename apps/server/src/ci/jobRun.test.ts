@@ -885,7 +885,9 @@ test('T-524 a full in-memory /tmp: "No space left on device" in a failed Job giv
 const FAKE_GATE_KUBECTL = String.raw`#!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >> "$FAKE/calls.log"
 case " $* " in
-  *" create secret "*|*" apply -f -"*) cat > /dev/null ;;
+  *" create secret generic "*"--dry-run=client -o json"*) jq -Rs '{apiVersion: "v1", kind: "Secret", metadata: {name: "s"}, data: {"node-auth-token": @base64}}' ;;
+  *" create -f -"*) cat > "$FAKE/secret.json"; [ ! -f "$FAKE/secret-refused" ] ;;
+  *" apply -f -"*) cat > "$FAKE/job.yaml" ;;
   *" get job "*"metadata.uid"*) printf 'uid-1' ;;
   *" get job "*) if [ -f "$FAKE/done" ]; then printf '1/'; else printf '/'; fi ;;
   *" get pods "*) if [ -f "$FAKE/pending" ]; then jq -n --rawfile m "$FAKE/pending" '{items: [{status: {phase: "Pending", conditions: [{type: "PodScheduled", status: "False", reason: "Unschedulable", message: $m}]}}]}'
@@ -995,6 +997,37 @@ test('T-524 gate-job.sh: a gate Pending for room says so with the reason; never 
   assert.equal(r3.code, 1, r3.out);
   assert.match(r3.out, /GATE-VERDICT: red: the job did not finish in 2s\n$/);
   assert.doesNotMatch(r3.out, /Pending|not scheduled/);
+});
+
+test('gate-job.sh: the token Secret is made once, already owned by the suspended Job, then the Job resumes; no Secret is read or patched (ws-*-jobs accounts)', async () => {
+  const w = gateWorld();
+  writeFileSync(join(w.root, 'done'), '');
+  const r = await w.start({ GATE_JOB_WAIT_S: '10' }).done;
+  assert.equal(r.code, 0, r.out);
+  const calls = readFileSync(join(w.root, 'calls.log'), 'utf8').split('\n').filter(Boolean);
+  const at = (re: RegExp) => calls.findIndex((c) => re.test(c));
+  // The dry run and the create are two stages of one pipeline: they start together, so their lines come in either order.
+  const [apply, uid, dry, create, resume] = [/ apply -f -$/, / get job claudepilot-gate-\S+ -o jsonpath=\{\.metadata\.uid\}/, / create secret generic claudepilot-gate-\S+ --from-file=node-auth-token=\/dev\/stdin --dry-run=client -o json$/, / create -f -$/, / patch job claudepilot-gate-\S+ --type merge -p \{"spec":\{"suspend":false\}\}$/].map(at) as [number, number, number, number, number];
+  assert.ok(apply >= 0 && uid > apply && dry > uid && create > uid && resume > Math.max(dry, create), calls.join('\n'));
+  assert.ok(!calls.some((c) => / (patch|get|replace|apply -f \S+) secrets?\b/.test(c) || / get secret/.test(c)), 'no Secret is read, patched or replaced');
+  const token = readFileSync(join(w.root, 'token'), 'utf8');
+  assert.ok(!calls.some((c) => c.includes(token)), 'the token is never an argument');
+  assert.match(readFileSync(join(w.root, 'job.yaml'), 'utf8'), /\nspec:\n(?:  #[^\n]*\n)*  suspend: true\n/, 'the Job is applied suspended');
+  const secret = JSON.parse(readFileSync(join(w.root, 'secret.json'), 'utf8')) as { metadata: { labels: Record<string, string>; ownerReferences: unknown[] }; data: Record<string, string> };
+  const name = /gate job (claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4}):/.exec(r.out)![1];
+  assert.deepEqual(secret.metadata.ownerReferences, [{ apiVersion: 'batch/v1', kind: 'Job', name, uid: 'uid-1' }]);
+  assert.deepEqual(secret.metadata.labels, { app: 'claudepilot-gate', 'claudepilot-gate/by': 'manual' });
+  assert.equal(Buffer.from(secret.data['node-auth-token']!, 'base64').toString('utf8'), token, 'the token, without a newline');
+
+  // The create refused (a policy, no create verb): red, the suspended Job is deleted, nothing resumes, kubectl's text is not shown.
+  const w2 = gateWorld();
+  writeFileSync(join(w2.root, 'secret-refused'), '');
+  const r2 = await w2.start({ GATE_JOB_WAIT_S: '10' }).done;
+  assert.equal(r2.code, 1, r2.out);
+  assert.match(r2.out, /GATE-VERDICT: red: the gate job could not be started: could not create its Secret claudepilot-gate-\S+ \(the reason is not shown: it may quote the token\)\n$/);
+  const calls2 = readFileSync(join(w2.root, 'calls.log'), 'utf8');
+  assert.match(calls2, / delete job claudepilot-gate-\S+ --ignore-not-found/);
+  assert.doesNotMatch(calls2, / patch job /);
 });
 
 test('cleanup: interrupted while queued, the Job and its Secret are deleted', async () => {

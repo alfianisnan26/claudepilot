@@ -529,7 +529,10 @@ Kubernetes target per entry: its own `KubernetesRuntime` on the portal's kubecon
 start with the reason, like `PORTAL_K8S_NODE_SELECTOR`. Placement and sizes are the target's: `nodeSelector` (replaces the global one),
 `preferredNodes` (soft preference, in order; the Node select of the New workspace dialog; a named node is required and replaces a hostname in the
 selector), `cpus`/`memoryMb` (the limits a create gets when it names none; the dialog presets them), `cpuRequest`/`memoryRequest` (replace the
-global requests). The PVC has no placement of its own: with a WaitForFirstConsumer class (k3s local-path, checked 2026-10-31) it binds on the
+global requests). `image`/`imagePullSecret` (an image reference, checked for shape at start, and a Secret name) replace `PORTAL_K8S_IMAGE`
+and `PORTAL_K8S_IMAGE_PULL_SECRET` for the target: new workspaces get them, and a start of a stopped workspace puts them back on its Deployment
+(the `workspace` and `seed-home` containers only; a browser container keeps its own) when they differ, so a workspace made with another image
+follows the target's at its next stop and start; a target without its own image never rewrites one. The PVC has no placement of its own: with a WaitForFirstConsumer class (k3s local-path, checked 2026-10-31) it binds on the
 node the pod is first scheduled to and keeps the pod there. Such a target never creates its namespace (Argo CD makes it, with the quota and
 Role: `deploy/k3s/workspace-orgs.yaml`). Its ids are reserved for Connect (an enrollment cannot take one, and the manager refuses an enrolled
 runtime that would replace one). The browser pool, delivery, terminals and CI follow the target id as for `kubernetes`.
