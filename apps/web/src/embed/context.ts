@@ -61,6 +61,10 @@ export interface PanelState {
   targets: ReporterSessionTargetStatus[];
   /** The last Ticket | Session choice the host's capture toolbar sent (capture-started or capture-result); null when it never said. */
   hostTarget: ReporterReportTarget | null;
+  /** The panel's current Ticket | Session choice (what the SDK's capture toolbar starts on). */
+  choice: ReporterReportTarget;
+  /** Sets the choice and tells the SDK (`pilot-reporter:target`). */
+  setChoice(t: ReporterReportTarget): void;
   signOut(): void;
   calloutsVisible: boolean;
   setCalloutsVisible(v: boolean): void;

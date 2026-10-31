@@ -50,6 +50,24 @@ export function isTargetField(v: unknown): v is ReporterReportTarget | undefined
   return v.kind === 'session' && Object.keys(v).length === 2 && typeof v.sessionId === 'string' && /^[A-Za-z0-9_-]{0,80}$/.test(v.sessionId);
 }
 
+/** A target the panel may send the SDK: Ticket, or a session with a resolved (non-empty) id. Null for anything else. */
+export function panelTarget(v: unknown): ReporterReportTarget | null {
+  if (!isTargetField(v) || v === undefined) return null;
+  return v.kind === 'ticket' ? { kind: 'ticket' } : v.sessionId ? { kind: 'session', sessionId: v.sessionId } : null;
+}
+
+/** `pilot-reporter:target` for the SDK's capture toolbar switch, or null when the target is not one the panel may send. */
+export function targetMessage(target: unknown): ReporterPanelMessage | null {
+  const t = panelTarget(target);
+  return t ? { type: 'pilot-reporter:target', target: t } : null;
+}
+
+/** `pilot-reporter:capture-request`, carrying the panel's current choice when it is a valid one (else without it). */
+export function captureRequest(requestId: string, mode: 'full' | 'crop', precise: boolean, target?: unknown): ReporterPanelMessage {
+  const t = panelTarget(target);
+  return { type: 'pilot-reporter:capture-request', requestId, mode, precise, ...(t ? { target: t } : {}) };
+}
+
 const isRect = (v: unknown) =>
   isObj(v) && ['x', 'y', 'w', 'h'].every((k) => typeof v[k] === 'number' && Number.isFinite(v[k] as number));
 

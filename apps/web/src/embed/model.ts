@@ -296,3 +296,11 @@ export function pickTarget(wanted: ReporterReportTarget | null | undefined, targ
   const hit = usable.find((t) => t.sessionId === wanted.sessionId) ?? usable[0];
   return hit ? { kind: 'session', sessionId: hit.sessionId } : { kind: 'ticket' };
 }
+
+/** What to tell the person when the toolbar asked for a session the bucket cannot take now (the report then goes in as a ticket). */
+export function targetNotice(wanted: ReporterReportTarget | null | undefined, targets: { sessionId: string; available: boolean }[]): string | null {
+  if (!wanted || wanted.kind !== 'session') return null;
+  if (!targets.length) return 'No session is set up for direct reports in this bucket: this goes in as a ticket.';
+  if (!targets.some((t) => t.available)) return 'No target session is available now: this goes in as a ticket.';
+  return null;
+}

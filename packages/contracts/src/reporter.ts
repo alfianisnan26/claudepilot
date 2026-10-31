@@ -753,7 +753,10 @@ export type ReporterHostMessage =
 /** Panel iframe -> host page (SDK). The SDK accepts these only from its iframe's contentWindow and only from the portal origin. */
 export type ReporterPanelMessage =
   | { type: 'pilot-reporter:ready'; bridge: typeof REPORTER_BRIDGE_VERSION; status: ReporterStatus; connected: boolean; actorLabel: string | null }
-  | { type: 'pilot-reporter:capture-request'; requestId: string; mode: 'full' | 'crop'; precise: boolean }
+  /** `target` (optional): the panel's current Ticket | Session choice, the default of the capture toolbar's switch. */
+  | { type: 'pilot-reporter:capture-request'; requestId: string; mode: 'full' | 'crop'; precise: boolean; target?: ReporterReportTarget }
+  /** The panel's Ticket | Session choice changed (and once after ready): the next capture toolbar starts on it. */
+  | { type: 'pilot-reporter:target'; target: ReporterReportTarget }
   /** The open tickets of this bucket anchored on the current path; replaces what is drawn. Empty when signed out. */
   | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
   | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }

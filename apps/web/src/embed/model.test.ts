@@ -14,6 +14,7 @@ import {
   parseHotkeys,
   parsePrefs,
   pickTarget,
+  targetNotice,
   playlist,
   querySearch,
   samePageHref,
@@ -257,4 +258,11 @@ test('pickTarget: the toolbar wish preselects the form; an unavailable or defaul
   assert.deepEqual(pickTarget({ kind: 'session', sessionId: 'gone' }, targets), { kind: 'session', sessionId: 'lead' });
   assert.deepEqual(pickTarget({ kind: 'session', sessionId: '' }, targets), { kind: 'session', sessionId: 'lead' });
   assert.deepEqual(pickTarget({ kind: 'session', sessionId: 'lead' }, []), { kind: 'ticket' }, 'no target set up: a ticket');
+});
+
+test('targetNotice: a session the bucket cannot take is refused with a clear message (it goes in as a ticket)', () => {
+  assert.equal(targetNotice({ kind: 'ticket' }, []), null);
+  assert.equal(targetNotice({ kind: 'session', sessionId: '' }, [{ sessionId: 'lead', available: true }]), null, 'resolved to the default');
+  assert.match(targetNotice({ kind: 'session', sessionId: '' }, [])!, /No session is set up/);
+  assert.match(targetNotice({ kind: 'session', sessionId: 'lead' }, [{ sessionId: 'lead', available: false }])!, /No target session is available/);
 });

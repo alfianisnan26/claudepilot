@@ -1,10 +1,10 @@
 import { REPORTER_BRIDGE_VERSION, type ReporterBuildInfo, type ReporterHostMessage, type ReporterReportTarget, type ReporterReview, type ReporterSessionTargetStatus, type ReporterStatus } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clearToken, createClient, memoryStorage, parseConnectMessage, readToken, safeStorage, writeToken, type StoredToken } from './api';
-import { createPanelBridge, exactOrigin, type PanelBridge } from './bridge';
+import { captureRequest, createPanelBridge, exactOrigin, targetMessage, type PanelBridge } from './bridge';
 import { PanelContext, newId, type Capture, type PanelState, type Tab } from './context';
 import { Icon, type IconName } from './icons';
-import { buildCallouts, isChangeEvent, parseHotkeys, type Hotkeys } from './model';
+import { buildCallouts, isChangeEvent, parseHotkeys, pickTarget, targetNotice, type Hotkeys } from './model';
 import { KnowledgeTab, SessionsTab, SettingsTab } from './OtherTabs';
 import { ReportTab } from './ReportTab';
 import { TicketsTab } from './TicketsTab';
@@ -95,6 +95,19 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     return () => b.dispose();
   }, [origin]);
   const post = useCallback<PanelState['post']>((msg) => bridge.current?.post(msg), []);
+  // The Ticket | Session choice the SDK's capture toolbar starts on: sent after ready, on every change, and with each capture request.
+  const [choice, setChoiceState] = useState<ReporterReportTarget>({ kind: 'ticket' });
+  const choiceRef = useRef<ReporterReportTarget>(choice);
+  const setChoice = useCallback(
+    (t: ReporterReportTarget) => {
+      const m = targetMessage(t);
+      if (!m || m.type !== 'pilot-reporter:target') return;
+      choiceRef.current = m.target;
+      setChoiceState(m.target);
+      post(m);
+    },
+    [post],
+  );
 
   const notify = useCallback((text: string, tone: 'info' | 'error' | 'ok' = 'info') => setToast({ text, tone, id: Date.now() }), []);
   useEffect(() => {
@@ -121,6 +134,8 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     if (!status) return;
     post({ type: 'pilot-reporter:ready', bridge: REPORTER_BRIDGE_VERSION, status, connected, actorLabel: connected ? (token?.actorLabel ?? null) : null });
     post({ type: 'pilot-reporter:settings', calloutsVisible, hotkeys });
+    const t = targetMessage(choiceRef.current);
+    if (t) post(t);
   }, [status, connected, token, calloutsVisible, hotkeys, post]);
   useEffect(() => sendReady(), [sendReady]);
 
@@ -239,7 +254,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     (mode: 'full' | 'crop', precise = false) => {
       const requestId = newId();
       setPending(requestId);
-      post({ type: 'pilot-reporter:capture-request', requestId, mode, precise });
+      post(captureRequest(requestId, mode, precise, choiceRef.current));
     },
     [post],
   );
@@ -255,6 +270,14 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   pendingRef.current = pending;
   const reviewRef = useRef(review);
   reviewRef.current = review;
+  // The toolbar's choice: a session it cannot name ('' or one not available) resolves to the bucket's first available target; none at all
+  // is refused with a message and the report goes in as a ticket.
+  const takeHostTarget = (t: ReporterReportTarget) => {
+    const notice = targetNotice(t, targets);
+    if (notice) notify(notice, 'error');
+    setHostTarget(t);
+    setChoice(pickTarget(t, targets));
+  };
   onHost.current = (m) => {
     switch (m.type) {
       case 'pilot-reporter:hello':
@@ -269,14 +292,14 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         return;
       case 'pilot-reporter:capture-started':
         setPending(m.requestId);
-        if (m.target) setHostTarget(m.target);
+        if (m.target) takeHostTarget(m.target);
         setTab('report');
         return;
       case 'pilot-reporter:capture-result': {
         // Only the capture we asked for (or the one a hotkey announced): a page cannot push reports on its own.
         if (m.requestId !== pendingRef.current) return;
         const screenshot = new Blob([m.screenshot], { type: m.mediaType });
-        if (m.target) setHostTarget(m.target);
+        if (m.target) takeHostTarget(m.target);
         setCapture({ captureId: newId(), requestId: m.requestId, screenshot, previewUrl: URL.createObjectURL(screenshot), evidence: m.evidence, ...(m.target ? { target: m.target } : {}) });
         setPending(null);
         setTab('report');
@@ -351,6 +374,8 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         requestCapture,
         targets,
         hostTarget,
+        choice,
+        setChoice,
         signOut: () => {
           void client.revoke().catch(() => undefined);
           signOut();

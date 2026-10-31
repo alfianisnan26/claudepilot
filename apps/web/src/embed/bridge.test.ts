@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { REPORTER_LIMITS, type ReporterEvidence, type ReporterHostMessage, type ReporterPanelMessage } from '@portal/contracts';
-import { createPanelBridge, exactOrigin, parseHostMessage, type BridgeTarget, type BridgeWindow } from './bridge';
+import { captureRequest, createPanelBridge, exactOrigin, parseHostMessage, targetMessage, type BridgeTarget, type BridgeWindow } from './bridge';
 
 const HOST = 'https://stg.konfersi.com';
 
@@ -150,6 +150,16 @@ test('the capture toolbar target on capture-result and capture-started: optional
     for (const target of [null, 'session', { kind: 'session' }, { kind: 'session', sessionId: 'a b' }, { kind: 'session', sessionId: 'x'.repeat(81) }, { kind: 'session', sessionId: 7 }, { kind: 'ticket', sessionId: 'x' }, { kind: 'urgent' }, { kind: 'session', sessionId: 'a', extra: 1 }])
       assert.equal(parseHostMessage({ ...base, target }), null, JSON.stringify(target));
   }
+});
+
+test('panel -> SDK: pilot-reporter:target and the target on capture-request carry only a valid, resolved target', () => {
+  assert.deepEqual(targetMessage({ kind: 'ticket' }), { type: 'pilot-reporter:target', target: { kind: 'ticket' } });
+  assert.deepEqual(targetMessage({ kind: 'session', sessionId: 'lead_1' }), { type: 'pilot-reporter:target', target: { kind: 'session', sessionId: 'lead_1' } });
+  for (const bad of [undefined, null, { kind: 'session', sessionId: '' }, { kind: 'session' }, { kind: 'session', sessionId: 'a b' }, { kind: 'ticket', extra: 1 }, 'ticket'])
+    assert.equal(targetMessage(bad), null, JSON.stringify(bad));
+  assert.deepEqual(captureRequest('r1', 'crop', false, { kind: 'session', sessionId: 'lead' }), { type: 'pilot-reporter:capture-request', requestId: 'r1', mode: 'crop', precise: false, target: { kind: 'session', sessionId: 'lead' } });
+  assert.deepEqual(captureRequest('r2', 'full', true, { kind: 'session', sessionId: '' }), { type: 'pilot-reporter:capture-request', requestId: 'r2', mode: 'full', precise: true }, 'an unresolved target is left out');
+  assert.deepEqual(captureRequest('r3', 'full', false), { type: 'pilot-reporter:capture-request', requestId: 'r3', mode: 'full', precise: false });
 });
 
 test('the opened-for origin must be an exact http(s) origin', () => {

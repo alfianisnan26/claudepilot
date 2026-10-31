@@ -278,7 +278,7 @@ function Sticky({ children }: { children: ReactNode }) {
 
 /** The quick path: one shot, one ticket. */
 function QuickForm({ capture }: { capture: Capture }) {
-  const { client, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build, hostTarget } = usePanel();
+  const { client, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build, hostTarget, setChoice } = usePanel();
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState<TicketType>('bug');
@@ -295,6 +295,8 @@ function QuickForm({ capture }: { capture: Capture }) {
   useEffect(() => {
     if (target.kind === 'session' && !targets.some((t) => t.sessionId === target.sessionId && t.available)) setTarget({ kind: 'ticket' });
   }, [targets, target]);
+  // The SDK's capture toolbar follows this form's switch.
+  useEffect(() => setChoice(target), [target, setChoice]);
 
   const submit = async () => {
     if (!summary.trim()) return setError('Write a short summary.');
@@ -611,7 +613,7 @@ function CommentRow(props: {
 
 /** Finish review: how the comments become tickets (one, one per page, one per comment) or join an open ticket. */
 function SubmitForm({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
-  const { client, review, setReview, refresh, notify, setTab, select, targets, post, hostTarget } = usePanel();
+  const { client, review, setReview, refresh, notify, setTab, select, targets, post, hostTarget, setChoice } = usePanel();
   const [summary, setSummary] = useState(() => (review ? proposedSummary(review) : ''));
   const [description, setDescription] = useState('');
   const [type, setType] = useState<TicketType>('bug');
@@ -630,6 +632,8 @@ function SubmitForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
   useEffect(() => {
     if (target.kind === 'session' && !targets.some((t) => t.sessionId === target.sessionId && t.available)) setTarget({ kind: 'ticket' });
   }, [targets, target]);
+  // The SDK's capture toolbar follows this form's switch.
+  useEffect(() => setChoice(target), [target, setChoice]);
   if (!review) return null;
   const count = mode === 'existing' ? 0 : ticketsFor(review, mode);
 
