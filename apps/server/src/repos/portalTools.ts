@@ -9,7 +9,7 @@ import { REPO_EVENT_KINDS, REPO_KINDS, type RepoEvent, type RepoNode, type RepoS
 import { paginate, pageInput } from '../portalmcp/paging.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { isWorkspaceId } from '../names.js';
-import { REPO_ID } from './text.js';
+import { absPath, repoId, REPO_ID } from './text.js';
 import type { ReposService } from './service.js';
 
 const SOURCE = 'git';
@@ -22,11 +22,46 @@ function workspaceArg(ctx: PortalToolContext, given: string | undefined): string
   return ws;
 }
 
-function repoArg(ctx: PortalToolContext, repos: ReposService, id: string): string {
+const NO_SUCH_REPO = 'No such repository.';
+
+/**
+ * A repository the caller may not reach is the same NOT_FOUND as one nobody has (T-980): the answer never tells a probe that an id is real.
+ * `ctx.assertWorkspace` throws a PortalToolError and `workspaceOf` an AppError: both carry a code, so it is matched by code.
+ */
+function repoArg(ctx: PortalToolContext, repos: ReposService, id: string, given?: string): string {
   if (!REPO_ID.test(id)) throw new AppError('VALIDATION_FAILED', 'That isn’t a repository id (r_ and 12 hex characters).', { details: { id: 'Expected r_…' } });
   const ws = repos.workspaceOf(id); // NOT_FOUND when there is no such repository
-  ctx.assertWorkspace(ws);
+  try {
+    ctx.assertWorkspace(ws);
+  } catch (e) {
+    if ((e as { code?: unknown } | null)?.code === 'FORBIDDEN') throw new AppError('NOT_FOUND', NO_SUCH_REPO);
+    throw e;
+  }
+  // A workspace_id given beside a repo_id must be the repository's own: a mismatch is refused, never ignored (T-980).
+  if (given !== undefined && given !== ws) throw new AppError('NOT_FOUND', NO_SUCH_REPO);
   return ws;
+}
+
+/**
+ * The repository a tool call names: its `repo_id`, or its `path` in a workspace (T-980), which is the same id (`repoId(workspace, path)`,
+ * a hash of the two), so everything after it, the lookup and the workspace check, is the one `repoArg` path for both. A path in a
+ * workspace the caller may not reach is the same NOT_FOUND as a path nobody has: a probe learns nothing from which of the two it got.
+ */
+function repoIdOfArgs(ctx: PortalToolContext, args: { repo_id?: string | undefined; path?: string | undefined; workspace_id?: string | undefined }): string {
+  if ((args.repo_id === undefined) === (args.path === undefined)) throw new AppError('VALIDATION_FAILED', 'Give the repository as repo_id or as path, one of the two.', { details: { repo_id: 'repo_id or path.' } });
+  if (args.repo_id !== undefined) return args.repo_id;
+  const path = absPath(args.path);
+  if (!path) throw new AppError('VALIDATION_FAILED', 'That isn’t an absolute path of a repository folder.', { details: { path: 'Expected /… as repos_list shows it.' } });
+  let ws: string | null;
+  try {
+    ws = workspaceArg(ctx, args.workspace_id);
+  } catch (e) {
+    // ctx.assertWorkspace throws a PortalToolError, workspaceOf an AppError: both carry a code
+    if ((e as { code?: unknown } | null)?.code === 'FORBIDDEN') throw new AppError('NOT_FOUND', NO_SUCH_REPO);
+    throw e;
+  }
+  if (!ws) throw new AppError('VALIDATION_FAILED', 'A path needs a workspace_id.', { details: { workspace_id: 'Give the workspace the path is in.' } });
+  return repoId(ws, path);
 }
 
 /** One repository, small: what to look at first. */
@@ -108,10 +143,12 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
       workspace_id: z.string().max(130).optional().describe('<target>/<name>. Agents: omit (their own workspace).'),
       kind: z.enum(REPO_KINDS as unknown as [string, ...string[]]).optional().describe('Only this kind.'),
       needs_attention: z.boolean().optional().describe('Only repositories that need a look.'),
+      name: z.string().min(1).max(200).optional().describe('Only repositories whose folder name or path contains this text (not case sensitive). Needs a workspace (agents: their own).'),
       ...pageInput,
     }),
     async handler(ctx, args) {
       const ws = workspaceArg(ctx, args.workspace_id);
+      if (!ws && args.name !== undefined) throw new AppError('VALIDATION_FAILED', 'A name filter needs a workspace_id.', { details: { workspace_id: 'Give the workspace to search in.' } });
       if (!ws) {
         const o = await repos.overview();
         return {
@@ -125,7 +162,11 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
       let list = data.repos;
       if (args.kind) list = list.filter((n) => n.kind === args.kind);
       if (args.needs_attention) list = list.filter((n) => n.attention.reasons.length > 0);
-      const page = paginate(list, args, { ws, kind: args.kind ?? null, needs: args.needs_attention ?? false });
+      if (args.name !== undefined) {
+        const needle = args.name.toLowerCase();
+        list = list.filter((n) => n.name.toLowerCase().includes(needle) || n.path.toLowerCase().includes(needle));
+      }
+      const page = paginate(list, args, { ws, kind: args.kind ?? null, needs: args.needs_attention ?? false, name: args.name ?? null });
       return {
         summary: `${lineOf(ws, data.summary)}${data.scan.at ? '' : ' Not scanned yet.'}`,
         workspace_id: ws,
@@ -186,7 +227,7 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
     }),
     handler(ctx, args) {
       let ws = workspaceArg(ctx, args.workspace_id);
-      if (args.repo_id) ws = repoArg(ctx, repos, args.repo_id);
+      if (args.repo_id) ws = repoArg(ctx, repos, args.repo_id, args.workspace_id);
       if (ctx.isAgent && !ws) ws = ctx.workspaceId;
       const page = repos.events({ workspaceId: ws ?? undefined, repoId: args.repo_id, kind: args.kind?.join(','), group: args.audit ? 'audit' : undefined, before: args.before, limit: args.limit ?? 25 });
       return {
@@ -231,16 +272,19 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
     rate: { perMinute: 6, perHour: 30 },
     maxArgsBytes: 2_048,
     input: z.object({
-      repo_id: z.string().max(20).describe('The repository (or worktree) to make it from.'),
+      repo_id: z.string().max(20).optional().describe('The repository (or worktree) to make it from, from repos_list. Give this or path.'),
+      path: z.string().max(400).optional().describe('Instead of repo_id: the repository’s folder in the workspace (an absolute path, as repos_list shows it).'),
+      workspace_id: z.string().max(130).optional().describe('With path: <target>/<name>. Agents: omit (their own workspace).'),
       branch: z.string().max(100).optional().describe('Default: wt/<6 hex>.'),
       base: z.string().max(100).optional().describe('A branch, tag or commit for a new branch. Default: HEAD.'),
       sync: z.boolean().optional().describe('Also keep it synced with its upstream.'),
       parent: z.string().max(400).optional().describe('An absolute folder to make it in. Default: <repository>.worktrees/.'),
     }),
     async handler(ctx, args) {
-      const ws = repoArg(ctx, repos, args.repo_id);
-      ctx.affected(`workspace:${ws}`, `repo:${args.repo_id}`);
-      const made = await repos.createWorktree(args.repo_id, { branch: args.branch, base: args.base, sync: args.sync, parent: args.parent }, ctx.actor, ctx.actorLabel);
+      const id = repoIdOfArgs(ctx, args);
+      const ws = repoArg(ctx, repos, id, args.workspace_id);
+      ctx.affected(`workspace:${ws}`, `repo:${id}`);
+      const made = await repos.createWorktree(id, { branch: args.branch, base: args.base, sync: args.sync, parent: args.parent }, ctx.actor, ctx.actorLabel);
       return {
         summary: `Made worktree ${made.branch}.`,
         worktree: { id: made.worktree.id, path: ctx.untrusted(made.worktree.path, SOURCE, 400), branch: ctx.untrusted(made.branch, SOURCE, 200), commit: made.commit, keep_synced: made.worktree.sync?.enabled ?? false },

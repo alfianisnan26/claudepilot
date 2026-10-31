@@ -53,7 +53,8 @@ export function glanceSources(reads: GlanceReads): GlanceSources {
       }
     },
     tickets: (actor) => {
-      const { items, total } = reads.tickets.list({ kind: 'ui' }, { assignee: 'user', limit: GLANCE_LIMITS.tickets });
+      // T-1993: the list is asked with the actor, so a bucket they may not view is out of the items and of the total alike.
+      const { items, total } = reads.tickets.list({ kind: 'ui', actor }, { assignee: 'user', limit: GLANCE_LIMITS.tickets });
       const mine: TicketItem[] = visible(actor, 'ticket', items, (t) => t.id);
       // Nothing hidden: the portal's own count is whole. Something hidden from this actor: only what they can see is counted.
       return { count: mine.length === items.length ? total : mine.length, items: mine };

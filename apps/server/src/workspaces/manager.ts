@@ -24,7 +24,7 @@ import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
 import { findWorkspace, WorkspaceIdentities, type WorkspaceIdentity } from './identity.js';
 import { describeValues } from './resources.js';
-import { isTargetUnreachable, type ResourceAccess, type Runtime, type ShellSession } from './runtime.js';
+import { isTargetUnreachable, type ResourceAccess, type ResourceApplied, type Runtime, type ShellSession } from './runtime.js';
 
 const notFound = () => new AppError('NOT_FOUND', 'Not found.');
 
@@ -567,8 +567,9 @@ export class Workspaces {
 
   /**
    * Stores a workspace's CPU and memory on its record and applies them when the person picked (T-98). `now`: refused while a CI run is
-   * running in it, or when the fit check does not say it fits (the numbers in the refusal); then the Deployment is patched and its pod
-   * restarts, every session in it ending (events written just before are pulled first, like a stop). `next_restart`: kept until its next
+   * running in it, or when the fit check does not say it fits (the numbers in the refusal); then the running pod is resized in place and the
+   * Deployment written (T-3081: no session ends), or, when the cluster refuses the resize, the Deployment is patched and its pod restarts,
+   * every session in it ending (events written just before are pulled first, like a stop); `how` and `resizeRefused` say which. `next_restart`: kept until its next
    * start, which applies them before it scales up. Values equal to what the Deployment has change nothing. Audited.
    */
   async setResources(
@@ -586,6 +587,7 @@ export class Workspaces {
       return this.#resourcesView(known, live, replicas, { fit, outcome: 'unchanged' });
     }
     let outcome: 'applied' | 'pending' = 'pending';
+    let applied: ResourceApplied | null = null;
     if (apply === 'now') {
       const ci = replicas > 0 ? (this.hooks.runningCi?.(known.legacyId) ?? 0) : 0;
       if (ci > 0) throw new AppError('CONFLICT', `${ci === 1 ? 'A CI run is' : `${ci} CI runs are`} running in this workspace. Let ${ci === 1 ? 'it' : 'them'} finish (or cancel ${ci === 1 ? 'it' : 'them'}), then apply.`, { details: { ci: String(ci) } });
@@ -594,9 +596,10 @@ export class Workspaces {
         const pull = this.hooks.beforeStop?.(known.legacyId).catch(() => undefined);
         if (pull) await Promise.race([pull, new Promise((r) => setTimeout(r, 5_000).unref())]);
       }
-      await this.#run(known.target, () => access.apply(known.name, values));
+      applied = (await this.#run(known.target, () => access.apply(known.name, values))) || null;
       outcome = 'applied';
     }
+    const restarted = applied?.how === 'restarted';
     this.identities.setResources(known.id, values, outcome === 'applied' ? { pendingAt: null, appliedAt: now } : { pendingAt: now, appliedAt: known.resourcesAppliedAt ?? null });
     this.#resourceProblems.delete(known.id);
     this.hooks.audit?.({
@@ -605,11 +608,24 @@ export class Workspaces {
       userId: actorUserId(actor),
       actorLabel: via.actorLabel ?? null,
       subject: known.id,
-      detail: { workspace: known.legacyId, apply, outcome, restarted: outcome === 'applied' && replicas > 0, from: describeValues(live), to: describeValues(values) },
+      detail: {
+        workspace: known.legacyId,
+        apply,
+        outcome,
+        restarted,
+        ...(applied ? { how: applied.how, resizeRefused: applied.refused } : {}),
+        from: describeValues(live),
+        to: describeValues(values),
+      },
     });
-    console.log(`[workspaces] ${known.legacyId} resources ${outcome === 'applied' ? (replicas > 0 ? 'applied, the pod restarts' : 'applied') : 'kept for the next start'}`);
+    const said =
+      outcome !== 'applied' ? 'kept for the next start'
+      : applied?.how === 'resized' ? 'applied in place, no restart'
+      : restarted ? `applied, the pod restarts${applied?.refused ? ` (in-place resize not used: ${applied.refused})` : ''}`
+      : 'applied';
+    console.log(`[workspaces] ${known.legacyId} resources ${said}`);
     this.hooks.changed?.();
-    return this.#resourcesView(known, outcome === 'applied' ? values : live, replicas, { fit, outcome });
+    return this.#resourcesView(known, outcome === 'applied' ? values : live, replicas, { fit, outcome, ...(applied ? { how: applied.how, resizeRefused: applied.refused } : {}) });
   }
 
   /**

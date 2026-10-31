@@ -108,3 +108,15 @@ test('T-1609: in the workspace, a gate Job already in the cluster for this commi
   const other = withJobs('job.batch/claudepilot-gate-0000000-a1b2');
   assert.match(other.stdout, new RegExp(`GATE JOB ${f.head} typecheck,web-build,web-tests`));
 });
+
+test('T-2167: the gate Job for this commit is found even when kubectl is still writing the list after it (no pipefail race with grep -q)', () => {
+  const f = fixture({ 'a.ts': 'export const a = 6;\n' });
+  const bin = join(f.root, '.fakebin');
+  // The matching name first, then more names a moment later: what a busy cluster's list looks like to a reader that stops at the first
+  // match. Before T-2167, `kubectl | grep -q` under pipefail: grep quit, kubectl's next write failed, the pipeline read as "no Job".
+  tool(join(bin, 'kubectl'), `printf '%s\\n' job.batch/claudepilot-gate-${f.head.slice(0, 7)}-a1b2\nsleep 0.3\nprintf '%s\\n' job.batch/claudepilot-job-0f job.batch/claudepilot-job-1f`);
+  const r = f.run({ PATH: `${bin}:${process.env.PATH}` });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /already in the cluster/);
+  assert.doesNotMatch(r.stdout, /GATE JOB/);
+});

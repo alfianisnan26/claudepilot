@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -187,6 +187,58 @@ test('T-960: a Python test runs with unittest when the image has no pytest, and 
   assert.match(bad.stdout, /test_bad\.py \(unittest, no pytest in the Job image\) FAILED/);
 });
 
+/** T-2975: script checks run by node's own test runner (as Konfersi's backend runs them, test:scripts), never vitest. */
+function scriptChecks(f: ReturnType<typeof fixture>, failing = false) {
+  mkdirSync(join(f.work, 'scripts/lib'), { recursive: true });
+  mkdirSync(join(f.work, 'pkg/tools'), { recursive: true });
+  const body = (ok: boolean) => `import test from 'node:test';\nimport assert from 'node:assert';\ntest('t', () => assert.ok(${ok}));\n`;
+  writeFileSync(join(f.work, 'scripts/snap.check.mjs'), body(!failing));
+  writeFileSync(join(f.work, 'scripts/lib/util.test.mjs'), body(true));
+  writeFileSync(join(f.work, 'pkg/tools/y.check.mjs'), body(true));
+  sh(f.work, 'git add -A && git commit -qm scripts');
+  // A vitest at the root and in pkg: it must not be called for these files (it does not collect *.check.mjs).
+  tool(join(f.work, 'node_modules/.bin/vitest'), `echo "vitest $* in $(basename "$PWD")" >> ${f.log}; exit 1`);
+}
+
+test('T-2975: *.check.mjs and scripts/** tests run with node --test, never vitest; a failing one fails', () => {
+  const f = fixture(0);
+  scriptChecks(f);
+  const tests = ['scripts/snap.check.mjs', 'scripts/lib/util.test.mjs', 'pkg/tools/y.check.mjs', 'pkg/x.test.mjs'];
+  const r = run(
+    f.work,
+    f.fake,
+    tests.flatMap((t) => ['--test', t]),
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /^::: test:\.\/scripts\/snap\.check\.mjs \(node --test\) ok$/m);
+  assert.match(r.stdout, /^::: test:\.\/scripts\/lib\/util\.test\.mjs \(node --test\) ok$/m);
+  assert.match(r.stdout, /^::: test:pkg\/tools\/y\.check\.mjs \(node --test\) ok$/m);
+  assert.equal(last(r.stdout), 'QUICK CHECK: all passed');
+  const tools = readFileSync(f.log, 'utf8');
+  assert.doesNotMatch(tools, /^vitest .*(check\.mjs|util\.test\.mjs)/m, 'vitest never got a script check');
+  assert.match(tools, /^vitest run x\.test\.mjs in pkg$/m, 'an ordinary test file still goes to vitest');
+  // The runner really ran it: a failing check is a failure.
+  const g = fixture(0);
+  scriptChecks(g, true);
+  const bad = run(g.work, g.fake, ['--test', 'scripts/snap.check.mjs']);
+  assert.equal(bad.status, 1, bad.stdout + bad.stderr);
+  assert.equal(last(bad.stdout), 'QUICK CHECK FAILED: test:./scripts/snap.check.mjs (node --test)');
+});
+
+test('T-2975: a repo with no prettier and no eslint whose --test passed is INCOMPLETE, never FAILED "nothing ran"', () => {
+  const f = fixture(0);
+  scriptChecks(f);
+  rmSync(join(f.work, 'node_modules/.bin/prettier'));
+  rmSync(join(f.work, 'node_modules/.bin/eslint'));
+  const r = run(f.work, f.fake, ['--test', 'scripts/snap.check.mjs']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: format SKIPPED \(no prettier\)/);
+  assert.match(r.stdout, /::: lint SKIPPED \(no eslint\)/);
+  assert.match(r.stdout, /::: test:\.\/scripts\/snap\.check\.mjs \(node --test\) ok/);
+  assert.doesNotMatch(r.stdout, /FAILED/);
+  assert.equal(last(r.stdout), 'QUICK CHECK INCOMPLETE: SKIPPED format lint (the other steps passed)');
+});
+
 test('--dir names the worktree, so a lane whose shell is back in another folder checks the right one (T-1053); a missing folder is a usage error', () => {
   const f = fixture(0);
   const r = run(f.root, f.fake, ['--dir', f.work, '--test', 'pkg/x.test.mjs']);
@@ -223,14 +275,17 @@ test('T-857: a file the package test:scripts glob matches runs with node --test,
   assert.doesNotMatch(tools, /a\.check\.mjs/, 'the node:test file never reached vitest');
   assert.match(tools, /^vitest run src\/b\.test\.mjs$/m);
   // A failing node:test file fails the check.
-  writeFileSync(join(f.work, 'be/scripts/a.check.mjs'), "import { test } from 'node:test';\ntest('bad', () => { throw new Error('x'); });\n");
+  writeFileSync(
+    join(f.work, 'be/scripts/a.check.mjs'),
+    "import { test } from 'node:test';\ntest('bad', () => { throw new Error('x'); });\n",
+  );
   sh(f.work, 'git commit -qam bad');
   const bad = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'be/scripts/a.check.mjs']);
   assert.equal(bad.status, 1);
   assert.equal(last(bad.stdout), 'QUICK CHECK FAILED: test:be/scripts/a.check.mjs (node --test)');
 });
 
-test("T-3101: a package with its own scripts/test.mjs entry runs the file through it (extensionless imports need its bundle)", () => {
+test('T-3101: a package with its own scripts/test.mjs entry runs the file through it (extensionless imports need its bundle)', () => {
   const f = fixture(0);
   pkg(f, 'lab', '{}\n', {
     'scripts/test.mjs': `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(f.log)}, 'entry ' + process.argv.slice(2).join(' ') + '\\n');\n`,
@@ -245,6 +300,26 @@ test("T-3101: a package with its own scripts/test.mjs entry runs the file throug
   assert.doesNotMatch(tools, /vitest/);
 });
 
+test('the order: a declared runner wins over the T-2975 routing, which wins over the installed tools', () => {
+  const f = fixture(0);
+  pkg(f, 'lab', '{}\n', {
+    'scripts/test.mjs': `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(f.log)}, 'entry ' + process.argv.slice(2).join(' ') + '\\n');\n`,
+    'src/a.check.mjs': 'x\n',
+  });
+  pkg(f, 'be', JSON.stringify({ scripts: { 'test:scripts': 'node --test scripts/*.check.mjs' } }), {
+    'tools/y.check.mjs': "import { test } from 'node:test';\ntest('ok', () => {});\n",
+  });
+  tool(join(f.work, 'lab/node_modules/.bin/vitest'), `echo "vitest $*" >> ${f.log}; exit 0`);
+  tool(join(f.work, 'be/node_modules/.bin/vitest'), `echo "vitest $*" >> ${f.log}; exit 1`);
+  const r = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'lab/src/a.check.mjs', '--test', 'be/tools/y.check.mjs']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: test:lab\/src\/a\.check\.mjs \(scripts\/test\.mjs\) ok/);
+  assert.match(r.stdout, /::: test:be\/tools\/y\.check\.mjs \(node --test\) ok/);
+  const tools = readFileSync(f.log, 'utf8');
+  assert.match(tools, /^entry src\/a\.check\.mjs$/m);
+  assert.doesNotMatch(tools, /vitest/);
+});
+
 test('a plain vitest package (no test:scripts, no scripts/test.mjs) still runs vitest', () => {
   const f = fixture(0);
   pkg(f, 'plain', JSON.stringify({ scripts: { test: 'vitest run', 'test:scripts': 'node --test scripts/*.check.mjs' } }), {
@@ -255,4 +330,57 @@ test('a plain vitest package (no test:scripts, no scripts/test.mjs) still runs v
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /::: test:plain\/src\/z\.test\.ts ok/);
   assert.match(readFileSync(f.log, 'utf8'), /^vitest run src\/z\.test\.ts$/m);
+});
+
+/** The fixture gets the real scripts/context-pack.sh and a committed, fresh docs/context-pack.md: every path the pack names is created as a
+ * placeholder (the pack's path check), repeated until the pack names nothing new (its hot files list what was just committed). */
+function withPack(f: ReturnType<typeof fixture>) {
+  mkdirSync(join(f.work, 'scripts'), { recursive: true });
+  copyFileSync(join(REPO, 'scripts/context-pack.sh'), join(f.work, 'scripts/context-pack.sh'));
+  writeFileSync(join(f.work, 'CLAUDE.md'), '# Fixture\n\n## Map\n');
+  sh(f.work, 'git add -A && git commit -qm pack-script');
+  for (let i = 0; i < 5; i++) {
+    const pack = sh(f.work, 'bash scripts/context-pack.sh --stdout --no-path-check');
+    const named = [...pack.matchAll(/`([^` ]*\/[^` ]*)`/g)].map((m) => m[1] ?? '').filter((p) => !/[*<>(){}]|^\/|^[-.]*$|^https?:/.test(p));
+    const missing = named.filter((p) => !existsSync(join(f.work, p)));
+    if (missing.length === 0) break;
+    for (const p of missing) {
+      const bare = p.replace(/\/$/, '');
+      if (p.endsWith('/') || named.some((q) => q.startsWith(`${bare}/`))) {
+        mkdirSync(join(f.work, bare), { recursive: true });
+        writeFileSync(join(f.work, bare, '.keep'), '');
+      } else {
+        mkdirSync(dirname(join(f.work, bare)), { recursive: true });
+        writeFileSync(join(f.work, bare), '# fixture\n');
+      }
+    }
+    sh(f.work, 'git add -A && git commit -qm paths');
+  }
+  sh(f.work, 'bash scripts/context-pack.sh && git add -A && git commit -qm pack');
+}
+
+test('T-3173: the gate context-pack check runs in the quick check: a fresh pack passes, a stale one fails and is named', () => {
+  const f = fixture(0);
+  withPack(f);
+  const fresh = run(f.work, f.fake, []);
+  assert.equal(fresh.status, 0, fresh.stdout + fresh.stderr);
+  assert.match(fresh.stdout, /::: context-pack ok/);
+  assert.equal(last(fresh.stdout), 'QUICK CHECK: all passed');
+  // A new script without a regenerated pack: the pack's script list no longer matches the commit (incident T-2888).
+  writeFileSync(join(f.work, 'scripts/new-thing.sh'), '#!/usr/bin/env bash\n# a script the pack does not list yet\n');
+  sh(f.work, 'git add -A && git commit -qm new-script');
+  const stale = run(f.work, f.fake, []);
+  assert.equal(stale.status, 1, stale.stdout + stale.stderr);
+  assert.match(stale.stdout, /::: context-pack FAILED/);
+  assert.match(stale.stdout + stale.stderr, /stale: docs\/context-pack\.md differs/);
+  assert.equal(last(stale.stdout), 'QUICK CHECK FAILED: context-pack');
+  // The other checks still ran and passed.
+  assert.match(stale.stdout, /::: format ok/);
+});
+
+test('T-3173: a repository without scripts/context-pack.sh gets no context-pack check', () => {
+  const f = fixture(0);
+  const r = run(f.work, f.fake, []);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /context-pack/);
 });

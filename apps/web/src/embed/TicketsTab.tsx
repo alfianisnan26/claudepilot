@@ -1,0 +1,759 @@
+import {
+  TICKET_PRIORITIES,
+  TICKET_PRIORITY_LABEL,
+  TICKET_STATUSES,
+  TICKET_STATUS_LABEL,
+  TICKET_TYPES,
+  TICKET_TYPE_LABEL,
+  type ReporterTicket,
+  type ReporterTicketComment,
+  type ReporterTicketList,
+  type TicketPriority,
+  type TicketType,
+} from '@portal/contracts';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { appendPage, filterChips, refreshLimit, reuseRows, rowThumb, splitPrefix, windowRange } from './chatModel';
+import { SEVERITIES, deployLine, pathnameOf, shortCommit, shotCaption } from '@/features/reporter/shared';
+import { usePanel } from './context';
+import { Icon } from './icons';
+import { Composer } from './Composer';
+import { Thread } from './Thread';
+import { Viewer } from './Viewer';
+import {
+  SORT_LABEL,
+  activeFilterCount,
+  buildQuery,
+  capturesHere,
+  effectiveOrder,
+  effectiveSort,
+  groupByPage,
+  parsePrefs,
+  playlist,
+  samePageHref,
+  type ListPrefs,
+  type Sort,
+} from './model';
+import { AuthImg, Btn, Chip, IconBtn, Notice, PhaseChip, Seg, inputClass } from './ui';
+
+const prefsKey = (bucket: string) => `pilot-reporter:prefs:${bucket}`;
+
+export function TicketsTab() {
+  const p = usePanel();
+  return p.selected ? <TicketDetail key={p.selected} ticketKey={p.selected} /> : <TicketList />;
+}
+
+/** The list as last shown per bucket and query (rows, cursor, scroll): back from a ticket it is there at once, where it was. */
+const listCache = new Map<string, { list: ReporterTicketList; scrollTop: number }>();
+const WINDOW_FROM = 60;
+const ROW_PX = 72;
+const scroller = () => document.getElementById('panel-main');
+
+function TicketList() {
+  const { client, bucket, page, tick, select, focus, status, post, focused } = usePanel();
+  const [prefs, setPrefsState] = useState<ListPrefs>(() => {
+    try {
+      return parsePrefs(localStorage.getItem(prefsKey(bucket)));
+    } catch {
+      return parsePrefs(null);
+    }
+  });
+  const setPrefs = (next: ListPrefs) => {
+    setPrefsState(next);
+    try {
+      localStorage.setItem(prefsKey(bucket), JSON.stringify({ ...next, q: '' }));
+    } catch {
+      // per-viewer convenience only
+    }
+  };
+  const path = page ? safePathname(page.url) : null;
+  const query = useMemo(() => buildQuery(prefs, path), [prefs, path]);
+  const cacheKey = `${bucket}|${JSON.stringify(query)}`;
+  const [list, setList] = useState<ReporterTicketList | null>(() => listCache.get(cacheKey)?.list ?? null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
+  const [sheet, setSheet] = useState<'filter' | 'sort' | null>(null);
+  const [q, setQ] = useState(prefs.q);
+  const listRef = useRef(list);
+  listRef.current = list;
+
+  // Search waits for a pause in typing.
+  useEffect(() => {
+    const t = setTimeout(() => q !== prefs.q && setPrefsState((cur) => ({ ...cur, q })), 300);
+    return () => clearTimeout(t);
+  }, [q, prefs.q]);
+
+  // The first page, and on a change event the rows already loaded (so the pages scrolled through stay); unchanged rows keep their objects.
+  const keyRef = useRef(cacheKey);
+  useEffect(() => {
+    let live = true;
+    let loaded = listRef.current?.items.length ?? 0;
+    if (keyRef.current !== cacheKey) {
+      // Another query: its own cached rows or nothing, never the last query's.
+      keyRef.current = cacheKey;
+      const c = listCache.get(cacheKey)?.list ?? null;
+      setList(c);
+      listRef.current = c;
+      loaded = c?.items.length ?? 0;
+    }
+    client.tickets({ ...query, limit: refreshLimit(loaded) }).then(
+      (l) => {
+        if (!live) return;
+        setList((cur) => {
+          const items = reuseRows(cur?.items ?? null, l.items);
+          return cur && items === cur.items && cur.nextCursor === l.nextCursor ? cur : { ...l, items };
+        });
+        setFailed(null);
+      },
+      (e: Error) => live && setFailed(e.message),
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, query, cacheKey, tick]);
+  // Back from a ticket: where the list was.
+  useLayoutEffect(() => {
+    const top = listCache.get(cacheKey)?.scrollTop;
+    if (top) scroller()?.scrollTo({ top });
+    // once, on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (list) listCache.set(cacheKey, { list, scrollTop: listCache.get(cacheKey)?.scrollTop ?? 0 });
+  }, [list, cacheKey]);
+
+  // The next page when the end of the list comes into view.
+  const loadMore = useCallback(() => {
+    const cur = listRef.current;
+    if (!cur?.nextCursor || more) return;
+    setMore(true);
+    client.tickets({ ...query, cursor: cur.nextCursor }).then(
+      (l) => {
+        setList((c) => (c ? { ...c, items: appendPage(c.items, l.items), nextCursor: l.nextCursor } : c));
+        setMore(false);
+      },
+      () => setMore(false),
+    );
+  }, [client, query, more]);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = end.current;
+    if (!el || typeof IntersectionObserver !== 'function') return;
+    const io = new IntersectionObserver((e) => e.some((x) => x.isIntersecting) && loadMore(), { root: scroller(), rootMargin: '400px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [loadMore, list?.nextCursor]);
+
+  // Play all: every capture on this page, top to bottom; the host's caption card can also end it.
+  const [play, setPlay] = useState<{ items: { key: string; captureId: string }[]; at: number } | null>(null);
+  const started = useRef(false);
+  useEffect(() => {
+    if (!play) return;
+    const item = play.items[play.at];
+    if (item) post({ type: 'pilot-reporter:focus', key: item.key, captureId: item.captureId, spotlight: true });
+  }, [play, post]);
+  useEffect(() => {
+    if (focused) started.current = true;
+    else if (started.current && play) {
+      started.current = false;
+      setPlay(null);
+    }
+  }, [focused, play]);
+
+  const items = list?.items ?? [];
+  const env = status.site?.environment ?? null;
+  const filters = activeFilterCount(prefs);
+  const grouped = prefs.scope === 'grouped' ? groupByPage(items) : null;
+
+  // One handler for every row (stable), so a memoised row re-renders only when its ticket changed.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const open = useCallback(
+    (key: string) => {
+      const t = itemsRef.current.find((x) => x.key === key);
+      if (!t) return;
+      const c = listCache.get(cacheKey);
+      if (c) c.scrollTop = scroller()?.scrollTop ?? 0;
+      const here = path ? capturesHere(t, path)[0] : undefined;
+      focus(t.key, here?.captureId ?? null);
+      select(t.key);
+    },
+    [cacheKey, path, focus, select],
+  );
+
+  const chips = filterChips(prefs, {
+    status: (v) => (v === 'closed' ? 'Closed' : v === 'all' ? 'Any status' : (TICKET_STATUS_LABEL[v as keyof typeof TICKET_STATUS_LABEL] ?? v)),
+    priority: (v) => TICKET_PRIORITY_LABEL[v as TicketPriority],
+    type: (v) => TICKET_TYPE_LABEL[v as TicketType],
+  });
+  const closedCount = list?.counts.status.closed ?? 0;
+
+  return (
+    <div className="flex flex-col gap-2 px-3 pt-2 pb-3">
+      <Seg
+        label="Scope"
+        value={prefs.scope === 'page' ? 'page' : 'all'}
+        onChange={(v) => setPrefs({ ...prefs, scope: v === 'page' ? 'page' : prefs.scope === 'grouped' ? 'grouped' : 'all' })}
+        options={[
+          { value: 'page', label: `This page${list && prefs.scope === 'page' ? ` · ${list.counts.onPath || items.length}` : ''}` },
+          { value: 'all', label: 'All' },
+        ]}
+      />
+      <div className="relative flex items-center gap-2">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Search</span>
+          <Icon name="search" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
+          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className={`${inputClass} pl-9`} />
+        </label>
+        <button
+          type="button"
+          onClick={() => setSheet(sheet === 'filter' ? null : 'filter')}
+          aria-expanded={sheet === 'filter'}
+          aria-label={`Filter${filters ? `, ${filters} on` : ''}`}
+          title="Filter"
+          className="relative inline-flex size-11 items-center justify-center rounded-xl bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        >
+          <Icon name="slidersHorizontal" />
+          {filters > 0 && <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-accent px-1 text-center text-[11px] leading-4 font-bold text-primary-ink">{filters}</span>}
+        </button>
+        <button
+          type="button"
+          onClick={() => setSheet(sheet === 'sort' ? null : 'sort')}
+          aria-expanded={sheet === 'sort'}
+          aria-label={`Sort: ${SORT_LABEL[effectiveSort(prefs)]}`}
+          title="Sort"
+          className="inline-flex size-11 items-center justify-center rounded-xl bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        >
+          <Icon name="arrowUpDown" />
+        </button>
+        {sheet === 'sort' && <SortPopover prefs={prefs} onChange={setPrefs} onClose={() => setSheet(null)} />}
+      </div>
+      {chips.length > 0 && (
+        <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3">
+          {chips.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setPrefs(c.without)}
+              aria-label={`Remove filter ${c.label}`}
+              className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full bg-accent-soft px-3 text-[13px] font-semibold text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            >
+              {c.label}
+              <Icon name="x" className="size-3.5" />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {sheet === 'filter' && <FilterSheet prefs={prefs} counts={list?.counts ?? null} items={items} onApply={setPrefs} onClose={() => setSheet(null)} />}
+
+      {prefs.scope === 'page' && path && items.length > 0 && (
+        <div className="flex items-center justify-end gap-0.5">
+          {play ? (
+            <>
+              <span className="mr-auto text-[13px] text-muted">Showing on the page</span>
+              <IconBtn icon="chevronLeft" label="Previous" disabled={play.at === 0} onClick={() => setPlay({ ...play, at: play.at - 1 })} />
+              <span className="min-w-11 text-center text-[13px] font-semibold tabular-nums">
+                {play.at + 1}/{play.items.length}
+              </span>
+              <IconBtn icon="chevronRight" label="Next" disabled={play.at >= play.items.length - 1} onClick={() => setPlay({ ...play, at: play.at + 1 })} />
+              <IconBtn
+                icon="square"
+                label="Stop"
+                onClick={() => {
+                  setPlay(null);
+                  post({ type: 'pilot-reporter:focus-clear' });
+                }}
+              />
+            </>
+          ) : (
+            <Btn tone="ghost" icon="play" onClick={() => setPlay({ items: playlist(items, path), at: 0 })}>
+              Play all
+            </Btn>
+          )}
+        </div>
+      )}
+
+      {failed && <Notice tone="error">{failed}</Notice>}
+      {!list && !failed && <div className="skeleton h-32 rounded-2xl" aria-busy="true" />}
+      {list && items.length === 0 && (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <p className="text-[14px] text-muted">{prefs.status === 'open' ? (prefs.scope === 'page' ? 'No open tickets here' : 'No open tickets') : 'No tickets'}</p>
+          {prefs.status === 'open' && closedCount > 0 && (
+            <Btn tone="secondary" onClick={() => setPrefs({ ...prefs, status: 'closed' })}>
+              Show {closedCount} closed
+            </Btn>
+          )}
+        </div>
+      )}
+
+      {grouped
+        ? grouped.map((g) => (
+            <section key={g.path} className="flex flex-col gap-0.5">
+              <h2 className="px-1 text-[12.5px] font-semibold break-all text-muted">{g.path || 'No page'}</h2>
+              <ul className="flex flex-col">
+                {g.items.map((t) => (
+                  <Row key={t.key} t={t} path={path} env={env} onOpen={open} />
+                ))}
+              </ul>
+            </section>
+          ))
+        : list && <Rows items={items} path={path} env={env} onOpen={open} />}
+      {list?.nextCursor && (
+        <div ref={end} className="flex min-h-11 items-center justify-center">
+          {more ? <span className="text-[13px] text-muted">Loading…</span> : <Btn tone="ghost" onClick={loadMore}>More</Btn>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The rows; a long list renders only the rows near the scrolled-to range (spacers keep its length). */
+function Rows({ items, path, env, onOpen }: { items: ReporterTicket[]; path: string | null; env: string | null; onOpen: (key: string) => void }) {
+  const [range, setRange] = useState(() => ({ start: 0, end: Math.min(items.length, WINDOW_FROM) }));
+  const ul = useRef<HTMLUListElement>(null);
+  const windowed = items.length > WINDOW_FROM;
+  useEffect(() => {
+    if (!windowed) return;
+    const el = scroller();
+    if (!el) return;
+    const update = () => {
+      const top = el.scrollTop - (ul.current?.offsetTop ?? 0);
+      setRange((cur) => {
+        const r = windowRange(items.length, top, el.clientHeight, ROW_PX);
+        return r.start === cur.start && r.end === cur.end ? cur : r;
+      });
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    return () => el.removeEventListener('scroll', update);
+  }, [windowed, items.length]);
+  const { start, end } = windowed ? range : { start: 0, end: items.length };
+  return (
+    <ul ref={ul} className="flex flex-col gap-1">
+      {start > 0 && <li aria-hidden="true" style={{ height: start * ROW_PX }} />}
+      {items.slice(start, end).map((t) => (
+        <Row key={t.key} t={t} path={path} env={env} onOpen={onOpen} />
+      ))}
+      {end < items.length && <li aria-hidden="true" style={{ height: (items.length - end) * ROW_PX }} />}
+    </ul>
+  );
+}
+
+const PRIORITY_TONE: Partial<Record<TicketPriority, string>> = { urgent: 'text-danger', high: 'text-flame' };
+
+/**
+ * One ticket (UX review 2026-10-31): a meta line (key, priority only when Urgent or High, the status chip, a "Reply" badge when someone
+ * waits on the reporter, else an unread dot) and the title on two lines, a bracketed prefix as a small tag. A small thumbnail on the left
+ * ONLY when the ticket has a screenshot (fixed 48 px, lazy): a ticket filed elsewhere is a text row with no placeholder. Memoised.
+ */
+export const Row = memo(function Row({ t, path, onOpen }: { t: ReporterTicket; path: string | null; env?: string | null; onOpen: (key: string) => void }) {
+  const { client } = usePanel();
+  const thumb = rowThumb(t, path ? capturesHere(t, path) : []);
+  const title = splitPrefix(t.summary);
+  const tone = PRIORITY_TONE[t.priority];
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(t.key)}
+        data-row={thumb ? 'thumb' : 'text'}
+        className="flex min-h-11 w-full items-start gap-3 rounded-xl px-2 py-2 text-left hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+      >
+        {thumb && <AuthImg client={client} src={thumb} alt="" className="size-12 shrink-0 rounded-lg" />}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted">
+            <span className="font-semibold whitespace-nowrap tabular-nums">{t.key}</span>
+            {tone && (
+              <span className={`inline-flex items-center gap-0.5 font-semibold whitespace-nowrap ${tone}`}>
+                <Icon name="flag" className="size-3" />
+                {TICKET_PRIORITY_LABEL[t.priority]}
+              </span>
+            )}
+            <PhaseChip phase={t.phase} />
+            {t.awaitingReporter ? (
+              <span title="Someone asked you something on this ticket" className="ml-auto shrink-0 rounded-full bg-accent px-2 text-[12px] leading-5 font-bold text-primary-ink">
+                Reply
+              </span>
+            ) : (
+              t.unread > 0 && <span className="ml-auto size-2 shrink-0 rounded-full bg-accent" aria-label={`${t.unread} unread`} />
+            )}
+          </span>
+          <span className="line-clamp-2 text-[14px] leading-5 font-semibold break-words">
+            {title.tag && <span className="mr-1 rounded bg-surface-2 px-1.5 py-px align-[1px] text-[12px] font-semibold text-ink-soft">{title.tag}</span>}
+            {title.text}
+          </span>
+        </span>
+      </button>
+    </li>
+  );
+});
+
+const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+
+/** Filters as a bottom sheet over the list (nothing pushes the list down): Status, Priority, Type; Tags and Who when there is data. Apply. */
+function FilterSheet({ prefs, counts, items, onApply, onClose }: { prefs: ListPrefs; counts: ReporterTicketList['counts'] | null; items: ReporterTicket[]; onApply: (p: ListPrefs) => void; onClose: () => void }) {
+  const [draft, setDraft] = useState(prefs);
+  const tags = [...new Set([...items.flatMap((t) => (t as { tags?: string[] }).tags ?? []), ...prefs.tags])].slice(0, 20);
+  const statusOptions: { value: ListPrefs['status']; label: string }[] = [
+    { value: 'open', label: 'Open' },
+    { value: 'closed', label: 'Closed' },
+    { value: 'all', label: 'All' },
+    // 'open' as a query means every open status (the contract's group), so the status itself is not offered twice.
+    ...TICKET_STATUSES.filter((s) => s !== 'open').map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] })),
+  ];
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Filter">
+      <button type="button" aria-label="Close filters" tabIndex={-1} onClick={onClose} className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.35)' }} />
+      <div className="relative flex max-h-[85%] flex-col rounded-t-2xl bg-bg shadow-lg">
+        <div className="flex shrink-0 items-center gap-1 px-3 pt-1">
+          <h2 className="flex-1 text-[15px] font-bold">Filter</h2>
+          <IconBtn icon="x" label="Close filters" onClick={onClose} />
+        </div>
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-3 pb-3">
+          <Group label="Status">
+            {statusOptions.map((o) => (
+              <Chip key={o.value} on={draft.status === o.value} onClick={() => setDraft({ ...draft, status: o.value })} count={counts?.status[o.value]}>
+                {o.label}
+              </Chip>
+            ))}
+          </Group>
+          <Group label="Priority">
+            {TICKET_PRIORITIES.map((v) => (
+              <Chip key={v} on={draft.priority.includes(v)} onClick={() => setDraft({ ...draft, priority: toggle<TicketPriority>(draft.priority, v) })} count={counts?.priority[v]}>
+                {TICKET_PRIORITY_LABEL[v]}
+              </Chip>
+            ))}
+          </Group>
+          <Group label="Type">
+            {TICKET_TYPES.map((v) => (
+              <Chip key={v} on={draft.type.includes(v)} onClick={() => setDraft({ ...draft, type: toggle<TicketType>(draft.type, v) })} count={counts?.type[v]}>
+                {TICKET_TYPE_LABEL[v]}
+              </Chip>
+            ))}
+          </Group>
+          {tags.length > 0 && (
+            <Group label="Tags">
+              {tags.map((t) => (
+                <Chip key={t} on={draft.tags.includes(t)} onClick={() => setDraft({ ...draft, tags: toggle(draft.tags, t) })}>
+                  #{t}
+                </Chip>
+              ))}
+            </Group>
+          )}
+          {items.length > 0 && (
+            <Group label="Who">
+              <Chip on={draft.mine} onClick={() => setDraft({ ...draft, mine: !draft.mine })}>
+                Mine
+              </Chip>
+            </Group>
+          )}
+        </div>
+        <div className="flex shrink-0 gap-2 border-t border-line px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <Btn tone="ghost" onClick={() => setDraft({ ...draft, status: 'open', priority: [], type: [], tags: [], mine: false })}>
+            Clear
+          </Btn>
+          <Btn
+            tone="primary"
+            className="flex-1"
+            onClick={() => {
+              onApply(draft);
+              onClose();
+            }}
+          >
+            Apply
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Sort as a small popover: the sorts (Position only on This page), the order, and Group by page. */
+function SortPopover({ prefs, onChange, onClose }: { prefs: ListPrefs; onChange: (p: ListPrefs) => void; onClose: () => void }) {
+  const sorts = (Object.keys(SORT_LABEL) as Sort[]).filter((s) => s !== 'position' || prefs.scope === 'page');
+  const current = effectiveSort(prefs);
+  const order = effectiveOrder(prefs);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node) && !(e.target as Element).closest?.('[aria-label^="Sort"]')) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('pointerdown', away);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [onClose]);
+  const row = 'flex min-h-11 w-full items-center gap-2 px-3 text-left text-[14px] focus-visible:bg-surface-2 focus-visible:outline-hidden';
+  return (
+    <div ref={ref} role="menu" aria-label="Sort" className="absolute top-12 right-0 z-30 w-60 overflow-hidden rounded-2xl border border-line bg-surface py-1 shadow-lg">
+      {sorts.map((s) => (
+        <button key={s} type="button" role="menuitemradio" aria-checked={current === s} onClick={() => onChange({ ...prefs, sort: s, order: null })} className={row}>
+          <span className="w-4">{current === s && <Icon name="check" className="size-4 text-accent" />}</span>
+          {SORT_LABEL[s]}
+        </button>
+      ))}
+      <div className="my-1 border-t border-line" />
+      <button type="button" role="menuitem" onClick={() => onChange({ ...prefs, sort: current, order: order === 'asc' ? 'desc' : 'asc' })} className={row}>
+        <Icon name="arrowUpDown" className="size-4 text-muted" />
+        {current === 'position' ? (order === 'asc' ? 'Top first' : 'Bottom first') : order === 'asc' ? 'Oldest first' : 'Newest first'}
+      </button>
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        aria-checked={prefs.scope === 'grouped'}
+        onClick={() => onChange({ ...prefs, scope: prefs.scope === 'grouped' ? 'all' : 'grouped' })}
+        className={row}
+      >
+        <span className="w-4">{prefs.scope === 'grouped' && <Icon name="check" className="size-4 text-accent" />}</span>
+        Group by page
+      </button>
+    </div>
+  );
+}
+
+function Group({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <fieldset className="flex flex-col gap-1.5">
+      <legend className="mb-1 text-[12.5px] font-semibold text-muted">{label}</legend>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </fieldset>
+  );
+}
+
+/** The ticket card: status, where it stands per environment, its captures (each one focusable on the page) and the thread. */
+function TicketDetail({ ticketKey }: { ticketKey: string }) {
+  const { client, select, page, focus, missing, origin, tick, status, post, coarse, openChat } = usePanel();
+  const [t, setT] = useState<ReporterTicket | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [thread, setThread] = useState<ReporterTicketComment[] | null>(null);
+  const [reply, setReply] = useState('');
+  const [sending, setSending] = useState(false);
+  const [view, setView] = useState<ReporterTicket['captures'][number] | null>(null);
+  const jumpRef = useRef<(() => void) | null>(null);
+  const path = page ? safePathname(page.url) : null;
+
+  useEffect(() => {
+    let live = true;
+    client.ticket(ticketKey).then(
+      (v) => live && (setT(v), setFailed(null)),
+      // A 404 while the session is fine (the client checks /me) is this ticket gone, said in this view only.
+      (e: Error & { status?: number }) => live && setFailed(e.status === 404 ? 'This ticket is not here any more.' : e.message),
+    );
+    // Reading the thread marks it read.
+    client.comments(ticketKey).then(
+      (c) => live && setThread((cur) => (cur && JSON.stringify(cur) === JSON.stringify(c) ? cur : c)),
+      () => live && setThread((cur) => cur ?? []),
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, ticketKey, tick]);
+
+  const back = () => {
+    select(null);
+    post({ type: 'pilot-reporter:focus-clear' });
+  };
+  const send = async () => {
+    if (!reply.trim()) return;
+    setSending(true);
+    try {
+      await client.reply(ticketKey, reply.trim());
+      setReply('');
+      setThread(await client.comments(ticketKey));
+      requestAnimationFrame(() => jumpRef.current?.());
+    } catch (e) {
+      setFailed((e as Error).message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const env = status.site?.environment ?? null;
+  const missingHere = missing && missing.key === ticketKey ? missing : null;
+  const missingCapture = missingHere?.captureId ? t?.captures.find((c) => c.captureId === missingHere.captureId) : undefined;
+  const otherPage = missingHere?.reason === 'other-page' ? (missingCapture ?? (t && path ? t.captures.find((c) => pathnameOf(c.anchor.path) !== pathnameOf(path)) : undefined)) : undefined;
+  const otherHref = otherPage ? samePageHref(origin, otherPage.anchor.path) : null;
+
+  const info = t && (
+    <div className="flex flex-col gap-2.5 pb-3">
+      <div>
+        <h2 className="text-[16px] leading-snug font-bold break-words">{t.summary}</h2>
+        {/* One meta line (UX review 2026-10-31): key · priority · status, nothing twice. */}
+        <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[13px] text-muted">
+          <span className="font-semibold whitespace-nowrap tabular-nums">{t.key}</span>
+          <span aria-hidden="true">·</span>
+          <span className={PRIORITY_TONE[t.priority] ?? ''}>{TICKET_PRIORITY_LABEL[t.priority]}</span>
+          <span aria-hidden="true">·</span>
+          <PhaseChip phase={t.phase} />
+          {t.site && <span className="whitespace-nowrap">· on {t.site.environment}</span>}
+        </p>
+      </div>
+
+      {t.target.kind === 'session' && (
+        <Notice tone={t.target.status === 'delivery-failed' ? 'error' : 'info'}>
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span className="min-w-0 flex-1">
+              {t.target.status === 'delivery-failed' ? (
+                <>
+                  <strong>{t.target.label}</strong> did not get this report; the ticket is kept in the queue.
+                </>
+              ) : (
+                <>
+                  Sent to <strong>{t.target.label}</strong> · {t.target.status}
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => t.target.kind === 'session' && openChat({ sessionId: t.target.sessionId, ticketKey: t.key })}
+              className="inline-flex min-h-11 items-center gap-1 font-semibold text-accent"
+            >
+              <Icon name="messageSquare" className="size-4" />
+              Chat
+            </button>
+          </span>
+        </Notice>
+      )}
+      {t.site?.declaredMismatch && (
+        <Notice tone="error">
+          The page declared {t.site.declaredMismatch.repo ?? t.site.repo} / {t.site.declaredMismatch.environment ?? t.site.environment}; the site record says {t.site.repo} / {t.site.environment}.
+        </Notice>
+      )}
+
+      {t.deployments.length === 0 && !t.fixCommits.length ? (
+        <p className="text-[13px] text-muted">No deployment known yet.</p>
+      ) : (
+      <section className="rounded-2xl border border-line px-3 py-2">
+        {t.deployments.length > 0 && (
+          <ul className="flex flex-col gap-1 text-[13px]">
+            {t.deployments.map((d) => (
+              <li
+                key={d.environment}
+                className={`break-words ${d.environment === env ? 'font-semibold' : ''} ${d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}`}
+              >
+                {deployLine(d)}
+              </li>
+            ))}
+          </ul>
+        )}
+        {t.fixCommits.length > 0 && <p className="mt-1 text-[12.5px] break-all text-muted">Fix {t.fixCommits.map((c) => shortCommit(c)).join(', ')}</p>}
+      </section>
+      )}
+
+      {SEVERITIES.some((s) => t.checkCounts[s] > 0) && (
+        <p className="flex flex-wrap gap-1.5 text-[12px]">
+          {SEVERITIES.filter((s) => t.checkCounts[s] > 0).map((s) => (
+            <span key={s} className={`rounded-full px-2 py-0.5 font-semibold ${s === 'critical' || s === 'serious' ? 'bg-danger-soft text-danger' : 'bg-surface-2 text-ink-soft'}`}>
+              {t.checkCounts[s]} {s}
+            </span>
+          ))}
+        </p>
+      )}
+
+      {t.captures.length > 0 && (
+        <section>
+          <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Shots</h3>
+          <ul className="flex gap-2 overflow-x-auto pb-1">
+            {t.captures.map((c) => (
+              <li key={c.captureId} className="shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    focus(t.key, c.captureId);
+                    if (c.screenshotUrl) setView(c);
+                  }}
+                  className="flex w-28 flex-col gap-1 rounded-xl p-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+                  aria-label={`View shot ${c.index}`}
+                >
+                  <AuthImg client={client} src={c.screenshotUrl} alt={`Shot ${c.index}`} className="h-20 w-full rounded-lg" />
+                  <span className="truncate text-[11.5px] text-muted">{shotCaption(c.index, c.anchor.path)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {missingHere && (
+        <Notice tone="info">
+          {missingHere.reason === 'other-page' ? 'That shot is on another page.' : 'That area is not on the page any more.'}
+          {otherHref && (
+            <button type="button" className="ml-2 font-semibold text-accent underline" onClick={() => window.open(otherHref, '_top')}>
+              Open that page
+            </button>
+          )}
+        </Notice>
+      )}
+
+      {t.repro && t.repro.steps.length > 0 && (
+        <details className="rounded-2xl border border-line p-3">
+          <summary className="flex min-h-11 cursor-pointer items-center text-[13px] font-semibold">Steps</summary>
+          <ol className="mt-2 list-decimal pl-5 text-[13px]">
+            {t.repro.steps.map((s, i) => (
+              <li key={i} className="break-words">
+                {s}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+      <h3 className="text-[13px] font-semibold text-muted">Thread</h3>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {/* pr-12: the SDK draws its one Close over the panel's top-right corner. */}
+      <div className="flex shrink-0 items-center gap-1 pr-12 pl-1">
+        <IconBtn icon="chevronLeft" label="Back" onClick={back} />
+        <span className="flex-1 text-[14px] font-semibold tabular-nums">{ticketKey}</span>
+        {t && (
+          <a href={t.url} target="_blank" rel="noopener noreferrer" aria-label="Open in pilot" title="Open in pilot" className="inline-flex size-11 items-center justify-center rounded-xl focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
+            <Icon name="externalLink" />
+          </a>
+        )}
+      </div>
+      {failed && (
+        <div className="px-3">
+          <Notice tone="error">{failed}</Notice>
+        </div>
+      )}
+      {!t && !failed && <div className="skeleton mx-3 h-40 rounded-2xl" aria-busy="true" />}
+      {t && (
+        <>
+          <Thread comments={thread} header={info} startAtTop jumpRef={jumpRef} className="flex-1 px-3" />
+          <Composer value={reply} onChange={setReply} onSend={() => void send()} busy={sending} coarse={coarse} label="Reply" placeholder="Reply" />
+        </>
+      )}
+      {view?.screenshotUrl && (
+        <Viewer src={view.screenshotUrl} alt={shotCaption(view.index, view.anchor.path)} crop={{ anchor: view.anchor, scroll: null }} onClose={() => setView(null)} />
+      )}
+    </div>
+  );
+}
+
+function safePathname(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return `${u.pathname}${u.search}`;
+  } catch {
+    return null;
+  }
+}

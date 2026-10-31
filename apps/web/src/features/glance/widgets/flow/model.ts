@@ -61,9 +61,10 @@ export function flowCompact(v: FlowView | null, failed: boolean): GlanceCompact 
 const KIND: Record<FlowAction['kind'], string> = { told: 'Told', reported: 'Reported', notified: 'Notified you', skipped: 'Skipped', failed: 'Failed' };
 const COND: Record<FlowAction['condition'], string> = { merge: 'merge', qa: 'QA', idle: 'idle lead', bypass: 'Bypass', stall: 'stall', conflict: 'conflict', no_pr: 'no PR', idle_lanes: 'idle lanes' };
 
-/** One action in a few words: "Told · merge · T-12, T-13". */
+/** One action in a few words: "Told · merge · KONF-12, KONF-13" (T-2016: bucket keys; the ids of an older action without them). */
 export function actionLine(a: FlowAction): string {
-  const t = a.tickets.length ? ` · ${a.tickets.slice(0, 3).join(', ')}${a.tickets.length > 3 ? ` +${a.tickets.length - 3}` : ''}` : '';
+  const names = a.keys && a.keys.length === a.tickets.length ? a.keys : a.tickets;
+  const t = names.length ? ` · ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3}` : ''}` : '';
   return `${KIND[a.kind]} · ${COND[a.condition]}${t}`;
 }
 

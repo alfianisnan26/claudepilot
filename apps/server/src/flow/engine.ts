@@ -13,7 +13,7 @@
 //                    an open PR is judged on its live head and is a conflict when the forge cannot merge it
 //                                                                                        D-102: or the implementer's self-test line on the head
 //                                                                                        (a comment, `Self-test: <run> on <sha> pass <N>`), with a
-//                                                                                        review PASS too when HIGH (tag `risk:high`, or reviewed);
+//                                                                                        review PASS too when HIGH (tag `risk-high`, or reviewed);
 //                                                                                        a NORMAL self-test row goes to its unit lead (D-99)
 //   qa      in review, no verdict on the head, nobody on it for `flow.qaAfterMin`   -> a peer lead, round robin, never the author's: QA-ASK
 //                                                                                        as one batch (D-93, T-1987): at most 8 per peer per
@@ -27,6 +27,9 @@
 //   bypass  a lead that was in Bypass is not now                                      -> reported only (audit and the card): see below
 //   stall   nothing done in `flow.stallHours` while tickets wait in review           -> the owner, once, if it lasts `flow.notifyAfterHours`
 //                                                                                        after the first nudge
+// T-3198: a ticket held by a crew whose root is no lead of the program (it carries the program's tag, another program's lead holds it) is
+// OUTSIDE: its merge, conflict, no_pr, QA and review alerts all go to that root's live head, never to the gate or a peer lead; when that
+// root cannot be told (ended, held) the alert is dropped for the round. Unheld tickets and the stall, idle and card counts are unchanged.
 // Every action is rate limited (one per lead per condition per `flow.repeatMin`) and audited (`flow.*`). A message goes through the chat
 // controller's send path as `portal:flow`, priority `later` (queued behind a running turn, never injected mid-tool), only to a live session:
 // a configured lead that ended is followed to its live successor or continuation, and one with none is skipped. The watchdog acts for the
@@ -175,8 +178,12 @@ export function headOf(verdicts: readonly StoredVerdict[], checks: readonly Tick
   return verdicts.find((v) => v.commit.startsWith(b.sha))?.commit ?? b.sha;
 }
 
-/** D-102: the tag of a HIGH ticket (security, permissions, money, migrations, infra): self-test plus one blind review by another unit. */
-export const RISK_HIGH_TAG = 'risk:high';
+/**
+ * D-102: the tags of a HIGH ticket (security, permissions, money, migrations, infra): self-test plus one blind review by another unit.
+ * T-2250: the tag rule refuses a colon, so tickets carry `risk-high` (or `risk_high`); `risk:high` is still read for any older row.
+ */
+export const RISK_HIGH_TAGS: readonly string[] = ['risk-high', 'risk_high', 'risk:high'];
+export const isHighRisk = (tags: readonly string[]): boolean => tags.some((t) => RISK_HIGH_TAGS.includes(t.toLowerCase()));
 /** D-102: the implementer's self-test line, the merge gate's own form: `Self-test: <job | command> on <sha> pass <N>[ stg same failures: <ids>]`. */
 const SELF_TEST = /^Self-test: \S.*? on ([0-9a-f]{12,40}) pass [1-9][0-9]*(?: stg same failures: .*\S.*)?$/;
 const sameCommit = (a: string, b: string) => a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a));
@@ -212,7 +219,13 @@ interface Ctx {
   kgPaused: (program: string | null) => boolean;
   /** Forge reads spent this round. */
   prReads: number;
+  /** T-2016: the bucket key of each ticket of the program read this round (the card shows keys). */
+  keyOf: Map<string, string>;
 }
+
+/** T-2023: one conflict or no_pr alert as told: the ticket, the repo and PR, the head and the state the record names. */
+const itemKey = (cond: 'conflict' | 'no_pr', it: { t: TicketItem; pr: TicketMergeStatus }) =>
+  `${cond}:${it.t.id}:${it.pr.repo}#${it.pr.pr ?? ''}@${it.pr.prHead ?? ''}`;
 
 export class FlowEngine {
   readonly #d: FlowDeps;
@@ -275,7 +288,7 @@ export class FlowEngine {
       }
       try {
         const hold: FlowHold | null = flowHeld.has('*') || flowHeld.has(p.name) ? 'flow' : kgPaused(p.name) ? 'keepgoing' : null;
-        view.push(await this.#program({ p, st, t, now, ownerId, told: false, hold, kgPaused, prReads: 0 }, groups));
+        view.push(await this.#program({ p, st, t, now, ownerId, told: false, hold, kgPaused, prReads: 0, keyOf: new Map() }, groups));
         done++;
       } catch (e) {
         console.error(`[flow] the program ${p.name} could not be looked at: ${(e as Error).message}`);
@@ -298,6 +311,7 @@ export class FlowEngine {
     const chat = this.#d.chat;
     const open = this.#d.tickets.list(p.tag, ['open', 'in_progress', 'blocked', 'in_review']);
     const doneRecent = this.#d.tickets.list(p.tag, ['done']).filter((x) => now - ms(x.closedAt) <= t.stallMs).length;
+    for (const x of open) if (x.key) c.keyOf.set(x.id, x.key);
     const rootOf = new Map<string, string | null>();
     const root = (sessionId: string) => {
       if (!rootOf.has(sessionId)) rootOf.set(sessionId, crewRoot(chat, sessionId));
@@ -328,6 +342,19 @@ export class FlowEngine {
     const gate = (p.mergeGate && leads.includes(p.mergeGate) ? p.mergeGate : null) ?? leads[0] ?? null;
     const gateResolved = gate ? (resolved.get(gate) ?? resolveHead(chat, gate)) : { head: null, why: 'ended' as const };
     const gateHead = gateResolved.head;
+    // T-3198: a ticket held by a session whose crew root is no lead of this program (it carries the program's tag, but another program's
+    // lead holds it) is OUTSIDE. Every alert about it goes to that root, the one session that can act on it, never to the gate or a peer
+    // lead: undefined: not outside (unheld, or a lead's); null: outside, but its root cannot be followed (the alert is dropped).
+    const outsideRoot = (x: TicketItem): string | null | undefined => {
+      const h = holder(x);
+      return h && !leadOf(x) ? root(h) : undefined;
+    };
+    // The live head of any session told: a lead's as resolved above, the gate's, or an outside root's (resolved once a round).
+    const resolveOf = (l: string) => {
+      if (l === gate) return gateResolved;
+      if (!resolved.has(l)) resolved.set(l, resolveHead(chat, l));
+      return resolved.get(l)!;
+    };
     // A lead that may hear from the watchdog now: it runs, no person stopped it, and Keep going is not paused for it.
     const reachable = (l: string) => {
       const h = heads.get(l);
@@ -346,12 +373,14 @@ export class FlowEngine {
       const recorded = await this.#livePrs(c, this.#mergeStatus(x.id));
       const pending = recorded.filter((m) => m.state !== 'merged').sort((a, b) => ms(b.at) - ms(a.at));
       if (recorded.length && !pending.length) continue;
-      const pr = pending[0] ?? null;
-      if (pr && (pr.state === 'conflict' || pr.state === 'no_pr')) {
-        // T-2018: at once, the round they are seen (the rate limit still holds): 15 PRs sat in conflict while builders idled.
-        (pr.state === 'conflict' ? conflict : noPr).push({ t: x, pr });
+      // T-2016: every repo is judged: a conflict or a missing PR in one repo is its own row, never hidden behind a newer ready record of
+      // another repo. T-2018: at once, the round they are seen (the rate limit still holds): 15 PRs sat in conflict while builders idled.
+      const blocked = pending.filter((m) => m.state === 'conflict' || m.state === 'no_pr');
+      if (blocked.length) {
+        for (const m of blocked) (m.state === 'conflict' ? conflict : noPr).push({ t: x, pr: m });
         continue;
       }
+      const pr = pending[0] ?? null;
       const verdicts = this.#d.tickets.verdicts(x.id);
       const head = pr?.prHead ?? headOf(verdicts, this.#d.tickets.checks(x.id));
       // With a recorded PR, the merge gate's own rule: a review PASS on that head as well when the ticket was reviewed at all.
@@ -364,7 +393,7 @@ export class FlowEngine {
       // D-102: the implementer's self-test on the head is a merge basis of its own; a HIGH ticket (tagged, or reviewed at all) needs a
       // review PASS on that head as well, asked of another unit's lead below. QA only runs regression then: it is never asked per ticket.
       const selfTest = head ? this.#selfTest(x.id, head) : null;
-      const high = x.tags.includes(RISK_HIGH_TAG) || verdicts.some((v) => v.role === 'review');
+      const high = isHighRisk(x.tags) || verdicts.some((v) => v.role === 'review');
       const review = head && high ? evaluateVerdicts(verdicts, head, ['review']) : null;
       if (ev?.pass && head) {
         const passAt = passAtOf(need);
@@ -390,9 +419,14 @@ export class FlowEngine {
     else c.st.stall[p.name] ??= { since: now, nudgedAt: null, notifiedAt: null };
 
     // D-99: a NORMAL row merged on its self-test goes to its own unit lead; QA-passed and HIGH rows to the merge gate, as before.
+    // T-3198: an outside row (any basis) goes to its holder's crew root, never to the gate; one whose root cannot be followed is dropped.
     const mergeTo = new Map<string | null, typeof merge>();
+    const outsideTo = new Set<string>();
     for (const m of merge) {
-      const to = m.basis === 'self-test' ? (leadOf(m.t) ?? gate) : gate;
+      const out = outsideRoot(m.t);
+      if (out === null) continue;
+      if (out !== undefined) outsideTo.add(out);
+      const to = out ?? (m.basis === 'self-test' ? (leadOf(m.t) ?? gate) : gate);
       mergeTo.set(to, [...(mergeTo.get(to) ?? []), m]);
     }
     for (const [to, list] of mergeTo) {
@@ -402,48 +436,96 @@ export class FlowEngine {
         .slice(0, FLOW_LIMITS.ticketsPerMessage)
         .map((m) => (m.pr ? `- ${ref(m.t)} ${m.pr.repo}#${m.pr.pr} ${m.basis} on the PR head ${m.head} (${m.pr.state})` : `- ${ref(m.t)} ${m.basis} on ${m.head} (newest seen, no PR status)`));
       const n = list.length;
-      const toGate = to === gate;
-      await this.#tell(c, 'merge', to, toGate ? gateHead : (heads.get(to!) ?? null), toGate ? gateResolved.why : (resolved.get(to!)?.why ?? null), sorted.map((m) => m.t.id), [
-        `${FLOW_PREFIX} ${plural(n, 'ticket')} in review ${n === 1 ? 'has' : 'have'} a merge basis (a QA PASS, or the D-102 self-test, with a review PASS when HIGH) and ${n === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). A row with a PR is judged on the PR head you recorded (ticket_merge_status); a row marked (newest seen, no PR status) is the newest commit the portal has seen: check it is the PR head and record the PR. Merge or close each, or record why not with ticket_merge_status:`,
-        ...rows,
-        ...more(n),
-      ]);
+      const r = to ? resolveOf(to) : { head: null, why: 'ended' as const };
+      const own = !!to && outsideTo.has(to);
+      await this.#tell(
+        c,
+        'merge',
+        to,
+        r.head,
+        r.why,
+        sorted.map((m) => m.t.id),
+        [
+          `${FLOW_PREFIX} ${plural(n, 'ticket')} in review ${n === 1 ? 'has' : 'have'} a merge basis (a QA PASS, or the D-102 self-test, with a review PASS when HIGH) and ${n === 1 ? 'is' : 'are'} not merged after ${t.mergeAfterMs / MIN} min (program ${p.name}). ${own ? `Your crew holds ${n === 1 ? 'it' : 'them'} and no lead of the program does, so you merge ${n === 1 ? 'it' : 'them'} and record ${n === 1 ? 'it' : 'each'} (a fast-forward merge with no PR: state merged with pr_head alone). ` : ''}A row with a PR is judged on the PR head you recorded (ticket_merge_status); a row marked (newest seen, no PR status) is the newest commit the portal has seen: check it is the PR head and record the PR. Merge or close each, or record why not with ticket_merge_status:`,
+          ...rows,
+          ...more(n),
+        ],
+        own ? OWN_NOTE.merge : undefined,
+      );
     }
 
+    // T-2023: an alert already told on this record (same ticket, repo, PR, head and state, no newer record) waits while someone has
+    // answered on the ticket since: the same stale alert every window cost a lead a turn each time. A new record, a moved head or a
+    // silent ticket is told again (the rate limit still holds).
+    const answered = (cond: 'conflict' | 'no_pr', it: { t: TicketItem; pr: TicketMergeStatus }) => {
+      const toldAt = c.st.items[itemKey(cond, it)];
+      if (typeof toldAt !== 'number' || ms(it.pr.at) > toldAt) return false;
+      try {
+        return (this.#d.tickets.comments?.(it.t.id) ?? []).some((x) => ms(x.at) > toldAt);
+      } catch {
+        return false;
+      }
+    };
+    const conflictTold = conflict.filter((it) => !answered('conflict', it));
+    const noPrTold = noPr.filter((it) => !answered('no_pr', it));
+
     // T-2014: conflict and no_pr, each to the ticket's unit lead (the lead whose unit holds it); a ticket with no unit lead is reported.
+    // T-3198: an outside ticket's go to its holder's crew root; one whose root cannot be followed is dropped (never the gate).
     const toUnits = async (cond: 'conflict' | 'no_pr', list: { t: TicketItem; pr: TicketMergeStatus }[]) => {
       const byLead = new Map<string, { t: TicketItem; pr: TicketMergeStatus }[]>();
       const orphans: string[] = [];
       for (const it of list) {
-        const l = leadOf(it.t);
+        const out = outsideRoot(it.t);
+        if (out === null) continue;
+        const l = out ?? leadOf(it.t);
         if (l) byLead.set(l, [...(byLead.get(l) ?? []), it]);
         else orphans.push(it.t.id);
       }
       for (const [l, items] of byLead) {
         const n = items.length;
-        await this.#tell(c, cond, l, heads.get(l) ?? null, resolved.get(l)?.why ?? null, items.map((i) => i.t.id), [
-          cond === 'conflict'
-            ? `${FLOW_PREFIX} the merge gate recorded a conflict on ${plural(n, 'pull request')} of your unit (program ${p.name}). Send ${n === 1 ? 'it' : 'each'} back to its builder for a rebase onto the base branch; QA then verifies the new head:`
-            : `${FLOW_PREFIX} the merge gate recorded no pull request for ${plural(n, 'ticket')} of your unit in review (program ${p.name}). Open the PR for each (or have its builder open it), or say on the ticket why not:`,
-          ...items.slice(0, FLOW_LIMITS.ticketsPerMessage).map((i) => `- ${ref(i.t)} ${i.pr.repo}${i.pr.pr ? `#${i.pr.pr}` : ''}${i.pr.prHead ? ` head ${i.pr.prHead}` : ''}`),
-          ...more(n),
-        ]);
+        const r = resolveOf(l);
+        const sent = await this.#tell(
+          c,
+          cond,
+          l,
+          r.head,
+          r.why,
+          [...new Set(items.map((i) => i.t.id))],
+          [
+            cond === 'conflict'
+              ? `${FLOW_PREFIX} the merge gate recorded a conflict on ${plural(n, 'pull request')} of your unit (program ${p.name}). Send ${n === 1 ? 'it' : 'each'} back to its builder for a rebase onto the base branch; QA then verifies the new head:`
+              : `${FLOW_PREFIX} the merge gate recorded no pull request for ${plural(n, 'ticket')} of your unit in review (program ${p.name}). Open the PR for each (or have its builder open it), or say on the ticket why not:`,
+            ...items
+              .slice(0, FLOW_LIMITS.ticketsPerMessage)
+              .map((i) => `- ${ref(i.t)} ${i.pr.repo}${i.pr.pr ? `#${i.pr.pr}` : ''}${i.pr.prHead ? ` head ${i.pr.prHead}` : ''}`),
+            ...more(n),
+            'Answered already (contained in another PR, superseded, rebased)? Say so on the ticket, or record it with ticket_merge_status: an alert on the same record waits once the ticket is answered.',
+          ],
+        );
+        if (sent) for (const i of items.slice(0, FLOW_LIMITS.ticketsPerMessage)) c.st.items[itemKey(cond, i)] = c.now;
       }
       if (orphans.length && !c.hold && !this.#limited(c, cond, `program-${p.name}`)) {
         c.st.sent[`${cond}:program-${p.name}`] = c.now;
-        this.#act(c, cond, 'skipped', null, orphans, 'No unit lead of the program holds these: nobody was told.');
+        this.#act(c, cond, 'skipped', null, [...new Set(orphans)], 'No unit lead of the program holds these: nobody was told.');
       }
     };
-    if (conflict.length) await toUnits('conflict', conflict);
-    if (noPr.length) await toUnits('no_pr', noPr);
+    if (conflictTold.length) await toUnits('conflict', conflictTold);
+    if (noPrTold.length) await toUnits('no_pr', noPrTold);
 
     if (qa.length) {
       // Round robin over the peer leads that run, never the author's own (the lead whose unit holds the ticket).
       const live = leads.filter(reachable);
       const byLead = new Map<string, (typeof qa)[number][]>();
+      // T-3198: an outside ticket's ask goes to its holder's crew root (one batch per message; the rest wait), never to a peer lead.
+      const byOwn = new Map<string, (typeof qa)[number][]>();
       let rr = c.st.rr[p.name] ?? 0;
       const unplaced: string[] = [];
       for (const q of qa) {
+        const out = outsideRoot(q.t);
+        if (out !== undefined) {
+          if (out && (byOwn.get(out)?.length ?? 0) < FLOW_LIMITS.qaBatchPerPeer) byOwn.set(out, [...(byOwn.get(out) ?? []), q]);
+          continue;
+        }
         const author = leadOf(q.t);
         const authorRoot = holder(q.t) ? root(holder(q.t)!) : null;
         const peers = live.filter((l) => l !== author && !(authorRoot && lineOf(l).has(authorRoot)) && (byLead.has(l) || !this.#limited(c, 'qa', l)));
@@ -477,6 +559,34 @@ export class FlowEngine {
               ]
             : []),
         ]);
+      }
+      for (const [l, list] of byOwn) {
+        const asks = list.filter((q) => q.ask === 'qa');
+        const reviews = list.filter((q) => q.ask === 'review');
+        const r = resolveOf(l);
+        await this.#tell(
+          c,
+          'qa',
+          l,
+          r.head,
+          r.why,
+          list.map((q) => q.t.id),
+          [
+            ...(asks.length
+              ? [
+                  `${FLOW_PREFIX} QA-ASK for tickets your crew holds (program ${p.name}; no lead of the program holds them, so they are yours to move): ${plural(asks.length, 'ticket')} in review ${asks.length === 1 ? 'has' : 'have'} no verdict on the head and nobody working on ${asks.length === 1 ? 'it' : 'them'} for ${t.qaAfterMs / MIN} min. Have a QA lane that is not the author verify them as one batch (D-93) and record each verdict on its head (ticket_verdict_batch), or say on the ticket why not:`,
+                  ...asks.map(row),
+                ]
+              : []),
+            ...(reviews.length
+              ? [
+                  `${FLOW_PREFIX} REVIEW-ASK (D-102) for tickets your crew holds (program ${p.name}): ${plural(reviews.length, 'HIGH ticket')} ${reviews.length === 1 ? 'has' : 'have'} the implementer's self-test on the head and no review verdict for ${t.mergeAfterMs / MIN} min. Have a blind reviewer outside your own lineage read each PR (no CI run) and record a review verdict on that head (ticket_verdict, role review):`,
+                  ...reviews.map(row),
+                ]
+              : []),
+          ],
+          OWN_NOTE.qa,
+        );
       }
       if (unplaced.length && !c.hold && !this.#limited(c, 'qa', `program-${p.name}`)) {
         c.st.sent[`qa:program-${p.name}`] = c.now;
@@ -533,8 +643,8 @@ export class FlowEngine {
         }
       if (!lanes.length) continue;
       const mine = <T extends { t: TicketItem }>(xs: T[]) => xs.filter((i) => leadOf(i.t) === l);
-      const conf = mine(conflict);
-      const nop = mine(noPr);
+      const conf = mine(conflictTold);
+      const nop = mine(noPrTold);
       const work = unitOpen
         .filter((x) => leadOf(x) === l)
         .sort((a, b) => rank(a.priority) - rank(b.priority) || ms(a.createdAt) - ms(b.createdAt) || a.number - b.number);
@@ -642,7 +752,13 @@ export class FlowEngine {
       if (!v) out.push(m);
       else if (v.merged) out.push({ ...m, state: 'merged' });
       else if (v.state === 'closed') out.push({ ...m, state: 'no_pr', prHead: null });
-      else out.push({ ...m, prHead: v.head ?? m.prHead, state: v.mergeable === false ? 'conflict' : m.state === 'conflict' && v.mergeable ? 'ready' : m.state });
+      else {
+        // T-2023: a recorded conflict speaks only for the head it named. Mergeable now: ready. Pushed to since (a rebase) and the forge has
+        // not judged the new head yet: waiting, never the old conflict again.
+        const moved = !!v.head && !!m.prHead && v.head !== m.prHead.toLowerCase();
+        const state = v.mergeable === false ? 'conflict' : m.state === 'conflict' && v.mergeable ? 'ready' : m.state === 'conflict' && moved ? 'waiting' : m.state;
+        out.push({ ...m, prHead: v.head ?? m.prHead, state });
+      }
     }
     return out;
   }
@@ -696,22 +812,32 @@ export class FlowEngine {
     why: 'ended' | 'closed' | null,
     tickets: string[],
     lines: string[],
-  ): Promise<void> {
-    if (c.hold || !lead || this.#limited(c, cond, lead)) return;
+    note: string = NOTE[cond],
+  ): Promise<boolean> {
+    if (c.hold || !lead || this.#limited(c, cond, lead)) return false;
     c.st.sent[`${cond}:${lead}`] = c.now;
-    if (!head || ended(head))
-      return this.#act(c, cond, 'skipped', null, tickets, why === 'closed' ? `A person closed the lead ${lead}: nothing was sent.` : `The lead ${lead} has no live session: nothing was sent.`);
+    if (!head || ended(head)) {
+      this.#act(c, cond, 'skipped', null, tickets, why === 'closed' ? `A person closed the lead ${lead}: nothing was sent.` : `The lead ${lead} has no live session: nothing was sent.`);
+      return false;
+    }
     const held = this.#heldWhy(c, head);
-    if (held) return this.#act(c, cond, 'skipped', head.id, tickets, held);
+    if (held) {
+      this.#act(c, cond, 'skipped', head.id, tickets, held);
+      return false;
+    }
     const subject = { type: 'session' as const, id: head.id, workspaceId: head.workspaceId };
-    if (!c.ownerId || !this.#d.owner.can(c.ownerId, 'operate', subject))
-      return this.#act(c, cond, 'skipped', head.id, tickets, 'The owner may not operate this session: nothing was sent.');
+    if (!c.ownerId || !this.#d.owner.can(c.ownerId, 'operate', subject)) {
+      this.#act(c, cond, 'skipped', head.id, tickets, 'The owner may not operate this session: nothing was sent.');
+      return false;
+    }
     try {
       await this.#d.chat.send(head.id, randomUUID(), lines.join('\n'), { priority: 'later', actor: FLOW_ACTOR, actorLabel: 'Flow watchdog' });
       c.told = true;
-      this.#act(c, cond, 'told', head.id, tickets, NOTE[cond]);
+      this.#act(c, cond, 'told', head.id, tickets, note);
+      return true;
     } catch (e) {
       this.#act(c, cond, 'failed', head.id, tickets, `The message was not taken (${String((e as Error).message ?? 'refused').slice(0, 80)}).`);
+      return false;
     }
   }
 
@@ -731,7 +857,10 @@ export class FlowEngine {
   }
 
   #act(c: Ctx, condition: FlowCondition, kind: FlowActionKind, sessionId: string | null, tickets: string[], note: string): void {
-    const a: FlowAction = { at: iso(c.now), program: c.p.name, condition, kind, sessionId, tickets: tickets.slice(0, FLOW_LIMITS.ticketsPerMessage), note };
+    const named = tickets.slice(0, FLOW_LIMITS.ticketsPerMessage);
+    // T-2016: the card shows bucket keys (KONF-12); a ticket whose key is not known this round shows its id.
+    const keys = named.map((id) => c.keyOf.get(id) ?? id);
+    const a: FlowAction = { at: iso(c.now), program: c.p.name, condition, kind, sessionId, tickets: named, keys, note };
     c.st.actions.unshift(a);
     c.st.actions.length = Math.min(c.st.actions.length, FLOW_LIMITS.kept);
     try {
@@ -759,6 +888,12 @@ const NOTE: Record<FlowCondition, string> = {
   no_pr: 'Told a unit lead which tickets in review have no pull request.',
   idle_lanes: 'Told a lead which of its builder lanes are idle and what to give them.',
 };
+
+/** T-3198: the card's note when the session told is the crew root holding outside tickets, not the program's gate or a peer lead. */
+const OWN_NOTE = {
+  merge: 'Told the lead whose crew holds these tickets (no lead of the program does) that they wait to be merged.',
+  qa: 'Asked the lead whose crew holds these tickets (no lead of the program does) to have them verified.',
+} as const;
 
 const more = (n: number) => (n > FLOW_LIMITS.ticketsPerMessage ? [`- and ${n - FLOW_LIMITS.ticketsPerMessage} more`] : []);
 

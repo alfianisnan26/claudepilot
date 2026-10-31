@@ -6,12 +6,15 @@ import { fullInput } from '../portalmcp/compact.js';
 import { costFields } from '../portalmcp/tools/common.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { SPAWN_CLAUDE_HELP, WORKER_REPORTS, spawnModel, type SpawnClaudeWhy, type WorkerReport } from './agents.js';
+import { ControlTimeout } from './controller.js';
 
 // The chat's own tools for the Portal MCP (interface I2): the ones a session's Claude may call about itself. They are
 // bound to the session its per-session token (I8) was minted for; nothing here lets one session act on another.
 
 /** What the tools need of the chat controller. */
 export interface ChatToolHost {
+  /** T-3215: how long a worker's queued start waits for a slot before it is ended with the cap's reason. */
+  readonly agentSlotWaitMs?: number;
   rename(sessionId: string, title: unknown, opts: { actor: string }): ChatSession;
   get(id: string): ChatSession | null;
   create(
@@ -34,6 +37,8 @@ export interface ChatToolHost {
   bypassNow(id: string): boolean;
   /** T-2997: the mode a worker gets when the Bypass it was to inherit was not kept: Auto where it may run in it, else dontAsk. */
   bypassNotKeptMode(id: string): ChatPermissionMode;
+  /** T-2997: the Bypass policy allows Bypass now (a spawn says why a Bypass parent's worker got Auto). */
+  bypassPolicyOn?(): boolean;
   /** T-2997: `sessions.autonomousAuto` is on (a spawn's unasked mode is Auto, and Auto may be asked whatever the parent's mode). */
   autonomousAutoOn(): boolean;
   send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew'; opening?: boolean }): Promise<void>;
@@ -87,8 +92,8 @@ function plainText(text: string): string {
 /**
  * The modes a session may ask for a worker (PILOT-996, D-103; before: plan, default, dontAsk only). Never wider than the parent's own
  * mode (`modeWithin`: plan < dontAsk < default < acceptEdits < auto), except Auto while `sessions.autonomousAuto` is on (T-2997,
- * `workerModeAllowed`). Bypass is never asked: a worker of a parent in Bypass now keeps it when no mode is asked, through the portal's
- * gated inherit path.
+ * `workerModeAllowed`). Bypass is never asked: a worker of a parent in Bypass now keeps it when no mode or Auto is asked (T-2997
+ * comment 50003: the parent's Bypass wins over a requested Auto), through the portal's gated inherit path.
  */
 const WORKER_MODES = ['plan', 'default', 'dontAsk', 'acceptEdits', 'auto'] as const satisfies readonly ChatPermissionMode[];
 /** The modes that narrow a worker: unconfirmed, the worker is ended before it gets its instruction. */
@@ -164,7 +169,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction. Default: its role’s model, if the persona gives one. Opus or fable for a role on sonnet needs why (D-63).'),
       why: z.string().min(1).max(CHAT_SPAWN_WHY_MAX).optional().describe('D-63: why this worker needs a model above its role’s (e.g. opus for a QA or review role): a gate, release or security check, or a slice too large for sonnet. Kept on the worker; the crew scorecard counts it.'),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
-      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: auto whatever your mode while Settings › Sessions › Auto for agents is on; any other, never wider than yours (plan < dontAsk < default < acceptEdits < auto); never bypassPermissions. Default: Bypass when you are in Bypass now and the policy allows it (the portal’s gated inherit), else auto (with Auto for agents off: yours, and dontAsk when you are in default). dontAsk runs only what the folder allows and refuses the rest at once; plan changes no file; default asks a person (only when one is there to answer).'),
+      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: auto whatever your mode while Settings › Sessions › Auto for agents is on; any other, never wider than yours (plan < dontAsk < default < acceptEdits < auto); never bypassPermissions. While you are in Bypass now and the policy allows it, unset or auto gives Bypass (the portal’s gated inherit; refused, auto and the result says why); a narrower mode asked is kept. Otherwise default: auto (with Auto for agents off: yours, and dontAsk when you are in default). dontAsk runs only what the folder allows and refuses the rest at once; plan changes no file; default asks a person (only when one is there to answer).'),
       // T-294: the worker's own limits, never wider than yours (absent: yours).
       max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).optional().describe('How many workers it may run at once (0: none), at most your own limit. Default: your limit.'),
       subagents: z.boolean().optional().describe('Whether it may start Claude Code sub-agents (the Agent tool). Default: as you; on only if yours are on.'),
@@ -189,7 +194,15 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           'FORBIDDEN',
           `A worker is never wider than its parent: you run in ${parent.mode}, so ${args.mode} is refused${args.mode === 'auto' ? ' (“Auto for agents” is off in Settings › Sessions)' : ''}. Ask for ${parent.mode} or a narrower mode, or leave mode out.`,
         );
-      const mode = workerMode(args.mode, parent.mode, { parentInBypass: !args.mode && chat.bypassNow(parentId), autonomousAuto });
+      // T-2997 (comment 50003): the parent's Bypass wins over no mode AND over a requested Auto (before, any mode asked skipped the inherit,
+      // so a lead in Bypass asking mode auto got an Auto worker never made capable); a narrower mode asked by name still wins.
+      const parentInBypass = chat.bypassNow(parentId);
+      const mode = workerMode(args.mode, parent.mode, { parentInBypass, autonomousAuto });
+      // Its stored mode says Bypass but the portal does not stand behind it now: the worker gets the mode above, and the result says why.
+      const notInherited =
+        !parentInBypass && parent.mode === 'bypassPermissions' && (!args.mode || args.mode === 'auto')
+          ? `Bypass not inherited: ${chat.bypassPolicyOn?.() === false ? 'the Bypass policy is off' : 'you are not in Bypass now as the portal sees it'}, ${mode} instead`
+          : null;
       const pick = spawnModel(args.role ?? null, roleModel, args.model ?? null, args.why ?? null);
       // T-294: the Claude first (an unknown name, or a Claude billed per use, is refused before anything starts).
       const on = await chat.spawnClaude(parentId, args.claude, pick.model);
@@ -227,16 +240,22 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       // Mode first. A narrowing mode asked by name and not confirmed ends the worker before it gets any instruction (fail closed); any other
       // is said, not fatal. Bypass not kept (the policy, the parent left it) falls back to Auto where the worker may run in it, else dontAsk
       // (T-2997), so the worker never waits on a person.
-      const setMode = async (m: ChatPermissionMode) => {
+      // T-3215 (PILOT-1112, folds PILOT-1025; owner 2026-10-31: "default mode should be auto, if bypass is on lead, should bypass"): a
+      // worker never runs in default (it starts in it) unless default was asked by name, and never falls back to dontAsk (no Bash, T-3041).
+      // Any other mode its Claude refuses (Auto, say) ends the worker before it gets any instruction, and the lead is told why. A switch
+      // with no answer in time may still apply, so it is "not confirmed" as before, except for a narrowing mode asked by name (fail closed).
+      const setMode = async (m: ChatPermissionMode): Promise<void> => {
         try {
           await chat.control(child.id, 'mode', { mode: m }, { actor: ctx.actor });
           applied.push(`mode ${m}`);
         } catch (e) {
-          if (args.mode && NARROWING.has(args.mode)) {
-            await chat.end(child.id).catch(() => undefined);
-            throw new AppError('CONFLICT', `The worker could not be confirmed in ${args.mode} mode (${whyOf(e)}), so it was ended before it got any instruction. Try again.`);
-          }
-          unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
+          const narrowAsked = !!args.mode && NARROWING.has(args.mode);
+          if (m === 'default' || (e instanceof ControlTimeout && !narrowAsked)) return void unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
+          await chat.end(child.id).catch(() => undefined);
+          throw new AppError(
+            'CONFLICT',
+            `The worker could not be confirmed in ${m} mode (${whyOf(e)}), so it was ended before it got any instruction${NARROWING.has(m) ? '' : ': it would have run in default and waited on a person'}. Try again, or start it on another Claude.`,
+          );
         }
       };
       const applyMode = async () => {
@@ -290,8 +309,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       const where = on.claudeId === parent.claudeId ? whyText : `${on.name}, ${whyText}`;
       return {
         summary: waits
-          ? `Worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''} waits to start: ${waits}. It gets its settings and your instruction when it starts, and reports to you; message it with session_message.`
+          ? `Worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''} waits to start: ${waits}. It gets its settings and your instruction when it starts${chat.agentSlotWaitMs ? `; if no slot frees within ${Math.ceil(chat.agentSlotWaitMs / 1000)} s it is ended and you are told why` : ''}, and reports to you; message it with session_message.`
           : `Started worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''}${applied.length ? `, ${applied.join(', ')}` : ''}.` +
+            `${notInherited ? ` ${notInherited}.` : ''}` +
             `${unconfirmed.length ? ` Not confirmed: ${unconfirmed.join('; ')}.` : ''} It reports to you; message it with session_message.`,
         session: {
           id: child.id,
@@ -309,6 +329,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           report: args.report ?? 'idle',
           applied,
           unconfirmed,
+          ...(notInherited ? { bypass: notInherited } : {}),
         },
       };
     },

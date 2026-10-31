@@ -69,9 +69,16 @@ export interface AttentionOptions {
 
 const WHY_RANK = new Map(ATTENTION_WHY.map((w, i) => [w, i]));
 
-/** Grouped by why (the class order), then the oldest first: what has waited longest leads its group. */
+/**
+ * Real asks first, refused calls after them (T-3114: 111 refusals buried the asks); then grouped by why (the class order), then the oldest
+ * first: what has waited longest leads its group.
+ */
 export const attentionOrder = (a: AttentionItem, b: AttentionItem): number =>
-  (WHY_RANK.get(a.why) ?? 99) - (WHY_RANK.get(b.why) ?? 99) || a.since.localeCompare(b.since) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id);
+  (a.group === 'refusal' ? 1 : 0) - (b.group === 'refusal' ? 1 : 0) ||
+  (WHY_RANK.get(a.why) ?? 99) - (WHY_RANK.get(b.why) ?? 99) ||
+  a.since.localeCompare(b.since) ||
+  a.kind.localeCompare(b.kind) ||
+  a.id.localeCompare(b.id);
 
 const refKey = (r: AttentionRef) => `${r.kind}\u0000${r.id}`;
 

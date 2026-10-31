@@ -1281,6 +1281,17 @@ export class ChatStore {
     return typeof row?.name === 'string' ? row.name : null;
   }
 
+  /** Whether `toolUseId` is a stored Agent (or Task) call of the session's main thread: one that started a sub-agent. T-3025. */
+  mainAgentCall(sessionId: string, toolUseId: string): boolean {
+    const row = this.#db()
+      .prepare(
+        `SELECT json_extract(payload, '$.toolName') AS name FROM chat_events
+         WHERE session_id = ? AND kind = 'tool_use' AND parent_tool_use_id IS NULL AND json_extract(payload, '$.toolUseId') = ? ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(sessionId, toolUseId) as { name: string | null } | undefined;
+    return row?.name === 'Agent' || row?.name === 'Task';
+  }
+
   /** Whether the one-time "Ready" note (from the first `system/init`) is stored; other system notes don't count. */
   hasReady(sessionId: string): boolean {
     return !!this.#db()

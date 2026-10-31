@@ -6,7 +6,8 @@
 // kind first, so one kind's pass never matches the other's call and no two different calls share a byte string.
 //
 //   jobrun.pool_env: kind, cwd, each argv element      (job-run: printf '%s\0' jobrun.pool_env "$PWD" "${argv0[@]}" | sha256sum)
-//   guard.refusal:   kind, tool, canonical JSON of the input (keys sorted at every level), cwd as the hook gave it
+//   guard.refusal:   kind, tool, canonical JSON of the input (keys sorted at every level), cwd as the hook gave it; a Bash input
+//                    without its free-text `description` (T-3233: a label, rewritten on most retries), every other field kept
 
 import { createHash } from 'node:crypto';
 import { REDACTED, redact } from '../chat/redact.js';
@@ -57,7 +58,9 @@ export function digestInput(tool: string, input: Record<string, unknown>): Recor
   if (!fields) return input;
   const out = digestFields(input, fields);
   if (tool === 'MultiEdit' && Array.isArray(out.edits))
-    out.edits = out.edits.map((e: unknown) => (e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e as Record<string, unknown>, ['old_string', 'new_string']) : e));
+    out.edits = out.edits.map((e: unknown) =>
+      e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e as Record<string, unknown>, ['old_string', 'new_string']) : e,
+    );
   return out;
 }
 
@@ -87,14 +90,51 @@ export function cleanRefusal(payload: unknown): unknown {
  * T-2885 review M1: job-run.sh's `pool_denied` as patterns; keep the two lists in step. A shell `case` glob: `*` is any run of characters.
  */
 export const JOBRUN_DENIED_GLOBS = [
-  '*_RW_*', '*ADMIN*', '*PROD*', '*_PRD_*', 'CLOUDFLARE_API_TOKEN', 'GITEA_*', 'GITHUB_*', '*_MASTER_*',
-  '*_RW', 'RW_*', '*_PRD', 'PRD_*', '*_MASTER', 'MASTER_*', 'GH_*', 'NODE_AUTH_TOKEN', 'ANTHROPIC_*', 'CLAUDE_*', 'CLAUDEPILOT_*', 'PILOT_*',
+  '*_RW_*',
+  '*ADMIN*',
+  '*PROD*',
+  '*_PRD_*',
+  'CLOUDFLARE_API_TOKEN',
+  'GITEA_*',
+  'GITHUB_*',
+  '*_MASTER_*',
+  '*_RW',
+  'RW_*',
+  '*_PRD',
+  'PRD_*',
+  '*_MASTER',
+  'MASTER_*',
+  'GH_*',
+  'NODE_AUTH_TOKEN',
+  'ANTHROPIC_*',
+  'CLAUDE_*',
+  'CLAUDEPILOT_*',
+  'PILOT_*',
 ] as const;
-const globRe = (g: string) => new RegExp(`^${g.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+const globRe = (g: string) =>
+  new RegExp(
+    `^${g
+      .split('*')
+      .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*')}$`,
+  );
 const DENIED = JOBRUN_DENIED_GLOBS.map(globRe);
 export const jobRunDenies = (name: string) => DENIED.some((r) => r.test(name));
 /** job-run.sh's options that take a value (its `case` before `--pool-env)`): each consumes the next word. */
-const JOBRUN_VALUE_OPTS = new Set(['--repo', '--ref', '--against', '--keep-tests', '--also', '--steps', '--artifacts', '--out', '--timeout', '--role', '--pool-env', '--image']);
+const JOBRUN_VALUE_OPTS = new Set([
+  '--repo',
+  '--ref',
+  '--against',
+  '--keep-tests',
+  '--also',
+  '--steps',
+  '--artifacts',
+  '--out',
+  '--timeout',
+  '--role',
+  '--pool-env',
+  '--image',
+]);
 /** The `--pool-env` names of a run, parsed as job-run parses its arguments (a value option takes the next word; `--` ends the options). */
 export function poolEnvNames(args: readonly unknown[]): string[] {
   const out: string[] = [];
@@ -121,7 +161,19 @@ export function refusedByJobRun(p: Record<string, unknown>): boolean {
 /** Whether a stored payload lost parts to redaction (then it is not the exact call, and gets no pass). */
 export const wasRedacted = (payload: unknown) => JSON.stringify(payload ?? null).includes(REDACTED);
 
-const digest = (parts: string[]) => createHash('sha256').update(parts.map((p) => `${p}\0`).join('')).digest('hex');
+const digest = (parts: string[]) =>
+  createHash('sha256')
+    .update(parts.map((p) => `${p}\0`).join(''))
+    .digest('hex');
+
+/** T-3206: a refusal payload with its tool input's free-text `description` left out (anything else: unchanged). */
+export function withoutDescription<T>(payload: T): T {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const p = payload as Record<string, unknown>;
+  if (!p.input || typeof p.input !== 'object' || Array.isArray(p.input)) return payload;
+  const { description: _free, ...input } = p.input as Record<string, unknown>;
+  return { ...p, input } as T;
+}
 
 /** The pass of a stored request's payload, or null for a kind that has none. */
 export function passOf(kind: string, payload: Record<string, unknown>): string | null {
@@ -130,7 +182,10 @@ export function passOf(kind: string, payload: Record<string, unknown>): string |
     return digest(['jobrun.pool_env', String(payload.cwd), ...args]);
   }
   if (kind === 'guard.refusal') {
-    const input = payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input) ? (payload.input as Record<string, unknown>) : {};
+    // T-3233: a Bash call's `description` is a label that does not change what runs, and Claude Code writes a new one on most retries;
+    // the guard leaves it out the same way (ruleGuard.ts `passOfCall`). Another tool's description may mean something, so it stays.
+    const call = payload.tool === 'Bash' ? withoutDescription(payload) : payload;
+    const input = call.input && typeof call.input === 'object' && !Array.isArray(call.input) ? (call.input as Record<string, unknown>) : {};
     return digest(['guard.refusal', String(payload.tool), canonicalJson(digestInput(String(payload.tool), input)), String(payload.cwd)]);
   }
   return null;
