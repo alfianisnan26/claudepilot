@@ -18,10 +18,11 @@
 {$PORTAL_DOMAIN} {
 	import tls_{$PORTAL_TLS:internal}
 	encode zstd gzip
-	# The cluster's Traefik serves *.pilot.ai.isnan.me, so the TLS name is that one; the Host stays this domain, which the
-	# IngressRoute also matches (deploy/k3s/portal.yaml) and the portal's same-host Origin check needs. WebSockets pass through.
+	# The cluster is not changed: the request reaches it as pilot.ai.isnan.me. The portal's CSRF check wants Origin to match Host,
+	# so this domain's own Origin is rewritten too; any other Origin passes unchanged and is still refused. WebSockets pass through.
 	reverse_proxy https://{$PORTAL_UPSTREAM:192.168.100.5}:443 {
-		header_up Host {host}
+		header_up Host pilot.ai.isnan.me
+		header_up Origin https://{$PORTAL_DOMAIN} https://pilot.ai.isnan.me
 		transport http {
 			tls_server_name pilot.ai.isnan.me
 		}
