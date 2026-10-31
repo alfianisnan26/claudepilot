@@ -247,7 +247,7 @@ export function TicketPage() {
           <h2 className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-muted">
             Description {t.source === 'agent' && <Badge>Written by an agent</Badge>}
           </h2>
-          {t.description ? <Markdown text={t.description} className="max-w-measure text-[14.5px] leading-relaxed" /> : <p className="text-sm text-muted">No description.</p>}
+          {t.description ? <Markdown text={t.description} hideComments className="max-w-measure text-[14.5px] leading-relaxed" /> : <p className="text-sm text-muted">No description.</p>}
           {closed && t.closingSummary && (
             <div className="mt-4 border-t border-line pt-3">
               <h3 className="mb-1 text-[13px] font-semibold text-muted">Outcome</h3>

@@ -106,15 +106,33 @@ export const COMPONENTS: Components = {
 
 export const PLUGINS = [remarkGfm];
 
+interface MdNode {
+  type: string;
+  value?: string;
+  children?: MdNode[];
+}
+const COMMENT_ONLY = /^\s*<!--[\s\S]*?-->\s*$/;
+/** Drops raw-HTML nodes that are only an HTML comment (Markdown hides them; GitHub does too): a machine marker never shows as text. */
+export function remarkHideComments() {
+  const strip = (n: MdNode) => {
+    if (!n.children) return;
+    n.children = n.children.filter((c) => !(c.type === 'html' && COMMENT_ONLY.test(c.value ?? '')));
+    n.children.forEach(strip);
+  };
+  return (tree: MdNode) => strip(tree);
+}
+const PLUGINS_HIDING_COMMENTS = [remarkGfm, remarkHideComments];
+
 /**
- * A reply as markdown (GitHub flavored). Raw HTML is never rendered (it shows as text), links open in
+ * A reply as markdown (GitHub flavored). Raw HTML is never rendered (it shows as text; with `hideComments`, an HTML comment on its
+ * own is dropped, as GitHub does: the ticket page's machine markers such as the reporter's deployment footer), links open in
  * a new tab, and unsafe URLs are dropped. Memoized per text, so a streaming token re-renders only the
  * block it lands in.
  */
-export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }) {
+export const Markdown = memo(function Markdown({ text, className, hideComments = false }: { text: string; className?: string; hideComments?: boolean }) {
   return (
     <div className={cn('min-w-0 break-words', className)}>
-      <ReactMarkdown remarkPlugins={PLUGINS} components={COMPONENTS}>
+      <ReactMarkdown remarkPlugins={hideComments ? PLUGINS_HIDING_COMMENTS : PLUGINS} components={COMPONENTS}>
         {text}
       </ReactMarkdown>
     </div>
