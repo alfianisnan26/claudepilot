@@ -1,11 +1,14 @@
-# orchestrator status (2026-10-31 11:45 UTC, session cce0f6be; older entries: git history)
+# orchestrator status (2026-10-31 11:50 UTC, session cce0f6be; older entries: git history)
 ## DONE
 - T-2997 (PILOT-1025) and T-3225 (PILOT-1117) released: deploy #613 (rmvw1zfv0e2e698) passed on fc7b77eb, portal 2026.10.31-3 (not started by this chat).
+- 11:45 merged batch 2 (c50943): T-965, T-2950, T-2167+2421, T-3004, T-2989, T-3173, T-3192, T-3198 (mig 797) -> fe879723.
 - 11:42 merged to integration on blind PASS (relay 11:41): T-3215 6d4dfe85 (merge-up 1f5cddb6), T-3206+T-3233 dfa82cb9+0d1bbd66 (a9d88eaa), T-3220 180cc150 (b052a836); c50941. Not deployed yet.
 - T-3114 released in #606 (a8c7384e), live-checked; ready to close (blocked by T-3220).
 
 ## IN FLIGHT
-- Survey (sonnet sub-agent): PASS heads of T-965, T-294, T-2950, T-2882, T-3070, T-2945, T-2167, T-2421, T-3004, T-1261, T-2989, T-3173, T-3192, T-3198 (short-sha check for T-3004); T-3115 FAIL (job-run.sh hash hunk missing) back to its builder.
+- Gate: gate-job.sh fe879723 (background, before any deploy).
+- Merge-ups after integration moved: CP-MU-PRD (sonnet) T-2882 bundle + T-2945/3070 (PRD-only conflicts); CP-B1261m (opus) T-1261 (repos/portalTools.ts); CP-B3115 (opus) T-3115 FAIL fix (job-run.sh reuse key). Each new head: delta re-review.
+- T-294: PASS on 71fe212c is stale (tip d5e8b10b, 3 web commits): delta review needed on d5e8b10b.
 - T-3222 + T-3207 (PILOT-1116/1110) queued worker shows planned mode, stale-row test, PRD: b95ea140 (on T-3215), self-test claudepilot-job-ce549d7b + claudepilot-job-605a1c00; REVIEW-ASK c50520; review PASS on b95ea140 (c50848), merge held: conflicts with T-3215 6d4dfe85 in portalTools.ts, builder CP-B3222m (Opus, sub-agent) resolving the merge-up now; then self-test + delta re-review (c50904).
 
 ## DECISIONS
