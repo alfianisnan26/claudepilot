@@ -47,6 +47,8 @@ function templateFiles(): Record<string, string> {
   add('scripts/gate-job.sh');
   add('scripts/gate-verdict.sh');
   add('scripts/gate-job-stop.sh');
+  add('scripts/gate-select.mjs');
+  add('scripts/gate-record.sh');
   add('images/workspace/Dockerfile');
   // The release gate itself (npm ci, the suite) is far too heavy here: a stand-in leaves the summary it would, green or red.
   out['scripts/gate.sh'] = `#!/usr/bin/env bash
@@ -66,6 +68,8 @@ printf 'kubectl %s\\n' "$*" >> "$FAKE/calls.log"
 args=" $* "
 manifest() { git --git-dir="$FAKE/github.git" show main:deploy/k3s/portal.yaml; }
 case $args in
+  # The green gate results (scripts/gate-record.sh, D-106): the lines of $FAKE/records, as the jsonpath list prints them.
+  *" get configmaps -l app=claudepilot-gate-result "*) cat "$FAKE/records" 2>/dev/null; true ;;
   # The in-cluster gate (scripts/gate-job.sh): its Job succeeds or fails with the fake gate's mode, and its log ends with the verdict.
   *" get job claudepilot-gate-"*"metadata.uid"*) printf 'uid-1234' ;;
   *" get jobs,secrets -l app=claudepilot-gate,claudepilot-gate/by=pipeline "*) [ -f "$FAKE/leftover" ] && { printf 'job.batch/claudepilot-gate-aaaaaaa-0000\nsecret/claudepilot-gate-aaaaaaa-0000\n'; rm -f "$FAKE/leftover"; }; true ;;
@@ -137,8 +141,8 @@ function shell(file: string, text: string) {
   chmodSync(file, 0o755);
 }
 
-/** The fakes, a fake GitHub (main, and integration one commit ahead) and a checkout of integration's head like the runner makes. */
-function world(): World {
+/** The fakes, a fake GitHub (main, and integration one commit ahead: `change`) and a checkout of integration's head like the runner makes. */
+function world(change = 'feature.txt'): World {
   const root = tempDirectory('cp-deploy-');
   const bin = join(root, 'bin');
   const home = join(root, 'home');
@@ -190,7 +194,8 @@ function world(): World {
   git(['commit', '-q', '-m', 'base'], src);
   const base = git(['rev-parse', 'HEAD'], src);
   git(['push', '-q', github, 'HEAD:refs/heads/main'], src);
-  writeFileSync(join(src, 'feature.txt'), 'new\n');
+  mkdirSync(dirname(join(src, change)), { recursive: true });
+  writeFileSync(join(src, change), 'new\n');
   git(['add', '-A'], src);
   git(['commit', '-q', '-m', 'a feature'], src);
   const sha = git(['rev-parse', 'HEAD'], src);
@@ -241,7 +246,7 @@ test('the pipeline file: manual only, the release deploys to production, rollbac
   const v = validatePipeline('.pilot/deploy.yml', readFileSync(join(REPO, '.pilot/deploy.yml'), 'utf8'));
   assert.deepEqual(v.info.diagnostics, []);
   assert.deepEqual(v.info.triggers, ['manual'], 'no push, merge or schedule: a deploy is always asked for');
-  assert.deepEqual(v.info.inputs.map((i) => [i.name, i.type, i.default]), [['images', 'string', 'portal'], ['gate', 'boolean', true], ['deploy', 'boolean', true], ['dry_run', 'boolean', false]]);
+  assert.deepEqual(v.info.inputs.map((i) => [i.name, i.type, i.default]), [['images', 'string', 'portal'], ['gate', 'boolean', true], ['full_gate', 'boolean', false], ['deploy', 'boolean', true], ['dry_run', 'boolean', false]]);
   const c = compile(v.pipeline!, { event: 'manual', ref: 'refs/heads/integration', sha: 'a'.repeat(40), base: null, actor: 'session:s1', repo: 'claudepilot', ticket: null, inputs: { images: 'portal', gate: true, deploy: true, dry_run: false }, workspace: 'kubernetes/kohi-event', runId: 'rabc123', runNumber: 1 }, { maxParallel: 2 });
   assert.ok(c.ok);
   if (!c.ok) return;
@@ -553,6 +558,76 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   assert.match(red.out, /GATE-VERDICT: red: typecheck failed/);
   assert.match(red.out, /gate: red at [0-9a-f]{7}/);
   assert.ok(!red.out.includes(w.token), 'a token in the job log never reaches the run log');
+});
+
+test('D-106: the gate is change-scoped from the green results in the cluster: scoped against main, reused for documents, whole when asked', () => {
+  const env = { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' };
+  // No record: the whole gate, recorded as full.
+  const w = world();
+  Object.assign(w.env, env);
+  const first = w.run('gate');
+  assert.equal(first.code, 0, first.out);
+  assert.match(first.out, /gate: scope full: no green gated commit is known on origin\/main/);
+  assert.match(w.calls(), new RegExp(`create configmap claudepilot-gate-result-${w.sha} --from-literal=commit=${w.sha} --from-literal=kind=full `));
+
+  // main's head is green: integration's code change since then runs typecheck only (nothing in this tree imports or names feature.txt).
+  writeFileSync(join(w.root, 'records'), `${w.base} full 2026-10-31T00:00:00Z \n`);
+  const dry = w.run('gate', { dry_run: 'true' });
+  assert.equal(dry.code, 0, dry.out);
+  assert.match(dry.out, new RegExp(`gate: scope scoped: 1 file\\(s\\) changed since ${w.base.slice(0, 8)}`));
+  assert.match(dry.out, new RegExp(`gate: base ${w.base.slice(0, 7)}, the last green gated commit on main; changed: 1 file\\(s\\): feature\\.txt`));
+  assert.match(dry.out, /\[dry-run\] would run: scripts\/gate-job\.sh [0-9a-f]{7} typecheck\n/);
+  const scoped = w.run('gate');
+  assert.equal(scoped.code, 0, scoped.out);
+  assert.match(scoped.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck at `));
+  assert.match(readFileSync(join(w.root, 'applied.yaml'), 'utf8'), /GATE_STEPS, value: "typecheck"/);
+  assert.match(w.calls(), new RegExp(`--from-literal=kind=scoped --from-literal=base=${w.base} `), 'recorded as scoped, with its base');
+  assert.match(scoped.out, /gate: green at [0-9a-f]{7} \(scoped\)/);
+
+  // Asked for the whole gate: full whatever the records say.
+  const full = w.run('gate', { full_gate: 'true' });
+  assert.equal(full.code, 0, full.out);
+  assert.match(full.out, /gate: scope full: asked for \(FULL\)/);
+  assert.match(full.out, /: typecheck,web-build,web-tests,server-suite at /);
+
+  // Integration moved by a document only: main's green result is reused, no Job runs, the reuse is recorded with the diff that justified it.
+  const d = world('docs/notes.md');
+  Object.assign(d.env, env);
+  writeFileSync(join(d.root, 'records'), `${d.base} full 2026-10-31T00:00:00Z \n`);
+  const reuse = d.run('gate');
+  assert.equal(reuse.code, 0, reuse.out);
+  assert.match(reuse.out, new RegExp(`gate: reused the green result of ${d.base.slice(0, 7)}; the trees differ only in: docs/notes\\.md`));
+  assert.match(reuse.out, /gate: green at [0-9a-f]{7} \(reused [0-9a-f]{7}\)/);
+  assert.ok(!existsSync(join(d.root, 'applied.yaml')), 'no gate Job');
+  assert.match(d.calls(), new RegExp(`create configmap claudepilot-gate-result-${d.sha} --from-literal=commit=${d.sha} --from-literal=kind=reuse --from-literal=base=${d.base} `));
+});
+
+test('D-106: the nightly pipeline runs the whole gate on the head, skips a tree a full green result covers, and fails loudly when red', () => {
+  const v = validatePipeline('.pilot/nightly.yml', readFileSync(join(REPO, '.pilot/nightly.yml'), 'utf8'));
+  assert.deepEqual(v.info.diagnostics, []);
+  assert.deepEqual(v.info.triggers, ['manual']);
+  const w = world();
+  Object.assign(w.env, { GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' });
+  const green = w.run('nightly');
+  assert.equal(green.code, 0, green.out);
+  assert.match(green.out, /: typecheck,web-build,web-tests,server-suite at /, 'every step');
+  assert.match(green.out, /nightly: green at [0-9a-f]{7} \(the whole gate\)/);
+  assert.match(w.calls(), /--from-literal=kind=full /);
+  assert.match(readFileSync(join(w.root, 'applied.yaml'), 'utf8'), /claudepilot-gate\/by: nightly/);
+
+  writeFileSync(join(w.root, 'records'), `${w.sha} scoped 2026-10-31T00:00:00Z \n`);
+  assert.match(w.run('nightly', { dry_run: 'true' }).out, /would run: scripts\/gate-job\.sh [0-9a-f]{7} \(the whole gate\)/, 'a scoped result is not a whole one');
+  writeFileSync(join(w.root, 'records'), `${w.sha} full 2026-10-31T00:00:00Z \n`);
+  const skip = w.run('nightly');
+  assert.equal(skip.code, 0, skip.out);
+  assert.match(skip.out, /nightly: already green in full: the green full gate of [0-9a-f]{8}/);
+
+  rmSync(join(w.root, 'records'));
+  writeFileSync(join(w.root, 'gate-mode'), 'red');
+  const red = w.run('nightly');
+  assert.equal(red.code, 1);
+  assert.match(red.out, /NIGHTLY FULL GATE RED at [0-9a-f]{7} on integration/);
+  assert.match(red.out, /GATE-VERDICT: red: typecheck failed/);
 });
 
 test('refusals: a red gate, a branch that moved, a main with other commits, an unknown image; a refused release changes nothing', () => {
