@@ -174,10 +174,11 @@ export class Browser {
     });
   }
 
-  async setViewport(width, height, mobile = width < 600) {
+  /** `dpr`: the device pixel ratio (1 by default; an iPhone is 3). */
+  async setViewport(width, height, mobile = width < 600, dpr = 1) {
     this.o.width = width;
     this.o.height = height;
-    await this.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile });
+    await this.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dpr, mobile });
     if (mobile) await this.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     else await this.send('Emulation.setTouchEmulationEnabled', { enabled: false });
   }

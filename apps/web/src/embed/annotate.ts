@@ -31,6 +31,12 @@ export const TOOLS: { tool: Tool; key: string; label: string }[] = [
 ];
 export const toolForKey = (key: string): Tool | null => TOOLS.find((t) => t.key === key.toLowerCase())?.tool ?? null;
 
+/**
+ * What a pointer-down does while a text box is open: with the Text tool it only ends the text (a tap elsewhere finishes it, it does not
+ * start another); with any other tool it ends the text AND starts that tool's mark, so the first drag after Text is never swallowed.
+ */
+export const downWhileTyping = (tool: Tool): 'finish' | 'finish-and-draw' => (tool === 'text' ? 'finish' : 'finish-and-draw');
+
 /** One unit of thickness for an image: about 1/420 of its long side, so marks look the same on a 1x and a 3x screenshot. */
 export const unitOf = (img: { w: number; h: number }) => Math.max(1, Math.max(img.w, img.h) / 420);
 const SIZE: Record<SizeClass, number> = { s: 1.5, m: 3, l: 6 };
@@ -77,7 +83,21 @@ export const hasBlur = (marks: readonly { type: string }[] | undefined) => !!mar
 
 /* ---------- Geometry ---------- */
 
-export const normRect = (a: Pt, b: Pt): Rect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
+/**
+ * A pointer's position in the SCREENSHOT's pixels, from where the image is drawn right now: `box` is the image element's
+ * getBoundingClientRect() read at this very event (it already holds the stage's place after any layout shift, the zoom and pan transform
+ * and any scroll), `size` the image's own pixels. Client coordinates and the rect are both CSS pixels, so the device pixel ratio cancels
+ * out. Never a cached rect or a remembered view: the editor once mapped through a stale one and a blur landed off its drag (2026.10.31-6).
+ */
+export function clientToImage(client: Pt, box: { left: number; top: number; width: number; height: number }, size: { w: number; h: number }): Pt {
+  if (!(box.width > 0) || !(box.height > 0)) return { x: 0, y: 0 };
+  return { x: ((client.x - box.left) * size.w) / box.width, y: ((client.y - box.top) * size.h) / box.height };
+}
+
+/** Screen pixels per image pixel of the image as drawn now (for touch slop and handle reach). */
+export const drawnScale = (box: { width: number }, size: { w: number }) => (size.w > 0 && box.width > 0 ? box.width / size.w : 1);
+
+export const normRect = (a: Pt, b: Pt): Rect =>({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
 
 /** Ramer-Douglas-Peucker on a flat x,y list: a pen stroke keeps its shape with far fewer points (and stays under the server's cap). */
 export function simplify(points: number[], tolerance: number): number[] {
