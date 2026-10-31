@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
@@ -330,4 +330,57 @@ test('a plain vitest package (no test:scripts, no scripts/test.mjs) still runs v
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /::: test:plain\/src\/z\.test\.ts ok/);
   assert.match(readFileSync(f.log, 'utf8'), /^vitest run src\/z\.test\.ts$/m);
+});
+
+/** The fixture gets the real scripts/context-pack.sh and a committed, fresh docs/context-pack.md: every path the pack names is created as a
+ * placeholder (the pack's path check), repeated until the pack names nothing new (its hot files list what was just committed). */
+function withPack(f: ReturnType<typeof fixture>) {
+  mkdirSync(join(f.work, 'scripts'), { recursive: true });
+  copyFileSync(join(REPO, 'scripts/context-pack.sh'), join(f.work, 'scripts/context-pack.sh'));
+  writeFileSync(join(f.work, 'CLAUDE.md'), '# Fixture\n\n## Map\n');
+  sh(f.work, 'git add -A && git commit -qm pack-script');
+  for (let i = 0; i < 5; i++) {
+    const pack = sh(f.work, 'bash scripts/context-pack.sh --stdout --no-path-check');
+    const named = [...pack.matchAll(/`([^` ]*\/[^` ]*)`/g)].map((m) => m[1] ?? '').filter((p) => !/[*<>(){}]|^\/|^[-.]*$|^https?:/.test(p));
+    const missing = named.filter((p) => !existsSync(join(f.work, p)));
+    if (missing.length === 0) break;
+    for (const p of missing) {
+      const bare = p.replace(/\/$/, '');
+      if (p.endsWith('/') || named.some((q) => q.startsWith(`${bare}/`))) {
+        mkdirSync(join(f.work, bare), { recursive: true });
+        writeFileSync(join(f.work, bare, '.keep'), '');
+      } else {
+        mkdirSync(dirname(join(f.work, bare)), { recursive: true });
+        writeFileSync(join(f.work, bare), '# fixture\n');
+      }
+    }
+    sh(f.work, 'git add -A && git commit -qm paths');
+  }
+  sh(f.work, 'bash scripts/context-pack.sh && git add -A && git commit -qm pack');
+}
+
+test('T-3173: the gate context-pack check runs in the quick check: a fresh pack passes, a stale one fails and is named', () => {
+  const f = fixture(0);
+  withPack(f);
+  const fresh = run(f.work, f.fake, []);
+  assert.equal(fresh.status, 0, fresh.stdout + fresh.stderr);
+  assert.match(fresh.stdout, /::: context-pack ok/);
+  assert.equal(last(fresh.stdout), 'QUICK CHECK: all passed');
+  // A new script without a regenerated pack: the pack's script list no longer matches the commit (incident T-2888).
+  writeFileSync(join(f.work, 'scripts/new-thing.sh'), '#!/usr/bin/env bash\n# a script the pack does not list yet\n');
+  sh(f.work, 'git add -A && git commit -qm new-script');
+  const stale = run(f.work, f.fake, []);
+  assert.equal(stale.status, 1, stale.stdout + stale.stderr);
+  assert.match(stale.stdout, /::: context-pack FAILED/);
+  assert.match(stale.stdout + stale.stderr, /stale: docs\/context-pack\.md differs/);
+  assert.equal(last(stale.stdout), 'QUICK CHECK FAILED: context-pack');
+  // The other checks still ran and passed.
+  assert.match(stale.stdout, /::: format ok/);
+});
+
+test('T-3173: a repository without scripts/context-pack.sh gets no context-pack check', () => {
+  const f = fixture(0);
+  const r = run(f.work, f.fake, []);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /context-pack/);
 });

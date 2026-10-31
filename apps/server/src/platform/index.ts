@@ -150,14 +150,15 @@ export function createPlatform(deps: PlatformDeps): Platform {
   // The registry: N3 (triggers) and N4 (auto transfer) add ONE line each below, e.g.
   //   platform.register(createTriggersModule(platform));
   //   platform.register(createAutoTransferModule(platform));
-  platform.register(createTriggersModule(platform));
+  const triggers = createTriggersModule(platform);
+  platform.register(triggers);
   platform.register(createAutoTransferModule(platform));
   // T-259: Keep going, the watchdog inside the portal.
   platform.register(createKeepGoingModule(platform));
   // T-1966: the flow watchdog, which keeps a program's leads moving (no model).
   platform.register(createFlowModule(platform));
   // T-968 S2b: the one list of loops and cron triggers (general-manager PRD §9.2).
-  platform.register(createSchedulesModule(platform));
+  platform.register(createSchedulesModule(platform, { triggers }));
 
   return platform;
 }

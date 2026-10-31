@@ -373,6 +373,11 @@ export interface CreateRepoWorktreeRequest {
   base?: string;
   /** Also turn "keep synced" on. */
   sync?: boolean;
+  /**
+   * The folder to make it in (T-1261): an absolute path to an existing folder in the workspace's files, not inside the repository.
+   * Default: `<repository>.worktrees/` beside it.
+   */
+  parent?: string;
 }
 
 export interface CreateRepoWorktreeResult {

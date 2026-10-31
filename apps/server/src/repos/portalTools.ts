@@ -266,7 +266,7 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
     name: 'worktree_create',
     title: 'Make a git worktree',
     description:
-      'Makes a git worktree of a repository from repos_list, on a new branch (started from base, or the repository’s HEAD) or on an existing branch no other worktree has, in <repository>.worktrees/ beside it. Git runs hardened: no hook, filter or fsmonitor of the repository runs. Optionally turns on “keep synced” (fetch and fast-forward only, when clean). Recorded in the audit with who asked. An agent can only do this in its own workspace.',
+      'Makes a git worktree of a repository from repos_list, on a new branch (started from base, or the repository’s HEAD) or on an existing branch no other worktree has, in <repository>.worktrees/ beside it, or in parent: an absolute path (no . or ..) to an existing folder of the workspace, outside the repository. A parent that is missing or not yours to see gets the same not-found. Git runs hardened: no hook, filter or fsmonitor of the repository runs. Optionally turns on “keep synced” (fetch and fast-forward only, when clean). Recorded in the audit with who asked. An agent can only do this in its own workspace.',
     scope: 'agent',
     hints: { readOnly: false, destructive: false, idempotent: false },
     rate: { perMinute: 6, perHour: 30 },
@@ -278,12 +278,13 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
       branch: z.string().max(100).optional().describe('Default: wt/<6 hex>.'),
       base: z.string().max(100).optional().describe('A branch, tag or commit for a new branch. Default: HEAD.'),
       sync: z.boolean().optional().describe('Also keep it synced with its upstream.'),
+      parent: z.string().max(400).optional().describe('An absolute folder to make it in. Default: <repository>.worktrees/.'),
     }),
     async handler(ctx, args) {
       const id = repoIdOfArgs(ctx, args);
       const ws = repoArg(ctx, repos, id, args.workspace_id);
       ctx.affected(`workspace:${ws}`, `repo:${id}`);
-      const made = await repos.createWorktree(id, { branch: args.branch, base: args.base, sync: args.sync }, ctx.actor, ctx.actorLabel);
+      const made = await repos.createWorktree(id, { branch: args.branch, base: args.base, sync: args.sync, parent: args.parent }, ctx.actor, ctx.actorLabel);
       return {
         summary: `Made worktree ${made.branch}.`,
         worktree: { id: made.worktree.id, path: ctx.untrusted(made.worktree.path, SOURCE, 400), branch: ctx.untrusted(made.branch, SOURCE, 200), commit: made.commit, keep_synced: made.worktree.sync?.enabled ?? false },

@@ -2,6 +2,9 @@
 // untrusted, that nothing here returns a credential, and that a worktree made through MCP is audited with its actor.
 
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { ToolRegistry, agentCallable, userTier } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
@@ -166,6 +169,40 @@ test('worktree_create: refused to a read token, made for an operate token and fo
     // a bad size is refused before anything runs
     assert.ok((await r.mcp.call(op.secret, 'worktree_create', { repo_id: projId, branch: 'x'.repeat(200) })).result?.isError);
   } finally {
+    r.done();
+  }
+});
+
+test('T-1261 worktree_create with a parent: an agent makes one in a folder of its workspace; a relative, .. or unseen parent is refused, the unseen ones alike', async () => {
+  const r = await rig();
+  const outside = mkdtempSync(join(tmpdir(), 'cp-t1261-mcp-'));
+  try {
+    const projId = repoId(WS, r.pool.path('proj'));
+    const agent = await r.mcp.agentToken(WS, 'sess7');
+    const lanes = join(r.pool.files, 'lanes');
+    mkdirSync(lanes);
+    const made = await r.mcp.call(agent.secret, 'worktree_create', { repo_id: projId, branch: 'lane/one', parent: lanes });
+    assert.equal(made.result?.isError, undefined, text(made));
+    assert.equal(made.result!.structuredContent.worktree.path.untrusted_text, join(lanes, 'lane-one'));
+    // (an operate token for these two: the tool allows 6 calls a minute per caller)
+    const op = r.mcp.token('operate');
+    for (const parent of ['lanes', `${r.pool.files}/lanes/../lanes`]) {
+      assert.equal((await r.mcp.call(op.secret, 'worktree_create', { repo_id: projId, branch: 'lane/bad', parent })).result?.isError, true, parent);
+    }
+    mkdirSync(join(r.pool.files, '.claudepilot', 'kept'), { recursive: true });
+    const unseen: string[] = [];
+    for (const parent of [outside, join(r.pool.files, '.claudepilot', 'kept'), join(r.pool.files, 'no-such-folder')]) {
+      const res = await r.mcp.call(agent.secret, 'worktree_create', { repo_id: projId, branch: 'lane/unseen', parent });
+      assert.equal(res.result?.isError, true, parent);
+      unseen.push(text(res).replace(parent, '<parent>'));
+    }
+    assert.equal(new Set(unseen).size, 1, `one answer for every folder the agent may not see: ${unseen.join(' | ')}`);
+    assert.deepEqual(readdirSync(outside), []);
+    const registry = new ToolRegistry();
+    registerRepoTools({} as never, registry);
+    assert.ok(registry.get('worktree_create')!.description.length < 1000, 'the tool’s description stays under 1000 characters');
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
     r.done();
   }
 });

@@ -147,6 +147,62 @@ test('protection off: the next deployment runs without asking (auto); one alread
   }
 });
 
+test('T-3004: an agent never deploys unattended outside stg: a run it starts to an unprotected environment is refused before anything runs', async () => {
+  const audit: Audit[] = [];
+  const h = await harness({ audit: (e) => void audit.push(e) });
+  try {
+    const STG = DEPLOY.replace('environment: production', 'environment: stg');
+    const repo = await remote(h, { '.pilot/deploy.yml': DEPLOY, '.pilot/stg.yml': STG });
+    // The plan as the service stores it on the run row (plan.json in the workspace appears only once the runner has picked the run up).
+    const planOf = (id: string) =>
+      JSON.parse((h.store.db!.prepare('SELECT plan FROM ci_runs WHERE id = ?').get(id) as { plan: string }).plan) as { jobs: { id: string; env: Record<string, string> }[] };
+    const approvalEnv = (id: string) => planOf(id).jobs.find((j) => j.id === 'release')!.env.PILOT_APPROVAL;
+
+    // Protected (the default): the agent's run is held for a decision, and the deploying job knows it waited.
+    const held = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' }, 'session:s1', { sessionId: 's1', deploymentOnly: 'no' });
+    assert.equal(held.deployments[0]!.approval, 'pending');
+    await waitingJob(h, held.id);
+    assert.equal(approvalEnv(held.id), 'held');
+    await h.svc.cancel(held.id);
+    await h.until('the held run to end', () => h.svc.get(held.id).status === 'cancelled');
+
+    // Protection off: every agent-like actor is refused, with what to do; the refusal is a failed run (the evidence), and nothing ran.
+    h.svc.setEnvironment(repo.id, 'production', { protected: false }, OWNER);
+    for (const actor of ['session:s1', 'manager:gm1', 'portal-mcp:tok1']) {
+      let message = '';
+      await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' }, actor, { sessionId: actor === 'session:s1' ? 's1' : null, deploymentOnly: 'no' }).then(
+        () => assert.fail(`${actor}: started`),
+        (e: { code?: string; message?: string }) => {
+          assert.equal(e.code, 'FORBIDDEN', actor);
+          message = e.message ?? '';
+        },
+      );
+      assert.match(message, /deploys to production, which does not hold for an approval in the portal/, actor);
+      assert.match(message, /What to do: a person starts this run in the portal, or a person protects production/, actor);
+    }
+    const refused = h.store.db!.prepare('SELECT id, actor, status FROM ci_runs WHERE repo_id = ? AND id <> ? ORDER BY number').all(repo.id, held.id) as { id: string; actor: string; status: string }[];
+    assert.deepEqual(refused.map((r) => [r.actor, r.status]), [['session:s1', 'failed'], ['manager:gm1', 'failed'], ['portal-mcp:tok1', 'failed']], 'recorded as failed runs');
+    for (const r of refused) assert.equal(h.svc.get(r.id).deployments.length, 0, 'no deployment row: nothing was let through');
+
+    // A rerun by an agent is refused the same way.
+    assert.equal(await codeOf(() => h.svc.rerun(held.id, 'session:s1')), 'CONFLICT');
+
+    // A person (ui) still releases unattended, and the job is told nobody decided.
+    const byPerson = await h.svc.startRun({ repoId: repo.id, pipeline: 'deploy', ref: 'main' });
+    assert.equal(byPerson.deployments[0]!.approval, 'auto');
+    assert.equal(approvalEnv(byPerson.id), 'auto');
+    await h.until('the person\'s run to pass', () => h.svc.get(byPerson.id).status === 'passed');
+
+    // stg is the one environment an agent may deploy to unattended (D-62).
+    h.svc.setEnvironment(repo.id, 'stg', { protected: false }, OWNER);
+    const stg = await h.svc.startRun({ repoId: repo.id, pipeline: 'stg', ref: 'main' }, 'session:s1', { sessionId: 's1', deploymentOnly: 'no' });
+    assert.equal(stg.deployments[0]!.approval, 'auto');
+    await h.until('the stg run to pass', () => h.svc.get(stg.id).status === 'passed');
+  } finally {
+    h.done();
+  }
+});
+
 test('an agent-shaped start: deploymentOnly refuses a pipeline that deploys nowhere and links the run to the session that asked', async () => {
   const { h, repo } = await setup();
   try {

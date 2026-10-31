@@ -185,7 +185,8 @@ test('a session starts detached in its cwd, takes a send, is tailable by offset,
 
 test('start --env puts NAME=value lines from stdin into the process environment, never on a command line or in a file; other names are refused', async () => {
   const { sessions, work, env } = mkEnv();
-  const token = 'cpst_Zk3pQ7vR1mT8xN4bC6yL0wH2dF5gJ9aS';
+  // Built at runtime: no token-shaped literal in the source (T-2989).
+  const token = ['cpst', 'envfixture'.repeat(3)].join('_');
   const input = `PILOT_MCP_TOKEN=${token}\nPILOT_SESSION_ID=s-1\nPILOT_MCP_URL=http://172.18.0.1:3105/mcp?a=b=c\nENABLE_CLAUDEAI_MCP_SERVERS=false\n`;
   const started = await run(['start', 'e1', '1', work, '--env', '4', '--', '-p', '--mcp-config', '{"mcpServers":{}}'], { input, env });
   assert.equal(started.code, 0, started.stderr);

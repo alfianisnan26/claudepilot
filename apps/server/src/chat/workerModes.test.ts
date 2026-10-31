@@ -11,7 +11,7 @@ import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { AUTO_REFUSED } from './controller.js';
 import { registerChatTools } from './portalTools.js';
 import { ChatStore } from './store.js';
-import { APPLIED, controls, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
+import { APPLIED, controls, fail, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
 test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', () => {
   // T-2997: Bypass only from a parent in it NOW (the portal's live check); a stored Bypass alone gives Auto, the policy on or off.
@@ -52,8 +52,11 @@ test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', (
   assert.equal(autoModeAllowed(trigger, { autonomousAuto: true }), true);
 });
 
-/** Answers every mode switch (with the mode asked), settings read and usage read, in the order they reach the process, until `p` settles. */
-async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
+/**
+ * Answers every mode switch (with the mode asked), settings read and usage read, in the order they reach the process, until `p` settles.
+ * `refuse`: the modes the process refuses to switch to (its error answer), as Claude Code does when Auto is not available to it.
+ */
+async function answering<T>(s: Live, p: Promise<T>, refuse: ReadonlySet<string> = new Set()): Promise<T> {
   let done = s.ws.sends.length;
   let settled = false;
   p.then(
@@ -71,7 +74,8 @@ async function answering<T>(s: Live, p: Promise<T>): Promise<T> {
       for (let i = s.ws.tailArgs.length - 1; i >= 0 && at < 0; i--) if (s.ws.tailArgs[i]![1] === sent.args[1]) at = i;
       const tail = s.ws.tails[at];
       if (!tail) break; // its process is not tailed yet: try again on the next round
-      if (c.request.subtype === 'set_permission_mode') tail.push(ok(c.id, { mode: String(c.request.mode) }));
+      if (c.request.subtype === 'set_permission_mode')
+        tail.push(refuse.has(String(c.request.mode)) ? fail(c.id, `${String(c.request.mode)} mode is not available`) : ok(c.id, { mode: String(c.request.mode) }));
       else if (c.request.subtype === 'get_settings') tail.push(ok(c.id, APPLIED));
       else if (c.request.subtype === 'get_usage') tail.push(ok(c.id, USAGE_API_KEY));
     }
@@ -558,6 +562,37 @@ test('T-2997: a lead whose stored mode says Bypass but which is not in Bypass no
     assert.equal(await answering(r.s, r.s.controller.inheritBypass(direct.id)), false);
     assert.equal(r.s.controller.audit({ kind: 'bypass.entered' }).length, 0, 'Bypass was never entered');
     assert.equal(r.s.controller.audit({ kind: 'bypass.capable' }).filter((x) => x.detail.how === 'inherit').length, 0, 'no capability handed on');
+  } finally {
+    await r.done();
+  }
+});
+
+test('T-3215 (PILOT-1112, folds PILOT-1025): a worker never runs in default or dontAsk unasked: Auto refused by its Claude ends it before any instruction, the lead told why', async () => {
+  const r = await rig();
+  try {
+    r.s.controller.autonomousAuto = () => true;
+    const a = await r.h.agentToken('docker/ws1', r.s.id);
+    assert.equal(r.s.controller.get(r.s.id)!.mode, 'default', 'set up: the lead runs in Manual');
+    const sendsBefore = r.s.ws.sends.length;
+    const refused = await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: 'Auto refused' }), new Set(['auto', 'dontAsk']));
+    assert.equal(refused.result?.isError, true, 'the spawn fails');
+    const error = refused.result!.structuredContent!.error as { code: string; message: string };
+    assert.equal(error.code, 'CONFLICT');
+    assert.match(error.message, /^The worker could not be confirmed in auto mode \(auto mode is not available\), so it was ended before it got any instruction: it would have run in default/);
+    const w = r.s.controller.children(r.s.id).find((c) => c.title === 'Auto refused')!;
+    assert.equal(w.state, 'ended', 'never left running in default');
+    assert.equal(r.s.controller.history(w.id).some((e) => e.kind === 'user'), false, 'no instruction went in');
+    const modes = controls({ sends: r.s.ws.sends.slice(sendsBefore) } as unknown as Live['ws']).filter((c) => c.request.subtype === 'set_permission_mode').map((c) => c.request.mode);
+    assert.deepEqual(modes, ['auto'], 'no dontAsk fallback is tried');
+
+    // A wider mode asked by name (acceptEdits under an Auto lead) and refused: ended too, never default.
+    await answering(r.s, r.s.controller.control(r.s.id, 'mode', { mode: 'auto' }, { actor: 'ui' }));
+    const edit = await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Edit only.', title: 'Edit refused', mode: 'acceptEdits' }), new Set(['acceptEdits']));
+    assert.equal(edit.result?.isError, true);
+    assert.equal(r.s.controller.children(r.s.id).find((c) => c.title === 'Edit refused')!.state, 'ended');
+    // Auto answered: the worker runs in Auto (the default order unchanged).
+    const ok2 = spawned(await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run it.', title: 'Auto ok' })));
+    assert.deepEqual([ok2.applied, r.s.controller.get(ok2.id)!.mode], [['mode auto'], 'auto']);
   } finally {
     await r.done();
   }

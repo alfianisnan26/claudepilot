@@ -94,6 +94,56 @@ test('migration 796: one table; every state but no_pr names the PR and its full 
   }
 });
 
+test("T-3198 migration 797: merged may name its head with no PR; the rebuild keeps every row and id; every other state keeps 796's rule", async () => {
+  assert.equal(MIGRATIONS.filter((m) => m.version === 797).length, 1);
+  const h = await ticketsHarness();
+  try {
+    const t = h.tickets.create(UI, { summary: 'x' });
+    const db = h.store.db!;
+    const ins = (pr: number | null, prHead: string | null, state: string) =>
+      db
+        .prepare(
+          'INSERT INTO ticket_merge_status (ticket_number, repo, pr, pr_head, state, reason, actor, actor_label, at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        )
+        .run(t.number, 'o/r', pr, prHead, state, 'ui', 'Admin', new Date().toISOString());
+    const rows = () =>
+      db
+        .prepare('SELECT id, pr, pr_head AS head, state FROM ticket_merge_status ORDER BY id')
+        .all()
+        .map((r) => ({ ...r }));
+    // As a portal before 797 left it: 796's table, 796's rule (merged needs its PR), and rows in it.
+    db.exec('DROP TABLE ticket_merge_status');
+    MIGRATIONS.find((m) => m.version === 796)!.up(db);
+    ins(null, null, 'no_pr');
+    ins(4, head('c'), 'ready');
+    assert.throws(() => ins(null, head('d'), 'merged'), '796 refuses merged without a PR');
+    const before = rows();
+    db.exec('BEGIN');
+    MIGRATIONS.find((m) => m.version === 797)!.up(db);
+    db.exec('COMMIT');
+    assert.deepEqual(rows(), before, 'every row and id kept');
+    ins(null, head('d'), 'merged');
+    assert.throws(() => ins(null, null, 'merged'), 'merged still names its head');
+    assert.throws(() => ins(null, head('d'), 'ready'));
+    assert.throws(() => ins(4, null, 'conflict'));
+    assert.throws(() => ins(null, head('d'), 'failed'));
+    assert.throws(() => ins(1, 'abc', 'merged'));
+    const idx = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ticket_merge_status' AND name = 'ticket_merge_status_ticket'`,
+      )
+      .get();
+    assert.ok(idx, 'the index is back');
+    assert.deepEqual(
+      h.tickets.mergeStatus(UI, t.id).map((m) => [m.pr, m.prHead, m.state]),
+      [[null, head('d'), 'merged']],
+      'the newest per repo',
+    );
+  } finally {
+    h.done();
+  }
+});
+
 test('mergeGatesOf: the configured gate when a lead of the group, else its first lead; a program with no group has each group\'s; off programs none', () => {
   const groups = `${GATE},${B};${C},${B}`;
   assert.deepEqual(mergeGatesOf(`konfersi|konfersi-migration|1|${B}`, groups), [{ tag: 'konfersi-migration', gates: [B] }]);

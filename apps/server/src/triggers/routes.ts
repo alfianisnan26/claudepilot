@@ -40,7 +40,7 @@ async function body(c: Context): Promise<Record<string, unknown>> {
 const optionalBody = async (c: Context): Promise<Record<string, unknown>> => ((c.req.header('content-length') ?? '0') === '0' && !c.req.header('transfer-encoding') ? {} : body(c));
 
 /** A manual event (Run now): a schedule's for cron, a bare one for CI (the limits and approval apply as to any fire). */
-function manualFacts(t: TriggerRecord, at: string): TriggerEventFacts {
+export function manualFacts(t: TriggerRecord, at: string): TriggerEventFacts {
   if (t.source === 'cron') return scheduleFacts(at);
   return { ...scheduleFacts(at), source: 'ci_failed', event: 'ci_failed' };
 }

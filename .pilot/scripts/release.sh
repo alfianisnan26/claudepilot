@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The release job (environment production: it starts only after a person approved it in the portal). Puts the new tags of the portal and
+# The release job (environment production: it waits for a decision in the portal while production is protected; an agent-started run to an
+# unprotected production is refused by the portal, T-3004). Puts the new tags of the portal and
 # workspace images into deploy/k3s/portal.yaml on top of the run's commit and pushes that commit to main, the branch Argo CD follows: that
 # push IS the deploy, and it goes to main alone (fast-forward, never forced). The run's branch then catches up as a separate step: the
 # release commit, or, when the branch moved on while the release waited for its approval, the release merged into its new tip, fetched
@@ -40,7 +41,15 @@ what=$( (
   [ -n "$PORTAL_TAG" ] && [ -n "$WORKSPACE_TAG" ] && printf ', '
   [ -n "$WORKSPACE_TAG" ] && printf 'workspace %s' "$WORKSPACE_TAG"
 ) || true)
-commit "deploy: $what" "Released by the deploy pipeline: pilot CI run #${PILOT_RUN_NUMBER:-?} of $(short "$sha") on $(src_branch), approved in the portal.
+# T-3004: say how the release was let through, never more. The portal sets PILOT_APPROVAL on the deploying job: `held` (it waited for a
+# decision in the portal: a person's, or the environment's own auto-approve rule; the run shows who) or `auto` (the environment does not
+# hold, so nobody decided). Anything else (an older portal, a run by hand) claims nothing.
+case "${PILOT_APPROVAL:-}" in
+  held) approval="approved in the portal (the run records who decided)" ;;
+  auto) approval="auto-approved (no person decided)" ;;
+  *) approval="approval not recorded" ;;
+esac
+commit "deploy: $what" "Released by the deploy pipeline: pilot CI run #${PILOT_RUN_NUMBER:-?} of $(short "$sha") on $(src_branch), $approval.
 
 Pilot-Run: ${PILOT_RUN_ID:-local}"
 bump=$(git rev-parse HEAD)

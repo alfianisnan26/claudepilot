@@ -129,7 +129,8 @@ interface World {
   sha: string;
   base: string;
   git(args: string[], cwd?: string): string;
-  run(script: string, inputs?: Record<string, string>): { code: number; out: string };
+  /** `extra`: more of the job's environment, as the portal sets it (e.g. PILOT_APPROVAL). */
+  run(script: string, inputs?: Record<string, string>, extra?: Record<string, string>): { code: number; out: string };
   calls(): string;
   main(): string;
   branch(name: string): string;
@@ -227,8 +228,8 @@ function world(change = 'feature.txt'): World {
     sha,
     base,
     git,
-    run(script, inputs = {}) {
-      const r = spawnSync('bash', [`.pilot/scripts/${script}.sh`], { cwd: work, env: runEnv(script, inputs), encoding: 'utf8', timeout: 60_000 });
+    run(script, inputs = {}, extra = {}) {
+      const r = spawnSync('bash', [`.pilot/scripts/${script}.sh`], { cwd: work, env: { ...runEnv(script, inputs), ...extra }, encoding: 'utf8', timeout: 60_000 });
       return { code: r.status ?? -1, out: `${r.stdout}${r.stderr}` };
     },
     calls: () => (existsSync(join(root, 'calls.log')) ? readFileSync(join(root, 'calls.log'), 'utf8') : ''),
@@ -337,6 +338,24 @@ test('a release: gate verdict, the real k3s-build.sh on a fake cluster, the bump
   assert.match(verify.out, /verify: live and well at [0-9a-f]{7}/);
   assert.match(w.calls(), /kubectl -n isnan-argocd annotate application isnan-claudepilot argocd\.argoproj\.io\/refresh=hard --overwrite/);
   assert.match(w.calls(), /curl -s -o \/dev\/null -w %\{http_code\} --max-time 10 http:\/\/portal\.test:3000\/healthz/);
+});
+
+test('T-3004: the release commit says how the release was let through: approved in the portal only when it waited, auto-approved when nobody decided', () => {
+  for (const [approval, says] of [
+    ['held', 'approved in the portal (the run records who decided).'],
+    ['auto', 'auto-approved (no person decided).'],
+    ['', 'approval not recorded.'],
+  ] as const) {
+    const w = world();
+    assert.equal(w.run('gate').code, 0);
+    const build = w.run('build', { images: 'portal' });
+    assert.equal(build.code, 0, build.out);
+    const release = w.run('release', {}, { PILOT_APPROVAL: approval });
+    assert.equal(release.code, 0, release.out);
+    const body = w.git(['--git-dir', w.github, 'log', '-1', '--format=%B', w.main()]);
+    assert.ok(body.includes(`on integration, ${says}\n`), `${approval || 'unset'}: ${body}`);
+    if (approval !== 'held') assert.doesNotMatch(body, /approved in the portal/, 'never claims a decision nobody made');
+  }
 });
 
 test('a verify that fails rolls back: the previous tags on main (and integration), then Argo CD, rollout and /healthz again', () => {
