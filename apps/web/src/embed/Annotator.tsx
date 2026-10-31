@@ -49,7 +49,7 @@ import { Icon, type IconName } from './icons';
  * tools pinned at the bottom in the safe area, scrolling sideways; desktop: one top bar. Done flattens the marks (blurs pixelate the real
  * pixels) into a PNG of the screenshot's size.
  */
-const DARK = { background: 'rgba(8, 10, 14, 0.98)', color: '#fff' } as const;
+const DARK = { background: '#0b0d12', color: '#fff' } as const;
 const DIM = { color: 'rgba(255, 255, 255, 0.72)' } as const;
 const ACCENT = '#1e88ff';
 const TOOL_ICON: Record<Tool, IconName> = {
