@@ -585,7 +585,7 @@ test('T-3215 (PILOT-1112, folds PILOT-1025): a worker never runs in default unas
     const sendsBefore = r.s.ws.sends.length;
     const refused = await answering(r.s, r.h.call(a.secret, 'session_spawn', { prompt: 'Run the job.', title: 'All refused' }), new Set(['auto', 'dontAsk']));
     assert.equal(refused.result?.isError, true);
-    assert.match(JSON.stringify(refused.result!.structuredContent), /could not be confirmed in auto mode nor in dontAsk/);
+    assert.match(JSON.stringify(refused.result!.structuredContent), /could not be confirmed in auto mode \(auto mode is not available\) nor in dontAsk \(dontAsk mode is not available\), so it was ended before it got any instruction/);
     assert.equal(r.s.controller.children(r.s.id).filter((c) => c.state !== 'ended').length, count, 'the worker was ended');
     const instructions = r.s.ws.sends.slice(sendsBefore).filter((x) => JSON.stringify(x).includes('Run the job.'));
     assert.equal(instructions.length, 0, 'it never got its instruction');
