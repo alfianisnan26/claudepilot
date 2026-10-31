@@ -64,6 +64,14 @@ spec:
               value: "true"
             - name: PORTAL_K8S_NAMESPACE
               value: isnan-claudepilot-workspaces
+            # One more Kubernetes target per org (workspace-orgs.yaml; apps/server/src/workspaces/kubeTargets.ts; migration plan B.5, 2026-10-31):
+            # workspaces `<id>/<name>` in the org's namespace; `kubernetes` above stays as it is. Placement is the target's: nodeSelector (here a
+            # hostname, in place of PORTAL_K8S_NODE_SELECTOR) at every create, set by the portal, not by a hand patch; a create may name one of
+            # preferredNodes instead (the New workspace dialog's Node select). The home volume follows the pod (local-path binds
+            # WaitForFirstConsumer) and keeps it on that node. cpus/memoryMb: the limits a create gets by default; cpuRequest/memoryRequest:
+            # what it reserves (in place of PORTAL_K8S_CPU_REQUEST / PORTAL_K8S_MEMORY_REQUEST). Image and storage are the PORTAL_K8S_* ones.
+            - name: PORTAL_K8S_TARGETS
+              value: '[{"id":"isnan","label":"isnan","namespace":"isnan-pilot-ws-isnan","nodeSelector":{"kubernetes.io/hostname":"k3s-node2"},"preferredNodes":["k3s-node2","k3s-node3"],"cpus":4,"memoryMb":8192,"cpuRequest":"1000m","memoryRequest":"3Gi"},{"id":"konfersi","label":"konfersi","namespace":"isnan-pilot-ws-konfersi","nodeSelector":{"kubernetes.io/hostname":"k3s-node2"},"preferredNodes":["k3s-node2","k3s-node3"],"cpus":4,"memoryMb":12288,"cpuRequest":"1500m","memoryRequest":"5Gi"},{"id":"kohilabs","label":"kohilabs","namespace":"isnan-pilot-ws-kohilabs","nodeSelector":{"kubernetes.io/hostname":"k3s-master"},"preferredNodes":["k3s-master","k3s-node3"],"cpus":4,"memoryMb":6144,"cpuRequest":"500m","memoryRequest":"2Gi"}]'
             - name: PORTAL_K8S_IMAGE
               value: registry.int.isnan.me/claudepilot/workspace:2.1.296-2026.10.15-2
             # Browser pool on Kubernetes (browser-desktop-pool PRD §10, B3 verified on a rig): the image of the `browser` container a

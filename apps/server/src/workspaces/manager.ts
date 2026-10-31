@@ -104,6 +104,8 @@ const timeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
  */
 export class Workspaces {
   readonly #runtimes = new Map<string, Runtime>();
+  /** The targets the portal was started with (its environment and settings, PORTAL_K8S_TARGETS too): a runtime added later never takes one's id. */
+  readonly #static = new Set<string>();
   readonly #pending = new Map<string, Workspace>();
   /** Creates in flight at the restart whose enrolled target had not come back yet: resumed by `recheck` when it does. */
   readonly #awaitingTarget = new Set<string>();
@@ -158,6 +160,7 @@ export class Workspaces {
     for (const r of runtimes) {
       r.useNames?.(identities);
       this.#runtimes.set(r.target.id, r);
+      this.#static.add(r.target.id);
     }
     this.#ttlMs = timing.ttlMs ?? CHECK_TTL_MS;
     this.#timeoutMs = timing.timeoutMs ?? CHECK_TIMEOUT_MS;
@@ -209,6 +212,8 @@ export class Workspaces {
 
   #install(runtime: Runtime) {
     const id = runtime.target.id;
+    // An enrolled target with the id of a configured one (made before PORTAL_K8S_TARGETS named it) would hide that target's workspaces: refused.
+    if (this.#static.has(id)) throw new AppError('CONFLICT', `Target “${id}” is configured on the portal; an enrolled target can’t take its id.`);
     this.#unwatch(id);
     const old = this.#runtimes.get(id);
     if (old && old !== runtime) dispose(old);

@@ -679,6 +679,7 @@ export const D65 = {
     // By exact workspace id, never a pattern on the name (a pattern on "event" gave kubernetes/kohi-event the Event program's 12).
     // Source of the numbers: D-65 baseline (docs/dev-sessions/DECISIONS.md). The Event program left pilot (D-67), so it has no row.
     // kubernetes/kohi-event is ClaudePilot's own workspace (deploy pipeline and continuation tests: PILOT_WORKSPACE, WORKSPACE): D-65's 48.
+    // After the workspace migration (2026-10-31) PORTAL_SCORECARD_DONE_BASELINES names the new ids (doneBaselines below); these are the default.
     { workspace: 'kubernetes/kohi-event', perDay: 48 },
     // kubernetes/konfersi is Konfersi's workspace (chat/lineage.test.ts): D-65's 47.
     { workspace: 'kubernetes/konfersi', perDay: 47 },
@@ -688,6 +689,27 @@ export const D65 = {
 } as const;
 
 const DENIED = /permission (to use .* )?(has been |was )?denied|permission denied|haven.t granted|requested permissions? to use|doesn.t want to proceed|denied by|not allowed to use|blocked by (a )?(deny|policy)/i;
+
+/**
+ * The done baselines by the lead's workspace id: `PORTAL_SCORECARD_DONE_BASELINES` (`<target>/<name>=<per day>[,...]`, workspace migration
+ * 2026-10-31: the programs' workspaces move to `isnan/...` and `konfersi/...`), else D-65's list above. Read at each call, so a restart with a
+ * new value is all a move needs. A malformed value is no baseline at all ("not recorded"), never half a list, and says why in the log.
+ */
+export function doneBaselines(raw: string | undefined = process.env.PORTAL_SCORECARD_DONE_BASELINES): readonly { workspace: string; perDay: number }[] {
+  if (raw === undefined || raw.trim() === '') return D65.doneBaselines;
+  const out: { workspace: string; perDay: number }[] = [];
+  for (const part of raw.split(',')) {
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]{0,62}\/[A-Za-z0-9][A-Za-z0-9._-]{0,62})\s*=\s*(\d+(?:\.\d+)?)\s*$/.exec(part);
+    if (!m) {
+      if (!warnedBaselines) console.error(`[scorecard] PORTAL_SCORECARD_DONE_BASELINES is not usable ("${part.trim().slice(0, 60)}" is not <target>/<name>=<per day>): no done baseline`);
+      warnedBaselines = true;
+      return [];
+    }
+    out.push({ workspace: m[1]!, perDay: Number(m[2]) });
+  }
+  return out;
+}
+let warnedBaselines = false;
 
 /** Classifies an error tool result: a permission denial, an error of a portal tool, or another failure. */
 export function wasteKind(toolName: string | null, text: string | null): 'denied' | 'portal' | 'failed' {
@@ -738,7 +760,7 @@ export function d65Targets(p: Program, facts: CrewFacts, rows: UsageRow[], win: 
   // 4. Feature and task tickets done a day, against the baseline.
   const ruleDone = 'Feature and task tickets done a day at or above the 2026-10-15 baseline (48 / 47 a day, all types: ClaudePilot / Konfersi).';
   const wsName = facts.sessions.get(p.id)?.workspaceId ?? '';
-  const base = D65.doneBaselines.find((b) => b.workspace === wsName);
+  const base = doneBaselines().find((b) => b.workspace === wsName);
   if (!done) out.push(unavailable('done_rate', ruleDone, 'no_source', SRC.tickets));
   else if (!base) out.push(unavailable('done_rate', ruleDone, 'not_recorded', `${SRC.doneRate}; no baseline for workspace ${wsName || 'unknown'}`));
   else {

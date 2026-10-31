@@ -17,6 +17,8 @@ export interface WorkspaceTarget {
   role?: 'cluster' | 'single';
   /** An enrolled cluster's nodes (the New workspace dialog offers a Node select when there is more than one). */
   nodes?: { id: string; name: string; connected: boolean; drained: boolean }[];
+  /** A target of PORTAL_K8S_TARGETS: the CPU and memory a create gets when it names none (the New workspace dialog presets them). */
+  defaults?: { cpus?: number; memoryMb?: number };
 }
 
 /**

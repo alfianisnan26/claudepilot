@@ -288,7 +288,7 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.
 - **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (4 since T-2966; was 2) per chat (`PILOT_SESSION_ID`; a lead's Agent sub-agent lanes share its chat) and `JOB_RUN_MAX_PER_PROGRAM`
-  (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
+  (2) per program (claudepilot, event, konfersi; T-524; or per program as `konfersi:6,claudepilot:4,event:2[,*:<n>]`, a program not named gets 9, 2026-10-31). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
   Priority lane (T-2967): a Job whose `--role` is in `JOB_RUN_PRIORITY_ROLES` (comma list, default `konfersi-stg-deploy`; empty turns it off)
   goes ahead of every waiting Job and is not held by the per-chat or per-program cap (pipeline runs all share the chat `manual`); the

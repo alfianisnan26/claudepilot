@@ -15,6 +15,7 @@ import { PoolChoice } from '@/features/pools/PoolPicker';
 import { multiPoolTabs, type MultiPoolTab } from '@/features/pools/registry';
 import { api, ApiError } from '@/lib/api';
 import { connectApi } from '@/features/targets/api';
+import { cpuLabel, memoryLabel, presetFor, withValue } from './createPresets';
 
 type AddOns = Partial<Record<MultiPoolType, string[]>>;
 
@@ -73,14 +74,20 @@ export function NewWorkspaceDialog({
   const picked = creatable.find((t) => t.id === target);
   // The Node select exists for a cluster with more than one node; "Auto" lets the portal place it.
   const pickable = (picked?.nodes ?? []).length > 1 ? picked!.nodes! : [];
+  // A target with defaults (PORTAL_K8S_TARGETS) presets CPU and memory when it is picked; the person can still change them.
+  // Keyed by the values, not the list: a refreshed target list while the dialog is open keeps what the person picked.
+  const preset = presetFor(picked);
+  useEffect(() => {
+    if (!open) return;
+    setCpus(preset.cpus);
+    setMemory(preset.memory);
+  }, [open, target, preset.cpus, preset.memory]);
 
   useEffect(() => {
     if (!open) return;
     setName('');
     setTarget((creatable.find((t) => t.id === defaultTarget && t.available) ?? creatable.find((t) => t.available))?.id ?? '');
     setNode('');
-    setCpus('2');
-    setMemory('4096');
     setPoolId('');
     setAddOns({});
     setErrors({});
@@ -204,8 +211,8 @@ export function NewWorkspaceDialog({
             <SinglePick key={t.id} open={open} tab={t} value={addOns[t.pool.type] ?? []} onChange={(ids) => setAddOns((a) => ({ ...a, [t.pool.type]: ids }))} />
           ))}
         <div className="grid grid-cols-2 gap-3">
-          <Select label="CPU" value={cpus} onChange={setCpus} options={CPU_OPTIONS} error={errors.cpus} />
-          <Select label="Memory" value={memory} onChange={setMemory} options={MEMORY_OPTIONS} error={errors.memoryMb} />
+          <Select label="CPU" value={cpus} onChange={setCpus} options={withValue(CPU_OPTIONS, cpus, cpuLabel)} error={errors.cpus} />
+          <Select label="Memory" value={memory} onChange={setMemory} options={withValue(MEMORY_OPTIONS, memory, memoryLabel)} error={errors.memoryMb} />
         </div>
         <AddOnsSection open={open} value={addOns} onChange={setAddOns} error={errors.pools} />
       </div>

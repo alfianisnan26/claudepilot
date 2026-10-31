@@ -36,7 +36,7 @@ spec:
             - weight: 100
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
-                namespaces: [isnan-claudepilot-workspaces]
+                namespaces: [isnan-claudepilot-workspaces, isnan-pilot-ws-isnan, isnan-pilot-ws-konfersi, isnan-pilot-ws-kohilabs]
                 labelSelector: {matchLabels: {claudepilot.managed: "true"}}
       initContainers:
         - name: clone

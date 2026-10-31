@@ -48,7 +48,7 @@ spec:
             - weight: 100
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
-                namespaces: [isnan-claudepilot-workspaces]
+                namespaces: [isnan-claudepilot-workspaces, isnan-pilot-ws-isnan, isnan-pilot-ws-konfersi, isnan-pilot-ws-kohilabs]
                 labelSelector: {matchLabels: {claudepilot.managed: "true"}}
       # T-401: the token is in the init container `fetch` alone, which runs no code of the commit or of a dependency: it clones, and fills
       # npm's cache on /tmp with `npm ci --ignore-scripts` in a throwaway copy. The `gate` container has no secret; gate.sh's own npm ci

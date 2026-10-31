@@ -23,7 +23,7 @@ import { Lab } from './index.js';
 import { fitPrograms, fullProgram, registerLabTools, scoreShort } from './portalTools.js';
 import { createLabRoutes } from './routes.js';
 import { paceBlock, type PaceClaude } from './headline.js';
-import { SCORECARD_BASIS, SRC, percentile, wasteKind } from './scorecard.js';
+import { D65, doneBaselines, SCORECARD_BASIS, SRC, percentile, wasteKind } from './scorecard.js';
 
 const H = 3_600_000;
 // Any fixed moment: the lab's clock is injected, nothing reads the real one.
@@ -317,6 +317,30 @@ test('T-549 (D-65): thresholds: warn from 80 percent of a ceiling; the done rate
     const week = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
     assert.deepEqual([week.state, week.figure.value], ['breach', 0.43]);
   } finally {
+    h.done();
+  }
+});
+
+test('workspace migration 2026-10-31: PORTAL_SCORECARD_DONE_BASELINES names the baselines by the new ids; unset is D-65’s list, malformed is none', () => {
+  assert.deepEqual(doneBaselines(undefined), D65.doneBaselines);
+  assert.deepEqual(doneBaselines(' '), D65.doneBaselines);
+  assert.deepEqual(doneBaselines('isnan/isnan=48, konfersi/konfersi = 47'), [{ workspace: 'isnan/isnan', perDay: 48 }, { workspace: 'konfersi/konfersi', perDay: 47 }]);
+  for (const bad of ['isnan=48', 'isnan/isnan=', 'isnan/isnan=x', 'isnan/isnan=48,,', 'a/b/c=1']) assert.deepEqual(doneBaselines(bad), [], bad);
+});
+
+test('workspace migration 2026-10-31: the scorecard reads the baseline from the setting', async () => {
+  const h = await seeded();
+  const was = process.env.PORTAL_SCORECARD_DONE_BASELINES;
+  try {
+    process.env.PORTAL_SCORECARD_DONE_BASELINES = 'isnan/isnan=48';
+    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'isnan/isnan' WHERE id = 'L1'`).run();
+    const t = target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate');
+    assert.match(t.figure.source, /\(48 a day\)/);
+    h.db.prepare(`UPDATE chat_sessions SET workspace_id = 'kubernetes/kohi-event' WHERE id = 'L1'`).run();
+    assert.equal(target(prog(h.lab.scorecard({ window: 'week' })!, 'L1'), 'done_rate').state, 'unavailable', 'the old id has no baseline once the setting names the new ones');
+  } finally {
+    if (was === undefined) delete process.env.PORTAL_SCORECARD_DONE_BASELINES;
+    else process.env.PORTAL_SCORECARD_DONE_BASELINES = was;
     h.done();
   }
 });

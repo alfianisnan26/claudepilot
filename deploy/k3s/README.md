@@ -6,6 +6,7 @@ The portal runs in the cluster as one pod and its workspaces run as pods too, at
 | File | What |
 | --- | --- |
 | `namespace.yaml` | `isnan-claudepilot-workspaces` (where workspaces are created), a memory default for pods in it and a quota |
+| `workspace-orgs.yaml` | one workspace namespace per org (`isnan-pilot-ws-isnan`, `-konfersi`, `-kohilabs`), each with the same LimitRange, a quota sized to its workspace, and the portal's Role; the portal serves them as the targets of `PORTAL_K8S_TARGETS` |
 | `rbac.yaml` | the portal's service account, a Role in the workspaces namespace and the one cluster-wide right it needs (create a namespace) |
 | `portal.yaml` | volume, Deployment, Service and the Traefik IngressRoute |
 
@@ -47,6 +48,7 @@ The commit must be on `main` of the repository. To update: build, change the two
 
 - State is one 10 Gi `local-path` volume (database, backups, knowledge) on `k3s-node2`; the key that seals stored secrets is the Secret `claudepilot-secret-key`; it is never pruned or deleted by Argo CD.
 - Workspaces are Deployments in `isnan-claudepilot-workspaces` made with the portal's service account (`PORTAL_K8S_*`); `PORTAL_K8S_NODE_SELECTOR` keeps them on the worker pool (`isnan.me/pool=worker`: `k3s-node2`, `k3s-node3`), off the control-plane node.
+- Org targets (`PORTAL_K8S_TARGETS`, owner 2026-10-31: one workspace and one namespace per org): `isnan`, `konfersi`, `kohilabs`, workspaces `<org>/<name>` in `isnan-pilot-ws-<org>` (`workspace-orgs.yaml`). Each target names its node (`nodeSelector`, a hostname here, in place of `PORTAL_K8S_NODE_SELECTOR`), the limits a create gets by default (`cpus`, `memoryMb`) and the requests (`cpuRequest`, `memoryRequest`); a create may name one of its `preferredNodes` instead. The portal sets this at every create, so no Deployment needs a hand patch; the home volume follows the pod (local-path binds WaitForFirstConsumer). The portal does not create these namespaces: Argo CD does, with their quota and Role. The old target `kubernetes` and its namespace stay as they are.
 - `PORTAL_INTERNAL_URL` is the in-cluster address workspaces use for the Portal MCP tools; Connect is on (`PORTAL_CONNECT_URL`).
 - Not enabled: the "This machine" target (`PORTAL_LOCAL_ENABLED`): it would give a shell inside the portal pod, which holds the cluster credentials; and Docker targets (there is no Docker socket in k3s).
 

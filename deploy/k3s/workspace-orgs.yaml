@@ -1,0 +1,295 @@
+# One workspace namespace per org (owner, 2026-10-31: one workspace per org, one namespace per org), beside isnan-claudepilot-workspaces,
+# which stays as it is (the `kubernetes` target). Named isnan-pilot-ws-<org> so they never collide with the orgs' own app namespaces
+# (konfersi-*, kohilabs-*); the Argo CD project `isnan` allows isnan-*. The portal serves each as its own Kubernetes target through
+# PORTAL_K8S_TARGETS (portal.yaml; apps/server/src/workspaces/kubeTargets.ts): workspaces `<org>/<name>`, a Deployment and a volume claim
+# each, as in the old namespace. Per namespace: the Namespace (never pruned or deleted with the app: workspaces and their volumes are not in
+# git), the old namespace's LimitRange, a ResourceQuota, and the portal ServiceAccount's Role (the same rules as `claudepilot-workspaces` in
+# rbac.yaml; apps/server/src/workspaces/kubeTargets.test.ts keeps them equal) with its RoleBinding. The portal never creates these namespaces.
+# Quotas (migration plan B.5, 2026-10-31): one org workspace each, sized to its limits plus the browser container (requests 100m / 512Mi,
+# limits 2 CPU / 3Gi) with a little headroom (a second workspace needs the quota raised). `requests.cpu` needs a CPU request on every container: the LimitRange
+# gives one (100m) to a container without it. local-path does not enforce claim sizes, so `requests.storage` counts claims, not bytes.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: isnan-pilot-ws-isnan
+  labels:
+    claudepilot.managed: "true"
+    claudepilot.org: isnan
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: workspace-defaults
+  namespace: isnan-pilot-ws-isnan
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 4Gi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+---
+# isnan: limits 4 CPU / 8Gi, requests 1000m / 3Gi, on k3s-node2 (PORTAL_K8S_TARGETS), plus the browser container.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: workspaces
+  namespace: isnan-pilot-ws-isnan
+spec:
+  hard:
+    pods: "3"
+    persistentvolumeclaims: "3"
+    requests.storage: 100Gi
+    requests.cpu: "2"
+    limits.memory: 12Gi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-pilot-ws-isnan
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  # In-place CPU and memory change of a running workspace pod (T-3081): a patch of the `resize` subresource only (container resources;
+  # the API server refuses anything else there), then the ReplicaSet that owns the pod gets the same template so the Deployment rolls
+  # nothing. Only in this namespace. Without these the portal falls back to the old roll (the pod restarts).
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Browser pool on Kubernetes (browser-desktop-pool PRD §10, T-575): each workspace's `ws-<name>-browser` ConfigMap (the browser's
+  # settings) and its egress NetworkPolicy (the browser reaches the internet, not the cluster). Only in this namespace; the same as
+  # the B3 rig had.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-pilot-ws-isnan
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: claudepilot-workspaces
+subjects:
+  - kind: ServiceAccount
+    name: claudepilot-portal
+    namespace: isnan-claudepilot
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: isnan-pilot-ws-konfersi
+  labels:
+    claudepilot.managed: "true"
+    claudepilot.org: konfersi
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: workspace-defaults
+  namespace: isnan-pilot-ws-konfersi
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 4Gi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+---
+# konfersi: limits 4 CPU / 12Gi, requests 1500m / 5Gi, on k3s-node2 (PORTAL_K8S_TARGETS), plus the browser container.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: workspaces
+  namespace: isnan-pilot-ws-konfersi
+spec:
+  hard:
+    pods: "3"
+    persistentvolumeclaims: "3"
+    requests.storage: 150Gi
+    requests.cpu: "3"
+    limits.memory: 16Gi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-pilot-ws-konfersi
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  # In-place CPU and memory change of a running workspace pod (T-3081): a patch of the `resize` subresource only (container resources;
+  # the API server refuses anything else there), then the ReplicaSet that owns the pod gets the same template so the Deployment rolls
+  # nothing. Only in this namespace. Without these the portal falls back to the old roll (the pod restarts).
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Browser pool on Kubernetes (browser-desktop-pool PRD §10, T-575): each workspace's `ws-<name>-browser` ConfigMap (the browser's
+  # settings) and its egress NetworkPolicy (the browser reaches the internet, not the cluster). Only in this namespace; the same as
+  # the B3 rig had.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-pilot-ws-konfersi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: claudepilot-workspaces
+subjects:
+  - kind: ServiceAccount
+    name: claudepilot-portal
+    namespace: isnan-claudepilot
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: isnan-pilot-ws-kohilabs
+  labels:
+    claudepilot.managed: "true"
+    claudepilot.org: kohilabs
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: workspace-defaults
+  namespace: isnan-pilot-ws-kohilabs
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 4Gi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi
+---
+# kohilabs: limits 4 CPU / 6Gi, requests 500m / 2Gi, on k3s-master (PORTAL_K8S_TARGETS), plus the browser container.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: workspaces
+  namespace: isnan-pilot-ws-kohilabs
+spec:
+  hard:
+    pods: "2"
+    persistentvolumeclaims: "2"
+    requests.storage: 60Gi
+    requests.cpu: "1"
+    limits.memory: 10Gi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-pilot-ws-kohilabs
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  # In-place CPU and memory change of a running workspace pod (T-3081): a patch of the `resize` subresource only (container resources;
+  # the API server refuses anything else there), then the ReplicaSet that owns the pod gets the same template so the Deployment rolls
+  # nothing. Only in this namespace. Without these the portal falls back to the old roll (the pod restarts).
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Browser pool on Kubernetes (browser-desktop-pool PRD §10, T-575): each workspace's `ws-<name>-browser` ConfigMap (the browser's
+  # settings) and its egress NetworkPolicy (the browser reaches the internet, not the cluster). Only in this namespace; the same as
+  # the B3 rig had.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: claudepilot-workspaces
+  namespace: isnan-pilot-ws-kohilabs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: claudepilot-workspaces
+subjects:
+  - kind: ServiceAccount
+    name: claudepilot-portal
+    namespace: isnan-claudepilot

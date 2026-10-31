@@ -191,7 +191,7 @@ test('a build with a credential on stdin: the manifest, the Secret from stdin (g
   assert.equal(m.spec.activeDeadlineSeconds, 3600);
   const pod = m.spec.template.spec;
   assert.equal(pod.automountServiceAccountToken, false);
-  assert.match(JSON.stringify(pod.affinity), /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/);
+  assert.match(JSON.stringify(pod.affinity), /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces","isnan-pilot-ws-isnan","isnan-pilot-ws-konfersi","isnan-pilot-ws-kohilabs"\].*"claudepilot.managed":"true"/);
   const [clone] = pod.initContainers, [kaniko] = pod.containers;
   assert.ok(clone && kaniko);
   assert.equal(clone.image, 'registry.test/claudepilot/workspace:1-dev-1');
