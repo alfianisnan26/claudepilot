@@ -45,7 +45,7 @@ import { METRICS_MEMO_MS } from './lab/metricsService.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { approvalAttentionSource, createApprovals, registerApprovalTools } from './approvals/index.js';
-import { APPROVAL_CHANNEL, fileRefusalRequests, markUsedPasses } from './approvals/outbox.js';
+import { APPROVAL_CHANNEL, expireRefusalsOnEnd, fileRefusalRequests, markUsedPasses } from './approvals/outbox.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
@@ -502,6 +502,10 @@ chatController.onEvent((id, msg) => {
   portalMcp.agents.revokeSession(id, reason);
   portalMcp.managers.revokeSession(id, reason);
 });
+// T-3114: a session that ended, was archived or deleted waits for none of its refused calls: their cards leave Needs you now.
+chatController.onEvent(
+  (id, msg) => void expireRefusalsOnEnd(approvals, id, msg, (what, e) => console.error(`[approvals] ${what}: ${(e as Error).message}`)),
+);
 registerBuiltInPortalTools({
   store,
   module: portalMcp,

@@ -15,8 +15,10 @@ import {
   APPROVAL_REASON_MAX,
   APPROVAL_TTL_DEFAULT_MIN,
   APPROVAL_TTL_MAX_MIN,
+  APPROVAL_TTL_REFUSAL_MIN,
   approvalNeedsValue,
   isApprovalKind,
+  isRefusalKind,
   type Actor,
   type Approval,
   type ApprovalKind,
@@ -26,7 +28,7 @@ import {
 import { findSecret } from '../portalmcp/sanitize.js';
 import { mayDecide, NO_APPROVAL } from './authz.js';
 import { APPROVAL_KIND_DEFS, type ApprovalChat, type ApprovalDelivery, type ApprovalDeps, type ApprovalKindDef, type ApprovalPools, type ApprovalRequester } from './kinds.js';
-import { cleanRefusal, PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom } from './pass.js';
+import { canonicalJson, cleanRefusal, PASS_HASH, PASS_KINDS, PASS_TTL_MS, passFrom } from './pass.js';
 
 type Row = {
   id: string;
@@ -65,9 +67,12 @@ export interface ApprovalCreate {
   kind: string;
   payload: unknown;
   reason?: string;
-  /** Minutes until it expires (default a day, at most a week). */
+  /** Minutes until it expires (default a day, at most a week; a refused call: 30 minutes, at most 30, T-3114). */
   ttlMinutes?: number;
 }
+
+/** T-3114: more refusal requests of one session wait than the outbox lets wait (OUTBOX_PENDING_MAX): the new one is dropped. */
+export const REFUSAL_CAP_MESSAGE = 'Too many refused calls of this session wait already.';
 
 export interface ApprovalsOptions {
   db: () => DatabaseSync | null;
@@ -172,7 +177,25 @@ export class Approvals {
       decidedBy: r.decided_by,
       decidedAt: r.decided_at,
       result: r.result ? (JSON.parse(r.result) as ApprovalResult) : null,
+      count: 1 + this.#repeats(r.id),
     };
+  }
+
+  /** T-3114: how many repeats were folded into this request. */
+  #repeats(id: string): number {
+    const r = this.#db().prepare('SELECT count(*) AS n FROM approval_repeats WHERE approval_id = ?').get(id) as { n: number };
+    return Number(r.n);
+  }
+
+  /** T-3114: the waiting refusal of this workspace with the same kind and payload (canonical JSON), or none. */
+  #twin(kind: string, workspace: string | null, payload: unknown): Row | undefined {
+    const want = canonicalJson(payload);
+    const rows = this.#db()
+      .prepare(
+        "SELECT * FROM approvals WHERE kind = ? AND workspace IS ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id",
+      )
+      .all(kind, workspace, this.#iso()) as Row[];
+    return rows.find((r) => canonicalJson(JSON.parse(r.payload)) === want);
   }
 
   #row(id: string): Row | undefined {
@@ -189,10 +212,16 @@ export class Approvals {
    * Asks. `requester`: the verified asking session (an agent's token), or null for the portal's own request. Validates the kind and its
    * schema, caps the size, refuses a secret-shaped value or a key that would hold a secret, and stores the payload once.
    */
-  create(req: ApprovalCreate, requester: ApprovalRequester | null, opts: { id?: string } = {}): Approval {
-    // T-2885: a workspace's outbox line names the id its writer already printed. Only the service's own shape; an id in use is a conflict.
+  create(
+    req: ApprovalCreate,
+    requester: ApprovalRequester | null,
+    opts: { id?: string; pendingCap?: { max: number; kinds: readonly string[] } } = {},
+  ): Approval {
+    // T-2885: a workspace's outbox line names the id its writer already printed. Only the service's own shape; an id in use is a conflict
+    // (a card's own id or a repeat's, T-3114).
     if (opts.id !== undefined && !APPROVAL_ID.test(opts.id)) throw new AppError('VALIDATION_FAILED', 'Not an approval id.');
-    if (opts.id !== undefined && this.#row(opts.id)) throw new AppError('CONFLICT', 'That approval id is in use.');
+    if (opts.id !== undefined && (this.#row(opts.id) || this.#db().prepare('SELECT 1 FROM approval_repeats WHERE id = ?').get(opts.id)))
+      throw new AppError('CONFLICT', 'That approval id is in use.');
     if (!isApprovalKind(req.kind)) throw new AppError('VALIDATION_FAILED', 'Unknown kind.', { details: { kind: 'Unknown.' } });
     const def: ApprovalKindDef = APPROVAL_KIND_DEFS[req.kind];
     // T-2885 review M2: a refused file call's content is never stored, and the rest is redacted (approvals/pass.ts cleanRefusal).
@@ -217,9 +246,33 @@ export class Approvals {
         .get(req.kind, json, requester?.sessionId ?? null, this.#iso()) as Row | undefined;
       if (waiting) return this.#toApproval(waiting);
     }
-    const ttl = Math.min(Math.max(Math.round(req.ttlMinutes ?? APPROVAL_TTL_DEFAULT_MIN), 1), APPROVAL_TTL_MAX_MIN);
+    // T-3114: a refused call waits 30 minutes at most (a day buried the real asks), whatever the asker says.
+    const refusal = isRefusalKind(req.kind);
+    const ttlMax = refusal ? APPROVAL_TTL_REFUSAL_MIN : APPROVAL_TTL_MAX_MIN;
+    const ttl = Math.min(
+      Math.max(Math.round(req.ttlMinutes ?? (refusal ? APPROVAL_TTL_REFUSAL_MIN : APPROVAL_TTL_DEFAULT_MIN)), 1),
+      ttlMax,
+    );
     const now = this.#now();
     const id = opts.id ?? `apr-${randomBytes(9).toString('hex')}`;
+    // T-3114: the same refused call again in the same workspace (same kind and payload) while its card waits: no second card. The repeat is
+    // recorded under the card (its id stays readable by the session that filed it), the count goes up, and the card lives another TTL
+    // from now, since an agent is still trying it. Before the cap: a repeat adds no card, so it never counts against the five.
+    if (refusal) {
+      const twin = this.#twin(req.kind, requester?.workspaceId ?? null, payload);
+      if (twin) {
+        this.#db()
+          .prepare('INSERT INTO approval_repeats (id, approval_id, requester_session, created_at) VALUES (?, ?, ?, ?)')
+          .run(id, twin.id, requester?.sessionId ?? null, this.#iso(now));
+        const until = this.#iso(now + ttl * 60_000);
+        if (until > twin.expires_at)
+          this.#db().prepare("UPDATE approvals SET expires_at = ? WHERE id = ? AND status = 'pending'").run(until, twin.id);
+        this.#o.changed?.();
+        return this.#toApproval(this.#row(twin.id)!);
+      }
+    }
+    if (opts.pendingCap && requester && this.pendingCount(requester.sessionId, opts.pendingCap.kinds) >= opts.pendingCap.max)
+      throw new AppError('RATE_LIMITED', REFUSAL_CAP_MESSAGE);
     this.#db()
       .prepare(
         `INSERT INTO approvals (id, kind, payload, requester_session, workspace, tier, reason, status, created_at, expires_at)
@@ -255,14 +308,42 @@ export class Approvals {
 
   /** What a session asked, newest first; another session's request is NOT_FOUND (`ownOne`). */
   listOwn(sessionId: string, limit = 50): Approval[] {
-    const rows = this.#db().prepare('SELECT * FROM approvals WHERE requester_session = ? ORDER BY created_at DESC, id DESC LIMIT ?').all(sessionId, limit) as Row[];
+    // T-3114: also the cards a repeat of this session was folded into.
+    const rows = this.#db()
+      .prepare(
+        'SELECT * FROM approvals WHERE requester_session = ? OR id IN (SELECT approval_id FROM approval_repeats WHERE requester_session = ?) ORDER BY created_at DESC, id DESC LIMIT ?',
+      )
+      .all(sessionId, sessionId, limit) as Row[];
     return rows.map((r) => this.#toApproval(r));
   }
 
   ownOne(sessionId: string, id: string): Approval {
     const r = this.#row(id);
-    if (!r || r.requester_session !== sessionId) throw new AppError('NOT_FOUND', NO_APPROVAL);
-    return this.#toApproval(r);
+    if (r && r.requester_session === sessionId) return this.#toApproval(r);
+    // T-3114: the id the guard printed for a repeat answers with the card it was folded into, for the session that filed it only.
+    const rep = this.#db().prepare('SELECT approval_id FROM approval_repeats WHERE id = ? AND requester_session = ?').get(id, sessionId) as
+      { approval_id: string } | undefined;
+    const card = rep ? this.#row(rep.approval_id) : undefined;
+    if (!card) throw new AppError('NOT_FOUND', NO_APPROVAL);
+    return this.#toApproval(card);
+  }
+
+  /**
+   * T-3114: the session ended (or was archived or deleted): its refused calls wait for nothing any more, so their cards expire now. Only
+   * the refusal kinds; a Bypass or a secret ask stays for the person. Returns how many expired.
+   */
+  expireForSession(sessionId: string, why = 'The asking session ended.'): number {
+    const db = this.#o.db();
+    if (!db) return 0;
+    const result: ApprovalResult = { ok: false, message: why };
+    const r = db
+      .prepare(
+        "UPDATE approvals SET status = 'expired', decided_at = ?, result = ? WHERE requester_session = ? AND status = 'pending' AND kind = ?",
+      )
+      .run(this.#iso(), JSON.stringify(result), sessionId, 'guard.refusal');
+    const n = Number(r.changes);
+    if (n) this.#o.changed?.();
+    return n;
   }
 
   /** Every pending request, for Needs you (the source filters by actor). */
@@ -344,12 +425,21 @@ export class Approvals {
 
   /** A message to the asking session (none when the portal asked). Best effort: a session that ended does not undo the decision. */
   async #tell(a: Approval, what: string): Promise<void> {
-    if (!a.requesterSession || !this.chat) return;
-    const text = `Your approval request ${a.id} (${a.kind}) was decided. ${what}`;
-    try {
-      await this.chat.send(a.requesterSession, randomUUID(), text, { actor: `portal:approval.${a.id}`, actorLabel: 'Approval', priority: 'later' });
-    } catch (e) {
-      this.#o.log?.(`telling ${a.requesterSession} about ${a.id}`, e);
+    if (!this.chat) return;
+    // T-3114: every session whose refusal was folded into this card hears it too, once each, under the id it was given.
+    const told = new Map<string, string>();
+    if (a.requesterSession) told.set(a.requesterSession, a.id);
+    const reps = this.#db()
+      .prepare('SELECT id, requester_session FROM approval_repeats WHERE approval_id = ? ORDER BY created_at, id')
+      .all(a.id) as { id: string; requester_session: string | null }[];
+    for (const r of reps) if (r.requester_session && !told.has(r.requester_session)) told.set(r.requester_session, r.id);
+    for (const [session, id] of told) {
+      const text = `Your approval request ${id} (${a.kind}) was decided. ${what}`;
+      try {
+        await this.chat.send(session, randomUUID(), text, { actor: `portal:approval.${a.id}`, actorLabel: 'Approval', priority: 'later' });
+      } catch (e) {
+        this.#o.log?.(`telling ${session} about ${a.id}`, e);
+      }
     }
   }
 }

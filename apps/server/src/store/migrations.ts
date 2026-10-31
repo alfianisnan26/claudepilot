@@ -3865,6 +3865,26 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 884,
+    name: 'approvals: repeats of the same refused call, folded into one card (T-3114)',
+    up(db) {
+      // T-3114: the same refused call (same kind, same payload, same workspace) filed again while its card waits makes no second card: it is
+      // a row here, under the card it repeats. `id` is the id the guard printed for the repeat, so `approval_get <id>` still answers the
+      // session that filed it; the card's count is 1 plus its repeats. Additive only (D-92): new objects with IF NOT EXISTS; the next free
+      // number after 883.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS approval_repeats (
+          id TEXT PRIMARY KEY,
+          approval_id TEXT NOT NULL,
+          requester_session TEXT,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS approval_repeats_approval ON approval_repeats (approval_id);
+        CREATE INDEX IF NOT EXISTS approval_repeats_session ON approval_repeats (requester_session, created_at);
+      `);
+    },
+  },
 ];
 
 /**

@@ -68,6 +68,13 @@ export interface AttentionItem {
   action: AttentionAction;
   /** Put off by the asking person until then (ISO): still waiting and counted, out of the deck until that time. Absent: not snoozed. */
   snoozedUntil?: string;
+  /**
+   * T-3114: `refusal` for a call the rule guard refused (an approval of kind guard.refusal). Such items sort after every real ask and the
+   * page shows them in one collapsed group ("Agents refused N calls"). Absent: a real ask.
+   */
+  group?: 'refusal';
+  /** T-3114: how many times this item was filed (a refused call tried again); absent means once. */
+  count?: number;
 }
 
 /** `GET /api/attention`. `counts` is every item per kind, whatever the page; null: that source could not be read ("unavailable", never 0). */
