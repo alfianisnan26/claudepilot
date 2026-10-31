@@ -242,7 +242,9 @@ test('authz: every route the reporter mounts is declared in the seam, and every 
     '/reporter/v1',
     createReporterWidgetRoutes(service, { webDist: null, vendorDirs: [], portalOrigin: () => PORTAL, signedIn: () => null, clientKey: () => 'x' }) as never,
   );
-  const listed = new Set(mounted.routes.filter((r) => r.method !== 'ALL').map((r) => `${r.method} ${r.path}`));
+  // ALL = middleware. OPTIONS = the Private Network Access preflight (`OPTIONS /reporter/v1/*`): the seam's keys name GET/POST/PUT/PATCH/
+  // DELETE only; it answers no data and only for the public files and an allowed embed (checked in reporter.test.ts, "no preflight").
+  const listed = new Set(mounted.routes.filter((r) => r.method !== 'ALL' && r.method !== 'OPTIONS').map((r) => `${r.method} ${r.path}`));
   const declared = declaredPolicies();
   assert.deepEqual([...listed].filter((k) => !declared.has(k)), [], 'undeclared routes');
   assert.ok(listed.has('DELETE /reporter/v1/me'), 'the sign-out route is mounted');
