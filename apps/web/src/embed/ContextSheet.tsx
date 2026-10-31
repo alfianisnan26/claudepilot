@@ -49,7 +49,7 @@ export function ContextSheet({ section, onClose }: { section: 'context' | 'carri
   const all = `${contextText(groups)}\nWhat a ticket carries\n${carries.map((r) => `  ${r.label}: ${r.value}`).join('\n')}`;
   return (
     <div role="dialog" aria-modal="true" aria-label="Context" className="fixed inset-0 z-50 flex flex-col bg-bg">
-      <header className="flex min-h-11 shrink-0 items-center gap-1 border-b border-line px-1 pt-[env(safe-area-inset-top)]">
+      <header className="flex min-h-11 shrink-0 items-center gap-1 border-b border-line pt-[env(safe-area-inset-top)] pr-12 pl-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={onClose} />
         <h2 className="flex-1 text-[15px] font-bold">Context</h2>
         <button

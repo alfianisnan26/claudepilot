@@ -68,7 +68,7 @@ export function Viewer({ src, alt, crop, onClose, actions }: { src: string; alt:
 
   return (
     <div role="dialog" aria-modal="true" aria-label={alt} className="fixed inset-0 z-[60] flex flex-col" style={DARK}>
-      <div className="flex shrink-0 items-center gap-1 px-1 pt-[env(safe-area-inset-top)]">
+      <div className="flex shrink-0 items-center gap-1 pt-[env(safe-area-inset-top)] pr-12 pl-1">
         <IconBtn icon="x" label="Close" onClick={onClose} style={WHITE} />
         <span className="min-w-0 flex-1 truncate text-[13px]" style={DIM}>
           {alt}

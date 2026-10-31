@@ -96,6 +96,7 @@ const evidence = () => ({ schema: 1, sdkVersion: '0.1.0', capturedAt: new Date()
 addEventListener('message', async (e) => {
   if (e.source !== f.contentWindow || e.origin !== location.origin) return;
   const m = e.data; window.got.push(m.type);
+  if (m.type === 'pilot-reporter:tray') window.lastTray = m;
   if (m.type === 'pilot-reporter:ready' && !window.said) { window.said = 1; f.contentWindow.postMessage({ type: 'pilot-reporter:hello', bridge: 1, sdkVersion: '0.1.0', page: { url: '${HOST}/', title: 'Home' }, build }, location.origin);
     const ev = evidence(); f.contentWindow.postMessage({ type: 'pilot-reporter:context', page: ev.page, device: ev.device, build, counts: { console: 4, consoleErrors: 1, network: 23, networkFailed: 1, interactions: 6 } }, location.origin); }
   if (m.type === 'pilot-reporter:capture-request') {
@@ -156,7 +157,14 @@ const AUDIT = `(() => {
     if (e.matches('input[type=checkbox]')) return false; // inside a 44 px label row
     return r.width < 43.5 || r.height < 43.5;
   }).map((e) => (e.getAttribute('aria-label') || e.textContent || e.tagName).trim().slice(0, 40) + ' ' + Math.round(e.getBoundingClientRect().width) + 'x' + Math.round(e.getBoundingClientRect().height));
-  return { overflow: doc.scrollWidth - doc.clientWidth, small, text: document.body.innerText.length };
+  // The SDK draws its one Close over the panel's top-right corner (phone sheet and desktop card): nothing of ours may sit under it.
+  const W = doc.clientWidth;
+  const corner = [...document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea')].filter((e) => {
+    const r = e.getBoundingClientRect();
+    // A click-away backdrop (tabindex -1, the whole screen) is meant to be everywhere.
+    return e.tabIndex >= 0 && r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden' && r.right > W - 48 && r.top < 44 && r.bottom > 0;
+  }).map((e) => (e.getAttribute('aria-label') || e.textContent || e.tagName).trim().slice(0, 30));
+  return { overflow: doc.scrollWidth - doc.clientWidth, small, corner, text: document.body.innerText.length };
 })()`;
 
 const failures = [];
@@ -164,6 +172,7 @@ const check = (name, a) => {
   if (a.overflow > 0) failures.push(`${name}: horizontal scroll ${a.overflow}px`);
   if (a.small.length) failures.push(`${name}: small targets ${a.small.join(', ')}`);
   if (a.text < 20) failures.push(`${name}: nothing rendered`);
+  if (a.corner?.length) failures.push(`${name}: under the SDK's Close (top-right 48 px): ${a.corner.join(', ')}`);
   console.log(`${name}: overflow ${a.overflow}px, small ${a.small.length}`);
 };
 
@@ -343,6 +352,8 @@ try {
       await clickTextIn('/^File ticket$/');
       await b.waitFor(`${frame}.body.innerText.includes('Filed KONF-15')`, 10000, 'the Filed row');
       await sleepShot(b, `reporter-${label}-framed-filed`);
+      const tray = await b.eval('window.lastTray');
+      if (!tray || tray.replies !== 1) failures.push(`framed ${label}: the tray message should carry replies = 1 (KONF-12 waits), got ${JSON.stringify(tray)}`);
       console.log('host got', await b.eval(`window.got.join(',')`));
     } finally {
       await b.close();

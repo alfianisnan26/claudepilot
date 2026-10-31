@@ -882,8 +882,11 @@ export type ReporterPanelMessage =
    */
   | { type: 'pilot-reporter:focus'; key: string; captureId: string | null; spotlight: boolean }
   | { type: 'pilot-reporter:focus-clear' }
-  /** Comments in the open draft review: the widget button shows the count as a badge (0 hides it). */
-  | { type: 'pilot-reporter:tray'; count: number }
+  /**
+   * Comments in the open draft review: the widget button shows the count as a badge (0 hides it). `replies` (optional, additive): the
+   * person's open tickets that wait for their reply, which the SDK shows on the button too.
+   */
+  | { type: 'pilot-reporter:tray'; count: number; replies?: number }
   /**
    * The panel shows something full screen (the screenshot viewer): on a phone the SDK raises its sheet to full height while `expanded`,
    * and puts it back after. Additive (2026-10-31): an SDK that does not know it ignores it and the viewer fills the sheet as it is.

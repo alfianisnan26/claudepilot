@@ -180,7 +180,7 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-1 border-b border-line px-1">
+      <header className="flex shrink-0 items-center gap-1 border-b border-line pr-12 pl-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={onBack} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[14px] font-semibold" title={session?.title}>

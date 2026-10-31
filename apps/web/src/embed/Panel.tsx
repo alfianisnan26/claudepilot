@@ -234,7 +234,20 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     void reloadReview();
     client.sessionTargets().then(setTargets, () => setTargets([]));
   }, [connected, client, reloadReview, tick]);
-  useEffect(() => post({ type: 'pilot-reporter:tray', count: review?.status === 'draft' ? review.comments.length : 0 }), [review, post]);
+  // The widget button's badges: draft comments, and the person's open tickets waiting for their reply (re-counted on every change).
+  const [replies, setReplies] = useState(0);
+  useEffect(() => {
+    if (!connected) return setReplies(0);
+    let live = true;
+    client.tickets({ status: 'open', mine: true, sort: 'updated', order: 'desc', limit: 100 }).then(
+      (l) => live && setReplies(l.items.filter((t) => t.awaitingReporter).length),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [connected, client, tick]);
+  useEffect(() => post({ type: 'pilot-reporter:tray', count: review?.status === 'draft' ? review.comments.length : 0, replies }), [review, replies, post]);
 
   // ---- callouts for the current page ----
   const path = page ? safePath(page.url) : null;
