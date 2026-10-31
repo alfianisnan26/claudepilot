@@ -1,5 +1,6 @@
 import {
   REPORTER_BRIDGE_VERSION,
+  type ReporterAnnotation,
   type ReporterBuildInfo,
   type ReporterCaptureMode,
   type ReporterConnectMessage,
@@ -29,6 +30,7 @@ import {
 import { captureRequest, createPanelBridge, exactOrigin, targetMessage, type PanelBridge } from './bridge';
 import { ChatView } from './ChatView';
 import { ContextSheet } from './ContextSheet';
+import { revokeShot, withAnnotations } from './annotate';
 import { PanelContext, newId, type Capture, type ChatOpen, type PanelState, type Tab } from './context';
 import { choiceKey, parseChoice } from './formModel';
 import { Icon, type IconName } from './icons';
@@ -103,6 +105,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const [tick, setTick] = useState(0);
   const [toast, setToast] = useState<{ text: string; tone: 'info' | 'error' | 'ok'; id: number } | null>(null);
   const coarse = useMemo(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, []);
+  const theme = usePanelTheme();
 
   const readPref = (name: string) => {
     try {
@@ -196,10 +199,10 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const sendReady = useCallback(() => {
     if (!status) return;
     post({ type: 'pilot-reporter:ready', bridge: REPORTER_BRIDGE_VERSION, status, connected, actorLabel: connected ? (token?.actorLabel ?? null) : null });
-    post({ type: 'pilot-reporter:settings', calloutsVisible, hotkeys });
+    post({ type: 'pilot-reporter:settings', calloutsVisible, hotkeys, theme });
     const t = targetMessage(choiceRef.current);
     if (t) post(t);
-  }, [status, connected, token, calloutsVisible, hotkeys, post]);
+  }, [status, connected, token, calloutsVisible, hotkeys, theme, post]);
   useEffect(() => sendReady(), [sendReady]);
 
   // A stored token is checked once: a 401 signs out (onUnauthorized), anything else keeps it.
@@ -324,16 +327,26 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   // The report's shots: a new capture starts a new report unless the form's "+" asked to add one.
   const setCapture = useCallback((c: Capture | null) => {
     setShots((old) => {
-      for (const o of old) if (o !== c) URL.revokeObjectURL(o.previewUrl);
+      for (const o of old) if (o !== c) revokeShot(o);
       return c ? [c] : [];
     });
   }, []);
   const removeShot = useCallback((captureId: string) => {
     setShots((old) => {
       const gone = old.find((o) => o.captureId === captureId);
-      if (gone) URL.revokeObjectURL(gone.previewUrl);
+      if (gone) revokeShot(gone);
       return old.filter((o) => o.captureId !== captureId);
     });
+  }, []);
+  const annotateShot = useCallback((captureId: string, marks: ReporterAnnotation[], image: Blob | null) => {
+    setShots((old) =>
+      old.map((o) => {
+        if (o.captureId !== captureId) return o;
+        const { next, revoke } = withAnnotations(o, marks, image, (b) => URL.createObjectURL(b));
+        for (const u of revoke) URL.revokeObjectURL(u);
+        return next;
+      }),
+    );
   }, []);
   const requestCapture = useCallback(
     (mode: ReporterCaptureMode, precise = false, append = false) => {
@@ -471,6 +484,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         setCapture,
         shots,
         removeShot,
+        annotateShot,
         pending,
         requestCapture,
         chat,
@@ -519,29 +533,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     <PanelContext.Provider value={state}>
       <div className="flex h-dvh flex-col overflow-hidden bg-bg text-ink">
         {/* No close button here: the SDK's frame draws the one close (it works even when this page fails to load); Esc closes too. */}
-        {/* One row (UX review 2026-10-31): the environment and Context, nothing repeated; the right end stays clear for the SDK's close X.
-            Detail views (a ticket, a chat) hide it and the tabs: their own back · title · open row is the only header. */}
-        {!detail && (
-          <header className="flex min-h-11 shrink-0 items-center gap-1 pr-14 pl-3">
-            <h1 className="sr-only">{status.bucketName || bucket}</h1>
-            {status.site && (
-              <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[12.5px] font-semibold text-ink-soft" title={`${status.bucketName || bucket} · ${status.site.repo} · ${status.site.origin}`}>
-                {status.site.environment}
-              </span>
-            )}
-            {connected && (
-              <button
-                type="button"
-                aria-label="Context"
-                title="Context"
-                onClick={() => setContextOpen('context')}
-                className="inline-flex size-11 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
-              >
-                <Icon name="info" className="size-[18px]" />
-              </button>
-            )}
-          </header>
-        )}
+        {/* One row (owner, 2026-10-31): the project's name as the title, its environment and Context right after it; the right 48 px stay
+            clear for the SDK's close X. It stays in detail views (a ticket, a chat), whose back row sits under it; the tabs hide there. */}
+        <TitleRow
+          name={status.bucketName || bucket}
+          env={status.site?.environment ?? null}
+          where={status.site ? `${status.site.repo} · ${status.site.origin}` : ''}
+          onContext={connected ? () => setContextOpen('context') : null}
+          divided={detail}
+        />
         {!connected ? (
           <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} note={ended ? 'Session ended. Connect again.' : null} />
         ) : (
@@ -745,4 +745,47 @@ export function Connect({
       )}
     </div>
   );
+}
+
+/**
+ * The panel's title row (owner, 2026-10-31): the project's name as the title (truncated), its environment as a chip and Context (i) right
+ * after it. The right 48 px stay clear for the SDK's close X. `divided`: a detail view's back row sits under it.
+ */
+export function TitleRow({ name, env, where, onContext, divided = false }: { name: string; env: string | null; where: string; onContext: (() => void) | null; divided?: boolean }) {
+  return (
+    <header className={`flex min-h-11 shrink-0 items-center gap-1.5 pr-14 pl-3 ${divided ? 'border-b border-line' : ''}`}>
+      <h1 data-testid="bucket-name" className="min-w-0 truncate text-[15px] font-semibold" title={name}>
+        {name}
+      </h1>
+      {env && (
+        <span className="shrink-0 rounded-full bg-surface-2 px-2.5 py-1 text-[12.5px] font-semibold text-ink-soft" title={where}>
+          {env}
+        </span>
+      )}
+      {onContext && (
+        <button
+          type="button"
+          aria-label="Context"
+          title="Context"
+          onClick={onContext}
+          className="-ml-1 inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        >
+          <Icon name="info" className="size-[18px]" />
+        </button>
+      )}
+    </header>
+  );
+}
+
+/** The panel's effective theme (its colours follow the system's in the frame), kept current: the host is told it with the settings. */
+export function usePanelTheme(): 'light' | 'dark' {
+  const query = useMemo(() => (typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null), []);
+  const [dark, setDark] = useState(() => !!query?.matches);
+  useEffect(() => {
+    if (!query) return;
+    const on = (e: MediaQueryListEvent) => setDark(e.matches);
+    query.addEventListener?.('change', on);
+    return () => query.removeEventListener?.('change', on);
+  }, [query]);
+  return dark ? 'dark' : 'light';
 }

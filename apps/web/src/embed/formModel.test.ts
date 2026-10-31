@@ -127,6 +127,12 @@ test('context: every group has a source or says unknown; a declared repo that di
   assert.equal(row('Network', 'IP').value, '203.0.113.7');
   assert.equal(row('Network', 'Family').value, 'IPv4');
   assert.equal(row('Session', 'Portal').value, 'unknown');
+  // Behind the cluster's load balancer the portal sees a pod address: labelled, never shown as the client's public IP; the release from /me.
+  const inside = contextGroups({ status, page: null, device: null, build: null, me: { bucketKey: 'KONF', origin: 'https://stg.konfersi.com', actorLabel: 'Owner', expiresAt: '2026-11-01T00:00:00Z', clientIp: '10.42.1.7', clientIpFamily: 4, portalRelease: '2026.10.31-5' }, actorLabel: 'Owner', sdkVersion: '0.2.0', portalRelease: '2026.10.31-5' });
+  const ipRow = inside.find((g) => g.title === 'Network')!.rows.find((r) => r.label === 'IP')!;
+  assert.equal(ipRow.value, '10.42.1.7 (internal: behind the cluster proxy)');
+  assert.equal(ipRow.copy, '10.42.1.7', 'copy gives the bare address');
+  assert.equal(inside.find((g) => g.title === 'Session')!.rows.find((r) => r.label === 'Portal')!.value, '2026.10.31-5');
   assert.match(contextText(groups), /Commit: a{40}/);
 });
 

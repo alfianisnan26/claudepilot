@@ -5,7 +5,7 @@
 // Everything quoted here came from a web page: it is untrusted, already redacted (validate.ts), and is fenced or escaped so it renders as
 // text, never as a link or an instruction.
 
-import { TICKET_LIMITS, type ReporterBuildInfo, type ReporterDeploymentState, type ReporterEvidence, type ReporterRepro, type ReporterTicketSite } from '@portal/contracts';
+import { TICKET_LIMITS, isInternalIp, type ReporterBuildInfo, type ReporterDeploymentState, type ReporterEvidence, type ReporterRepro, type ReporterTicketSite } from '@portal/contracts';
 
 /** Every control character and line or paragraph separator (C0, DEL, C1, U+2028, U+2029): what could start a new line in a prompt. */
 const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
@@ -38,6 +38,11 @@ export interface DescribedCapture {
   evidence: ReporterEvidence | null;
   screenshotAttachmentId: number | null;
   evidenceAttachmentId: number | null;
+  /** The flattened image with the reporter's marks (annotation editor), when one was uploaded. */
+  annotatedAttachmentId?: number | null;
+  /** How many marks the capture carries, and whether one pixelated an area (the screenshot is then the blurred image itself). */
+  marks?: number;
+  blurred?: boolean;
 }
 
 export interface DescribeInput {
@@ -96,6 +101,7 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
   if (c.body) lines.push(untrustedMarkdown(c.body.trim()), '');
   else if (c.note) lines.push(`> ${inline(c.note, 1000)}`, '');
   lines.push(`- URL: ${code(c.pageUrl, 400)}`);
+  if (c.marks) lines.push(`- Annotated (${c.marks} ${c.marks === 1 ? 'mark' : 'marks'})${c.blurred ? '; blurred areas are removed from the screenshot (no original was uploaded)' : ''}`);
   const e = c.evidence;
   if (e) {
     if (e.page.route) lines.push(`- Route: ${code(e.page.route, 200)}`);
@@ -115,6 +121,7 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
   } else lines.push('- Evidence: not uploaded yet');
   const files = [
     c.screenshotAttachmentId !== null ? `screenshot (attachment ${c.screenshotAttachmentId})` : null,
+    c.annotatedAttachmentId != null ? `annotated screenshot (attachment ${c.annotatedAttachmentId})` : null,
     c.evidenceAttachmentId !== null ? `evidence JSON (attachment ${c.evidenceAttachmentId})` : null,
   ].filter(Boolean);
   if (files.length) lines.push(`- Files: ${files.join(', ')}; read them with ticket_attachment_get ${ticketId} or reporter_evidence ${ticketId}`);
@@ -133,7 +140,7 @@ export function describeTicket(d: DescribeInput): string {
   if (first) out.push(`- Domain: ${code(first.page.host, 200)}, path ${code(first.page.path, 300)}${first.page.route ? `, route ${code(first.page.route, 200)}` : ''}`);
   out.push(`- Build: ${buildLine(d.build)}${d.build.environment ? `, declared environment ${code(d.build.environment, 20)}` : ''}`);
   if (first) out.push(`- Device: ${deviceLine(first)}`);
-  out.push(`- Reporter IP: ${d.reporterIp ? code(d.reporterIp, 64) : 'unknown'} (as the portal saw it)`);
+  out.push(`- Reporter IP: ${d.reporterIp ? `${code(d.reporterIp, 64)} (${isInternalIp(d.reporterIp) ? 'internal: behind the cluster proxy' : 'as the portal saw it'})` : 'unknown'}`);
   out.push(`- Reported with the UI reporter (SDK ${code(d.sdkVersion || 'unknown', 40)})${d.target.kind === 'session' ? `, sent straight to the session ${inline(d.target.label, 60)} (urgent)` : ''}.`);
   out.push('');
   for (const c of d.captures) out.push(captureSection(c, d.captures.length, d.ticketId), '');
