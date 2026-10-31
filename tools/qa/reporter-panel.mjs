@@ -308,7 +308,10 @@ try {
       await clickIn('[aria-label="View shot 1"]');
       await sleep(600);
       await sleepShot(b, `reporter-${label}-framed-viewer`);
-      await b.eval(`${frame}.defaultView.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+      // A key reaches the focused element (here the body), so the viewer's capture listener takes Esc before the panel's close.
+      await b.eval(`${frame}.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`);
+      await sleep(200);
+      if (await b.eval(`window.got.includes('pilot-reporter:close')`)) failures.push(`framed ${label}: Esc in the viewer closed the panel`);
       await sleep(300);
 
       await clickIn('[role=radio][aria-checked=false]');

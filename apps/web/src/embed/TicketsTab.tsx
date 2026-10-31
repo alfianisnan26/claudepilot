@@ -413,7 +413,7 @@ function FilterSheet({ prefs, counts, items, onApply, onClose }: { prefs: ListPr
   }, [onClose]);
   return (
     <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Filter">
-      <button type="button" aria-label="Close filters" tabIndex={-1} onClick={onClose} className="absolute inset-0 bg-black/30" />
+      <button type="button" aria-label="Close filters" tabIndex={-1} onClick={onClose} className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.35)' }} />
       <div className="relative flex max-h-[85%] flex-col rounded-t-2xl bg-bg shadow-lg">
         <div className="flex shrink-0 items-center gap-1 px-3 pt-1">
           <h2 className="flex-1 text-[15px] font-bold">Filter</h2>

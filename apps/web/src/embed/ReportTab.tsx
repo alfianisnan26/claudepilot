@@ -80,7 +80,7 @@ export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => 
   return (
     <div role="status" className="m-3 mb-0 flex flex-wrap items-center gap-1 rounded-2xl bg-accent-soft py-1 pr-1 pl-3">
       <Icon name="check" className="size-4 text-accent" />
-      <span className="min-w-0 flex-1 text-[14px] font-semibold">
+      <span className="min-w-0 flex-1 text-[14px] font-semibold whitespace-nowrap">
         Filed <span className="whitespace-nowrap tabular-nums">{ticketKey}</span>
       </span>
       <IconBtn
@@ -380,7 +380,7 @@ function TypePriority({ type, setType, priority, setPriority, urgent }: { type: 
             <Icon name="flag" className="size-3.5" />
             {TICKET_PRIORITY_LABEL[priority]}
             <Icon name="chevronDown" className="size-3.5 opacity-70" />
-            <select aria-label="Priority" value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)} className="absolute inset-0 cursor-pointer opacity-0">
+            <select aria-label="Priority" value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)} className="absolute -inset-px cursor-pointer opacity-0">
               {PRIORITIES.map((v) => (
                 <option key={v} value={v}>
                   {TICKET_PRIORITY_LABEL[v]}
@@ -419,6 +419,8 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
   useEffect(() => {
     if (target.kind === 'session' && targets.length && !targets.some((t) => t.sessionId === target.sessionId && t.available)) setTarget({ kind: 'ticket' });
   }, [targets, target]);
+  // An error is about what was sent: editing clears it.
+  useEffect(() => setError(null), [summary, description, target]);
   // The SDK's capture toolbar follows this form's switch (and remembers it).
   useEffect(() => setChoice(target), [target, setChoice]);
   const asking = target.kind === 'session';
@@ -500,7 +502,7 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
           onChange={(e) => setDescription(e.target.value)}
           rows={3}
           maxLength={8000}
-          required
+          aria-required="true"
           aria-label="Your question"
           placeholder="Your question"
           className={`${inputClass} resize-y`}

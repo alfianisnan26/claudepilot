@@ -11,6 +11,11 @@ import { IconBtn, useAuthUrl } from './ui';
  * open: pilot-reporter:expand), fit to screen, pinch and wheel zoom, drag to pan, double-tap or double-click for 100%, the crop drawn.
  * Esc, the X or a swipe down at fit closes it; "Open in a new tab" is the image's own (same-origin blob) address.
  */
+/** The viewer is dark in both themes (a photo viewer): fixed colours, not theme tokens. */
+const DARK = { background: 'rgba(8, 10, 14, 0.97)', color: '#fff' } as const;
+const WHITE = { color: '#fff' } as const;
+const DIM = { color: 'rgba(255, 255, 255, 0.72)' } as const;
+
 export function Viewer({ src, alt, crop, onClose, actions }: { src: string; alt: string; crop?: { anchor: ReporterAnchor; scroll: { x: number; y: number } | null } | null; onClose: () => void; actions?: ReactNode }) {
   const { client, post } = usePanel();
   const url = useAuthUrl(client, src);
@@ -62,13 +67,15 @@ export function Viewer({ src, alt, crop, onClose, actions }: { src: string; alt:
   const atFit = img ? Math.abs(view.scale - fitScale(img, area)) < 0.01 : true;
 
   return (
-    <div role="dialog" aria-modal="true" aria-label={alt} className="fixed inset-0 z-[60] flex flex-col bg-black/95 text-white">
+    <div role="dialog" aria-modal="true" aria-label={alt} className="fixed inset-0 z-[60] flex flex-col" style={DARK}>
       <div className="flex shrink-0 items-center gap-1 px-1 pt-[env(safe-area-inset-top)]">
-        <IconBtn icon="x" label="Close" onClick={onClose} className="text-white" />
-        <span className="min-w-0 flex-1 truncate text-[13px] text-white/80">{alt}</span>
+        <IconBtn icon="x" label="Close" onClick={onClose} style={WHITE} />
+        <span className="min-w-0 flex-1 truncate text-[13px]" style={DIM}>
+          {alt}
+        </span>
         {actions}
         {url && url !== 'failed' && (
-          <a href={url} target="_blank" rel="noopener noreferrer" aria-label="Open in a new tab" title="Open in a new tab" className="inline-flex size-11 items-center justify-center rounded-xl text-white focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
+          <a href={url} target="_blank" rel="noopener noreferrer" aria-label="Open in a new tab" title="Open in a new tab" className="inline-flex size-11 items-center justify-center rounded-xl focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden" style={WHITE}>
             <Icon name="externalLink" className="size-[18px]" />
           </a>
         )}
@@ -129,7 +136,7 @@ export function Viewer({ src, alt, crop, onClose, actions }: { src: string; alt:
           drag.current = null;
         }}
       >
-        {url === 'failed' && <p className="p-6 text-center text-[14px] text-white/70">This image could not load.</p>}
+        {url === 'failed' && <p className="p-6 text-center text-[14px]" style={DIM}>This image could not load.</p>}
         {url && url !== 'failed' && (
           <div className="absolute top-0 left-0 origin-top-left" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, width: img?.w, height: img?.h }}>
             <img src={url} alt={alt} draggable={false} onLoad={(e) => setImg({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} className="block max-w-none" />
@@ -139,7 +146,7 @@ export function Viewer({ src, alt, crop, onClose, actions }: { src: string; alt:
           </div>
         )}
       </div>
-      <p className="shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))] text-center text-[12px] text-white/60 tabular-nums">{Math.round(view.scale * 100)}%</p>
+      <p className="shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))] text-center text-[12.5px] tabular-nums" style={DIM}>{Math.round(view.scale * 100)}%</p>
     </div>
   );
 }

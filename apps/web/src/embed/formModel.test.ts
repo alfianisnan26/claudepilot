@@ -46,7 +46,8 @@ test('viewer: fit to screen, zoom about a point, pan clamped, double-tap toggles
 test('title suggestion: the anchored element’s label on the page title, editable', () => {
   const anchor = { selector: 'main > #hero-cta', path: '/', relative: null, rect: { x: 0, y: 0, w: 1, h: 1 }, viewport: { w: 1, h: 1, dpr: 1 }, mode: 'crop' as const };
   assert.equal(elementLabel({ dom: { selector: '#x', path: '', snippet: '<button class="cta">Book a  demo</button>' }, anchor }), 'Book a demo');
-  assert.equal(elementLabel({ dom: null, anchor }), 'hero-cta');
+  assert.equal(elementLabel({ dom: null, anchor }), 'hero cta');
+  assert.equal(elementLabel({ dom: null, anchor: { ...anchor, selector: 'main h1' } }), '', 'a bare tag says nothing');
   assert.equal(elementLabel({ dom: null, anchor: { ...anchor, selector: 'div:nth-child(3)' } }), '');
   assert.equal(suggestTitle('Pricing | Konfersi', 'Book a demo'), 'Book a demo on Pricing | Konfersi');
   assert.equal(suggestTitle('', 'Book a demo'), 'Book a demo');

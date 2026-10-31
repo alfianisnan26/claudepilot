@@ -66,9 +66,10 @@ const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
 export function elementLabel(e: Pick<ReporterEvidence, 'dom' | 'anchor'>): string {
   const snippet = e.dom?.snippet ? squash(e.dom.snippet.replace(/<[^>]*>/g, ' ').replace(/&[a-z]+;/g, ' ')) : '';
   if (snippet) return snippet.slice(0, 48);
+  // From the selector only an id says something ("#hero-cta"); a bare tag ("h1") or a position ("div:nth-child(3)") does not.
   const sel = e.anchor.selector ?? '';
   const last = sel.split(/\s*>\s*|\s+/).filter(Boolean).at(-1) ?? '';
-  return /^[a-z][a-z0-9-]*$/i.test(last) || /^#[\w-]+$/.test(last) ? last.replace(/^#/, '') : '';
+  return /^#[\w-]+$/.test(last) ? last.slice(1).replace(/[-_]+/g, ' ') : '';
 }
 
 /** The title suggestion: "<element> on <page title>", either alone when the other is missing; editable, never required to keep. */
