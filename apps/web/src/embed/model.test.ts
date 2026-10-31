@@ -15,6 +15,7 @@ import {
   playlist,
   querySearch,
   samePageHref,
+  sentText,
   splitStream,
   ticketsFor,
 } from './model';
@@ -224,4 +225,14 @@ test('the Markdown subset keeps text as text and only http(s) links', () => {
     { t: 'pre', v: 'code' },
     { t: 'p', v: 'text <script>' },
   ]);
+});
+
+test('after a direct report the panel says plainly whether the session got it', () => {
+  const session = { kind: 'session' as const, sessionId: 's1' };
+  assert.deepEqual(sentText(['KONF-3'], { kind: 'ticket' }, undefined, []), { text: 'KONF-3 filed.', tone: 'ok' });
+  assert.deepEqual(sentText(['KONF-3'], session, undefined, []), { text: 'KONF-3 filed. Sending to the session.', tone: 'ok' });
+  assert.deepEqual(sentText(['KONF-3'], session, { sessionId: 's1', delivered: true, error: null }, []), { text: 'KONF-3 filed. Sent to the session.', tone: 'ok' });
+  const failed = sentText(['KONF-3', 'KONF-4'], session, { sessionId: 's1', delivered: false, error: 'session ended' }, ['screenshot']);
+  assert.equal(failed.tone, 'error');
+  assert.equal(failed.text, '2 tickets filed. The session did not get it (session ended); the ticket is kept. Upload failed: screenshot.');
 });

@@ -546,8 +546,8 @@ export interface ReporterObservedBuildRequest {
 
 /** GET /reporter/v1/session-targets item: a direct-report target and that session's live state. */
 export interface ReporterSessionTargetStatus extends ReporterSessionTarget {
-  /** The session's title, or null when it is gone. */
-  title: string | null;
+  /** The session's title, when the server tells it. */
+  title?: string | null;
   /** 'working', 'idle', 'waiting', 'asleep', 'ended'... as the chat reports it. */
   status: string;
   /** False when the session cannot take a message (ended, gone): the panel disables it with the reason. */

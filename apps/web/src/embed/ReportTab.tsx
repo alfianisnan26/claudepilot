@@ -7,7 +7,6 @@ import {
   type ReporterFileMode,
   type ReporterReportTarget,
   type ReporterReviewComment,
-  type ReporterSessionDelivery,
   type ReporterTicket,
   type TicketPriority,
   type TicketType,
@@ -17,7 +16,7 @@ import { SEVERITIES, countBySeverity, cropBox, pathnameOf } from '@/features/rep
 import type { ReporterClient } from './api';
 import { usePanel, type Capture } from './context';
 import { Icon } from './icons';
-import { proposedSummary, ticketsFor } from './model';
+import { proposedSummary, sentText, ticketsFor } from './model';
 import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './ui';
 
 const TYPES: TicketType[] = ['bug', 'feature', 'task', 'question'];
@@ -42,25 +41,6 @@ async function uploadCapture(attach: (captureId: string, kind: 'screenshot' | 'e
       failed.push('evidence');
     }
   return failed;
-}
-
-/** What to tell the person after a send: the ticket, any file that failed, and plainly whether the session got it. */
-function sentText(keys: string[], target: ReporterReportTarget, delivery: ReporterSessionDelivery | undefined, failedFiles: string[]): { text: string; tone: 'ok' | 'error' } {
-  const what = keys.length === 1 ? keys[0]! : `${keys.length} tickets`;
-  const parts = [`${what} filed.`];
-  let tone: 'ok' | 'error' = 'ok';
-  if (target.kind === 'session') {
-    if (delivery?.delivered) parts.push('Sent to the session.');
-    else {
-      tone = 'error';
-      parts.push(delivery ? `The session did not get it${delivery.error ? ` (${delivery.error})` : ''}; the ticket is kept.` : 'Not confirmed that the session got it; the ticket is kept.');
-    }
-  }
-  if (failedFiles.length) {
-    tone = 'error';
-    parts.push(`Upload failed: ${failedFiles.join(', ')}.`);
-  }
-  return { text: parts.join(' '), tone };
 }
 
 export function ReportTab() {

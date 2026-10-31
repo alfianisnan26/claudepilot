@@ -1,5 +1,7 @@
 import {
   isTicketClosed,
+  type ReporterReportTarget,
+  type ReporterSessionDelivery,
   type ReporterCallout,
   type ReporterReview,
   type ReporterTicket,
@@ -256,4 +258,23 @@ export function ticketsFor(r: ReporterReview, mode: 'single' | 'per-page' | 'per
   if (mode === 'single') return 1;
   if (mode === 'per-capture') return r.comments.length;
   return new Set(r.comments.map((c) => pathnameOf(c.anchor.path))).size;
+}
+
+/**
+ * What to tell the person after a send: the ticket, any file that failed, and plainly whether the session got it. The server posts a
+ * direct report to the session once its files are in, so without a delivery answer it is "sending" (the ticket card shows a failure).
+ */
+export function sentText(keys: string[], target: ReporterReportTarget, delivery: ReporterSessionDelivery | undefined, failedFiles: string[]): { text: string; tone: 'ok' | 'error' } {
+  const parts = [`${keys.length === 1 ? keys[0]! : `${keys.length} tickets`} filed.`];
+  let failed = failedFiles.length > 0;
+  if (target.kind === 'session') {
+    if (!delivery) parts.push('Sending to the session.');
+    else if (delivery.delivered) parts.push('Sent to the session.');
+    else {
+      failed = true;
+      parts.push(`The session did not get it${delivery.error ? ` (${delivery.error})` : ''}; the ticket is kept.`);
+    }
+  }
+  if (failedFiles.length) parts.push(`Upload failed: ${failedFiles.join(', ')}.`);
+  return { text: parts.join(' '), tone: failed ? 'error' : 'ok' };
 }

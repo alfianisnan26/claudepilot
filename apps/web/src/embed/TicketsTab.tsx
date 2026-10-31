@@ -430,11 +430,16 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
             </div>
           </div>
 
-          {t.target.kind === 'session' && (
-            <Notice tone="info">
-              Sent to <strong>{t.target.label}</strong> · {t.target.status}
-            </Notice>
-          )}
+          {t.target.kind === 'session' &&
+            (t.target.status === 'delivery-failed' ? (
+              <Notice tone="error">
+                <strong>{t.target.label}</strong> did not get this report; the ticket is kept in the queue.
+              </Notice>
+            ) : (
+              <Notice tone="info">
+                Sent to <strong>{t.target.label}</strong> · {t.target.status}
+              </Notice>
+            ))}
           {t.site?.declaredMismatch && (
             <Notice tone="error">
               The page declared {t.site.declaredMismatch.repo ?? t.site.repo} / {t.site.declaredMismatch.environment ?? t.site.environment}; the site record says {t.site.repo} / {t.site.environment}.
@@ -503,7 +508,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
 
           {t.repro && t.repro.steps.length > 0 && (
             <details className="rounded-2xl border border-line p-3">
-              <summary className="min-h-6 cursor-pointer text-[13px] font-semibold">Steps</summary>
+              <summary className="flex min-h-11 cursor-pointer items-center text-[13px] font-semibold">Steps</summary>
               <ol className="mt-2 list-decimal pl-5 text-[13px]">
                 {t.repro.steps.map((s, i) => (
                   <li key={i} className="break-words">

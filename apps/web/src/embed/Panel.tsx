@@ -347,6 +347,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         requestCapture,
         targets,
         signOut: () => {
+          void client.revoke().catch(() => undefined);
           signOut();
           post({ type: 'pilot-reporter:focus-clear' });
           notify('Signed out');

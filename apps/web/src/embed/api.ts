@@ -131,6 +131,8 @@ const listOf = <T,>(v: unknown, field: string): T[] => {
 export interface ReporterClient {
   status(bucket: string, origin: string): Promise<ReporterStatus>;
   me(): Promise<ReporterMe>;
+  /** Revokes this token on the server (sign out); best effort. */
+  revoke(): Promise<unknown>;
   tickets(q: ReporterTicketQuery): Promise<ReporterTicketList>;
   ticket(key: string): Promise<ReporterTicket>;
   createTicket(req: ReporterCreateTicketRequest): Promise<ReporterCreateTicketResponse>;
@@ -195,6 +197,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
   return {
     status: (bucket, origin) => call('GET', `${R.status}?${new URLSearchParams({ bucket, origin })}`),
     me: () => call('GET', R.me),
+    revoke: () => call('DELETE', R.me),
     tickets: async (q) => {
       const v = await call<ReporterTicketList | ReporterTicket[]>('GET', `${R.tickets}${querySearch(q)}`);
       if (Array.isArray(v)) return { items: v, nextCursor: null, counts: { status: {}, priority: {}, type: {}, onPath: 0 } };
