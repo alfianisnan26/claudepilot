@@ -602,7 +602,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_adopt',
     title: 'Take over an ended session’s tickets',
     description:
-      'Takes over every unfinished ticket of a chat session that has ENDED in your workspace: the one you continue (an earlier chat of your track), or one nobody continues. Use it when ticket_comment or ticket_update says a ticket is assigned to another session that ended: it is a tool step, not something to ask a person for. Refused for a live session (it keeps its work), for a session another live chat continues, and outside your workspace. Asks for confirmation first (shows the tickets); returns the ids moved. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+      'Takes over every unfinished ticket of a chat session that has ENDED in your workspace: the one you continue (an earlier chat of your track), or one nobody continues. From the session you continue it also takes back the tickets the portal moved off it by title to another chat before you started. Use it when ticket_comment or ticket_update says a ticket is assigned to another session that ended: it is a tool step, not something to ask a person for. Refused for a live session (it keeps its work), for a session another live chat continues, and outside your workspace. Asks for confirmation first (shows the tickets); returns the ids moved. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
     scope: 'agent',
     input: z.object({
       from_session: z.string().min(1).max(80).describe('The id of the ended session whose tickets you take over.'),
