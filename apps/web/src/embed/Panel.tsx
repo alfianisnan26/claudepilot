@@ -1,5 +1,6 @@
 import {
   REPORTER_BRIDGE_VERSION,
+  type ReporterAnnotation,
   type ReporterBuildInfo,
   type ReporterCaptureMode,
   type ReporterConnectMessage,
@@ -29,6 +30,7 @@ import {
 import { captureRequest, createPanelBridge, exactOrigin, targetMessage, type PanelBridge } from './bridge';
 import { ChatView } from './ChatView';
 import { ContextSheet } from './ContextSheet';
+import { revokeShot, withAnnotations } from './annotate';
 import { PanelContext, newId, type Capture, type ChatOpen, type PanelState, type Tab } from './context';
 import { choiceKey, parseChoice } from './formModel';
 import { Icon, type IconName } from './icons';
@@ -325,16 +327,26 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   // The report's shots: a new capture starts a new report unless the form's "+" asked to add one.
   const setCapture = useCallback((c: Capture | null) => {
     setShots((old) => {
-      for (const o of old) if (o !== c) URL.revokeObjectURL(o.previewUrl);
+      for (const o of old) if (o !== c) revokeShot(o);
       return c ? [c] : [];
     });
   }, []);
   const removeShot = useCallback((captureId: string) => {
     setShots((old) => {
       const gone = old.find((o) => o.captureId === captureId);
-      if (gone) URL.revokeObjectURL(gone.previewUrl);
+      if (gone) revokeShot(gone);
       return old.filter((o) => o.captureId !== captureId);
     });
+  }, []);
+  const annotateShot = useCallback((captureId: string, marks: ReporterAnnotation[], image: Blob | null) => {
+    setShots((old) =>
+      old.map((o) => {
+        if (o.captureId !== captureId) return o;
+        const { next, revoke } = withAnnotations(o, marks, image, (b) => URL.createObjectURL(b));
+        for (const u of revoke) URL.revokeObjectURL(u);
+        return next;
+      }),
+    );
   }, []);
   const requestCapture = useCallback(
     (mode: ReporterCaptureMode, precise = false, append = false) => {
@@ -472,6 +484,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         setCapture,
         shots,
         removeShot,
+        annotateShot,
         pending,
         requestCapture,
         chat,

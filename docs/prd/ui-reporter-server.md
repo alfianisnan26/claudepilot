@@ -117,6 +117,23 @@ additive and accepted everywhere `full` is; the description says "screen (what w
   commit, branch, version, device), a section per capture (URL, device, "Not captured: ..." when the shot has gaps, area and element,
   console errors, failed requests, LCP, UI check findings, attachment ids), steps to reproduce, and a deployment footer that the server rewrites when the state changes.
 
+## Annotations
+
+- A capture (ticket or review comment) may carry `annotations`: `ReporterAnnotation[]` (pen, highlight, line, arrow, rect, ellipse, blur,
+  text, step) in the screenshot's pixels. `validate.ts` `cleanAnnotations` refuses an unknown type, a colour off
+  `REPORTER_ANNOTATION_COLORS`, a wrong point count, a coordinate out of range (+-100,000) and anything over the caps (200 marks, 2,000
+  points per mark, 20,000 per capture); text loses control characters, is cut at 300 characters and redacted like every string.
+  Stored as JSON in `annotations` (migration 903, `reporter_ticket_captures` and `reporter_review_comments`).
+- `x-reporter-kind: annotated`: the flattened image, PNG or WebP by magic bytes, within the screenshot cap, one per capture, only when the
+  capture has marks, and REFUSED when a mark is a blur: the panel then uploads the flattened (blurred) image as the screenshot and never
+  sends the original, so no un-blurred copy is stored. Kept as a ticket attachment `<id>.annotated.png` (`annotated_attachment`); review
+  files move with the submit.
+- Reads: `GET .../captures/:captureId/annotated` and `.../comments/:captureId/annotated` (bearer, declared in `authz.ts`); the panel's
+  capture and comment views carry `annotatedUrl` and `marks`; the owner's evidence `annotatedAttachmentId` and `annotations`; the agent's
+  evidence `annotated_attachment_id`, `marks`, `blurred`. Duplicate thumbnails and the direct-to-session chat images use the annotated image.
+- The description's capture section says `Annotated (N marks)`, adds "blurred areas are removed from the screenshot (no original was
+  uploaded)" with a blur, and names the annotated attachment.
+
 ## Direct to a session
 
 `target: { kind: 'session', sessionId }` (one of the bucket's `sessionTargets`, live): the ticket is filed anyway (urgent, tag `ui-urgent`,

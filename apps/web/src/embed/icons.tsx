@@ -53,6 +53,17 @@ const NODES = {
   circleX: [["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"m15 9-6 6"}],["path",{"d":"m9 9 6 6"}]],
   layers: [["path",{"d":"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"}],["path",{"d":"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"}],["path",{"d":"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"}]],
   loaderCircle: [["path",{"d":"M21 12a9 9 0 1 1-6.219-8.56"}]],
+  // Annotation editor (lucide: mouse-pointer-2, move-up-right, circle, type, highlighter, grid-3x3, list-ordered, undo-2, redo-2; a diagonal line).
+  pointer: [["path",{"d":"M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z"}]],
+  line: [["path",{"d":"M5 19 19 5"}]],
+  arrowUpRight: [["path",{"d":"M13 5H19V11"}],["path",{"d":"M19 5 5 19"}]],
+  circle: [["circle",{"cx":"12","cy":"12","r":"9"}]],
+  type: [["path",{"d":"M12 4v16"}],["path",{"d":"M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"}],["path",{"d":"M9 20h6"}]],
+  highlighter: [["path",{"d":"m9 11-6 6v3h9l3-3"}],["path",{"d":"m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"}]],
+  grid: [["rect",{"width":"18","height":"18","x":"3","y":"3","rx":"2"}],["path",{"d":"M3 9h18"}],["path",{"d":"M3 15h18"}],["path",{"d":"M9 3v18"}],["path",{"d":"M15 3v18"}]],
+  listOrdered: [["path",{"d":"M10 12h11"}],["path",{"d":"M10 18h11"}],["path",{"d":"M10 6h11"}],["path",{"d":"M4 10h2"}],["path",{"d":"M4 6h1v4"}],["path",{"d":"M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"}]],
+  undo: [["path",{"d":"M9 14 4 9l5-5"}],["path",{"d":"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"}]],
+  redo: [["path",{"d":"m15 14 5-5-5-5"}],["path",{"d":"M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"}]],
 } satisfies Record<string, Node[]>;
 
 export type IconName = keyof typeof NODES;

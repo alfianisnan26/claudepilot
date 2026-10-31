@@ -431,6 +431,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   const image = (c: Context, f: { bytes: Buffer; type: string }) =>
     c.body(new Uint8Array(f.bytes), 200, { 'Content-Type': f.type, 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'private, max-age=300' });
   api.get('/tickets/:key/captures/:captureId/screenshot', (c) => image(c, service.screenshot(ctxOf(c), c.req.param('key'), c.req.param('captureId'))));
+  api.get('/tickets/:key/captures/:captureId/annotated', (c) => image(c, service.annotated(ctxOf(c), c.req.param('key'), c.req.param('captureId'))));
   api.get('/tickets/:key/comments', (c) => c.json(success(service.comments(ctxOf(c), c.req.param('key')))));
   api.post('/tickets/:key/comments', json, async (c) => c.json(success(service.reply(ctxOf(c), c.req.param('key'), (await jsonBody<{ body: string }>(c)).body)), 201));
 
@@ -450,6 +451,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     return c.json(success(service.attachToReview(ctxOf(c), c.req.param('id'), c.req.header('x-reporter-capture') ?? '', c.req.header('x-reporter-kind') ?? '', bytes, c.req.header('content-type'))), 201);
   });
   api.get('/reviews/:id/comments/:captureId/screenshot', (c) => image(c, service.reviewScreenshot(ctxOf(c), c.req.param('id'), c.req.param('captureId'))));
+  api.get('/reviews/:id/comments/:captureId/annotated', (c) => image(c, service.reviewAnnotated(ctxOf(c), c.req.param('id'), c.req.param('captureId'))));
   api.post('/reviews/:id/submit', json, async (c) => c.json(success(service.submitReview(ctxOf(c), c.req.param('id'), await jsonBody(c), base(c))), 201));
 
   api.post('/duplicates', json, async (c) => c.json(success({ candidates: service.duplicates(ctxOf(c), await jsonBody(c), base(c)) })));
