@@ -486,7 +486,9 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     c.header('X-Accel-Buffering', 'no');
     return stream(c, async (s) => {
       let after = from && /^\d{1,15}$/.test(from) ? Number(from) : first.lastSeq;
-      let mark = `${first.state}|${first.waiting}|${first.waitingFor ?? ''}`;
+      // A change of state, approvals or runtime (model, mode, context, plan usage) is pushed as an update too.
+      const markOf = (st: typeof first) => `${st.state}|${st.waiting}|${st.waitingFor ?? ''}|${JSON.stringify(st.runtime ?? null)}`;
+      let mark = markOf(first);
       const started = Date.now();
       let lastPing = Date.now();
       let alive = true;
@@ -504,7 +506,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
             await s.write(`${JSON.stringify({ type: 'gone' })}\n`);
             break;
           }
-          const now = `${st.state}|${st.waiting}|${st.waitingFor ?? ''}`;
+          const now = markOf(st);
           if (st.lastSeq > after || now !== mark) {
             const page = st.lastSeq > after ? service.chatPage(x, id, { after: String(after) }, origin) : { items: [], session: st };
             after = Math.max(after, st.lastSeq);

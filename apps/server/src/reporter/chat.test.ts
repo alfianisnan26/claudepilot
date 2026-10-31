@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { REPORTER_LIMITS, REPORTER_ROUTES, type ReporterChatPage } from '@portal/contracts';
-import { toChatMessage, toolLine } from './chat.js';
+import { planOf, toChatMessage, toolLine } from './chat.js';
 import { UI } from '../tickets/testkit.js';
 import { build, capture, PORTAL, reporterHarness } from './testkit.js';
 
@@ -207,4 +207,60 @@ test('toChatMessage: a tool result says only whether it failed, joined to its ca
   assert.equal(toChatMessage({ seq: 4, at: 'x', kind: 'tool_result', toolUseId: 'call-1', isError: true, text: '' }, url)!.text, 'Failed');
   assert.equal(toChatMessage({ seq: 5, at: 'x', kind: 'tool_result', text: 'no id' }, url), null, 'a result without its call id cannot be joined: left out');
   assert.equal(toChatMessage({ seq: 6, at: 'x', kind: 'tool_result', toolUseId: 'c', agentLabel: 'explorer' }, url), null, 'a sub-agent’s result stays out');
+});
+
+test('the chat state carries the session runtime the portal header shows (model, effort, mode, Claude by name, context, cost, plan windows), never an email or credential', async () => {
+  const resets = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const plans: string[] = [];
+  const h = await reporterHarness({
+    claudePlan: (id) => {
+      plans.push(id);
+      return id === 'work' ? { session: { usedPct: 42, resetsAt: resets }, week: { usedPct: 12.5, resetsAt: null } } : null;
+    },
+  });
+  try {
+    const email = ['alfian', 'example.com'].join('@');
+    h.chat.add('lead1', 'working', {
+      title: 'Konfersi lead',
+      model: 'claude-opus-5-5',
+      effort: 'high',
+      mode: 'acceptEdits',
+      context: { usedTokens: 84_000, windowTokens: 200_000 },
+      costUsd: 1.25,
+      claudeId: 'work',
+      claudeName: `Work ${email} ${secretish()}`,
+    });
+    h.service.updateConfig('KONF', { sessionTargets: [{ sessionId: 'lead1', label: 'Lead' }] }, 't');
+    const p = await page(await h.call('/reporter/v1/sessions/lead1/messages', { token: h.mint().token }));
+    const r = p.session.runtime!;
+    assert.deepEqual(
+      { model: r.model, effort: r.effort, mode: r.mode, context: r.context, costUsd: r.costUsd, plan: r.plan },
+      { model: 'claude-opus-5-5', effort: 'high', mode: 'acceptEdits', context: { usedTokens: 84_000, windowTokens: 200_000 }, costUsd: 1.25, plan: { session: { usedPct: 42, resetsAt: resets }, week: { usedPct: 12.5, resetsAt: null } } },
+    );
+    assert.match(r.claude!, /^Work /, 'the Claude by its portal name');
+    const all = JSON.stringify(p);
+    assert.ok(!all.includes(email) && !all.includes(secretish()), 'no email or credential-shaped text in the runtime');
+    assert.ok(!/claudeId|"work"/.test(JSON.stringify(r)), 'not the Claude id either');
+    assert.deepEqual(plans.at(-1), 'work');
+
+    // A session with nothing reported yet: every field says so (null), never a made-up number.
+    h.chat.add('bare', 'idle', { workspaceId: 'docker/konf' });
+    h.service.updateConfig('KONF', { sessionTargets: [{ sessionId: 'lead1', label: 'Lead' }, { sessionId: 'bare', label: 'Bare' }] }, 't');
+    const b = (await page(await h.call('/reporter/v1/sessions/bare/messages', { token: h.mint().token }))).session.runtime!;
+    assert.deepEqual(b, { model: null, effort: null, mode: null, claude: null, context: null, costUsd: null, plan: null });
+  } finally {
+    h.done();
+  }
+});
+
+test('planOf: the usage snapshot’s session and week windows as they stand; no plan reading is null (unavailable), never 0 %', () => {
+  const w = (key: string, usedPct: number | null, resetsAt: string | null = null) => ({ key, label: key, usedPct, resetsAt, level: 'ok' as const });
+  assert.deepEqual(planOf({ runsOn: 'plan', unavailable: null, windows: [w('session', 30, 'r1'), w('week', 70, 'r2'), w('week_opus', 90)] }), {
+    session: { usedPct: 30, resetsAt: 'r1' },
+    week: { usedPct: 70, resetsAt: 'r2' },
+  });
+  assert.equal(planOf({ runsOn: 'plan', unavailable: 'signed_out' as never, windows: [w('session', 0)] }), null);
+  assert.equal(planOf({ runsOn: 'key', unavailable: null, windows: [] }), null);
+  assert.equal(planOf(null), null);
+  assert.deepEqual(planOf({ runsOn: 'plan', unavailable: null, windows: [w('session', null)] }), { session: { usedPct: null, resetsAt: null }, week: null });
 });

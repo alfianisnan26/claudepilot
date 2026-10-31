@@ -720,8 +720,8 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* pr-12: the SDK draws its one Close over the panel's top-right corner. */}
-      <div className="flex shrink-0 items-center gap-1 pr-12 pl-1">
+      {/* Under the panel's title row now, which keeps the SDK's Close clear: this row has the whole width. */}
+      <div className="flex shrink-0 items-center gap-1 pr-1 pl-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={back} />
         <span className="flex-1 text-[14px] font-semibold tabular-nums">{ticketKey}</span>
         {t && (

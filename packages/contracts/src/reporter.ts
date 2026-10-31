@@ -778,6 +778,31 @@ export interface ReporterChatState {
   /** The ticket of the bucket it works on, when it works on one. */
   ticketKey: string | null;
   url: string;
+  /** What it runs with, as the portal's chat header shows it (the same session record and usage snapshot). Additive. */
+  runtime?: ReporterChatRuntime;
+}
+
+/** A plan window of the Claude a session runs on (the portal's usage snapshot): percent used and when it resets; null where unknown. */
+export interface ReporterUsageWindow {
+  usedPct: number | null;
+  resetsAt: string | null;
+}
+
+/**
+ * A session's runtime for the panel's chat header: model and effort, permission mode, the Claude it runs on by the portal's display name
+ * (never an email, account or plan id, token or credential), the context window, its cost so far, and that Claude's plan windows. Every
+ * value is the portal's own; null when the portal has none ("unavailable", never a guess).
+ */
+export interface ReporterChatRuntime {
+  model: string | null;
+  effort: string | null;
+  mode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions' | null;
+  claude: string | null;
+  context: { usedTokens: number; windowTokens: number | null } | null;
+  /** What Claude Code reported the session cost (list price: for a plan not a bill). */
+  costUsd: number | null;
+  /** The Claude's plan windows; null when it has no plan reading (signed out, an API key, not read yet). */
+  plan: { session: ReporterUsageWindow | null; week: ReporterUsageWindow | null } | null;
 }
 
 /**

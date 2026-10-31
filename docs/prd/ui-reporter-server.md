@@ -78,6 +78,10 @@ Every route of `REPORTER_ROUTES` under `/reporter/v1` from `me` down. No `Access
 `GET /sessions/:id/messages` (`?before=&limit=` a page counted back from the newest, or `?after=`), `POST /sessions/:id/messages`
 (`ReporterChatSendRequest`), `GET /sessions/:id/stream?after=` (NDJSON `ReporterChatStreamLine`: hello, update with new lines and the state,
 ping, gone; checked every second, closed after 5 minutes, at most 2 per token), `GET /sessions/:id/blobs/:blobId` (images only, sandboxed).
+The session state (`ReporterChatState`) carries `runtime` (`ReporterChatRuntime`): model, effort, mode, the Claude's display name (an email in
+it is cut, never an account id, plan id or credential), context, cost, copied from the portal's own session record, and the Claude's plan
+windows (session, week: percent and reset) from the usage snapshot the Usage page shows (`planOf`; read through a 30 s cache, never a
+probe); null where the portal has none. A runtime change is pushed on the stream like a state change.
 
 - **Which sessions.** Only a session of the token's bucket: one of its direct-report targets, linked to one of its tickets, or in its default
   workspace; and one the token's person may `view` (reads) or `operate` (send) through the seam. Anything else, an unknown id or no chat is

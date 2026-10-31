@@ -18,6 +18,7 @@ import { chatApi } from './api';
 import { BypassDialog } from './BypassDialog';
 import { ContextRing } from './ContextRing';
 import { EffortSlider, ModelFamilies } from './ModelPicker';
+import { MODE_LABELS } from './modeLabels';
 import type { ChatControlArgs, ChatControlOp } from './useChatSocket';
 
 type Control = (op: ChatControlOp, args?: ChatControlArgs) => Promise<void>;
@@ -30,12 +31,12 @@ export interface ControlsHandle {
 
 /** Every mode a session can report, so the chip always reads right; only `OFFERED_MODES` can be picked here. */
 const MODES: Record<ChatPermissionMode, { label: string; hint: string; icon: LucideIcon; danger?: boolean }> = {
-  plan: { label: 'Plan', hint: 'Reads and plans; changes nothing until you approve.', icon: ListChecks },
-  default: { label: 'Manual', hint: 'Asks before edits and commands.', icon: Hand },
-  acceptEdits: { label: 'Edit', hint: 'Edits files without asking; asks before commands.', icon: FilePen },
-  auto: { label: 'Auto', hint: 'A classifier approves routine actions and blocks risky ones.', icon: ShieldCheck },
-  dontAsk: { label: 'Don’t ask', hint: 'Runs only pre-approved actions and denies the rest.', icon: ShieldOff },
-  bypassPermissions: { label: 'Bypass', hint: 'Runs everything without asking.', icon: ShieldAlert, danger: true },
+  plan: { ...MODE_LABELS.plan, icon: ListChecks },
+  default: { ...MODE_LABELS.default, icon: Hand },
+  acceptEdits: { ...MODE_LABELS.acceptEdits, icon: FilePen },
+  auto: { ...MODE_LABELS.auto, icon: ShieldCheck },
+  dontAsk: { ...MODE_LABELS.dontAsk, icon: ShieldOff },
+  bypassPermissions: { ...MODE_LABELS.bypassPermissions, icon: ShieldAlert },
 };
 /** A mode's name and icon, for the ⋯ menu's Mode item. */
 export const modeDetails = (mode: ChatPermissionMode) => MODES[mode] ?? MODES.default;

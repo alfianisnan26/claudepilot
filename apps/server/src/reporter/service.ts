@@ -65,6 +65,7 @@ import {
   type ReporterChatMessage,
   type ReporterChatPage,
   type ReporterChatSendRequest,
+  type ReporterChatRuntime,
   type ReporterChatState,
 } from '@portal/contracts';
 import { can } from '../authz/seam.js';
@@ -106,6 +107,14 @@ export interface ReporterChatSession {
   /** Open approvals and what the oldest asks. */
   waiting?: number;
   waitingFor?: string | null;
+  /** What it runs with (the portal's ChatSession fields; absent in older fakes). */
+  model?: string | null;
+  effort?: string | null;
+  mode?: string;
+  context?: { usedTokens: number; windowTokens: number | null } | null;
+  costUsd?: number;
+  claudeId?: string;
+  claudeName?: string | null;
 }
 
 export interface ReporterChat {
@@ -148,6 +157,11 @@ export interface ReporterDeps {
   sdkVersion?: () => string;
   /** A person's display name, for the token's label. */
   userLabel?: (userId: string) => string;
+  /**
+   * A Claude's plan windows from the portal's usage snapshot (never probes; cached by the caller), or null when it has no reading. Read
+   * every second by the live chat stream, so it must be cheap.
+   */
+  claudePlan?: (claudeId: string) => ReporterChatRuntime['plan'];
 }
 
 /** Who a panel call is: the token's scope, resolved now. */
@@ -1801,6 +1815,32 @@ export class ReporterService {
       lastSeq: s.lastSeq ?? 0,
       ticketKey,
       url: `${base}/admin/sessions/${encodeURIComponent(s.id)}`,
+      runtime: this.#runtime(s),
+    };
+  }
+
+  /** The chat header's runtime from the session record and the usage snapshot: copied, never recomputed; a name that holds an email loses it. */
+  #runtime(s: ReporterChatSession): ReporterChatRuntime {
+    const modes = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'] as const;
+    const short = (v: string | null | undefined, max: number) => (v ? redactText(v).replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '…').slice(0, max) : null);
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const ctx = s.context && num(s.context.usedTokens) !== null ? { usedTokens: s.context.usedTokens, windowTokens: num(s.context.windowTokens) } : null;
+    let plan: ReporterChatRuntime['plan'] = null;
+    if (s.claudeId !== undefined && this.deps.claudePlan) {
+      try {
+        plan = this.deps.claudePlan(s.claudeId);
+      } catch {
+        plan = null;
+      }
+    }
+    return {
+      model: short(s.model, 80),
+      effort: short(s.effort, 20),
+      mode: (modes as readonly string[]).includes(s.mode ?? '') ? (s.mode as ReporterChatRuntime['mode']) : null,
+      claude: short(s.claudeName, 60),
+      context: ctx,
+      costUsd: num(s.costUsd),
+      plan,
     };
   }
 

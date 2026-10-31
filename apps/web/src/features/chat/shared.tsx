@@ -2,6 +2,7 @@ import { Badge, Spinner, type BadgeTone } from '@isnanme/ui';
 import { CHAT_ENDED_CREDENTIAL, CHAT_ENDED_INTEGRITY, CHAT_INELIGIBLE, type ChatSessionState } from '@portal/contracts';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError } from '@/lib/api';
+import { formatTokens, formatUsd } from './tokens';
 import { ChatAckError } from './useChatSocket';
 
 /** State → label and badge tone. `starting`/`working` spin; `waiting`/`interrupted` ask for you. */
@@ -84,15 +85,8 @@ export function timeShort(iso: string, now = Date.now()): string {
   return `${Math.round(s / (86400 * 30))}mo`;
 }
 
-/** A small dollar amount: more decimals the smaller it is, so cents still read. */
-export const formatUsd = (n: number) => `$${n.toFixed(n < 1 ? 3 : 2)}`;
-
-/** "850", "12.3k", "1.2M". */
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 999_500) return `${(n / 1000).toFixed(n < 9_950 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
-}
+/** "850", "12.3k", "1.2M"; a small dollar amount with more decimals the smaller it is (tokens.ts, shared with the reporter panel). */
+export { formatTokens, formatUsd };
 
 /** "42s", "3m 05s", "1h 12m". */
 export function formatDuration(ms: number): string {

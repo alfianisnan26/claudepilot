@@ -519,29 +519,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     <PanelContext.Provider value={state}>
       <div className="flex h-dvh flex-col overflow-hidden bg-bg text-ink">
         {/* No close button here: the SDK's frame draws the one close (it works even when this page fails to load); Esc closes too. */}
-        {/* One row (UX review 2026-10-31): the environment and Context, nothing repeated; the right end stays clear for the SDK's close X.
-            Detail views (a ticket, a chat) hide it and the tabs: their own back · title · open row is the only header. */}
-        {!detail && (
-          <header className="flex min-h-11 shrink-0 items-center gap-1 pr-14 pl-3">
-            <h1 className="sr-only">{status.bucketName || bucket}</h1>
-            {status.site && (
-              <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[12.5px] font-semibold text-ink-soft" title={`${status.bucketName || bucket} · ${status.site.repo} · ${status.site.origin}`}>
-                {status.site.environment}
-              </span>
-            )}
-            {connected && (
-              <button
-                type="button"
-                aria-label="Context"
-                title="Context"
-                onClick={() => setContextOpen('context')}
-                className="inline-flex size-11 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
-              >
-                <Icon name="info" className="size-[18px]" />
-              </button>
-            )}
-          </header>
-        )}
+        {/* One row (owner, 2026-10-31): the project's name as the title, its environment and Context right after it; the right 48 px stay
+            clear for the SDK's close X. It stays in detail views (a ticket, a chat), whose back row sits under it; the tabs hide there. */}
+        <TitleRow
+          name={status.bucketName || bucket}
+          env={status.site?.environment ?? null}
+          where={status.site ? `${status.site.repo} · ${status.site.origin}` : ''}
+          onContext={connected ? () => setContextOpen('context') : null}
+          divided={detail}
+        />
         {!connected ? (
           <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} note={ended ? 'Session ended. Connect again.' : null} />
         ) : (
@@ -744,5 +730,35 @@ export function Connect({
         </Btn>
       )}
     </div>
+  );
+}
+
+/**
+ * The panel's title row (owner, 2026-10-31): the project's name as the title (truncated), its environment as a chip and Context (i) right
+ * after it. The right 48 px stay clear for the SDK's close X. `divided`: a detail view's back row sits under it.
+ */
+export function TitleRow({ name, env, where, onContext, divided = false }: { name: string; env: string | null; where: string; onContext: (() => void) | null; divided?: boolean }) {
+  return (
+    <header className={`flex min-h-11 shrink-0 items-center gap-1.5 pr-14 pl-3 ${divided ? 'border-b border-line' : ''}`}>
+      <h1 data-testid="bucket-name" className="min-w-0 truncate text-[15px] font-semibold" title={name}>
+        {name}
+      </h1>
+      {env && (
+        <span className="shrink-0 rounded-full bg-surface-2 px-2.5 py-1 text-[12.5px] font-semibold text-ink-soft" title={where}>
+          {env}
+        </span>
+      )}
+      {onContext && (
+        <button
+          type="button"
+          aria-label="Context"
+          title="Context"
+          onClick={onContext}
+          className="-ml-1 inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        >
+          <Icon name="info" className="size-[18px]" />
+        </button>
+      )}
+    </header>
   );
 }

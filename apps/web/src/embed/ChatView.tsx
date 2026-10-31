@@ -1,11 +1,12 @@
 import { REPORTER_LIMITS, type ReporterChatMessage, type ReporterChatState } from '@portal/contracts';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { chatItems, chatStatus, mergeLines, newUuid, sessionTitle } from './chatModel';
+import { chatItems, chatStatus, mergeLines, newUuid, runtimeLine, sessionTitle } from './chatModel';
 import { Composer } from './Composer';
 import { usePanel, type ChatOpen } from './context';
 import { useBottomList } from './hooks';
 import { Icon } from './icons';
 import { Md } from './markdown';
+import { RuntimeSheet } from './RuntimeSheet';
 import { ToolActivity } from './ToolActivity';
 import { AuthImg, IconBtn, Notice } from './ui';
 import { Viewer } from './Viewer';
@@ -42,6 +43,8 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
   const [pending, setPending] = useState<{ uuid: string; text: string }[]>([]);
   const [view, setView] = useState<string | null>(null);
   const [lateFail, setLateFail] = useState<string | null>(null);
+  const [info, setInfo] = useState(false);
+  const closeInfo = useCallback(() => setInfo(false), []);
   const lastSeq = useRef(0);
   const loadingOlder = useRef(false);
   const list = useRef<HTMLDivElement>(null);
@@ -179,22 +182,31 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
   const ended = session?.state === 'ended';
   const ticketKey = open.ticketKey ?? session?.ticketKey ?? null;
   const busy = st.tone === 'busy' || st.tone === 'wait';
+  const line = runtimeLine(session?.runtime);
   // Tool calls fold into activity rows once per batch of lines (mergeLines keeps the array when a batch adds nothing).
   const items = useMemo(() => chatItems(lines, busy), [lines, busy]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-1 border-b border-line pr-12 pl-1">
+      <header className="flex shrink-0 items-center gap-1 border-b border-line pr-1 pl-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={onBack} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-semibold" title={session?.title}>
+        {/* The title and one info line (status · model · Claude · context); a tap opens the session's runtime. */}
+        <button
+          type="button"
+          onClick={() => setInfo(true)}
+          disabled={!session}
+          aria-haspopup="dialog"
+          aria-label={`${session ? sessionTitle(session.title) : 'Session'}: ${[st.word, line].filter(Boolean).join(', ')}. Session info`}
+          className="flex min-h-11 min-w-0 flex-1 flex-col justify-center rounded-xl px-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+        >
+          <span className="block w-full truncate text-[14px] font-semibold" title={session?.title}>
             {session ? sessionTitle(session.title) : 'Session'}
-          </p>
-          <p className="flex items-center gap-1.5 text-[12px] text-muted">
-            <span aria-hidden="true" className={`size-2 rounded-full ${st.tone === 'busy' ? 'bg-flame' : st.tone === 'wait' ? 'bg-gold' : st.tone === 'off' ? 'bg-line-strong' : 'bg-accent'}`} />
-            {st.word}
-          </p>
-        </div>
+          </span>
+          <span data-testid="runtime-line" className="flex w-full min-w-0 items-center gap-1.5 text-[12px] text-muted">
+            <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${st.tone === 'busy' ? 'bg-flame' : st.tone === 'wait' ? 'bg-gold' : st.tone === 'off' ? 'bg-line-strong' : 'bg-accent'}`} />
+            <span className="min-w-0 truncate">{[st.word, line].filter(Boolean).join(' · ')}</span>
+          </span>
+        </button>
         {ticketKey && (
           <button
             type="button"
@@ -309,6 +321,7 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
         />
       )}
       {view && <Viewer src={view} alt="Image" onClose={() => setView(null)} />}
+      {info && session && <RuntimeSheet runtime={session.runtime} status={st.word} onClose={closeInfo} />}
     </div>
   );
 }

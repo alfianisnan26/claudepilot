@@ -5,7 +5,7 @@
 // panel can mark the call), images by reference. Sub-agent lines, thinking, tool output, costs, system notes, a move's context and side
 // questions are left out.
 
-import type { ChatEvent, ReporterChatMessage } from '@portal/contracts';
+import type { ChatEvent, ClaudeUsage, ReporterChatMessage, ReporterChatRuntime } from '@portal/contracts';
 import { redact } from '../chat/redact.js';
 
 /** The most of one line of text the panel gets (a long answer is cut; "Open in pilot" has the whole of it). */
@@ -85,3 +85,19 @@ export function toChatMessages(events: readonly ChatEvent[], blobUrl: (blobId: s
 
 /** A message's client id: what the portal's own composer sends (a UUID). */
 export const CHAT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A Claude's plan windows for the panel's chat header, from the portal's usage snapshot as it stands (never recomputed): the session window
+ * and the week window, each its percent used and reset time. Null when the snapshot has no plan reading for it (not on a plan, signed out,
+ * not read yet: the snapshot's own `unavailable`), so the panel says "unavailable" rather than 0 %.
+ */
+export function planOf(c: Pick<ClaudeUsage, 'runsOn' | 'unavailable' | 'windows'> | null): ReporterChatRuntime['plan'] {
+  if (!c || c.runsOn !== 'plan' || c.unavailable) return null;
+  const pick = (key: string) => {
+    const w = c.windows.find((x) => x.key === key);
+    return w ? { usedPct: typeof w.usedPct === 'number' ? w.usedPct : null, resetsAt: w.resetsAt ?? null } : null;
+  };
+  const session = pick('session');
+  const week = pick('week');
+  return session || week ? { session, week } : null;
+}

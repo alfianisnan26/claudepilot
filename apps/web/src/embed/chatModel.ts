@@ -1,4 +1,7 @@
-import type { ChatEvent, ReporterChatMessage, ReporterChatState, ReporterTicket, ReporterTicketComment } from '@portal/contracts';
+import type { ChatEvent, ReporterChatMessage, ReporterChatRuntime, ReporterChatState, ReporterTicket, ReporterTicketComment, ReporterUsageWindow } from '@portal/contracts';
+import { MODE_LABELS } from '@/features/chat/modeLabels';
+import { modelShortName } from '@/features/chat/modelName';
+import { formatTokens, formatUsd } from '@/features/chat/tokens';
 import { buildRows, formatSeconds, shortTarget, toolLabel, type ToolPair, type TranscriptRow } from '@/features/chat/toolModel';
 
 /* The panel's pure rules for chat, the composer, the comment thread and the ticket list (PILOT-1111). No React, no DOM: tested directly. */
@@ -274,3 +277,52 @@ export function runTook(steps: readonly ToolPair[]): string | null {
 
 /** Rows an opened activity shows before "Show N more". */
 export const ACTIVITY_FIRST = 8;
+
+/* ---------- Session runtime (the chat header's info line and sheet) ---------- */
+
+const UNAVAILABLE = 'unavailable';
+
+/** Percent of the context window used, as the portal's context ring rounds it; null when the window is not known. */
+export const contextPct = (c: ReporterChatRuntime['context']): number | null => (c && c.windowTokens ? Math.min(100, Math.round((c.usedTokens / c.windowTokens) * 100)) : null);
+
+/** The info line under the chat title: "Opus 5.5 · Work · 42%" (model · Claude · context), only what is known. */
+export function runtimeLine(r: ReporterChatRuntime | undefined): string {
+  if (!r) return '';
+  const pct = contextPct(r.context);
+  return [modelShortName(r.model), r.claude, pct !== null ? `${pct}%` : null].filter(Boolean).join(' · ');
+}
+
+/** "in 3h 05m", "in 12m", "now": until a reset time; null when there is none or it is not a time. */
+export function resetsIn(iso: string | null, now = Date.now()): string | null {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(t)) return null;
+  const m = Math.max(0, Math.floor((t - now) / 60_000));
+  if (m < 1) return 'now';
+  if (m < 60) return `in ${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `in ${h}h ${String(m % 60).padStart(2, '0')}m`;
+  return `in ${Math.floor(h / 24)}d`;
+}
+
+const windowText = (w: ReporterUsageWindow | null, now: number) => {
+  if (!w || w.usedPct === null) return UNAVAILABLE;
+  const reset = resetsIn(w.resetsAt, now);
+  return `${Math.round(w.usedPct)}%${reset ? ` · resets ${reset}` : ''}`;
+};
+
+/** The sheet's rows: every value the portal has, "unavailable" where it has none (never a guess). */
+export function runtimeRows(r: ReporterChatRuntime | undefined, status: string, now = Date.now()): { label: string; value: string; tone?: 'danger' }[] {
+  const ctx = r?.context ?? null;
+  const pct = contextPct(ctx);
+  const mode = r?.mode ? MODE_LABELS[r.mode] : null;
+  return [
+    { label: 'Status', value: status },
+    { label: 'Model', value: r?.model ? `${modelShortName(r.model)}${r.effort ? ` · ${r.effort}` : ''}` : UNAVAILABLE },
+    { label: 'Mode', value: mode?.label ?? UNAVAILABLE, ...(mode?.danger ? { tone: 'danger' as const } : {}) },
+    { label: 'Claude', value: r?.claude ?? UNAVAILABLE },
+    { label: 'Context', value: ctx ? (pct !== null && ctx.windowTokens ? `${pct}% · ${formatTokens(ctx.usedTokens)} of ${formatTokens(ctx.windowTokens)}` : `${formatTokens(ctx.usedTokens)} tokens`) : UNAVAILABLE },
+    { label: 'Cost', value: r?.costUsd !== null && r?.costUsd !== undefined ? formatUsd(r.costUsd) : UNAVAILABLE },
+    { label: 'Plan session', value: windowText(r?.plan?.session ?? null, now) },
+    { label: 'Plan week', value: windowText(r?.plan?.week ?? null, now) },
+  ];
+}
