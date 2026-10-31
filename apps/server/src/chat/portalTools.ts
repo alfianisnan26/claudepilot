@@ -1,6 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, CHAT_SESSION_TITLE_MAX, CHAT_SPAWN_WHY_MAX, sessionRef, workerMode, workerModeAllowed, workspaceRef, type ChatControl, type ChatPermissionMode, type ChatSession, type CreateChatSessionRequest } from '@portal/contracts';
+import {
+  CHAT_AGENT_NAME,
+  CHAT_MAX_WORKERS_MAX,
+  CHAT_SESSION_TITLE_MAX,
+  CHAT_SPAWN_WHY_MAX,
+  sessionRef,
+  workerMode,
+  workerModeAllowed,
+  workspaceRef,
+  type ChatControl,
+  type ChatPermissionMode,
+  type ChatSession,
+  type CreateChatSessionRequest,
+} from '@portal/contracts';
 import { actorOfPrincipal, requireCan } from '../authz/seam.js';
 import { fullInput } from '../portalmcp/compact.js';
 import { costFields } from '../portalmcp/tools/common.js';
@@ -21,7 +34,15 @@ export interface ChatToolHost {
     opts: {
       actor: string;
       parentId: string;
-      spawn?: { claude: string; why: string; role?: string | null; model?: string | null; effort?: string | null; mode?: string | null; modelWhy?: string | null };
+      spawn?: {
+        claude: string;
+        why: string;
+        role?: string | null;
+        model?: string | null;
+        effort?: string | null;
+        mode?: string | null;
+        modelWhy?: string | null;
+      };
       /** T-294: the worker's limits; absent fields take the parent's, and none may be wider (the controller refuses). */
       limits?: { maxWorkers?: number; subagents?: boolean };
       /** T-294 (Crew over MCP): what the worker tells its lead unasked. */
@@ -40,7 +61,12 @@ export interface ChatToolHost {
   bypassPolicyOn?(): boolean;
   /** T-2997: `sessions.autonomousAuto` is on (a spawn's unasked mode is Auto, and Auto may be asked whatever the parent's mode). */
   autonomousAutoOn(): boolean;
-  send(id: string, uuid: string, text: string, opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew'; opening?: boolean }): Promise<void>;
+  send(
+    id: string,
+    uuid: string,
+    text: string,
+    opts: { actor: string; actorLabel?: string; relation?: 'parent' | 'worker' | 'crew'; opening?: boolean },
+  ): Promise<void>;
   /** T-417 review: every other message to a worker waits until its spawn delivery (`until`) settles. */
   holdInput(id: string, until: Promise<unknown>): void;
   /** T-417 review: waits for a session's start (a queued one included) to settle; true when it runs. */
@@ -49,7 +75,12 @@ export interface ChatToolHost {
   tellLead(workerId: string, text: string): Promise<void>;
   messageFamily(fromId: string, toId: string, text: string, opts?: { priority?: 'next' | 'later' }): Promise<void>;
   /** T-294: one message to every live worker, or every live crew member, of the sender; refused whole over the hourly limit. */
-  messageGroup(fromId: string, to: 'workers' | 'crew', text: string, opts?: { priority?: 'next' | 'later' }): Promise<{ sent: string[]; failed: string[] }>;
+  messageGroup(
+    fromId: string,
+    to: 'workers' | 'crew',
+    text: string,
+    opts?: { priority?: 'next' | 'later' },
+  ): Promise<{ sent: string[]; failed: string[] }>;
   /** T-294: a member's message on its crew channel (its parent's, or its own for a lead); `lead` other than that channel is NOT_FOUND. */
   crewPost(fromId: string, text: string, opts?: { lead?: string }): { id: number; at: string; lead: string };
   /** T-294: the channel's messages after the member's cursor (or `after`); the cursor moves on unless `peek`. */
@@ -61,7 +92,11 @@ export interface ChatToolHost {
   /** T-294: the other workers of a session's parent. */
   crew(id: string): ChatSession[];
   /** T-294: the Claude a worker of `parentId` starts on, and why. */
-  spawnClaude(parentId: string, want?: string, model?: string | null): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy; detail?: string }>;
+  spawnClaude(
+    parentId: string,
+    want?: string,
+    model?: string | null,
+  ): Promise<{ claudeId: string; name: string; why: SpawnClaudeWhy; detail?: string }>;
   /** T-490 (D-63): the model a role runs on by the workspace persona's agent definition, or null. Unset: none known. */
   roleModel?: (workspaceId: string, role: string) => string | null;
   /** A model, effort or mode change (the controller's rules: never Bypass from here; Auto where `autoModeAllowed` says so). */
@@ -73,18 +108,29 @@ export interface ChatToolHost {
   /** T-136: recover a session ended for integrity in place (the controller's rules: never a person's close, the cap, the pause, a suspicious cause). */
   recover(id: string, opts: { by: 'agent'; actor: string }): Promise<ChatSession>;
   /** T-284: clear a request no process can answer any more (refused for one of the live process). */
-  clearRequest(id: string, requestId: string, opts: { actor: string }): Promise<{ requestId: string; outcome: string; session: ChatSession }>;
+  clearRequest(
+    id: string,
+    requestId: string,
+    opts: { actor: string },
+  ): Promise<{ requestId: string; outcome: string; session: ChatSession }>;
 }
 
 /** The session behind an agent's token: only a session may start workers, message its family or look at it. */
 function self(ctx: PortalToolContext): string {
-  if (!ctx.isAgent || !ctx.sessionId) throw new AppError('FORBIDDEN', 'Only a chat session can do this, from inside itself. Use session_start and session_send with an admin token to start and message sessions as an admin.');
+  if (!ctx.isAgent || !ctx.sessionId)
+    throw new AppError(
+      'FORBIDDEN',
+      'Only a chat session can do this, from inside itself. Use session_start and session_send with an admin token to start and message sessions as an admin.',
+    );
   return ctx.sessionId;
 }
 
 /** A message between sessions is for the model on the other side: no slash commands, which are for people. */
 function plainText(text: string): string {
-  if (text.trimStart().startsWith('/')) throw new AppError('VALIDATION_FAILED', 'Slash commands are for people. Write the instruction in words.', { details: { text: 'No slash commands.' } });
+  if (text.trimStart().startsWith('/'))
+    throw new AppError('VALIDATION_FAILED', 'Slash commands are for people. Write the instruction in words.', {
+      details: { text: 'No slash commands.' },
+    });
   return text;
 }
 
@@ -112,7 +158,11 @@ const REPLY_WHOLE_MAX = 8_000;
 
 /** T-574: the lead's default `session_family` is one line per worker; the whole block stays under this many characters, and a cut says what it cut. */
 const FAMILY_LINES_MAX = 600;
-const firstLine = (s: string | null): string => (s ?? '').split('\n').find((l) => l.trim())?.trim() ?? '';
+const firstLine = (s: string | null): string =>
+  (s ?? '')
+    .split('\n')
+    .find((l) => l.trim())
+    ?.trim() ?? '';
 const clipTo = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 const stateOf = (c: ChatSession) => (c.waiting > 0 ? 'waiting' : c.state === 'idle' && c.process === 'asleep' ? 'asleep' : c.state);
@@ -133,12 +183,23 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     rate: { perMinute: 6, perHour: 30 },
     maxArgsBytes: 2_048,
     input: z.object({
-      title: z.string().min(1).max(CHAT_SESSION_TITLE_MAX * 2).describe(`A few words on what the chat is about, at most ${CHAT_SESSION_TITLE_MAX} characters.`),
-      session_id: z.string().max(80).optional().describe('Admin tokens only: the chat to rename. An agent is known by its own token and needs nothing here.'),
+      title: z
+        .string()
+        .min(1)
+        .max(CHAT_SESSION_TITLE_MAX * 2)
+        .describe(`A few words on what the chat is about, at most ${CHAT_SESSION_TITLE_MAX} characters.`),
+      session_id: z
+        .string()
+        .max(80)
+        .optional()
+        .describe('Admin tokens only: the chat to rename. An agent is known by its own token and needs nothing here.'),
     }),
     handler(ctx, args) {
       const id = ctx.isAgent ? (args.session_id ?? ctx.sessionId!) : args.session_id;
-      if (!id) throw new AppError('VALIDATION_FAILED', 'Say which chat with session_id.', { details: { session_id: 'Required for an admin’s token.' } });
+      if (!id)
+        throw new AppError('VALIDATION_FAILED', 'Say which chat with session_id.', {
+          details: { session_id: 'Required for an admin’s token.' },
+        });
       ctx.assertSession(id); // an agent only as its own session
       const session = chat.rename(id, args.title, { actor: ctx.actor });
       ctx.affected(`session:${session.id}`);
@@ -159,23 +220,75 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     rate: { perMinute: 10, perHour: 60 },
     maxArgsBytes: 14_000,
     input: z.object({
-      prompt: z.string().min(1).max(8000).describe('What the worker should do, with everything it needs: it has not seen this conversation.'),
+      prompt: z
+        .string()
+        .min(1)
+        .max(8000)
+        .describe('What the worker should do, with everything it needs: it has not seen this conversation.'),
       title: z.string().max(CHAT_SESSION_TITLE_MAX).optional().describe('A few words for the session list.'),
       folder: z.string().max(300).optional().describe('Where it works, inside the home folder. Default: your folder.'),
-      worktree: z.union([z.boolean(), z.object({ branch: z.string().max(100).optional(), base: z.string().max(100).optional() })]).optional().describe('Run it in a git worktree of its own: true, or the branch and the base to start from.'),
+      worktree: z
+        .union([z.boolean(), z.object({ branch: z.string().max(100).optional(), base: z.string().max(100).optional() })])
+        .optional()
+        .describe('Run it in a git worktree of its own: true, or the branch and the base to start from.'),
       claude: z.string().min(1).max(80).optional().describe(`Which Claude it runs on: ${SPAWN_CLAUDE_HELP}.`),
-      role: z.string().regex(CHAT_AGENT_NAME).optional().describe('An agent definition in its folder (.claude/agents/<role>.md, e.g. implementer, qa-verifier): it runs as that agent, with its prompt, its tools and, unless model is given, its model (the workspace persona’s, set before its first instruction). A name with no definition there is ignored by Claude Code.'),
-      model: z.string().min(1).max(80).optional().describe('Its model (sonnet, opus, haiku or a full id), set before its first instruction. Default: its role’s model, if the persona gives one. Opus or fable for a role on sonnet needs why (D-63).'),
-      why: z.string().min(1).max(CHAT_SPAWN_WHY_MAX).optional().describe('D-63: why this worker needs a model above its role’s (e.g. opus for a QA or review role): a gate, release or security check, or a slice too large for sonnet. Kept on the worker; the crew scorecard counts it.'),
+      role: z
+        .string()
+        .regex(CHAT_AGENT_NAME)
+        .optional()
+        .describe(
+          'An agent definition in its folder (.claude/agents/<role>.md, e.g. implementer, qa-verifier): it runs as that agent, with its prompt, its tools and, unless model is given, its model (the workspace persona’s, set before its first instruction). A name with no definition there is ignored by Claude Code.',
+        ),
+      model: z
+        .string()
+        .min(1)
+        .max(80)
+        .optional()
+        .describe(
+          'Its model (sonnet, opus, haiku or a full id), set before its first instruction. Default: its role’s model, if the persona gives one. Opus or fable for a role on sonnet needs why (D-63).',
+        ),
+      why: z
+        .string()
+        .min(1)
+        .max(CHAT_SPAWN_WHY_MAX)
+        .optional()
+        .describe(
+          'D-63: why this worker needs a model above its role’s (e.g. opus for a QA or review role): a gate, release or security check, or a slice too large for sonnet. Kept on the worker; the crew scorecard counts it.',
+        ),
       effort: z.string().min(1).max(20).optional().describe('Its effort level (low, medium, high), set before its first instruction.'),
-      mode: z.enum(WORKER_MODES).optional().describe('Its permission mode: auto whatever your mode while Settings › Sessions › Auto for agents is on; any other, never wider than yours (plan < dontAsk < default < acceptEdits < auto); never bypassPermissions. While you are in Bypass now and the policy allows it, unset or auto gives Bypass (the portal’s gated inherit; refused, auto and the result says why); a narrower mode asked is kept. Otherwise default: auto (with Auto for agents off: yours, and dontAsk when you are in default). dontAsk runs only what the folder allows and refuses the rest at once; plan changes no file; default asks a person (only when one is there to answer).'),
+      mode: z
+        .enum(WORKER_MODES)
+        .optional()
+        .describe(
+          'Its permission mode: auto whatever your mode while Settings › Sessions › Auto for agents is on; any other, never wider than yours (plan < dontAsk < default < acceptEdits < auto); never bypassPermissions. While you are in Bypass now and the policy allows it, unset or auto gives Bypass (the portal’s gated inherit; refused, auto and the result says why); a narrower mode asked is kept. Otherwise default: auto (with Auto for agents off: yours, and dontAsk when you are in default). dontAsk runs only what the folder allows and refuses the rest at once; plan changes no file; default asks a person (only when one is there to answer).',
+        ),
       // T-294: the worker's own limits, never wider than yours (absent: yours).
-      max_workers: z.number().int().min(0).max(CHAT_MAX_WORKERS_MAX).optional().describe('How many workers it may run at once (0: none), at most your own limit. Default: your limit.'),
-      subagents: z.boolean().optional().describe('Whether it may start Claude Code sub-agents (the Agent tool). Default: as you; on only if yours are on.'),
+      max_workers: z
+        .number()
+        .int()
+        .min(0)
+        .max(CHAT_MAX_WORKERS_MAX)
+        .optional()
+        .describe('How many workers it may run at once (0: none), at most your own limit. Default: your limit.'),
+      subagents: z
+        .boolean()
+        .optional()
+        .describe('Whether it may start Claude Code sub-agents (the Agent tool). Default: as you; on only if yours are on.'),
       // T-294 (Crew over MCP): what the worker tells you unasked.
-      report: z.enum(WORKER_REPORTS).optional().describe('What the portal tells you about it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
+      report: z
+        .enum(WORKER_REPORTS)
+        .optional()
+        .describe(
+          'What the portal tells you about it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.',
+        ),
       // T-449: the ticket the worker works on (usage attribution reads the session's ticket).
-      ticket: z.string().regex(/^(?:T-\d{1,9}|[A-Za-z]{2,6}-\d{1,9})$/).optional().describe('The ticket it works on (T-n or its bucket key, KONF-3; stored as T-n): its cost counts under that ticket in usage_attribution. An unknown ticket is refused as not found. Default: none (No ticket).'),
+      ticket: z
+        .string()
+        .regex(/^(?:T-\d{1,9}|[A-Za-z]{2,6}-\d{1,9})$/)
+        .optional()
+        .describe(
+          'The ticket it works on (T-n or its bucket key, KONF-3; stored as T-n): its cost counts under that ticket in usage_attribution. An unknown ticket is refused as not found. Default: none (No ticket).',
+        ),
     }),
     async handler(ctx, args) {
       const parentId = self(ctx);
@@ -219,9 +332,22 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         {
           actor: ctx.actor,
           parentId,
-          spawn: { claude: on.claudeId, why: on.why, role: args.role ?? null, model: pick.model, effort: args.effort ?? null, mode, modelWhy: args.why ?? null },
+          spawn: {
+            claude: on.claudeId,
+            why: on.why,
+            role: args.role ?? null,
+            model: pick.model,
+            effort: args.effort ?? null,
+            mode,
+            modelWhy: args.why ?? null,
+          },
           ...(args.max_workers !== undefined || args.subagents !== undefined
-            ? { limits: { ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}), ...(args.subagents !== undefined ? { subagents: args.subagents } : {}) } }
+            ? {
+                limits: {
+                  ...(args.max_workers !== undefined ? { maxWorkers: args.max_workers } : {}),
+                  ...(args.subagents !== undefined ? { subagents: args.subagents } : {}),
+                },
+              }
             : {}),
           ...(args.report ? { report: args.report } : {}),
           ...(mode === 'bypassPermissions' ? { inheritBypass: true } : {}),
@@ -246,7 +372,10 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         } catch (e) {
           if (args.mode && NARROWING.has(args.mode)) {
             await chat.end(child.id).catch(() => undefined);
-            throw new AppError('CONFLICT', `The worker could not be confirmed in ${args.mode} mode (${whyOf(e)}), so it was ended before it got any instruction. Try again.`);
+            throw new AppError(
+              'CONFLICT',
+              `The worker could not be confirmed in ${args.mode} mode (${whyOf(e)}), so it was ended before it got any instruction. Try again.`,
+            );
           }
           unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
         }
@@ -269,9 +398,16 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           }
         }
         // Claude Code runs an agent name it has no definition for as the default, silently: one line lets the worker say so (T-294 slice 2).
-        const first = args.role ? `[Your role: ${args.role}. If your instructions do not describe this role (its agent file, in the folder's .claude/agents or the workspace persona's), tell your parent with session_message before you start.]\n\n${args.prompt}` : args.prompt;
+        const first = args.role
+          ? `[Your role: ${args.role}. If your instructions do not describe this role (its agent file, in the folder's .claude/agents or the workspace persona's), tell your parent with session_message before you start.]\n\n${args.prompt}`
+          : args.prompt;
         // From its parent, said so in the frame its Claude reads (T-294 QA: the first instruction said "another session").
-        await chat.send(child.id, randomUUID(), first, { actor: ctx.actor, relation: 'parent', opening: true, ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}) });
+        await chat.send(child.id, randomUUID(), first, {
+          actor: ctx.actor,
+          relation: 'parent',
+          opening: true,
+          ...(ctx.actorLabel ? { actorLabel: ctx.actorLabel } : {}),
+        });
       };
       // T-417: the live cap is full and nothing may sleep: the worker waits for a slot. The caller learns it at once (not after the wait);
       // its settings and its first instruction follow when it starts. A queued start that fails ends the worker at once (no control call
@@ -282,13 +418,17 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         if (!(await chat.startSettled(child.id))) {
           const why = chat.get(child.id)?.endedReason;
           await chat.end(child.id).catch(() => undefined);
-          return void (await tell(`Worker ${child.id} could not start${why ? ` (${why.slice(0, 200)})` : ''}, so it was ended before it got any instruction.`));
+          return void (await tell(
+            `Worker ${child.id} could not start${why ? ` (${why.slice(0, 200)})` : ''}, so it was ended before it got any instruction.`,
+          ));
         }
         try {
           await deliver();
         } catch (e) {
           await chat.end(child.id).catch(() => undefined);
-          return void (await tell(`Worker ${child.id} was ended before it got your instruction: ${e instanceof Error ? e.message.slice(0, 200) : 'its settings failed'}.`));
+          return void (await tell(
+            `Worker ${child.id} was ended before it got your instruction: ${e instanceof Error ? e.message.slice(0, 200) : 'its settings failed'}.`,
+          ));
         }
         if (unconfirmed.length) await tell(`Worker ${child.id} started with your instruction. Not confirmed: ${unconfirmed.join('; ')}.`);
       };
@@ -338,15 +478,26 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     rate: { perMinute: 20 },
     maxArgsBytes: 10_000,
     input: z.object({
-      session_id: z.string().max(80).optional().describe('Your parent’s, a worker’s or a crew member’s id (session_family lists them). Either this or to.'),
-      to: z.enum(['workers', 'crew']).optional().describe('Instead of session_id: every live worker you started (workers), or every live worker of your parent but you (crew).'),
+      session_id: z
+        .string()
+        .max(80)
+        .optional()
+        .describe('Your parent’s, a worker’s or a crew member’s id (session_family lists them). Either this or to.'),
+      to: z
+        .enum(['workers', 'crew'])
+        .optional()
+        .describe('Instead of session_id: every live worker you started (workers), or every live worker of your parent but you (crew).'),
       text: z.string().min(1).max(8000),
       priority: z.enum(['next', 'later']).optional().describe('next steers the turn now running; later waits for it to end (default).'),
     }),
     async handler(ctx, args) {
       const from = self(ctx);
       if ((args.session_id === undefined) === (args.to === undefined)) {
-        throw new AppError('VALIDATION_FAILED', 'Say who gets it: session_id for one session, or to for all your workers or your crew, not both.', { details: { to: 'Exactly one of session_id and to.' } });
+        throw new AppError(
+          'VALIDATION_FAILED',
+          'Say who gets it: session_id for one session, or to for all your workers or your crew, not both.',
+          { details: { to: 'Exactly one of session_id and to.' } },
+        );
       }
       const text = plainText(args.text);
       const opts = args.priority ? { priority: args.priority } : {};
@@ -413,11 +564,19 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         ...(args.peek ? { peek: true } : {}),
       });
       return {
-        summary: r.items.length ? `${r.items.length} ${r.items.length === 1 ? 'message' : 'messages'}${r.more ? ', more to read' : ''}.` : 'No new messages.',
+        summary: r.items.length
+          ? `${r.items.length} ${r.items.length === 1 ? 'message' : 'messages'}${r.more ? ', more to read' : ''}.`
+          : 'No new messages.',
         lead: r.lead,
         cursor: r.cursor,
         more: r.more,
-        messages: r.items.map((m) => ({ id: m.id, from: m.from, at: m.at, own: m.from === from, text: ctx.untrusted(m.text, 'agent', 4000) })),
+        messages: r.items.map((m) => ({
+          id: m.id,
+          from: m.from,
+          at: m.at,
+          own: m.from === from,
+          text: ctx.untrusted(m.text, 'agent', 4000),
+        })),
       };
     },
   });
@@ -431,9 +590,24 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     hints: { readOnly: true, idempotent: true },
     input: z.object({
       ...fullInput,
-      view: z.enum(['lines', 'detail']).optional().describe('lines: one line per worker (the default for a session that has workers). detail: the full rows (the default for a session without workers).'),
-      worker_id: z.string().max(80).optional().describe('One member’s full row (a worker, crew member or your parent), by id or its first 8 characters, instead of the list.'),
-      reply_of: z.string().max(80).optional().describe('A worker’s, crew member’s or your parent’s id: returns its latest reply whole (up to 8,000 characters), untrusted text, instead of the family view.'),
+      view: z
+        .enum(['lines', 'detail'])
+        .optional()
+        .describe(
+          'lines: one line per worker (the default for a session that has workers). detail: the full rows (the default for a session without workers).',
+        ),
+      worker_id: z
+        .string()
+        .max(80)
+        .optional()
+        .describe('One member’s full row (a worker, crew member or your parent), by id or its first 8 characters, instead of the list.'),
+      reply_of: z
+        .string()
+        .max(80)
+        .optional()
+        .describe(
+          'A worker’s, crew member’s or your parent’s id: returns its latest reply whole (up to 8,000 characters), untrusted text, instead of the family view.',
+        ),
     }),
     handler(ctx, args) {
       const me = chat.get(self(ctx));
@@ -441,8 +615,10 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       // T-294: one member's whole latest reply (the report line quotes only its head). Only its family; anyone else is the same 404 as none.
       if (args.reply_of) {
         const other = chat.get(args.reply_of);
-        const family = !!other && (other.parentId === me.id || (!!me.parentId && (other.id === me.parentId || other.parentId === me.parentId)));
-        if (!other || !family || other.id === me.id) throw new AppError('NOT_FOUND', 'No such session in your family: your parent, your workers and your crew.');
+        const family =
+          !!other && (other.parentId === me.id || (!!me.parentId && (other.id === me.parentId || other.parentId === me.parentId)));
+        if (!other || !family || other.id === me.id)
+          throw new AppError('NOT_FOUND', 'No such session in your family: your parent, your workers and your crew.');
         const reply = chat.lastReply(other.id);
         return {
           summary: reply ? `The latest reply of “${other.title}” (${other.state}).` : `“${other.title}” has not replied yet.`,
@@ -458,7 +634,8 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       if (args.worker_id) {
         const want = args.worker_id;
         const is = (s: ChatSession) => s.id !== me.id && (s.id === want || (want.length >= 8 && s.id.startsWith(want)));
-        if (![...workers, ...crew, ...(parent ? [parent] : [])].some(is)) throw new AppError('NOT_FOUND', 'No such session in your family: your parent, your workers and your crew.');
+        if (![...workers, ...crew, ...(parent ? [parent] : [])].some(is))
+          throw new AppError('NOT_FOUND', 'No such session in your family: your parent, your workers and your crew.');
         workers = workers.filter(is);
         crew = crew.filter(is);
         parent = parent && is(parent) ? parent : null;
@@ -484,7 +661,11 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       });
       const waiting = [...workers, ...crew].filter((s) => s.state !== 'ended' && s.waiting > 0).length;
       const head =
-        (workers.length ? `${workers.length} ${workers.length === 1 ? 'worker' : 'workers'}: ${stateCounts(workers)}.` : parent ? 'You were started by another session and have no workers.' : 'No parent, no workers.') +
+        (workers.length
+          ? `${workers.length} ${workers.length === 1 ? 'worker' : 'workers'}: ${stateCounts(workers)}.`
+          : parent
+            ? 'You were started by another session and have no workers.'
+            : 'No parent, no workers.') +
         (crew.length ? ` Crew: ${crew.length} (${stateCounts(crew)}).` : '') +
         (waiting ? ` ${waiting} ${waiting === 1 ? 'waits' : 'wait'} on a person.` : '');
       if (lines) {
@@ -494,7 +675,16 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         for (const w of workers) {
           // The row carries no id: its number is the place of the worker in `workers` (the full id is there once, not twice).
           // A field that is empty (no model yet, no ticket, no report) is left out, not printed as a dash.
-          const row = [rows.length + 1, clipTo(w.title.replace(/\s+/g, ' '), 16), stateOf(w), (w.model ?? '').replace(/^claude-/, ''), w.ticketId ?? '', clipTo(firstLine(chat.lastReply(w.id)), 24)].filter((x) => x !== '').join(' ');
+          const row = [
+            rows.length + 1,
+            clipTo(w.title.replace(/\s+/g, ' '), 16),
+            stateOf(w),
+            (w.model ?? '').replace(/^claude-/, ''),
+            w.ticketId ?? '',
+            clipTo(firstLine(chat.lastReply(w.id)), 24),
+          ]
+            .filter((x) => x !== '')
+            .join(' ');
           if (size + row.length + 1 > FAMILY_LINES_MAX) break;
           rows.push(row);
           listed.push({ id: w.id });
@@ -507,7 +697,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
           // workers stays an array of objects with only the full id (readers of the detail view); the text of the lines is one labelled block.
           workers: listed,
           lines: ctx.untrusted(rows.join('\n'), 'agent', FAMILY_LINES_MAX),
-          ...(left > 0 ? { cut: [`${left} of ${workers.length} workers not listed (size cap): worker_id for one, view detail for all.`] } : {}),
+          ...(left > 0
+            ? { cut: [`${left} of ${workers.length} workers not listed (size cap): worker_id for one, view detail for all.`] }
+            : {}),
           more: 'worker_id, reply_of, view detail',
         };
       }
@@ -527,7 +719,10 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     scope: 'agent',
     hints: { idempotent: true },
     rate: { perMinute: 20 },
-    input: z.object({ session_id: z.string().max(80), action: z.enum(['interrupt', 'end']).describe('interrupt stops the turn now running and leaves the session open; end closes it.') }),
+    input: z.object({
+      session_id: z.string().max(80),
+      action: z.enum(['interrupt', 'end']).describe('interrupt stops the turn now running and leaves the session open; end closes it.'),
+    }),
     async handler(ctx, args) {
       const me = self(ctx);
       const worker = chat.get(args.session_id);
@@ -547,7 +742,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     name: 'session_recover',
     title: 'Recover an ended session in place',
     description:
-      'Brings a chat session that ENDED FOR INTEGRITY back as the same session: the same id, title, pin, tags, tickets and cost, its conversation resumed from where it stopped (the line that ended it is not read again), with a short continuation message. Refused for a session a person closed or one that ended otherwise, when the line that ended it is suspicious (only a person can bring that back, in the app), past the day\'s cap, and right after another recovery. Asks for confirmation first.',
+      "Brings a chat session that ENDED FOR INTEGRITY back as the same session: the same id, title, pin, tags, tickets and cost, its conversation resumed from where it stopped (the line that ended it is not read again), with a short continuation message. Refused for a session a person closed or one that ended otherwise, when the line that ended it is suspicious (only a person can bring that back, in the app), past the day's cap, and right after another recovery. Asks for confirmation first.",
     scope: 'agent',
     rate: { perMinute: 6, perHour: 30 },
     input: z.object({
@@ -568,21 +763,26 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       }
       if (!s || !reachable) throw new AppError('NOT_FOUND', 'No such session.');
       // Anything the rules refuse (a person's close, a suspicious cause, the cap, the pause) is refused now, without a confirmation.
-      if (s.state !== 'ended' || !s.endedFor || s.endedFor.classified !== 'harmless') await chat.recover(s.id, { by: 'agent', actor: ctx.actor });
+      if (s.state !== 'ended' || !s.endedFor || s.endedFor.classified !== 'harmless')
+        await chat.recover(s.id, { by: 'agent', actor: ctx.actor });
       const gate = ctx.confirm(
         args,
         {
           session_id: s.id,
           title: ctx.untrusted(s.title, 'agent', 120),
           ended_for: { reason: s.endedFor!.reason, classified: s.endedFor!.classified, origin: s.endedFor!.origin },
-          changes: 'A new Claude Code process resumes this session’s conversation in place (the same row); its old sub-agents stay stopped; a short continuation message is sent.',
+          changes:
+            'A new Claude Code process resumes this session’s conversation in place (the same row); its old sub-agents stay stopped; a short continuation message is sent.',
         },
         `${s.id}:${s.endedReason ?? ''}`,
       );
       if (gate) return gate;
       const back = await chat.recover(s.id, { by: 'agent', actor: ctx.actor });
       ctx.affected(`session:${back.id}`);
-      return { summary: `Recovered ${back.id} in place (${back.state}${back.mode === 'bypassPermissions' ? ', Bypass kept' : ''}).`, session: { id: back.id, state: back.state, mode: back.mode } };
+      return {
+        summary: `Recovered ${back.id} in place (${back.state}${back.mode === 'bypassPermissions' ? ', Bypass kept' : ''}).`,
+        session: { id: back.id, state: back.state, mode: back.mode },
+      };
     },
   });
 
@@ -615,7 +815,12 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       if (!s || !reachable) throw new AppError('NOT_FOUND', 'No such session.');
       const done = await chat.clearRequest(s.id, args.request_id, { actor: ctx.actor });
       ctx.affected(`session:${s.id}`);
-      return { summary: `Cleared request ${done.requestId} (${done.outcome}).`, request_id: done.requestId, outcome: done.outcome, session: { id: done.session.id, state: done.session.state, waiting: done.session.waiting } };
+      return {
+        summary: `Cleared request ${done.requestId} (${done.outcome}).`,
+        request_id: done.requestId,
+        outcome: done.outcome,
+        session: { id: done.session.id, state: done.session.state, waiting: done.session.waiting },
+      };
     },
   });
 }

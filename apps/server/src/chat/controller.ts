@@ -326,7 +326,18 @@ const BYPASS_KEEP_ASKS: ReadonlySet<string> = new Set(['AskUserQuestion', 'ExitP
  * never undone: `mode` (a person's or a token's own switch), `policy`, the gate refusals (`not_capable`, `not_lead`, `not_confirmed`,
  * `parent_not_bypass`), `downgrade`, `ended`, and Keep going's own failed try.
  */
-const BYPASS_LOST: ReadonlySet<string> = new Set(['sleep', 'stopped', 'lost_touch', 'restart', 'restart_unfinished', 'move_failed', 'restart_failed', 'wake_failed', 'lost_failed', 'recover_failed']);
+const BYPASS_LOST: ReadonlySet<string> = new Set([
+  'sleep',
+  'stopped',
+  'lost_touch',
+  'restart',
+  'restart_unfinished',
+  'move_failed',
+  'restart_failed',
+  'wake_failed',
+  'lost_failed',
+  'recover_failed',
+]);
 /** PILOT-996: why Auto was refused, and what to do about it (it replaced "Auto is only for sessions a person started here…"). */
 export const AUTO_REFUSED = {
   parent:
@@ -619,7 +630,8 @@ export const CREW_REPORT_ACTOR = 'portal:crew';
 /** T-1966: the audit kinds of a person's Stop hold (`crewhold.set`, `crewhold.lifted`). */
 const HOLD_KIND = 'crewhold';
 /** A person at the keyboard (`ui`, the default) or signed in with a shared account (`account:<id>`). */
-const isPersonActor = (actor: string | undefined): boolean => actor === undefined || actor === CHAT_ACTOR_UI || actor.startsWith('account:');
+const isPersonActor = (actor: string | undefined): boolean =>
+  actor === undefined || actor === CHAT_ACTOR_UI || actor.startsWith('account:');
 /** T-3215: an agent session (its session_message, its spawn): it waits on a tool call, so a slot wait for it is short. */
 const isAgentActor = (actor: string | undefined): boolean => !!actor && actor.startsWith('session:');
 /** T-546: a report quotes at most this much of the first line of the worker's latest reply (its verdict or DONE, and the sha). */
@@ -912,7 +924,12 @@ export class ChatController {
       throw new Error(`no free slot to start it (${child.slotWait})`);
     }
     if (mode !== 'bypassPermissions' || !(await this.inheritBypass(child.id)))
-      await this.control(child.id, 'mode', { mode: mode === 'bypassPermissions' ? this.bypassNotKeptMode(child.id) : mode }, { actor: HANDOFF_ACTOR });
+      await this.control(
+        child.id,
+        'mode',
+        { mode: mode === 'bypassPermissions' ? this.bypassNotKeptMode(child.id) : mode },
+        { actor: HANDOFF_ACTOR },
+      );
     await this.control(child.id, 'model', { model: 'sonnet' }, { actor: HANDOFF_ACTOR });
     const prompt =
       `[Your role: ${HANDOFF_QA}.] Verify ${a.ticket} at commit ${a.sha} (the implementer's branch ticket/${a.ticket}-*, fetched from origin). ` +
@@ -1419,7 +1436,9 @@ export class ChatController {
     this.#workspaceGone.set(workspaceId, { since, last: now });
     if (now - since >= this.#workspaceGoneMs) return 'gone'; // it lasted: they all ended (the workspace restarted, say)
     if (since === now)
-      console.warn(`[chat] ${workspaceId}: all ${others.length + 1} live sessions read gone at once; a workspace fault until it lasts, nothing marked (T-1650)`);
+      console.warn(
+        `[chat] ${workspaceId}: all ${others.length + 1} live sessions read gone at once; a workspace fault until it lasts, nothing marked (T-1650)`,
+      );
     return 'unknown';
   }
 
@@ -1428,7 +1447,10 @@ export class ChatController {
     const running = this.#workspaceProbe.get(workspaceId);
     if (running) return running;
     const p = (async () => {
-      const csids = this.#chat.liveRows().filter((r) => r.workspace_id === workspaceId).map(claudeSessionOf);
+      const csids = this.#chat
+        .liveRows()
+        .filter((r) => r.workspace_id === workspaceId)
+        .map(claudeSessionOf);
       const readings = await Promise.all(csids.map(async (c) => [c, await this.#status(workspaceId, c)] as const));
       return new Set(readings.filter(([, s]) => s === 'live').map(([c]) => c));
     })().finally(() => this.#workspaceProbe.delete(workspaceId));
@@ -2789,7 +2811,8 @@ export class ChatController {
       // T-1692: a lead whose sleep (or vanishing) kept its Bypass reads the start mode while nothing runs; the move is its wake, so the
       // move puts it back the way the wake would have (`#keepBypass('wake' | 'lost')`, every gate and the lead's own asked again). Before,
       // an automatic move of a sleeping lead woke it on the new Claude in the start mode for good (general and Metocean leads, 2026-10-20).
-      const pausedBypass = !wasBypass && row.process !== 'live' && this.#sleptInBypass(sessionId) ? (row.process === 'asleep' ? 'wake' : 'lost') : null;
+      const pausedBypass =
+        !wasBypass && row.process !== 'live' && this.#sleptInBypass(sessionId) ? (row.process === 'asleep' ? 'wake' : 'lost') : null;
       const r = await this.#hostStart(workspaceId, {
         sessionId,
         csid: newCsid,
@@ -4207,7 +4230,8 @@ export class ChatController {
       // the way Bypass treats them; deny rules never reach a card, a request not shown whole stays for a person (`#respond` refuses it).
       // PILOT-996: never a question or a plan's exit (they are a person's or the model's own call, not a tool Bypass would run).
       for (const req of this.#chat.openRequests(sessionId))
-        if (req.kind === 'tool' && !BYPASS_KEEP_ASKS.has(req.toolName ?? '')) await this.#respond(sessionId, req.requestId, 'allow', { actor: 'portal:bypass-kept' }).catch(() => undefined);
+        if (req.kind === 'tool' && !BYPASS_KEEP_ASKS.has(req.toolName ?? ''))
+          await this.#respond(sessionId, req.requestId, 'allow', { actor: 'portal:bypass-kept' }).catch(() => undefined);
       this.#chat.addAudit({
         severity: 'high',
         kind: 'bypass.entered',
@@ -4359,11 +4383,14 @@ export class ChatController {
   bypassNow(rawId: string): boolean {
     const id = this.#chat.resolveId(rawId);
     const row = this.#chat.row(id);
-    if (!row || row.state === 'ended' || row.process !== 'live' || row.bypass_capable !== 1 || row.mode !== 'bypassPermissions') return false;
+    if (!row || row.state === 'ended' || row.process !== 'live' || row.bypass_capable !== 1 || row.mode !== 'bypassPermissions')
+      return false;
     if (!this.#bypassAllowed() || this.#leaving.has(id)) return false;
     const track = this.#modes.get(id) ?? readControl(row.control_state, controlProc(row))?.mode ?? null;
     if (!track || track.expected !== 'bypassPermissions' || track.bypassPending) return false;
-    const last = this.#chat.audit({ kind: 'bypass', sessionId: id, limit: 50 }).find((a) => a.kind === 'bypass.entered' || a.kind === 'bypass.left');
+    const last = this.#chat
+      .audit({ kind: 'bypass', sessionId: id, limit: 50 })
+      .find((a) => a.kind === 'bypass.entered' || a.kind === 'bypass.left');
     return last?.kind === 'bypass.entered';
   }
 
@@ -4442,7 +4469,13 @@ export class ChatController {
       const held = this.#chat.audit({ kind: HOLD_KIND, sessionId, limit: 1 })[0]?.kind === `${HOLD_KIND}.set`;
       if (held === set) return;
       const row = this.#chat.row(sessionId);
-      this.#chat.addAudit({ severity: 'info', kind: `${HOLD_KIND}.${set ? 'set' : 'lifted'}`, sessionId, workspaceId: row?.workspace_id ?? null, actor });
+      this.#chat.addAudit({
+        severity: 'info',
+        kind: `${HOLD_KIND}.${set ? 'set' : 'lifted'}`,
+        sessionId,
+        workspaceId: row?.workspace_id ?? null,
+        actor,
+      });
     } catch {
       // the store is unavailable: the in-memory hold decides until the portal restarts
     }
@@ -5023,7 +5056,8 @@ export class ChatController {
         if (row.process === 'gone') continue; // a gone process is never relaunched for a wake
         if (this.#crewHeld.has(leadId)) continue; // a person stopped it
         if (this.#slotWaits.has(leadId)) continue; // its wake waits for a slot under the cap
-        if (this.#busy.has(leadId) || this.#moving.has(leadId) || this.#restarting.has(leadId) || this.#chat.hasOpenInputs(leadId)) continue;
+        if (this.#busy.has(leadId) || this.#moving.has(leadId) || this.#restarting.has(leadId) || this.#chat.hasOpenInputs(leadId))
+          continue;
         const since = this.#idleSince(row);
         if (now - since < windowMs) continue;
         const last = this.#crewWoke.get(leadId);
@@ -5104,7 +5138,9 @@ export class ChatController {
       for (const r of ready.slice(0, WAKE_READY_LINES)) lines.push(`- ${crewQuote(r.ticket, 20)}: ${crewQuote(r.role, 10)} PASS`);
     }
     lines.push(
-      ready.length ? 'Close what is done, dispatch idle lanes. Close or merge these before new dispatch.' : 'Close what is done, dispatch idle lanes.',
+      ready.length
+        ? 'Close what is done, dispatch idle lanes. Close or merge these before new dispatch.'
+        : 'Close what is done, dispatch idle lanes.',
     );
     return lines.join('\n');
   }
@@ -6902,7 +6938,11 @@ export class ChatController {
     }
     // A sub-agent's SendMessage to the main conversation, delivered: only with its cause in this process's stream (T-136). An Agent-tool
     // sub-agent's final report (handback): only from a sub-agent this process showed as its own (T-3025).
-    if (replay.origin?.kind === 'peer' && replay.peer && (this.#handedBack(sessionId, replay.peer) || this.#peerCaused(sessionId, replay.peer))) {
+    if (
+      replay.origin?.kind === 'peer' &&
+      replay.peer &&
+      (this.#handedBack(sessionId, replay.peer) || this.#peerCaused(sessionId, replay.peer))
+    ) {
       // Should Claude Code report that line's command later (not seen yet), its lifecycle is the harness's, like a T-99 turn.
       if (replay.uuid) {
         this.#chat.addControl(sessionId, HARNESS_COMMAND(replay.uuid));

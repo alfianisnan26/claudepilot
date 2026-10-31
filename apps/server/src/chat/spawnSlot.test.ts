@@ -119,7 +119,9 @@ test('T-3222: a worker queued for a slot shows its planned mode while its stored
     assert.equal(r.s.controller.list().find((s) => s.id === id)?.plannedMode, 'dontAsk', 'the session list shows it too');
     // The lead's session_family shows the planned mode, marked as planned.
     const family = await r.h.call(r.a.secret, 'session_family', { view: 'detail' });
-    const row = (family.result!.structuredContent.workers as { id: string; mode: string; mode_planned?: boolean }[]).find((w) => w.id === id)!;
+    const row = (family.result!.structuredContent.workers as { id: string; mode: string; mode_planned?: boolean }[]).find(
+      (w) => w.id === id,
+    )!;
     assert.deepEqual([row.mode, row.mode_planned], ['dontAsk', true]);
 
     // The slot frees: the process starts, the mode control runs, and the real mode is what shows.
@@ -146,7 +148,11 @@ test('T-3222: the planned mode skips no permission check: Auto planned while que
     const spawned = await r.h.call(r.a.secret, 'session_spawn', { prompt: 'Run the job.', title: 'Auto worker', mode: 'auto' });
     assert.equal(spawned.result?.isError, undefined, JSON.stringify(spawned.raw));
     const id = (spawned.result!.structuredContent.session as { id: string }).id;
-    assert.deepEqual([r.s.controller.get(id)!.plannedMode, r.s.controller.get(id)!.mode], ['auto', 'default'], 'Auto planned, nothing applied');
+    assert.deepEqual(
+      [r.s.controller.get(id)!.plannedMode, r.s.controller.get(id)!.mode],
+      ['auto', 'default'],
+      'Auto planned, nothing applied',
+    );
     // "Auto for agents" goes off while it waits: the check at start must refuse Auto, whatever the planned mode says.
     autoForAgents = false;
     const sends = r.s.ws.sends.length;
@@ -162,13 +168,21 @@ test('T-3222: the planned mode skips no permission check: Auto planned while que
     );
     assert.equal(r.s.controller.audit({ kind: 'mode.auto' }).filter((x) => x.sessionId === id).length, 0, 'no Auto audited');
     assert.equal(
-      controls({ sends: r.s.ws.sends.slice(sends) } as unknown as Live['ws']).filter((c) => c.request.subtype === 'set_permission_mode' && c.request.mode === 'auto').length,
+      controls({ sends: r.s.ws.sends.slice(sends) } as unknown as Live['ws']).filter(
+        (c) => c.request.subtype === 'set_permission_mode' && c.request.mode === 'auto',
+      ).length,
       0,
       'Auto never reached the process',
     );
     const now = r.s.controller.get(id)!;
     assert.deepEqual([now.mode, now.plannedMode], ['default', undefined], 'the real mode shows, not the planned Auto');
-    await until(() => spawnReports(r.s).some((t) => t.includes(`Worker ${id} started with your instruction. Not confirmed: mode auto: Auto is off for this worker`)), 4000);
+    await until(
+      () =>
+        spawnReports(r.s).some((t) =>
+          t.includes(`Worker ${id} started with your instruction. Not confirmed: mode auto: Auto is off for this worker`),
+        ),
+      4000,
+    );
   } finally {
     await r.done();
   }

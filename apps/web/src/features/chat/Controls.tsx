@@ -1,16 +1,6 @@
 import { Button, cn, Dialog, Spinner, SwitchRow } from '@isnanme/ui';
 import { autoModeAllowed, type ChatBypassState, type ChatModelOption, type ChatPermissionMode, type ChatSession } from '@portal/contracts';
-import {
-  Check,
-  FilePen,
-  Hand,
-  ListChecks,
-  ShieldAlert,
-  ShieldCheck,
-  ShieldOff,
-  Zap,
-  type LucideIcon,
-} from 'lucide-react';
+import { Check, FilePen, Hand, ListChecks, ShieldAlert, ShieldCheck, ShieldOff, Zap, type LucideIcon } from 'lucide-react';
 import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { errorText } from '@/lib/api';
@@ -437,13 +427,25 @@ function ModePicker({
   const options: Option[] = OFFERED_MODES.map((m) => {
     const { label, hint, icon: Icon } = MODES[m];
     const blocked = m === 'auto' && !autoAllowed && mode !== 'auto';
-    return { value: m, label, hint: blocked ? 'Off for agents: Settings › Sessions.' : hint, icon: <Icon className="size-4" />, disabled: blocked };
+    return {
+      value: m,
+      label,
+      hint: blocked ? 'Off for agents: Settings › Sessions.' : hint,
+      icon: <Icon className="size-4" />,
+      disabled: blocked,
+    };
   });
   // Bypass, in the danger colour, only where the policy allows it: its own row once the session can enter it, else the restart that makes it so.
   if (bypass?.allowed && !bypass.active)
     options.push(
       bypass.capable
-        ? { value: 'bypassPermissions', label: MODES.bypassPermissions.label, hint: MODES.bypassPermissions.hint, icon: <ShieldAlert className="size-4" />, danger: true }
+        ? {
+            value: 'bypassPermissions',
+            label: MODES.bypassPermissions.label,
+            hint: MODES.bypassPermissions.hint,
+            icon: <ShieldAlert className="size-4" />,
+            danger: true,
+          }
         : {
             value: RESTART_FOR_BYPASS,
             label: 'Restart to allow Bypass',
@@ -457,8 +459,9 @@ function ModePicker({
     <div className="flex flex-col gap-3">
       {!offered && (
         <p className="text-[13px] text-muted">
-          Now: <span className={cn('font-semibold', MODES[mode]?.danger ? 'text-danger' : 'text-ink-soft')}>{MODES[mode]?.label ?? mode}</span>. Pick a
-          mode to change it.
+          Now:{' '}
+          <span className={cn('font-semibold', MODES[mode]?.danger ? 'text-danger' : 'text-ink-soft')}>{MODES[mode]?.label ?? mode}</span>.
+          Pick a mode to change it.
         </p>
       )}
       <OptionList
@@ -579,9 +582,15 @@ function OptionList({
           >
             {o.icon && <span className={cn('mt-0.5 shrink-0', o.danger ? 'text-danger' : 'text-ink-soft')}>{o.icon}</span>}
             <span className="min-w-0 flex-1">
-              <span className={cn('block font-semibold', o.danger ? 'text-danger' : 'text-ink', dense ? 'text-[14px]' : 'text-[15px]')}>{o.label}</span>
+              <span className={cn('block font-semibold', o.danger ? 'text-danger' : 'text-ink', dense ? 'text-[14px]' : 'text-[15px]')}>
+                {o.label}
+              </span>
               {o.hint && (
-                <span className={cn('mt-0.5 block break-words text-muted', dense ? 'line-clamp-2 text-[12px] leading-snug' : 'text-[13px]')}>{o.hint}</span>
+                <span
+                  className={cn('mt-0.5 block break-words text-muted', dense ? 'line-clamp-2 text-[12px] leading-snug' : 'text-[13px]')}
+                >
+                  {o.hint}
+                </span>
               )}
             </span>
             <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center">
