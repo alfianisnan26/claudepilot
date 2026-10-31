@@ -522,6 +522,18 @@ To avoid two copies of the same spawning, pty, path-mapping and file-writing cod
 
 A single's workspace is `<id>/<id>`. A cluster's `CreateWorkspaceRequest.node` is optional; the New workspace dialog shows a Node select only for a cluster with more than one node. `maxWorkspaces` and `drained` are enforced in `Workspaces.create` through `hooks.beforeCreate` (T1 provides `connect.canCreate(target, node?)`; T3 wires it).
 
+**Local org targets (owner, 2026-10-31: one workspace and one namespace per org).** Besides the scanned `kubernetes` target (unchanged:
+`PORTAL_K8S_NAMESPACE`, id `kubernetes`), `PORTAL_K8S_TARGETS` (JSON, `apps/server/src/workspaces/kubeTargets.ts`) adds one scanned
+Kubernetes target per entry: its own `KubernetesRuntime` on the portal's kubeconfig, its own namespace, workspaces `<id>/<name>`. A bad value
+(not JSON, an unknown key, a reserved, duplicate or malformed id, a namespace used twice or equal to `PORTAL_K8S_NAMESPACE`) stops the portal at
+start with the reason, like `PORTAL_K8S_NODE_SELECTOR`. Placement and sizes are the target's: `nodeSelector` (replaces the global one),
+`preferredNodes` (soft preference, in order; the Node select of the New workspace dialog; a named node is required and replaces a hostname in the
+selector), `cpus`/`memoryMb` (the limits a create gets when it names none; the dialog presets them), `cpuRequest`/`memoryRequest` (replace the
+global requests). The PVC has no placement of its own: with a WaitForFirstConsumer class (k3s local-path, checked 2026-10-31) it binds on the
+node the pod is first scheduled to and keeps the pod there. Such a target never creates its namespace (Argo CD makes it, with the quota and
+Role: `deploy/k3s/workspace-orgs.yaml`). Its ids are reserved for Connect (an enrollment cannot take one, and the manager refuses an enrolled
+runtime that would replace one). The browser pool, delivery, terminals and CI follow the target id as for `kubernetes`.
+
 ### 12.9 How a workspace reaches the portal
 
 `portalmcp/internalUrl.ts` works the portal's address out from the target's kind: `local` is `127.0.0.1`, `docker` is the container's default gateway. Both are wrong for a remote target. A tunnelled runtime sets `portalUrl` (the target's portal address) and `derive` returns `<portalUrl>/mcp` when it is set (T3, surgical). The workspace is on the same host or network as the agent, so it reaches the same address. Agent tokens for Portal MCP are an opt-in that already calls back (portal-mcp PRD §11 and §12.6); nothing else calls back.

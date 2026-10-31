@@ -102,6 +102,7 @@ Targets (each shows up when reachable):
 | `docker` | `PORTAL_DOCKER_SOCKET` (`/var/run/docker.sock`; in the devcontainer, its DinD daemon) | container `claudepilot-<name>` + volume `claudepilot-<name>-home` |
 | `docker-host` | `PORTAL_DOCKER_HOST_SOCKET` (`/var/run/docker-host.sock`; the Mac's Docker Desktop) | same |
 | `kubernetes` | current kubeconfig context, namespace `PORTAL_K8S_NAMESPACE` (`claudepilot-workspaces`) | Deployment `ws-<name>` (scaled 1/0 to start/stop) + PVC `ws-<name>-home` |
+| any id in `PORTAL_K8S_TARGETS` | the same kubeconfig, its own namespace (JSON list: `id`, `namespace`, optional `label`, `nodeSelector`, `preferredNodes`, `cpus`, `memoryMb`, `cpuRequest`, `memoryRequest`, `storage`, `storageClass`; `apps/server/src/workspaces/kubeTargets.ts`) | same as `kubernetes`, placed on the target's node |
 | `local` | the machine the portal runs on (off unless `PORTAL_LOCAL_ENABLED=true`) | one workspace, `PORTAL_LOCAL_NAME` (`local`), as the portal's own user |
 
 - **This machine** (`local`) is the host itself as a single workspace. It starts switched off: Start
