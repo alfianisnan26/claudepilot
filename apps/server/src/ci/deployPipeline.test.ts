@@ -72,6 +72,8 @@ case $args in
   *" get configmaps -l app=claudepilot-gate-result "*) cat "$FAKE/records" 2>/dev/null; true ;;
   # The in-cluster gate (scripts/gate-job.sh): its Job succeeds or fails with the fake gate's mode, and its log ends with the verdict.
   *" get job claudepilot-gate-"*"metadata.uid"*) printf 'uid-1234' ;;
+  # Its token Secret: a client-side dry run, then one create already owned by the Job (kept apart from the pre-pull's create below).
+  *" create secret generic claudepilot-gate-"*"--dry-run=client -o json"*) cat > /dev/null; printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"claudepilot-gate"}}' ;;
   *" get jobs,secrets -l app=claudepilot-gate,claudepilot-gate/by=pipeline "*) [ -f "$FAKE/leftover" ] && { printf 'job.batch/claudepilot-gate-aaaaaaa-0000\nsecret/claudepilot-gate-aaaaaaa-0000\n'; rm -f "$FAKE/leftover"; }; true ;;
   *" get job claudepilot-gate-"*) if [ "$(cat "$FAKE/gate-mode" 2>/dev/null)" = red ]; then printf '/1'; else printf '1/'; fi ;;
   *" logs job/claudepilot-gate-"*)
@@ -89,7 +91,7 @@ case $args in
   *" get pods "*"startTime"*) cat "$FAKE/started" 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ ;;
   # The pre-pull (2026-10-18): the portal's node, and its Job, which succeeds unless the test says the pull keeps failing.
   *" get pods "*"spec.nodeName"*) printf 'k3s-node2' ;;
-  *" create -f -"*) cat > "$FAKE/prepull.yaml" ;;
+  *" create -f -"*) body=$(cat); case $body in *'"kind":"Secret"'*) printf '%s' "$body" > "$FAKE/secret.json" ;; *) printf '%s\\n' "$body" > "$FAKE/prepull.yaml" ;; esac ;;
   *" get job claudepilot-prepull-"*) if [ -f "$FAKE/prepull-fails" ]; then printf '/9'; else printf '1/'; fi ;;
   *" get pods "*) printf '0 ' ;;
   *" get job "*) if [ -f "$FAKE/build-fails" ]; then printf '/1'; else printf '1/'; fi ;;
@@ -566,7 +568,14 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   assert.match(calls, /kubectl -n isnan-claudepilot create secret generic claudepilot-gate-/);
   assert.match(calls, /kubectl -n isnan-claudepilot delete secret claudepilot-gate-/, 'the Secret is deleted on exit');
   assert.match(calls, /delete job claudepilot-gate-aaaaaaa-0000/, 'a leftover of a cancelled run is stopped at the start');
-  assert.match(calls, /patch secret claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} --type merge -p \{"metadata":\{"ownerReferences":\[\{"apiVersion":"batch\/v1","kind":"Job","name":"claudepilot-gate-[0-9a-f-]+","uid":"uid-1234"\}\]/, 'the Secret belongs to its Job');
+  // The Secret belongs to its Job from its one create (no patch, no read: the ws-*-jobs accounts may not read Secrets).
+  const secret = JSON.parse(readFileSync(join(w.root, 'secret.json'), 'utf8')) as { metadata: { ownerReferences: { kind: string; name: string; uid: string }[]; labels: Record<string, string> } };
+  assert.deepEqual(secret.metadata.ownerReferences.map((o) => [o.kind, o.uid]), [['Job', 'uid-1234']], 'the Secret belongs to its Job');
+  assert.match(secret.metadata.ownerReferences[0]!.name, /^claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4}$/);
+  assert.equal(secret.metadata.labels['claudepilot-gate/by'], 'pipeline');
+  assert.doesNotMatch(calls, /patch secret|get secret/);
+  assert.match(calls, /patch job claudepilot-gate-[0-9a-f]{7}-[0-9a-f]{4} --type merge -p \{"spec":\{"suspend":false\}\}/, 'the suspended Job is let go after its Secret exists');
+  assert.match(job, /\n  suspend: true\n/, 'applied suspended');
   assert.equal((calls.match(/get jobs,secrets -l app=claudepilot-gate,claudepilot-gate\/by=pipeline/g) ?? []).length, 2, 'leftovers cleared at the start, ours at the end');
   assert.match(job, /claudepilot-gate\/by: pipeline/);
 

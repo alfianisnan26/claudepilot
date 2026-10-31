@@ -29,16 +29,23 @@ fi
 cleanup() { kubectl -n "$ns" delete secret "$job" --ignore-not-found >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 trap 'kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null 2>&1 || true; exit 130' INT TERM
-# The token reaches kubectl on stdin (printf is a builtin: no argument a process list would show), without gh's newline (npm refuses it).
-printf '%s' "$(gh auth token)" | kubectl -n "$ns" create secret generic "$job" --from-file=node-auth-token=/dev/stdin >/dev/null
+# A gate that could not be started: its suspended Job goes too (a suspended Job never finishes, so its TTL never takes it).
+not_started() { kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null 2>&1 || true; echo "GATE-VERDICT: red: the gate job could not be started: $1"; exit 1; }
 verdict=$(base64 -w0 < scripts/gate-verdict.sh)
+# The Job is applied suspended (gate-job.yaml), so no pod needs the Secret yet. The Secret is then made in ONE create that already carries
+# the label and the ownerReference: whoever deletes the Job (its TTL, gate-job-stop.sh, a person) deletes the token with it, also when this
+# script was killed before its trap ran (a cancelled pipeline run), and nothing reads or patches a Secret, which the workspaces'
+# least-privilege accounts (ws-*-jobs, deploy/k3s/workspace-jobs-rbac.yaml) may not do; the admin kubeconfig does the same. The token
+# reaches kubectl on stdin (printf is a builtin: no argument a process list would show), without gh's newline (npm refuses it); the final
+# call is `create`, not `apply` (apply would keep the data in a last-applied annotation).
 sed -e "s#NAME#$job#g" -e "s#BY_WHOM#${GATE_JOB_BY:-manual}#g" -e "s#\"COMMIT\"#\"$commit\"#" -e "s#\"STEPS\"#\"$steps\"#" -e "s#image: IMAGE#image: $image#" -e "s#\"VERDICT\"#\"$verdict\"#" -e "s#\"FILES\"#\"$files\"#" deploy/k3s-build/gate-job.yaml | kubectl apply -f - >/dev/null
-# The Secret belongs to the Job: whoever deletes the Job (its TTL, gate-job-stop.sh, a person) deletes the token with it, also when this script was
-# killed before its trap ran (a cancelled pipeline run).
 uid=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
-if [ -n "$uid" ]; then
-  kubectl -n "$ns" patch secret "$job" --type merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$job\",\"uid\":\"$uid\"}],\"labels\":{\"app\":\"claudepilot-gate\",\"claudepilot-gate/by\":\"${GATE_JOB_BY:-manual}\"}}}" >/dev/null || true
-fi
+[ -n "$uid" ] || not_started "could not read the uid of $job (no token was sent)"
+printf '%s' "$(gh auth token)" | kubectl -n "$ns" create secret generic "$job" --from-file=node-auth-token=/dev/stdin --dry-run=client -o json 2>/dev/null |
+  jq -c --arg job "$job" --arg uid "$uid" --arg by "${GATE_JOB_BY:-manual}" \
+    '.metadata.labels = {"app": "claudepilot-gate", "claudepilot-gate/by": $by} | .metadata.ownerReferences = [{"apiVersion": "batch/v1", "kind": "Job", "name": $job, "uid": $uid}]' |
+  kubectl -n "$ns" create -f - >/dev/null 2>&1 || not_started "could not create its Secret $job (the reason is not shown: it may quote the token)"
+kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null || not_started "could not resume $job"
 echo "gate job $job: $steps at $sha on $image ..."
 state=; why=; t1=$(date +%s); pend_t=
 for _ in $(seq 1 $(( wait_s / poll_s ))); do
