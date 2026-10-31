@@ -169,6 +169,13 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   npm or git: the checkout and its short sha come from `fetch` (the workspace image), so a Debian-based image such as `python:3.11-slim` plus pytest
   runs as is; alpine or distroless images do not work (no bash) (T-379 live proof: `python -m pytest -q` rc 0). The npm steps are skipped with a note (`--steps npm-ci` is refused) and `--against` is refused. Without `--image` nothing changes.
 
+- **A stopped Job is never green (T-523):** a Job deleted while queued, before its pod started or before its exit line (by
+  `job-run.sh --stop`, a later run's cleanup of a Job whose `job-run.sh` is gone, or a `kubectl delete`) ends with exit 1 and a last line
+  that says the command never ran or gave no result, at once (it no longer waits out the start or run deadline). Read the exit code of
+  `job-run.sh` itself: a pipe (`| tail`) reports the last stage's code. Note `job-run.sh --stop` with no argument stops every Job of every chat.
+- **One folder per repository name (T-1063):** each checkout is `/tmp/w/<repo name>`. An `--also` of the `--ref` repository (another
+  ref of it, or a fork of the same name) or two `--also` of one name are refused before anything is made (rc 2); put both changes on one
+  pushed commit (a `qa/` branch), or run two Jobs.
 - **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
   (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper
   reads it from the environment, never a URL). The Secret belongs to the Job and is deleted on exit; the streamed log is masked for the token.

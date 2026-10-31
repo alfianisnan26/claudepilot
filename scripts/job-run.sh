@@ -18,6 +18,8 @@
 #                                                       (exit 1; 2 when <ref> or a kept path is missing). Without it nothing changes.
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
 #     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg;
+#                                                       one folder per repository name: an --also of the --ref repository (or of a name
+#                                                       already used) is refused, rc 2 (T-1063): put both changes on one pushed commit;
 #                                                       platform/konfersi-lab-platform also sets KONFERSI_LAB_PLATFORM_DIR to its clone (T-3006)
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
 #     --deploy-layout                                   (T-2865, needs --also) the --also clones get no npm ci and no install scripts (no node_modules), as
@@ -84,6 +86,8 @@
 # only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is the --pool-env deny-list (PILOT-998: no write, admin, production or master credential, and none of the runner's own tokens, goes in; a delivered name outside it does, the T-2823 read-only Koneviro keys included). The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
+# A Job stopped (deleted: --stop, a later run's cleanup, kubectl delete) while queued, before its pod started or before its exit line is
+# exit 1 with a last line that says the command never ran or gave no result: never 0 (T-523).
 set -eu
 # Under xtrace (bash -x, SHELLOPTS) the trace would print the credentials this script handles: refuse (T-426).
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
@@ -353,9 +357,18 @@ case "$repo" in claudepilot|event) program=$repo ;; *) program=konfersi ;; esac
 if [ -n "$big" ]; then memory=$mem_big; tmp_size=$tmp_big; else memory=$mem_std; tmp_size=$tmp_std; fi
 [ "$repo" != event ] || [ ${#also[@]} -eq 0 ] || die "--also cannot be used with --repo event (T-491: the Event Job's token is for isnanme/event alone)"
 alsos=
+# T-1063: the Job checks each repository out into a folder named after it (/tmp/w/<repo>, the main one last), so an --also of the --ref
+# repository, or two --also of the same name, would land in one folder and the last checkout would silently win. Refused here, before
+# anything is created. (Rejected: a second folder name; one combined pushed commit, or two Jobs, does the same with no new layout.)
+main_dir=$(basename "$url" .git); also_dirs=" $main_dir "
 for a in ${also[@]+"${also[@]}"}; do
   [[ ! $a =~ \.\. && $a =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(@([A-Za-z0-9][A-Za-z0-9._/-]{0,199}))?$ ]] || die "--also <org>/<repo>[@<ref>] (got $a)"
   p=${BASH_REMATCH[1]}; r=${BASH_REMATCH[3]:-stg}
+  if [ "${p#*/}" = "$main_dir" ]; then
+    die "--also $p: the same repository folder as --ref's ($main_dir): the Job has one checkout per repository name, so this one would be dropped. Put both changes on one pushed commit (a qa/ branch) or run two Jobs (T-1063)"
+  fi
+  [[ $also_dirs != *" ${p#*/} "* ]] || die "--also $p: another --also already uses the folder ${p#*/} (one checkout per repository name, T-1063)"
+  also_dirs="$also_dirs${p#*/} "
   if [ "$kind" = gitea ]; then base=https://$gitea; else base=https://github.com; fi
   alsos="$alsos ${p#*/}=$base/$p.git@$r"
 done
@@ -627,7 +640,9 @@ while :; do
   case "$d" in
     go) break ;;
     gate) [ "$d" = "$last" ] || echo "job-run: waits: a gate Job is Pending for room, and gates go first (JOB_RUN_GATE_FIRST=0 turns it off)"; last=$d ;;
-    gone) echo "job-run: $job was stopped while queued" >&2; exit 1 ;;
+    # T-523: a queued Job is stopped (deleted) by job-run.sh --stop (all, that Job, or its chat), by a later run's cleanup of a Job whose
+    # job-run.sh it takes to be gone (reap), or by a kubectl delete. The command never ran: never exit 0.
+    gone) echo "job-run: $job was stopped while queued: the command never ran (exit 1)" >&2; exit 1 ;;
     wait\ *) [ "$d" = "$last" ] || echo "job-run: queued behind ${d#wait } (at most $max at once, $per per chat, $pprog per program)"; last=$d ;;
   esac
   [ $(( $(date +%s) - t0 )) -lt "$queue_wait" ] || { echo "job-run: still queued after ${queue_wait}s: giving up" >&2; exit 1; }
@@ -663,7 +678,12 @@ fi
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
 t1=$(date +%s); tw=$t1; phase=running
 job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs
-  kubectl -n "$ns" get job "$job" -o json 2>/dev/null | jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // ""' 2>/dev/null || echo gone
+  # T-523: "gone" only when the API says the Job does not exist (--ignore-not-found prints nothing, exit 0); a failed read is "" (still
+  # running), so a passing API hiccup never ends a run. Before, a deleted Job read as "" too, and the run waited out its whole deadline.
+  local j
+  j=$(kubectl -n "$ns" get job "$job" --ignore-not-found -o json 2>/dev/null) || return 0
+  [ -n "$j" ] || { echo gone; return 0; }
+  jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // ""' <<<"$j" 2>/dev/null || true
 }
 pod_json() { kubectl -n "$ns" get pods -l "job-name=$job" -o json 2>/dev/null || true; }
 pod_get() { jq -r "$1"' // ""' <<<"$2" 2>/dev/null || true; }
@@ -671,7 +691,9 @@ said=; why=
 while :; do
   pj=$(pod_json); ph=$(pod_get '.items[0].status.phase' "$pj")
   case "$ph" in Running|Succeeded|Failed) break ;; esac
-  [ -z "$(job_state)" ] || break
+  js=$(job_state)
+  [ "$js" != gone ] || { echo "job-run: $job was stopped before it started: the command never ran (exit 1)" >&2; exit 1; }
+  [ -z "$js" ] || break
   # The fetch container (T-401: the clone and npm ci, with the credentials) is running: started, so the start wait does not apply (the
   # Job's deadline does); its log comes out of the run container.
   if [ -n "$(pod_get '.items[0].status.initContainerStatuses[0].state.running.startedAt' "$pj")" ]; then tw=$(date +%s); sleep "$poll"; continue; fi
@@ -769,6 +791,7 @@ if [ -z "$rc" ]; then
   case "$st" in
     Failed:DeadlineExceeded) rc=124; echo "job-run: past the deadline (${timeout}s)" >&2 ;;
     '') rc=1; echo "job-run: the Job did not finish" >&2; phase=setup ;;
+    gone) rc=1; echo "job-run: $job was stopped before it finished: no exit code, no result (exit 1)" >&2 ;;
     *) rc=1; echo "job-run: the Job ended without an exit code ($st)" >&2 ;;
   esac
 fi
