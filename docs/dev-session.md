@@ -151,6 +151,7 @@ git push origin HEAD:wip/<name>                                              # t
 scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
 scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
 scripts/job-run.sh --repo konfersi:platform/<app> --ref <commit> --also platform/konfersi-shared@stg --deploy-layout -- '<build>'   # T-2865: the sibling gets no npm ci (no node_modules), as stg-deploy lays it out; only the app installs
+scripts/job-run.sh --repo konfersi:platform/<lab-plugin> --ref <branch> --also platform/konfersi-lab-platform@<ref> -- 'npm test'   # T-3006: the command gets KONFERSI_LAB_PLATFORM_DIR (the clone's absolute path); a value the command sets wins
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 # Scripts that rewrite the checkout (tools/qa/rtk-history.sh, rtk-classes.sh, rtk-measure.sh, and the mutant runner rtk-guard-mutants.sh; T-736) refuse unless the Job's own env var JR_REPO_URL is set and the tree is clean.
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
@@ -295,6 +296,12 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait. `/tmp` and `/dev/shm` (1Gi) are both
   in memory and count against the same limit: with `/tmp` and `/dev/shm` full, a 4Gi Job has 1Gi left for its processes. A full `/tmp` is a
   full tmpfs, so the command gets `No space left on device` (no eviction); a failed Job with that text in its log gets the `--big` hint too.
+- **A quiet node and a real CPU (T-3071):** `--node <name>` runs the Job on that node only; it must be in the worker pool (label
+  `isnan.me/pool=worker`, read before any Job: a control-plane node, an unlabelled or unknown node is refused, rc 2), and the Job's required
+  rule names the node AND the pool. `--cpu <n>` (1 to 4 whole cores) sets the CPU request = limit = n in both containers, so the pod is
+  Guaranteed (memory is requested = limited already); without it a Job requests 500m with a limit of 4, as before. A perf or Lighthouse Job
+  (scores swing with a slow or busy node, T-2811) runs as `--node k3s-node3 --cpu 2`. Pending on the pinned node says so once, naming it.
+  Both are in the `--reuse` key.
 - **Placement (T-365, T-524):** preferred, never required (a required rule left every Job Pending): away from the control-plane node, the
   portal's node and workspace pods. The scheduler scales each rule to 0..100 before adding them, so with two nodes the control-plane and the
   portal rules cancel and the node with the most free memory and CPU after the request wins; the honest request is what keeps the master

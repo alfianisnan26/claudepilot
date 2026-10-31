@@ -623,6 +623,118 @@ test('T-2018: a conflict recorded this minute is told at once, and still only on
   assert.equal(told(), 2, 'the next window');
 });
 
+test('T-2016: every repo is judged: a conflict or a missing PR in one repo is not hidden behind a newer ready record of another', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(20, { holder: 'wb' });
+  r.tickets.verdict('T-20', { role: 'qa', verdict: 'pass', commit: sha('b'), at: ago(r, 40) });
+  r.tickets.merged('T-20', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'conflict', reason: null, min: 50 });
+  r.tickets.merged('T-20', { repo: 'konfersi/web', pr: null, prHead: null, state: 'no_pr', reason: null, min: 45 });
+  r.tickets.merged('T-20', { repo: 'konfersi/lab', pr: 9, prHead: sha('b'), state: 'ready', reason: null, min: 40 });
+  await r.engine.round();
+  const counts = r.engine.snapshot().programs[0]!.counts;
+  assert.deepEqual([counts.merge, counts.conflict, counts.no_pr], [0, 1, 1], 'the newer ready record in konfersi/lab hides nothing');
+  const toB = r.chat.sent.filter((x) => x.id === LEAD_B).map((x) => x.text);
+  assert.match(toB.find((t) => /for a rebase/.test(t))!, new RegExp(`- T-20 \\(KONF-20\\) konfersi/api#7 head ${sha('a')}`));
+  assert.match(toB.find((t) => /no pull request/.test(t))!, /- T-20 \(KONF-20\) konfersi\/web$/m);
+  assert.equal(r.chat.sent.filter((x) => /merge basis/.test(x.text)).length, 0, 'no merge nudge while a repo conflicts');
+});
+
+test('T-2016: two conflicting repos are two rows of one message; the ticket is named once', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(21, { holder: 'wb' });
+  r.tickets.merged('T-21', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'conflict', reason: null });
+  r.tickets.merged('T-21', { repo: 'konfersi/web', pr: 8, prHead: sha('b'), state: 'conflict', reason: null });
+  await r.engine.round();
+  const m = r.chat.sent.filter((x) => x.id === LEAD_B && /for a rebase/.test(x.text));
+  assert.equal(m.length, 1);
+  assert.match(m[0]!.text, /konfersi\/api#7[\s\S]*konfersi\/web#8|konfersi\/web#8[\s\S]*konfersi\/api#7/);
+  assert.match(m[0]!.text, /on 2 pull requests/);
+  const told = r.engine.snapshot().actions.find((a) => a.condition === 'conflict' && a.kind === 'told')!;
+  assert.deepEqual(told.tickets, ['T-21']);
+});
+
+test('T-2016: a second round within 30 min resends neither conflict nor no_pr; the card\'s actions carry the bucket keys', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(22, { holder: 'wb' });
+  r.tickets.merged('T-22', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'conflict', reason: null });
+  r.tickets.add(23, { holder: 'wb' });
+  r.tickets.merged('T-23', { repo: 'konfersi/api', pr: null, prHead: null, state: 'no_pr', reason: null });
+  await r.engine.round();
+  const sent = () => r.chat.sent.filter((x) => x.id === LEAD_B && /for a rebase|no pull request/.test(x.text)).length;
+  assert.equal(sent(), 2);
+  r.clock.advance(5);
+  await r.engine.round();
+  r.clock.advance(20);
+  await r.engine.round();
+  assert.equal(sent(), 2, 'not again inside the window');
+  const told = r.engine.snapshot().actions.filter((a) => a.kind === 'told');
+  assert.deepEqual(told.map((a) => [a.condition, a.tickets, a.keys]).sort(), [['conflict', ['T-22'], ['KONF-22']], ['no_pr', ['T-23'], ['KONF-23']]]);
+});
+
+test('T-2023: once the ticket is answered, the same conflict on the same record is not told again; a new record or a moved head is', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(24, { holder: 'wb' });
+  r.tickets.merged('T-24', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'conflict', reason: null });
+  const told = () => r.chat.sent.filter((x) => x.id === LEAD_B && /for a rebase/.test(x.text));
+  await r.engine.round();
+  assert.equal(told().length, 1);
+  assert.match(told()[0]!.text, /Say so on the ticket/);
+  r.clock.advance(5);
+  r.tickets.comment('T-24', 'contained in #154: not a conflict', 0);
+  r.clock.advance(26);
+  await r.engine.round();
+  assert.equal(told().length, 1, 'answered on the ticket: held, though the window passed');
+  assert.equal(r.engine.snapshot().programs[0]!.counts.conflict, 1, 'still counted on the card');
+  r.restart();
+  r.clock.advance(31);
+  await r.engine.round();
+  assert.equal(told().length, 1, 'the hold survives a portal restart');
+  r.tickets.merged('T-24', { repo: 'konfersi/api', pr: 7, prHead: sha('a'), state: 'conflict', reason: 'still', min: 0 });
+  r.clock.advance(1);
+  await r.engine.round();
+  assert.equal(told().length, 2, 'the gate recorded it again: told');
+  r.clock.advance(5);
+  r.tickets.comment('T-24', 'rebasing', 0);
+  r.tickets.merged('T-24', { repo: 'konfersi/api', pr: 7, prHead: sha('b'), state: 'conflict', reason: null, min: 40 });
+  r.clock.advance(26);
+  await r.engine.round();
+  assert.equal(told().length, 3, 'another head is another alert');
+  assert.match(told()[2]!.text, new RegExp(`head ${sha('b')}`));
+});
+
+test('T-2023: silent tickets are still reminded each window (the answer, not the time, holds an alert)', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(25, { holder: 'wb' });
+  r.tickets.merged('T-25', { repo: 'konfersi/api', pr: null, prHead: null, state: 'no_pr', reason: null });
+  r.tickets.comment('T-25', 'an older comment, before any alert', 60);
+  await r.engine.round();
+  r.clock.advance(31);
+  await r.engine.round();
+  assert.equal(r.chat.sent.filter((x) => x.id === LEAD_B && /no pull request/.test(x.text)).length, 2);
+});
+
+test('T-2023: a recorded conflict on a head the PR has moved off is not a conflict while the forge has not judged the new head', async () => {
+  const views = new Map<number, FlowPrView | null>();
+  const r = rig({ prs: { pr: async (_repo, n) => views.get(n) ?? null } });
+  crew(r);
+  r.tickets.add(26, { holder: 'wb' });
+  r.tickets.merged('T-26', { repo: 'konfersi/lab-plugin', pr: 156, prHead: sha('a'), state: 'conflict', reason: null });
+  views.set(156, { state: 'open', merged: false, head: sha('f'), mergeable: null }); // pushed to (rebased); Gitea still computing
+  r.tickets.add(27, { holder: 'wb' });
+  r.tickets.merged('T-27', { repo: 'konfersi/compute', pr: 134, prHead: sha('c'), state: 'conflict', reason: null });
+  views.set(134, { state: 'open', merged: false, head: sha('c'), mergeable: null }); // same head, not known: the record stands
+  await r.engine.round();
+  assert.equal(r.engine.snapshot().programs[0]!.counts.conflict, 1);
+  const m = r.chat.sent.find((x) => x.id === LEAD_B && /for a rebase/.test(x.text))!;
+  assert.doesNotMatch(m.text, /T-26 /, 'the moved PR is not told as a conflict');
+  assert.match(m.text, /T-27 /);
+});
+
 // T-2018: idle builder lanes while the unit has work.
 
 /** Lead B with two builder lanes idle 15 and 25 min; leads A and C working, no idle lanes. */
@@ -811,6 +923,23 @@ test('D-102: a HIGH ticket self-tested needs a blind review PASS; until then a p
   const m = r.chat.sent.find((x) => x.text.includes('self-test + review PASS'));
   assert.ok(m);
   assert.equal(m.id, LEAD_A, 'HIGH rows go to the merge gate');
+});
+
+test('T-2250: a ticket tagged risk-high (the tag rule refuses risk:high) with only a self-test gets a REVIEW-ASK, never a merge nudge', async () => {
+  for (const tag of ['risk-high', 'risk_high', 'Risk-High']) {
+    const r = rig();
+    crew(r);
+    r.tickets.add(71, { holder: 'wb', tags: ['konfersi-migration', tag, 'security'] });
+    r.tickets.merged('T-71', { repo: 'konfersi/api', pr: 13, prHead: sha('a'), state: 'ready', reason: null });
+    r.tickets.comment('T-71', `Self-test: claudepilot-job-7b on ${sha('a')} pass 12`, 40);
+    await r.engine.round();
+    assert.equal(r.engine.snapshot().programs[0]!.counts.merge, 0, `${tag}: a self-test alone is no merge basis for HIGH`);
+    assert.equal(r.chat.sent.filter((x) => /merge basis/.test(x.text)).length, 0, `${tag}: no merge nudge`);
+    const ask = r.chat.sent.find((x) => x.text.includes('REVIEW-ASK'));
+    assert.ok(ask, `${tag}: a peer is asked to review`);
+    assert.notEqual(ask.id, LEAD_B);
+    assert.match(ask.text, /- T-71 \(KONF-71\) head/);
+  }
 });
 
 test('D-102: a HIGH ticket whose review failed, or whose author still works on it, is not asked again', async () => {

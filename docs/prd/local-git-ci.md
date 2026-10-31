@@ -626,13 +626,17 @@ about 15026Mi): node2 holds 3 Jobs by memory before (3.87) and 5 after, but 3 by
 requests and 0 by real use (77-82%, over the 75% T-611 line). So CPU requests bind, and a smaller default only cuts the margin: **a lower default waits on a
 CPU-request measurement.** An OOMKilled Job says so and names `--big`.
 
+**Pinned, Guaranteed (T-3071).** For a measurement (a Lighthouse score swung 10-20 points between nodes, T-2811) `--node <name>` pins the Job to one
+node of the worker pool (`isnan.me/pool=worker`; read before any Job, control-plane and unknown nodes refused; the required rule holds the node AND
+the pool) and `--cpu <n>` (1 to 4) makes CPU requested = limited = n in both containers, a Guaranteed pod. Without them nothing changes (500m, limit 4).
+
 **Reuse (opt-in, `--reuse`).** Without `--reuse` every run is a Job and neither reads nor writes the store, so a QA run or a probe is never served another
 session's result. With it, a Job that passed is saved, and the same work later returns the saved log and exit code with no Job and no kubectl call.
 
 - **Key:** the SHA-256 of these, NUL-separated, in order: key version `v2`; the hash of `scripts/job-run.sh` and `deploy/k3s-build/job-run.yaml` together (a change
   to either, even a comment, is a miss); the resolved runner image reference (its tag); `--big`; the repository's clone URL; the full 40-hex commit; the exact
   command (the single string, or the quoted words); `--against`; `--keep-tests`; the `--also` list with its refs; `--steps`; `--deploy-layout` (T-2865: a pass with the `--also` clones installed is not one
-  without). Not in it, because they do not change
+  without); `--node` and `--cpu` (T-3071). Not in it, because they do not change
   what a pass means: `--timeout`, `--role`, the chat.
 - **Trust boundary:** the store is one workspace home. Any session in that workspace can write an entry, and a `--reuse` run from any session there trusts it.
   A result is evidence only as far as that is acceptable; the reuse line names the original Job and when it passed, so the evidence can be opened.

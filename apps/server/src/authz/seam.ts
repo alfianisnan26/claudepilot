@@ -77,6 +77,12 @@ export interface ObjectResolver {
 }
 
 const resolvers = new Map<ObjectType, ObjectResolver>();
+/**
+ * T-1993: the types whose access is decided by ownership ONLY. Without their resolver `can()` refuses (not found) and `visible()` keeps nothing,
+ * instead of the single-owner fallback that gives the founding user everything: a ticket bucket another person owns must never open to the
+ * owner because the resolver was not registered yet (fail closed). The tickets service registers its own when it is made.
+ */
+const RESOLVER_REQUIRED: ReadonlySet<ObjectType> = new Set<ObjectType>(['ticket_bucket']);
 export const registerResolver = (r: ObjectResolver): void => void resolvers.set(r.type, r);
 export const resolverFor = (type: ObjectType): ObjectResolver | undefined => resolvers.get(type);
 /** For tests. */
@@ -220,6 +226,7 @@ export const singleOwner: Authz = {
     // What the user holds: by ownership where the type has a resolver, else everything for the one owner.
     let held: Level;
     const resolver = resolvers.get(object.type);
+    if (!resolver && RESOLVER_REQUIRED.has(object.type)) return deny('not_found');
     if (!resolver) held = userId === FOUNDING_USER_ID ? 'manage' : 'none';
     else {
       const found = resolver.resolve(object.id, object.poolType);
@@ -302,7 +309,7 @@ export function requireCan(actor: Actor, verb: Verb, object: ObjectRef): void {
 /** Keeps the rows the actor may view: what every list returns. The owner's single-owner fast path returns the rows as they are. */
 export function visible<T>(actor: Actor, type: ObjectType, rows: readonly T[], idOf: (row: T) => string, poolType?: ObjectRef['poolType']): T[] {
   if (actor.kind === 'system') return [...rows];
-  if (current.mode === 'single-owner' && !resolvers.has(type) && actor.kind !== 'agent' && actorUserId(actor) === FOUNDING_USER_ID) return [...rows];
+  if (current.mode === 'single-owner' && !resolvers.has(type) && !RESOLVER_REQUIRED.has(type) && actor.kind !== 'agent' && actorUserId(actor) === FOUNDING_USER_ID) return [...rows];
   return rows.filter((row) => current.can(actor, 'view', poolType ? { type, id: idOf(row), poolType } : { type, id: idOf(row) }).allow);
 }
 

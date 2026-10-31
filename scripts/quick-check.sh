@@ -7,10 +7,12 @@
 #   scripts/quick-check.sh [--dir <worktree>] [--base <ref>] [--test <path>]... [--repo <job-run --repo value>] [--no-format] [--no-lint]
 # Run it inside the worktree (or name it with --dir: a lane's shell may be back in another folder, T-1053), after pushing HEAD (job-run runs a PUSHED commit: git push origin HEAD:<your work branch>). The base is the
 # merge base with --base, or with the first of origin/stg, origin/integration, origin/main, origin/master that exists. --test takes a test
-# file of the branch, run from its package's folder: vitest, jest, node --test (a *.test.ts with tsx), or pytest for a *.py (unittest when the
-# image has no pytest). A *.check.mjs (.cjs, .js) and any script test under the package's scripts/ always run with node's own test runner,
-# node --test (with tsx for .ts), never vitest, which does not collect them (T-2975). A missing tool is SKIPPED, never passed (T-612): the
-# last line is FAILED (naming any skips too), FAILED: nothing ran when every check was skipped and no --test ran (T-960), INCOMPLETE when only
+# file of the branch, run from its package's folder, the first that applies: 1. the runner the repo declares (T-857, T-3101): `node --test`
+# for a file the package.json test:scripts glob matches, else `node scripts/test.mjs <file>` when the package has that entry (it bundles
+# extensionless TS imports); 2. a *.check.mjs (.cjs, .js) or any script test under the package's scripts/ runs with node's own test runner,
+# node --test (with tsx for .ts), never vitest, which does not collect them (T-2975); 3. by what is installed: vitest, jest, node --test (a
+# *.test.ts with tsx), or pytest for a *.py (unittest when the image has no pytest). A missing tool is SKIPPED, never passed (T-612): the last
+# line is FAILED (naming any skips too), FAILED: nothing ran when every check was skipped and no --test ran (T-960), INCOMPLETE when only
 # skips are left (a repo with no prettier or eslint whose --test passed is INCOMPLETE, never FAILED: T-2975), or all passed.
 # Exit: 0 all passed; 1 a check failed, nothing ran or a step was SKIPPED (the last line names it); 2 a usage error; anything else is job-run's own.
 set -uo pipefail
@@ -64,7 +66,22 @@ for t in "${tests[@]}"; do
   case "$rel" in ../*) echo "quick-check: $t is outside this worktree" >&2; exit 2 ;; esac
   dir="$(dirname "$rel")"
   while [ "$dir" != "." ] && [ ! -f "$dir/package.json" ]; do dir="$(dirname "$dir")"; done
-  test_lines+="$(printf 'runtest %q %q; ' "$dir" "${rel#"$dir"/}")"
+  pfile="${rel#"$dir"/}"
+  # The runner is chosen here, from the repo's own config (T-857, T-3101): a file matched by the package's test:scripts glob runs with
+  # node --test; else the package's own scripts/test.mjs entry (it bundles extensionless TS imports) when it has one; else auto (vitest,
+  # jest, tsx, node --test by what is installed).
+  runner=auto
+  tscripts="$(sed -n 's/.*"test:scripts"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$dir/package.json" 2>/dev/null | head -1)"
+  set -f
+  for tok in $tscripts; do
+    tok="$(printf %s "$tok" | tr -d "\"'\\\\")"; tok="${tok#./}"
+    case "$tok" in -* | "") continue ;; esac
+    # shellcheck disable=SC2053
+    if [[ "$pfile" == $tok ]]; then runner=node; break; fi
+  done
+  set +f
+  if [ "$runner" = auto ] && [ -f "$dir/scripts/test.mjs" ] && [ "$pfile" != "scripts/test.mjs" ]; then runner=entry; fi
+  test_lines+="$(printf 'runtest %q %q %q; ' "$dir" "$pfile" "$runner")"
 done
 
 if [ ${#files[@]} -eq 0 ] && [ ${#tests[@]} -eq 0 ]; then
@@ -77,15 +94,17 @@ q() { printf '%q ' "$@"; }
 cmd='set +e; fails=""; skips=""; ran=0; bin="$PWD/node_modules/.bin";
 skip() { skips="$skips $1"; echo "::: $1 SKIPPED ($2)"; };
 check() { local name="$1"; shift; ran=$((ran+1)); echo "::: $name"; "$@"; local rc=$?; if [ $rc -eq 0 ]; then echo "::: $name ok"; else fails="$fails $name"; echo "::: $name FAILED (exit $rc)"; fi; };
-runtest() { local dir="$1" file="$2"; local b="$PWD/$dir/node_modules/.bin"; [ -x "$b/vitest" ] || b="$bin";
-  case "$file" in
-    *.check.mjs | *.check.cjs | *.check.js | scripts/*.mjs | scripts/*.cjs | scripts/*.js | scripts/*.ts | scripts/*.mts)
+runtest() { local dir="$1" file="$2" runner="$3"; local b="$PWD/$dir/node_modules/.bin"; [ -x "$b/vitest" ] || b="$bin";
+  case "$runner:$file" in
+    node:*) check "test:$dir/$file (node --test)" sh -c "cd \"\$0\" && node --test \"\$1\"" "$dir" "$file" ;;
+    entry:*) check "test:$dir/$file (scripts/test.mjs)" sh -c "cd \"\$0\" && node scripts/test.mjs \"\$1\"" "$dir" "$file" ;;
+    *:*.check.mjs | *:*.check.cjs | *:*.check.js | *:scripts/*.mjs | *:scripts/*.cjs | *:scripts/*.js | *:scripts/*.ts | *:scripts/*.mts)
        case "$file" in
          *.ts | *.mts) if [ -x "$bin/tsx" ] || [ -x "$b/tsx" ]; then check "test:$dir/$file (node --test)" sh -c "cd \"\$0\" && node --import tsx --test \"\$1\"" "$dir" "$file";
               else check "test:$dir/$file (node --test)" sh -c "cd \"\$0\" && node --test \"\$1\"" "$dir" "$file"; fi ;;
          *) check "test:$dir/$file (node --test)" sh -c "cd \"\$0\" && node --test \"\$1\"" "$dir" "$file" ;;
        esac ;;
-    *.py) if python3 -m pytest --version >/dev/null 2>&1; then check "test:$dir/$file" sh -c "cd \"\$0\" && python3 -m pytest -q \"\$1\"" "$dir" "$file";
+    *:*.py) if python3 -m pytest --version >/dev/null 2>&1; then check "test:$dir/$file" sh -c "cd \"\$0\" && python3 -m pytest -q \"\$1\"" "$dir" "$file";
        else check "test:$dir/$file (unittest, no pytest in the Job image)" sh -c "cd \"\$0\" && python3 -m unittest discover -s \"\$(dirname \"\$1\")\" -p \"\$(basename \"\$1\")\"" "$dir" "$file"; fi ;;
     *) if [ -x "$b/vitest" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && \"\$1\" run \"\$2\"" "$dir" "$b/vitest" "$file";
        elif [ -x "$b/jest" ]; then check "test:$dir/$file" sh -c "cd \"\$0\" && \"\$1\" --runInBand \"\$2\"" "$dir" "$b/jest" "$file";

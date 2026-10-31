@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { clipToContent, placePopover } from './popover';
+import { clipToContent, placePopover, refocusAnchorAfterOutside } from './popover';
 
 const view = { top: 0, left: 0, width: 390, height: 844 };
 const safe = { top: 47, right: 0, bottom: 34, left: 0 };
@@ -46,4 +46,15 @@ test('T-1988: the visible box stops at the page content edge, so a popover keeps
   assert.deepEqual(clipToContent(view, 1280), view, 'an overlay scrollbar takes no room');
   assert.deepEqual(clipToContent(view, 0), view, 'no reading, no change');
   assert.equal(clipToContent({ top: 0, left: 100, width: 300, height: 500 }, 390).width, 290, 'a pinch-zoomed view moved right is cut at the same edge');
+});
+
+// T-2955: a tap outside on a part of the page that cannot take focus returns focus to the control; one that takes focus keeps it.
+test('T-2955: outside tap on plain page, focus on the body, goes back to the control', () => {
+  assert.equal(refocusAnchorAfterOutside({ closest: () => null }, true), true);
+  assert.equal(refocusAnchorAfterOutside(null, true), true);
+});
+
+test('T-2955: outside tap on a button or field, or focus already elsewhere, is left alone', () => {
+  assert.equal(refocusAnchorAfterOutside({ closest: () => ({}) }, true), false);
+  assert.equal(refocusAnchorAfterOutside({ closest: () => null }, false), false);
 });

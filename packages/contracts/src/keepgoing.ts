@@ -113,9 +113,25 @@ export interface SetKeepGoingPauseRequest {
  * What the sweep did. `reported` is a notification and a ticket; `stood_down` the policy turned itself off (a person closed the chat, its
  * ticket closed). Slice 2: `recovered` an integrity ending brought back in place (T-136), `recover_refused` the portal would not (a new chat
  * follows), `restarted` a new chat continues an ended one (written on the ended one, with the class of its ending as the cause).
- * T-257 item 4: `escalated` a chat left down was told to the coordinator's chat.
+ * T-257 item 4: `escalated` a chat left down was told to the coordinator's chat. T-3189: `drained` a nudge was skipped because the chat has
+ * nothing to act on (its tickets wait on others, no worker runs): written once per idle period, not counted toward the cap.
  */
-export const KEEPGOING_ACTIONS = ['nudged', 'woke', 'answered', 'reported', 'failed', 'capped', 'stood_down', 'set', 'recovered', 'recover_refused', 'restarted', 'escalated', 'rebypassed'] as const;
+export const KEEPGOING_ACTIONS = [
+  'nudged',
+  'woke',
+  'answered',
+  'reported',
+  'failed',
+  'capped',
+  'stood_down',
+  'set',
+  'recovered',
+  'recover_refused',
+  'restarted',
+  'escalated',
+  'rebypassed',
+  'drained',
+] as const;
 export type KeepGoingActionKind = (typeof KEEPGOING_ACTIONS)[number];
 
 /**

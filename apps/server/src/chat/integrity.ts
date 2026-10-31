@@ -67,6 +67,28 @@ export const INTEGRITY_CASES: readonly IntegrityCase[] = [
     negative: 'a peer line with no SendMessage before it, with another body, from another task, after the window, or a second time',
   },
   {
+    id: 'replay-peer-handback',
+    line: 'a replayed user line with origin {kind: "peer", senderTaskId, body, handback: true}: an Agent-tool sub-agent\'s final report',
+    rule:
+      'only when THIS process showed that sub-agent as one of its own Agent (or Task) calls: the main thread\'s tool result of a stored ' +
+      'Agent/Task call whose tool_use_result.agentId equals senderTaskId (foreground: status "completed", handback "send"; background: ' +
+      'status "async_launched"), or a line of the sub-agent itself (agent_id equals senderTaskId, parent_tool_use_id a stored Agent/Task ' +
+      'call); from equals senderTaskId; each sighting allows one hand-back; no time window (a background sub-agent runs for hours); the ' +
+      'causes are stored with the process\'s control state, so a portal restart keeps them; the transcript gets a system row; T-3025',
+    evidence:
+      'Konfersi Business lead 4b69a73b, Claude Code 2.1.296, 2026-10-29 (its own transcript, ids kept, text not): a foreground Agent ' +
+      '(run_in_background false) -> 15 min later the main thread\'s tool result {tool_use_result: {status: "completed", agentId: ' +
+      '"a86ca9c48b4986227", handback: "send"}} -> a queued command {origin: {kind: "peer", from: "a86ca9c48b4986227", senderTaskId: ' +
+      '"a86ca9c48b4986227", name: "implementer", body: "[Subagent hand-back] …", handback: true}} absorbed mid-turn; and a background ' +
+      'Agent {tool_use_result: {isAsync: true, status: "async_launched", agentId: "ab5dfc7efa7dda8a1"}} -> 14 min later a user line ' +
+      '{origin: {kind: "peer", from/senderTaskId: "ab5dfc7efa7dda8a1", handback: true}}. No SendMessage before either: the portal ended ' +
+      'the lead both times ("origin peer")',
+    negative:
+      'a hand-back from an agent id this process never showed (another process\'s task), one whose id came from a sub-agent\'s own ' +
+      'nested call or from a tool result of a call that is no Agent/Task, one where from differs from senderTaskId, the same hand-back a ' +
+      'second time, and a peer line without handback: true (that one needs its SendMessage, replay-peer)',
+  },
+  {
     id: 'replay-local-command',
     line: 'a replayed user line holding local command output (<local-command-stdout>) under an id of its own',
     rule: 'only while one of the portal\'s own slash commands (/compact, …) runs',
@@ -266,6 +288,19 @@ export interface PeerCause {
   queued: boolean;
 }
 
+/**
+ * One Agent-tool sub-agent this process showed (T-3025): the call that started it and its agent id. Its hand-back (a peer line with
+ * `handback: true`) is accepted once per sighting. Ids only.
+ */
+export interface HandbackCause {
+  toolUseId: string;
+  taskId: string;
+  at: number;
+}
+
+/** How many hand-back causes a process keeps (the oldest go first). */
+export const HANDBACKS_MAX = 32;
+
 /* ---------- The control state that decides integrity, persisted (T-277 layer 2, migration 820) ---------- */
 
 /** The permission mode the stream must report and the changes Claude Code may make by itself (the controller's track, as stored). */
@@ -289,6 +324,8 @@ export interface StoredControl {
   peers: PeerCause[];
   /** The stop_task requests this process was sent whose report has not arrived (T-318); absent when none. */
   stops?: TaskStop[];
+  /** The Agent-tool sub-agents whose hand-back has not arrived (T-3025); absent when none. */
+  handbacks?: HandbackCause[];
 }
 
 /** The process a stored state belongs to. */
@@ -297,11 +334,18 @@ export function controlProc(row: { claude_session_id?: string | null; id: string
 }
 
 /** The stored form; the peer causes are kept as the controller holds them (at most 32, digests). */
-export function controlJson(proc: string, mode: StoredMode, peers: readonly PeerCause[], stops: readonly TaskStop[] = []): string {
+export function controlJson(
+  proc: string,
+  mode: StoredMode,
+  peers: readonly PeerCause[],
+  stops: readonly TaskStop[] = [],
+  handbacks: readonly HandbackCause[] = [],
+): string {
   const m: StoredMode = { expected: mode.expected, prePlan: mode.prePlan, enterPlan: mode.enterPlan, exitPlan: mode.exitPlan, bypassPending: mode.bypassPending };
   const p = peers.slice(-32).map((c) => ({ toolUseId: c.toolUseId, taskId: c.taskId, digest: c.digest, at: c.at, queued: c.queued }));
   const t = stops.slice(-TASK_STOPS_MAX).map((x) => ({ taskId: x.taskId, at: x.at }));
-  return JSON.stringify({ v: 1, proc, mode: m, peers: p, ...(t.length ? { stops: t } : {}) } satisfies StoredControl);
+  const h = handbacks.slice(-HANDBACKS_MAX).map((x) => ({ toolUseId: x.toolUseId, taskId: x.taskId, at: x.at }));
+  return JSON.stringify({ v: 1, proc, mode: m, peers: p, ...(t.length ? { stops: t } : {}), ...(h.length ? { handbacks: h } : {}) } satisfies StoredControl);
 }
 
 const str = (v: unknown, max = 200): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
@@ -344,8 +388,18 @@ export function readControl(stored: string | null | undefined, proc: string): St
       stops.push({ taskId: t.taskId, at: t.at });
     }
   }
+  const handbacks: HandbackCause[] = [];
+  if (o.handbacks !== undefined) {
+    if (!Array.isArray(o.handbacks) || o.handbacks.length > HANDBACKS_MAX) return null;
+    for (const x of o.handbacks as unknown[]) {
+      if (!x || typeof x !== 'object') return null;
+      const h = x as Record<string, unknown>;
+      if (!str(h.toolUseId) || !str(h.taskId, 64) || !/^[A-Za-z0-9_-]+$/.test(h.taskId) || typeof h.at !== 'number' || !Number.isFinite(h.at)) return null;
+      handbacks.push({ toolUseId: h.toolUseId, taskId: h.taskId, at: h.at });
+    }
+  }
   const mode: StoredMode = { expected: m.expected, prePlan: (m.prePlan as string | null) ?? null, enterPlan: m.enterPlan, exitPlan: m.exitPlan, bypassPending: (m.bypassPending as string | null) ?? null };
-  return { v: 1, proc, mode, peers, ...(stops.length ? { stops } : {}) };
+  return { v: 1, proc, mode, peers, ...(stops.length ? { stops } : {}), ...(handbacks.length ? { handbacks } : {}) };
 }
 
 /** A digest of a control response as parsed (its id, outcome and body), so a second copy can be compared with the first. */

@@ -185,6 +185,7 @@ import {
   controlJson,
   controlProc,
   endingRecord,
+  HANDBACKS_MAX,
   lessPermissive,
   PEER_CAUSE_MS,
   readControl,
@@ -195,6 +196,7 @@ import {
   TASK_STOPS_MAX,
   type ControlExpectation,
   type EndingCase,
+  type HandbackCause,
   type PeerCause,
   type TaskStop,
 } from './integrity.js';
@@ -1178,6 +1180,8 @@ export class ChatController {
   readonly #peerCauses = new Map<string, PeerCause[]>();
   /** Per session, the stop_task requests this portal sent to its current process whose report has not arrived (T-318); ids only. */
   readonly #taskStops = new Map<string, TaskStop[]>();
+  /** Per session, the Agent-tool sub-agents of its current process whose hand-back may follow (T-3025); ids only. */
+  readonly #handbacks = new Map<string, HandbackCause[]>();
   /** Per session, the control state last written and the process it is for (T-277 layer 2): an unchanged one is not written again. */
   readonly #controlSaved = new Map<string, { proc: string; json: string }>();
 
@@ -6483,6 +6487,7 @@ export class ChatController {
       }
     }
     if (parsed.peerSends || parsed.peerQueued) this.#notePeerCauses(sessionId, parsed);
+    if (parsed.agentSeen) this.#noteHandbackCauses(sessionId, parsed.agentSeen);
     if (parsed.controlResponse && !this.#acceptControlResponse(sessionId, parsed.controlResponse)) return;
     if (parsed.replay && !this.#acceptReplay(sessionId, parsed.replay)) return;
     if (parsed.commandUuid && !this.#acceptCommand(sessionId, parsed.commandUuid, parsed.inputs?.[0]?.state)) return;
@@ -6846,8 +6851,9 @@ export class ChatController {
       console.log(`[chat] ${shortId(sessionId)}: the report of task ${replay.taskStopped} that this portal stopped`);
       return true;
     }
-    // A sub-agent's SendMessage to the main conversation, delivered: only with its cause in this process's stream (T-136).
-    if (replay.origin?.kind === 'peer' && replay.peer && this.#peerCaused(sessionId, replay.peer)) {
+    // A sub-agent's SendMessage to the main conversation, delivered: only with its cause in this process's stream (T-136). An Agent-tool
+    // sub-agent's final report (handback): only from a sub-agent this process showed as its own (T-3025).
+    if (replay.origin?.kind === 'peer' && replay.peer && (this.#handedBack(sessionId, replay.peer) || this.#peerCaused(sessionId, replay.peer))) {
       // Should Claude Code report that line's command later (not seen yet), its lifecycle is the harness's, like a T-99 turn.
       if (replay.uuid) {
         this.#chat.addControl(sessionId, HARNESS_COMMAND(replay.uuid));
@@ -6915,6 +6921,41 @@ export class ChatController {
     console.log(
       `[chat] ${shortId(sessionId)}: a sub-agent's message (task ${shortId(peer.taskId)}) reached the main conversation after its SendMessage was queued`,
     );
+    return true;
+  }
+
+  /**
+   * Remembers the Agent-tool sub-agents this process shows (INTEGRITY_CASES `replay-peer-handback`, T-3025): only under a stored Agent/Task
+   * call of the main thread. One pending cause per agent id; a sub-agent seen again after its hand-back (continued) may hand back again.
+   */
+  #noteHandbackCauses(sessionId: string, seen: NonNullable<ParsedLine['agentSeen']>): void {
+    const causes = this.#handbacks.get(sessionId) ?? [];
+    let changed = false;
+    for (const s of seen) {
+      if (causes.some((c) => c.taskId === s.taskId)) continue;
+      if (!this.#chat.mainAgentCall(sessionId, s.toolUseId)) continue;
+      causes.push({ toolUseId: s.toolUseId, taskId: s.taskId, at: this.#clock() });
+      changed = true;
+    }
+    if (changed) this.#handbacks.set(sessionId, causes.slice(-HANDBACKS_MAX));
+  }
+
+  /**
+   * Whether a peer line is the hand-back of an Agent-tool sub-agent of this process: Claude Code marks it `handback: true`, its sender is
+   * one this process showed under its own Agent/Task call, and `from` names the same agent. The cause is used up (a second copy ends the
+   * session); the transcript gets a row saying the report came back.
+   */
+  #handedBack(sessionId: string, peer: NonNullable<NonNullable<ParsedLine['replay']>['peer']>): boolean {
+    if (peer.handback !== true || !peer.taskId || peer.from !== peer.taskId) return false;
+    const causes = this.#handbacks.get(sessionId) ?? [];
+    const i = causes.findIndex((c) => c.taskId === peer.taskId);
+    if (i < 0) return false;
+    const [cause] = causes.splice(i, 1);
+    if (causes.length) this.#handbacks.set(sessionId, causes);
+    else this.#handbacks.delete(sessionId);
+    const label = this.#names(sessionId).get(cause!.toolUseId) ?? this.#chat.taskLabel(sessionId, cause!.toolUseId);
+    this.#note(sessionId, label ? `Sub-agent "${label}" handed back its report` : 'A sub-agent handed back its report');
+    console.log(`[chat] ${shortId(sessionId)}: a sub-agent's hand-back (task ${shortId(peer.taskId)}) reached the main conversation`);
     return true;
   }
 
@@ -7020,6 +7061,7 @@ export class ChatController {
     this.#modes.set(sessionId, m);
     if (stored?.peers.length) this.#peerCauses.set(sessionId, stored.peers);
     if (stored?.stops?.length) this.#taskStops.set(sessionId, stored.stops);
+    if (stored?.handbacks?.length) this.#handbacks.set(sessionId, stored.handbacks);
     if (stored) this.#controlSaved.set(sessionId, { proc: stored.proc, json: row!.control_state! });
     if (row && row.state !== 'ended' && row.process === 'live') {
       console.log(
@@ -7047,6 +7089,7 @@ export class ChatController {
       { ...m, bypassPending: m.bypassPending ?? null },
       this.#peerCauses.get(sessionId) ?? [],
       this.#taskStops.get(sessionId) ?? [],
+      this.#handbacks.get(sessionId) ?? [],
     );
     if (saved?.json === json) return;
     this.#chat.patchSession(sessionId, { controlState: json });
@@ -7578,6 +7621,7 @@ export class ChatController {
     this.#modes.delete(sessionId);
     this.#peerCauses.delete(sessionId);
     this.#taskStops.delete(sessionId);
+    this.#handbacks.delete(sessionId);
     // The process is over: its control state with it (T-277 layer 2); the next process starts its own.
     this.#controlSaved.delete(sessionId);
     try {

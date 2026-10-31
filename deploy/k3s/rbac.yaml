@@ -1,5 +1,5 @@
 # What the portal's Kubernetes target does (apps/server/src/workspaces/kubernetes.ts): one Deployment and one volume claim per
-# workspace, a pod list to see them, exec into the pod (shell, files, Claude), the namespace create call it makes before each
+# workspace, a pod list to see them, exec into the pod (shell, files, Claude), an in-place resize of its pod (T-3081), the namespace create call it makes before each
 # workspace (it is skipped by the API server when the namespace exists, and the call is only allowed to create), and
 # the metrics API for CPU and memory figures.
 apiVersion: v1
@@ -20,6 +20,15 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create", "get"]
+  # In-place CPU and memory change of a running workspace pod (T-3081): a patch of the `resize` subresource only (container resources;
+  # the API server refuses anything else there), then the ReplicaSet that owns the pod gets the same template so the Deployment rolls
+  # nothing. Only in this namespace. Without these the portal falls back to the old roll (the pod restarts).
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "update"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "create", "delete"]

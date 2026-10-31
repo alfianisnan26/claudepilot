@@ -85,6 +85,9 @@ const refuse = () => { const t = stdin(); let plain = ''; try { plain = Object.v
   process.stderr.write('error: ' + t + ' ' + plain + '\n'); process.exit(1); };
 // T-1982: the API server proxying the registry's service: the file "cluster-tags.json" is its answer; none = the call fails.
 if (verb === 'get' && kind === '--raw') { const t = path.join(F, 'cluster-tags.json'); if (!fs.existsSync(t)) process.exit(1); process.stdout.write(fs.readFileSync(t, 'utf8')); }
+// T-3071: a node's isnan.me/pool label, from the file "nodes.json" ({name: pool}); a name not in it (or no file) is a node that cannot be read.
+else if (verb === 'get' && kind === 'node') { const f = path.join(F, 'nodes.json'); const n = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
+  if (!(name in n)) process.exit(1); process.stdout.write(n[name]); }
 else if (verb === 'get' && kind === 'jobs') { process.stdout.write(JSON.stringify({ items: read().jobs.map(k8s) })); }
 else if (verb === 'get' && kind === 'job') { const j = job(name);
   // As kubectl: --ignore-not-found prints nothing and exits 0 for a Job that does not exist (T-523).
@@ -3729,6 +3732,57 @@ test('T-611 merge: the reuse key hashes job-run.sh AND job-run.yaml; the Secret 
   assert.ok(!p.applied1().includes(secret), 'the value is never in the manifest');
 });
 
+test("T-3006: an --also clone of platform/konfersi-lab-platform is KONFERSI_LAB_PLATFORM_DIR for the command; another --also or none sets nothing; the command's own value wins", () => {
+  const root = mkdtempSync(join(tmpdir(), 'cp-jobrun-labdir-'));
+  roots.push(root);
+  const git = (args: string[], cwd: string) =>
+    spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  // One bare repository per name, each with one commit on main.
+  const bare = (rel: string) => {
+    const src = join(root, `src-${hex(3)}`);
+    mkdirSync(src);
+    git(['init', '-q', '-b', 'main'], src);
+    writeFileSync(join(src, 'README'), `${rel}\n`);
+    git(['add', '.'], src);
+    git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'one'], src);
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    git(['clone', '-q', '--bare', src, join(root, rel)], root);
+    return `file://${join(root, rel)}`;
+  };
+  const main = bare('claudepilot.git');
+  const lab = bare('platform/konfersi-lab-platform.git');
+  const shared = bare('konfersi/konfersi-shared.git');
+  const pod = (also: string, cmd: string) => {
+    const jr = join(root, `run-${hex(3)}`);
+    const r = runPod(TEMPLATE, {
+      PATH: process.env.PATH,
+      JR_ROOT: jr,
+      JR_REPO_URL: main,
+      JR_REF: 'main',
+      JR_ALSO: also,
+      JR_STEPS: 'none',
+      JR_ARTIFACTS: '',
+      JR_ARTIFACT_MAX: '1',
+      JR_CMD: Buffer.from(cmd).toString('base64'),
+      NODE_NAME: 'n',
+    });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return { jr, out: r.stdout };
+  };
+  // The command prints the variable (empty when unset) and, when set, the README of the folder it names.
+  const show = 'echo "LABDIR=$KONFERSI_LAB_PLATFORM_DIR"; [ -z "$KONFERSI_LAB_PLATFORM_DIR" ] || cat "$KONFERSI_LAB_PLATFORM_DIR/README"';
+  // With the lab platform among the --also clones: its absolute path next to the repository, and the clone is there.
+  const withLab = pod(`konfersi-shared=${shared}@main konfersi-lab-platform=${lab}@main`, show);
+  assert.ok(withLab.out.includes(`\nLABDIR=${join(withLab.jr, 'w/konfersi-lab-platform')}\n`), withLab.out);
+  assert.match(withLab.out, /^platform\/konfersi-lab-platform\.git$/m, "the path holds the clone's files");
+  // Another --also, or none: not set.
+  assert.match(pod(`konfersi-shared=${shared}@main`, show).out, /^LABDIR=$/m);
+  assert.match(pod('', show).out, /^LABDIR=$/m);
+  // A value the command sets itself is the one it sees.
+  const own = pod(`konfersi-lab-platform=${lab}@main`, 'KONFERSI_LAB_PLATFORM_DIR=../mine; echo "LABDIR=$KONFERSI_LAB_PLATFORM_DIR"');
+  assert.match(own.out, /^LABDIR=\.\.\/mine$/m);
+});
+
 test('gates first: while a gate pod waits for a node and a Job of ours runs, a Job about to go waits; it goes once the gate is placed; with none running it never waits', async () => {
   const w = world([{ name: 'claudepilot-job-00000001', chat: 'chat-x' }]);
   // A gate Pending with no node (as kubectl prints name=nodeName per line).
@@ -3747,4 +3801,155 @@ test('gates first: while a gate pod waits for a node and a Job of ours runs, a J
   const r2 = await w2.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true']).done;
   assert.equal(r2.code, 0, r2.out);
   assert.doesNotMatch(r2.out, /gates go first/);
+});
+
+// ---- T-3071: --node <name> pins a Job to one node of the worker pool, --cpu <n> makes its CPU requested = limited (a Guaranteed pod), so a
+// perf or Lighthouse Job runs on a quiet node with a real CPU request. The fake cluster: k3s-node2 and k3s-node3 in the worker pool, k3s-master control.
+const NODES = { 'k3s-node2': 'worker', 'k3s-node3': 'worker', 'k3s-master': 'control', 'k3s-bare': '' };
+const PIN3 = [
+  { key: 'kubernetes.io/hostname', operator: 'In', values: ['k3s-node3'] },
+  { key: 'isnan.me/pool', operator: 'In', values: ['worker'] },
+];
+function pinned(extra: string[], top: number | undefined = 50, over: Record<string, string> = {}) {
+  const w = world([], top === undefined ? {} : { top });
+  writeFileSync(join(w.root, 'nodes.json'), JSON.stringify(NODES));
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', ...extra, '--', 'true'], over);
+  return { w, r };
+}
+const pinRule = (w: ReturnType<typeof world>) =>
+  ((yamlLoad(w.applied1()) as Manifest).spec.template.spec.affinity as { nodeAffinity?: NodeAff | null }).nodeAffinity?.[REQ];
+type Res = { requests: { cpu: string; memory: string }; limits: { cpu: string; memory: string } };
+const allContainers = (m: Manifest) => [...(m.spec.template.spec.initContainers ?? []), ...m.spec.template.spec.containers];
+
+test('T-3071 --cpu <n>: n cores requested = limited in BOTH containers (a Guaranteed pod); without it 500m and 4, unchanged', () => {
+  for (const [extra, req, lim] of [
+    [[], '500m', '4'],
+    [['--cpu', '2'], '2', '2'],
+    [['--cpu', '1', '--big'], '1', '1'],
+    [['--cpu', '4'], '4', '4'],
+  ] as const) {
+    const { w, r } = pinned([...extra]);
+    assert.equal(r.code, 0, `${extra.join(' ')}: ${r.out}`);
+    const m = yamlLoad(w.applied1()) as Manifest;
+    const cs = allContainers(m);
+    assert.equal(cs.length, 2, 'fetch and run');
+    for (const c of cs) {
+      const res = c.resources as Res;
+      assert.equal(res.requests.cpu, req, `${extra.join(' ')}: cpu request`);
+      assert.equal(res.limits.cpu, lim, `${extra.join(' ')}: cpu limit`);
+      // Guaranteed QoS: every container requests what it is limited to, CPU and memory.
+      if (extra.length) assert.deepEqual(res.requests, res.limits, `${extra.join(' ')}: requests = limits`);
+    }
+    assert.doesNotMatch(JSON.stringify(m), /__[A-Z_]+__/, 'no placeholder left');
+    if (extra.length) {
+      assert.match(r.out, new RegExp(`with \\dGi and ${req} CPU \\(Guaranteed\\); log: `));
+      assert.match(w.log(), new RegExp(`^=== JOB-RUN PLACEMENT node=\\S+ .* cpu=${req}$`, 'm'));
+    } else assert.doesNotMatch(r.out, /CPU \(Guaranteed\)/);
+  }
+});
+
+test('T-3071 --cpu: whole cores from 1 to 4, anything else a usage error before any kubectl call', () => {
+  for (const v of ['0', '5', '10', '1.5', '500m', '-1', 'x', '', '01']) {
+    const { w, r } = pinned(['--cpu', v]);
+    assert.equal(r.code, 2, `--cpu ${JSON.stringify(v)}: ${r.out}`);
+    assert.match(r.out, /--cpu: whole cores, 1 to 4/);
+    assert.equal(w.calls(), '', `--cpu ${JSON.stringify(v)}: no kubectl call`);
+  }
+  for (const opt of ['--cpu', '--node']) {
+    const r = world().run(['--repo', 'claudepilot', '--ref', 'main', opt]);
+    assert.equal(r.code, 2, r.out);
+    assert.match(r.out, new RegExp(`${opt} needs a value`));
+  }
+});
+
+test('T-3071 --node <worker>: the REQUIRED rule names the node AND the worker pool, under the line and over it (one term, ANDed)', () => {
+  const under = pinned(['--node', 'k3s-node3', '--cpu', '2']);
+  assert.equal(under.r.code, 0, under.r.out);
+  assert.deepEqual(pinRule(under.w), { nodeSelectorTerms: [{ matchExpressions: PIN3 }] });
+  assert.match(under.w.calls(), /^kubectl get node k3s-node3 -o jsonpath=\{\.metadata\.labels\.isnan\\\.me\/pool\}$/m, 'the pool is read');
+  assert.match(under.w.log(), /^=== JOB-RUN PLACEMENT node=\S+ .* pinned=k3s-node3 cpu=2$/m);
+  const over = pinned(['--node', 'k3s-node3'], 90);
+  assert.equal(over.r.code, 0, over.r.out);
+  assert.deepEqual(pinRule(over.w), {
+    nodeSelectorTerms: [{ matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }, ...PIN3] }],
+  });
+  // With the avoid list too: still one term.
+  const avoid = pinned(['--node', 'k3s-node3'], 50, { JOB_RUN_AVOID_NODES: 'k3s-master' });
+  assert.equal(avoid.r.code, 0, avoid.r.out);
+  assert.deepEqual(pinRule(avoid.w), {
+    nodeSelectorTerms: [{ matchExpressions: [{ key: 'kubernetes.io/hostname', operator: 'NotIn', values: ['k3s-master'] }, ...PIN3] }],
+  });
+  // Without --node nothing changes: no node read, no rule under the line.
+  const plain = pinned([]);
+  assert.equal(plain.r.code, 0, plain.r.out);
+  assert.doesNotMatch(plain.w.calls(), /get node /);
+  assert.equal(pinRule(plain.w), undefined);
+});
+
+test('T-3071 --node: the release patch keeps the pin when the master moves while the Job waits', () => {
+  const w = world([], { top: 50 });
+  writeFileSync(join(w.root, 'nodes.json'), JSON.stringify(NODES));
+  writeFileSync(join(w.root, 'top2.txt'), topLine('9000Mi', '90%'));
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--node', 'k3s-node3', '--', 'true']);
+  assert.equal(r.code, 0, r.out);
+  const patches = w.calls().split('\n').filter((l) => / patch job /.test(l));
+  assert.equal(patches.length, 2, patches.join('\n'));
+  assert.deepEqual(
+    body(patches[0]),
+    patchOf({ nodeSelectorTerms: [{ matchExpressions: [{ key: 'isnan.me/pool', operator: 'NotIn', values: ['control'] }, ...PIN3] }] }),
+  );
+});
+
+test('T-3071 --node: a control-plane node, a node without the pool label, an unknown node, a bad name or an avoided node is refused (rc 2), no Job', () => {
+  for (const [what, name, re, over] of [
+    ['control plane', 'k3s-master', /--node k3s-master: not a node of the worker pool .*control-plane nodes are refused/, {}],
+    ['no pool label', 'k3s-bare', /--node k3s-bare: not a node of the worker pool/, {}],
+    ['unknown', 'k3s-node9', /--node k3s-node9: not a node of the worker pool .*or it could not be read/, {}],
+    ['avoided', 'k3s-node3', /--node k3s-node3 is in JOB_RUN_AVOID_NODES \(k3s-node2,k3s-node3\): the Job could never start/, { JOB_RUN_AVOID_NODES: 'k3s-node2,k3s-node3' }],
+  ] as const) {
+    const { w, r } = pinned(['--node', name], 50, over);
+    assert.equal(r.code, 2, `${what}: ${r.out}`);
+    assert.match(r.out, re, what);
+    assert.equal(w.applied().length, 0, `${what}: no Job`);
+    assert.equal(w.state().jobs.length, 0, `${what}: no Job`);
+  }
+  for (const bad of ['-x', 'a b', 'k3s-node3\n=== JOB-RUN EXIT 0', 'node_3', '', 'x.']) {
+    const { w, r } = pinned(['--node', bad]);
+    assert.equal(r.code, 2, `${JSON.stringify(bad)}: ${r.out}`);
+    assert.match(r.out, /--node: a k3s node name .*the argument is not shown/);
+    assert.doesNotMatch(r.out, /=== JOB-RUN EXIT/, 'the value is never echoed');
+    assert.equal(w.calls(), '', 'no kubectl call');
+  }
+  // The metrics API being down changes nothing: the pin and its pool check stand.
+  const nometrics = pinned(['--node', 'k3s-node3'], undefined);
+  assert.equal(nometrics.r.code, 0, nometrics.r.out);
+  assert.deepEqual(pinRule(nometrics.w), { nodeSelectorTerms: [{ matchExpressions: PIN3 }] });
+});
+
+test('T-3071 --node: Pending because the pinned node has no room says so once, naming the node', () => {
+  const w = world([], { top: 50 });
+  writeFileSync(join(w.root, 'nodes.json'), JSON.stringify(NODES));
+  writeFileSync(join(w.root, 'pending'), "0/3 nodes are available: 1 Insufficient cpu, 2 node(s) didn't match Pod's node affinity/selector.");
+  const r = w.run(['--repo', 'claudepilot', '--ref', 'main', '--node', 'k3s-node3', '--cpu', '2', '--', 'true'], { JOB_RUN_START_WAIT_S: '1' });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /is Pending: it may run only on k3s-node3 \(--node\), which has no room for it now \(0\/3 nodes are available: 1 Insufficient cpu/);
+  assert.equal((r.out.match(/is Pending/g) ?? []).length, 1, 'said once');
+  assert.doesNotMatch(r.out, /JOB_RUN_AVOID_NODES/, 'not the avoid-list message');
+  assert.match(w.log(), /pending=affinity pinned=k3s-node3 decision=waits-for-pinned-node/);
+});
+
+test('T-3071 reuse: --node and --cpu are in the key (a pass on any node at 500m never stands for a pinned, Guaranteed one)', () => {
+  const w = world();
+  writeFileSync(join(w.root, 'nodes.json'), JSON.stringify(NODES));
+  const c = sha();
+  assert.equal(go(w, c, 'npm test').code, 0);
+  let seen = jobs(w);
+  for (const extra of [['--cpu', '2'], ['--node', 'k3s-node3'], ['--node', 'k3s-node3', '--cpu', '2'], ['--node', 'k3s-node2', '--cpu', '2']]) {
+    const r = go(w, c, 'npm test', extra);
+    assert.equal(r.code, 0, r.out);
+    assert.doesNotMatch(r.out, /reused a passed result/, extra.join(' '));
+    assert.equal(jobs(w), ++seen, `${extra.join(' ')} runs a Job`);
+  }
+  assert.match(go(w, c, 'npm test', ['--node', 'k3s-node3', '--cpu', '2']).out, /reused a passed result/, 'the same pin and CPU: a hit');
+  assert.equal(jobs(w), seen);
 });

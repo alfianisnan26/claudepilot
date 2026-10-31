@@ -473,6 +473,24 @@ queued for the main conversation's next turn."}`; then `system/init` (a new turn
   an answer the portal gave, the `behavior` it recorded (allow, deny). A different mode, an error, another shape, another behavior or an
   id never asked still ends the session.
 
+**An Agent-tool sub-agent's hand-back (T-3025, observed 2026-10-29).** Claude Code 2.1.296 delivers the final report of an Agent-tool
+sub-agent, foreground or background, as a peer line of its own, with **no** SendMessage before it: `origin: {kind: "peer", from,
+senderTaskId, name, body: "[Subagent hand-back] …", handback: true}`. The case `replay-peer` above never matched it, so every Agent-tool
+hand-back ended the lead ("origin peer"; the Konfersi Business lead three times on 2026-10-29). Seen in that lead's own transcript: a
+foreground Agent's main-thread tool result `{tool_use_result: {status: "completed", agentId, handback: "send"}}`, the hand-back read in
+the same moment (absorbed mid-turn); a background Agent's launch result `{tool_use_result: {isAsync: true, status: "async_launched",
+agentId}}`, the hand-back 14 minutes later. Case `replay-peer-handback`: the line is believed only when `handback` is the boolean
+`true`, `from` equals `senderTaskId`, and this process showed that agent id under one of its own main-thread Agent (or Task) calls
+stored in the transcript: in that call's tool result (`tool_use_result.agentId`, main thread only) or on a line of the sub-agent itself
+(`agent_id` under the call). No time window (a background sub-agent runs for hours). Each sighting allows one hand-back; a sub-agent
+seen again afterwards (continued) may hand back again. The causes are kept with the process's control state (`handbacks`, ids and time
+only), so a portal restart keeps them and a new process drops them. The transcript gets a system row, "Sub-agent "<description>" handed
+back its report" (the report itself is the Agent call's result, or the background task's output). Still ending the session: a hand-back
+from an agent id this process never showed (another process's task, `replay-peer-unknown`), an id seen only on a call that is no
+Agent/Task call or on a sub-agent's own nested Agent call, `from` naming another agent, a second copy, and a peer line without `handback:
+true` (that one needs its SendMessage, `replay-peer`). Not covered (not observed): a hand-back that arrives without any line of its
+sub-agent or its result in this process's stream.
+
 **The report of a task the portal stopped (T-318, observed 2026-10-14).** When the host stops a background command (`stop_task`),
 Claude Code 2.1.296 queues its own report of it, passive (it starts no turn), and delivers it with the NEXT turn, after that turn's
 `system/init`: a replayed user line with `origin: {kind: "task-notification", runId}` and **no** `producer` (the CLI enqueues it
@@ -511,7 +529,8 @@ report from the row. What the integrity checks decide by is stored on the sessio
 mode before plan, plan entered (EnterPlanMode seen), leaving plan approved (ExitPlanMode allowed), the id of a Bypass request sent under
 the grant whose reply was not read yet, the sub-agent SendMessage causes a peer line may follow (tool use id, task id, sha256 digest,
 time, queued; never text), and the `stop_task` requests whose report has not arrived (task id, time; `stops`, only when there are any,
-T-318). It is written with every change: a line's change commits in the same transaction as the line's byte offset,
+T-318), and the Agent-tool sub-agents whose hand-back may follow (tool use id, agent id, time; `handbacks`, only when there are any,
+T-3025). It is written with every change: a line's change commits in the same transaction as the line's byte offset,
 so a restart resumes from exactly the state that line left; an answer (ExitPlanMode), a launch, a move and the gated Bypass request
 write at once; it is cleared when the process is over. Control lines and the digest of their first reply were already stored
 (`chat_inputs`, migration 771). When the portal attaches to a live process it holds nothing for, it reloads that state exactly; a state
@@ -1327,6 +1346,7 @@ watched chats on Home. Neither ever repairs Bypass (the lease is the owner's ope
 | FR72 | **The supervisor reads the portal's pauses** (one direction: the portal is the source of truth from 2026-10-14): each round it reads `GET /api/keepgoing`; a pause of all, or of a track's key, leaves that track alone exactly like its `PAUSE-<track>` file (which still works, as a local override; the portal never reads the files). | ✅ Built; `node --check`. |
 | FR73 | **A chat left down is escalated** (T-257 items 1 and 4): next to the `down` ticket (priority high) and the `keepgoing_attention` notification (urgency high), it is a **Needs you** item `keepgoing_down` ([attention.md](attention.md) §2) until it runs again, and the **coordinator's chat** is told once per report: the chat the setting `keepgoing.coordinator` names (a session id, Settings group "Keep going"), else the chat's parent. A message at priority later, as the portal, with ids and fixed words only (never the chat's title); only to a coordinator chat that is not ended and that the policy's owner may operate; one `escalated` trail and audit row (`keepgoing.escalated`); a send that fails is a `failed` row. | ✅ Built; server tests (`keepgoing/escalate.test.ts`: 15 minutes still ended gives one ticket, one notification, one Needs you item, one message to the coordinator, nothing repeated, all cleared when it runs; the setting wins over the parent; an ended coordinator or none is not told; a harmless ending after the integrity cap is still recovered in place; `attention/attention.test.ts`). |
 | FR74 | **Programs in the UI** (slice 3): Session info has a **Program** field under the Keep going switch while it is on (44 px, 16 px text on a phone, an InfoTip; lowercase letters, digits and hyphens, empty is none; saved on Enter or when left, `PUT …/keep-going { program }`). The chat list has a **Program** picker beside Group by (icon only, 44 x 44 px, the native list: All programs, then each program with its count; shown only when a chat has a program); a program narrows the chips' counts and the list. | ✅ Built; web tests (`listOrder.test.ts`); browser: `tools/qa/session-list.mjs` and `tools/qa/keepgoing.mjs`. |
+| FR80 | **A drained chat is not nudged** (T-3189; a drained lead got 60 identical nudges in 24 h, hit the cap and a "left for a person" ticket was filed, T-3187). When a nudge (or the wake of a sleeping chat before one) is due, Keep going skips it when ALL hold: the chat **holds tickets** (assigned to it as a session) and none is open or in progress (all in review, blocked or closed); **nothing changed on them since the chat's last activity** (the newest `updated_at` of its tickets, which a comment, a verdict, a check, a status change or an assignment moves, is not after the chat's `lastActivityAt`); no sub-agent or background task runs; and no worker it started has not ended. A skip sends nothing and is not counted toward `maxNudgesPerDay` or `maxWakesPerDay`; one `drained` trail row and one `keepgoing.drained` audit row (info) per idle period say so, not one per round. The next round after a change lands on one of its tickets (or a ticket is newly assigned to it, or one is open or in progress, or a worker runs) nudges it as before. **A chat that never held a ticket keeps today's behaviour** (nudged); so do an interrupted chat (woken) and a continue owed after a wake. Anything unknown (no ticket or worker port, a failing read) counts as not drained. Restart, recover, the Bypass put-back and the caps' values are unchanged. | ✅ Built; server tests (`keepgoing/drained.test.ts`: all in review or blocked gives no nudge in 6 hours, no cap spent, one drained row per idle period; a comment, a status change, a new assignment nudges at the next round; an open ticket or a live worker is nudged, an ended worker does not count; no tickets keeps the old nudges and cap; a sleeping drained chat is not woken, an interrupted one is; `tickets/heldBy.test.ts`). |
 
 **Browser check (slice 2, 2026-10-14):** `tools/qa/keepgoing.mjs` against a scratch portal in a Job (`claudepilot-job-9c63d87c`, commit
 6d0028f): 139/139 checks at 390 px (touch, safe areas) and 1280 px, light and dark: slice 1's chip and Session info, and the Autonomy card

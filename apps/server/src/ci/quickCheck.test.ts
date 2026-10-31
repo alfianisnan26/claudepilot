@@ -16,10 +16,8 @@ const roots: string[] = [];
 after(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
 
 /** The machine's git configuration (signing, hooks) stays out of the fixture. */
-// NODE_TEST_CONTEXT is left out: a `node --test` the script starts (T-2975) would otherwise report to this runner instead of to its own output.
-const PARENT_ENV = { ...process.env };
-delete PARENT_ENV.NODE_TEST_CONTEXT;
-const GIT_ENV = { ...PARENT_ENV, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+// NODE_TEST_CONTEXT is dropped: a nested `node --test` under it reports to the parent and exits 0 even when a test fails.
+const GIT_ENV = { ...process.env, NODE_TEST_CONTEXT: undefined, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 const sh = (cwd: string, cmd: string) => {
   const r = spawnSync('bash', ['-c', cmd], {
     cwd,
@@ -249,4 +247,64 @@ test('--dir names the worktree, so a lane whose shell is back in another folder 
   assert.equal(readFileSync(join(f.root, 'args'), 'utf8').split('\n')[1], sh(f.work, 'git rev-parse HEAD'), 'the worktree’s pushed commit');
   assert.match(readFileSync(f.log, 'utf8'), /^vitest run x\.test\.mjs in pkg$/m);
   assert.equal(run(f.root, f.fake, ['--dir', join(f.root, 'nope')]).status, 2);
+});
+
+/** A second package in the fixture, committed so the Job's clone has it; `files` are written relative to it. */
+function pkg(f: ReturnType<typeof fixture>, name: string, packageJson: string, files: Record<string, string>) {
+  mkdirSync(join(f.work, name), { recursive: true });
+  writeFileSync(join(f.work, name, 'package.json'), packageJson);
+  for (const [p, body] of Object.entries(files)) {
+    mkdirSync(dirname(join(f.work, name, p)), { recursive: true });
+    writeFileSync(join(f.work, name, p), body);
+  }
+  sh(f.work, 'git add -A && git commit -qm pkg');
+}
+
+test('T-857: a file the package test:scripts glob matches runs with node --test, not vitest; other files keep their runner', () => {
+  const f = fixture(0);
+  pkg(f, 'be', JSON.stringify({ scripts: { 'test:scripts': 'node --test scripts/*.check.mjs' } }), {
+    'scripts/a.check.mjs': "import { test } from 'node:test';\ntest('ok', () => {});\n",
+    'src/b.test.mjs': 'x\n',
+  });
+  tool(join(f.work, 'be/node_modules/.bin/vitest'), `echo "vitest $*" >> ${f.log}; exit 0`);
+  const r = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'be/scripts/a.check.mjs', '--test', 'be/src/b.test.mjs']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: test:be\/scripts\/a\.check\.mjs \(node --test\) ok/);
+  assert.match(r.stdout, /::: test:be\/src\/b\.test\.mjs ok/);
+  const tools = readFileSync(f.log, 'utf8');
+  assert.doesNotMatch(tools, /a\.check\.mjs/, 'the node:test file never reached vitest');
+  assert.match(tools, /^vitest run src\/b\.test\.mjs$/m);
+  // A failing node:test file fails the check.
+  writeFileSync(join(f.work, 'be/scripts/a.check.mjs'), "import { test } from 'node:test';\ntest('bad', () => { throw new Error('x'); });\n");
+  sh(f.work, 'git commit -qam bad');
+  const bad = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'be/scripts/a.check.mjs']);
+  assert.equal(bad.status, 1);
+  assert.equal(last(bad.stdout), 'QUICK CHECK FAILED: test:be/scripts/a.check.mjs (node --test)');
+});
+
+test("T-3101: a package with its own scripts/test.mjs entry runs the file through it (extensionless imports need its bundle)", () => {
+  const f = fixture(0);
+  pkg(f, 'lab', '{}\n', {
+    'scripts/test.mjs': `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(f.log)}, 'entry ' + process.argv.slice(2).join(' ') + '\\n');\n`,
+    'src/x.test.ts': "import './y';\n",
+  });
+  tool(join(f.work, 'lab/node_modules/.bin/vitest'), `echo "vitest $*" >> ${f.log}; exit 0`);
+  const r = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'lab/src/x.test.ts']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: test:lab\/src\/x\.test\.ts \(scripts\/test\.mjs\) ok/);
+  const tools = readFileSync(f.log, 'utf8');
+  assert.match(tools, /^entry src\/x\.test\.ts$/m);
+  assert.doesNotMatch(tools, /vitest/);
+});
+
+test('a plain vitest package (no test:scripts, no scripts/test.mjs) still runs vitest', () => {
+  const f = fixture(0);
+  pkg(f, 'plain', JSON.stringify({ scripts: { test: 'vitest run', 'test:scripts': 'node --test scripts/*.check.mjs' } }), {
+    'src/z.test.ts': 'x\n',
+  });
+  tool(join(f.work, 'plain/node_modules/.bin/vitest'), `echo "vitest $*" >> ${f.log}; exit 0`);
+  const r = run(f.work, f.fake, ['--no-format', '--no-lint', '--test', 'plain/src/z.test.ts']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /::: test:plain\/src\/z\.test\.ts ok/);
+  assert.match(readFileSync(f.log, 'utf8'), /^vitest run src\/z\.test\.ts$/m);
 });
