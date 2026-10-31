@@ -7,14 +7,25 @@
 
 import { TICKET_LIMITS, type ReporterBuildInfo, type ReporterDeploymentState, type ReporterEvidence, type ReporterRepro, type ReporterTicketSite } from '@portal/contracts';
 
-/** One line of untrusted text inline: no Markdown, no HTML, no line breaks. */
+/** Every control character and line or paragraph separator (C0, DEL, C1, U+2028, U+2029): what could start a new line in a prompt. */
+const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+
+/** Untrusted text on one line: control characters and line breaks become one space, then capped. */
+export const oneLine = (text: string | null | undefined, max = 200): string => (text ?? '').replace(BREAKS, ' ').slice(0, max);
+
+/** One line of untrusted text inline: no Markdown, no HTML, no line breaks, no control characters. */
 export function inline(text: string | null | undefined, max = 200): string {
-  const s = (text ?? '').replace(/[\r\n\t]+/g, ' ').slice(0, max);
-  return s.replace(/[\\`*_{}[\]()#+!|<>~]/g, (c) => `\\${c}`);
+  return oneLine(text, max).replace(/[\\`*_{}[\]()#+!|<>~]/g, (c) => `\\${c}`);
 }
 
 /** Untrusted text as a code span (backticks inside are dropped). */
-const code = (text: string | null | undefined, max = 200) => `\`${(text ?? '').replace(/[`\r\n]/g, ' ').slice(0, max)}\``;
+const code = (text: string | null | undefined, max = 200) => `\`${oneLine(text, max).replace(/`/g, ' ')}\``;
+
+/**
+ * Untrusted Markdown kept as written (the reporter's words, a review comment), except an HTML comment opener: the footer marker the server
+ * finds later (DEPLOY_FOOTER_START) can never come from the page, so a rewrite never cuts what follows it.
+ */
+const untrustedMarkdown = (text: string) => text.replace(/<!--/g, '<\\!--');
 
 export interface DescribedCapture {
   captureId: string;
@@ -61,7 +72,7 @@ export function deploymentLine(states: ReporterDeploymentState[]): string {
   return states
     .map((s) =>
       s.status === 'deployed'
-        ? `${s.environment} deployed${s.fixCommit ? ` (${s.fixCommit.slice(0, 7)})` : ''}`
+        ? `${s.environment} deployed${s.fixCommit ? ` (${s.fixCommit.slice(0, 7)})` : ''}${s.confidence === 'observed' ? ' (observed by the widget, no pipeline yet)' : ''}`
         : s.status === 'not-deployed'
           ? `${s.environment} not deployed${s.currentCommit ? ` (live ${s.currentCommit.slice(0, 7)})` : ''}`
           : `${s.environment} unknown${s.reason ? ` (${reason[s.reason]})` : ''}`,
@@ -80,7 +91,7 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
   const lines: string[] = [];
   lines.push(`### ${total > 1 ? `Capture ${c.index} of ${total}: ` : 'Page: '}${code(c.path, 300)}`);
   lines.push('');
-  if (c.body) lines.push(c.body.trim(), '');
+  if (c.body) lines.push(untrustedMarkdown(c.body.trim()), '');
   else if (c.note) lines.push(`> ${inline(c.note, 1000)}`, '');
   lines.push(`- URL: ${code(c.pageUrl, 400)}`);
   const e = c.evidence;
@@ -111,7 +122,7 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
 export function describeTicket(d: DescribeInput): string {
   const first = d.captures.find((c) => c.evidence)?.evidence ?? null;
   const out: string[] = [];
-  if (d.text.trim()) out.push(d.text.trim(), '');
+  if (d.text.trim()) out.push(untrustedMarkdown(d.text.trim()), '');
   out.push('---', '', '### Where', '');
   out.push(`- Site: ${code(d.site.origin, 200)} (environment ${code(d.site.environment, 20)}), repo ${code(d.site.repo, 200)}`);
   if (d.site.declaredMismatch)
@@ -122,7 +133,7 @@ export function describeTicket(d: DescribeInput): string {
   out.push(`- Reported with the UI reporter (SDK ${code(d.sdkVersion || 'unknown', 40)})${d.target.kind === 'session' ? `, sent straight to the session ${inline(d.target.label, 60)} (urgent)` : ''}.`);
   out.push('');
   for (const c of d.captures) out.push(captureSection(c, d.captures.length, d.ticketId), '');
-  const repro = first ? buildRepro(first) : null;
+  const repro = first ? buildRepro(first, d.site.origin) : null;
   if (repro?.steps.length) {
     out.push('### Steps to reproduce', '');
     repro.steps.forEach((s, i) => out.push(`${i + 1}. ${s}`));
@@ -137,9 +148,9 @@ export function describeTicket(d: DescribeInput): string {
   return text;
 }
 
-/** Replaces the deployment footer of a description (or appends one). */
+/** Replaces the deployment footer of a description (or appends one). The LAST marker: the footer is always the end of the description. */
 export function withFooter(description: string, footer: string): string {
-  const at = description.indexOf(DEPLOY_FOOTER_START);
+  const at = description.lastIndexOf(DEPLOY_FOOTER_START);
   const head = at >= 0 ? description.slice(0, at) : `${description.trimEnd()}\n\n`;
   const next = `${head}${footer}`;
   return next.length > TICKET_LIMITS.description ? description : next;
@@ -148,6 +159,16 @@ export function withFooter(description: string, footer: string): string {
 /* ---------- Repro ---------- */
 
 const quoteJs = (s: string) => JSON.stringify(s);
+
+/** A path that, joined to the origin, stays on it; anything else is "/". */
+function onOrigin(origin: string, path: string): string {
+  if (!path.startsWith('/') || path.startsWith('//')) return '/';
+  try {
+    return new URL(`${origin}${path}`).origin === origin ? path : '/';
+  } catch {
+    return '/';
+  }
+}
 
 function who(i: { label: string | null; selector: string | null }): string {
   if (i.label) return `"${inline(i.label, 80)}"`;
@@ -160,10 +181,11 @@ function who(i: { label: string | null; selector: string | null }): string {
  * viewport and user agent, replays clicks, changes (masked values become a placeholder fill), submits, keys and navigations, and ends with an
  * expect on the anchored element. Never a typed value: the trail never had one.
  */
-export function buildRepro(e: ReporterEvidence): ReporterRepro {
-  const origin = e.page.origin;
+export function buildRepro(e: ReporterEvidence, siteOrigin?: string): ReporterRepro {
+  // The SITE's origin (the token's), never the page's claim; a start path that would leave it (`@host`, `//host`) falls back to "/".
+  const origin = siteOrigin ?? e.page.origin;
   const firstNav = e.interactions.find((i) => i.kind === 'navigate' && i.detail);
-  const start = firstNav?.detail || e.page.path || '/';
+  const start = onOrigin(origin, firstNav?.detail || e.page.path || '/');
   const steps: string[] = [`Open ${code(`${origin}${start}`, 300)} at ${e.device.viewport.w}x${e.device.viewport.h}${e.device.mobile ? ' (mobile)' : ''}.`];
   const body: string[] = [];
   for (const i of e.interactions) {

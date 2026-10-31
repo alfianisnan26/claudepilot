@@ -118,9 +118,12 @@ export interface ReporterTicketSite {
 }
 
 /**
- * A build seen live in an environment (owner, 2026-10-31: fundamental to know whether a fix is deployed). Sources: `widget` = a
- * signed-in panel on that site reported the page's build (ReporterBuildInfo.commit) as it loaded; `pipeline` = a deploy pipeline
- * or agent posted it with a portal token after deploying. Kept per (repo, environment): the current commit and a short history.
+ * A build seen live in an environment (owner, 2026-10-31: fundamental to know whether a fix is deployed). Sources: `pipeline` = a
+ * deploy pipeline or agent posted it with a portal token after deploying (AUTHORITATIVE); `widget` = OBSERVED: a signed-in panel on
+ * that site reported the page's build (ReporterBuildInfo.commit) as it loaded, which the page itself declares (a stale tab or a wrong
+ * meta tag can lie), so it counts only when `verified` (the commit exists in a checkout of the repo the server can read) and only
+ * while the bucket has no pipeline deployment for that environment. Kept per (bucket, repo, environment): a token of one bucket never
+ * writes what another bucket reads.
  */
 export interface ReporterDeployment {
   repo: string;
@@ -132,10 +135,14 @@ export interface ReporterDeployment {
   via: string;
   firstSeenAt: string;
   lastSeenAt: string;
+  /** Pipeline: always true. Observed: the commit was found in a checkout of the repo; false = unverified, history only, never live. */
+  verified?: boolean;
 }
 
 /** POST /api/reporter/deployments (a portal token with operate on the bucket, for pipelines and agents after a deploy). */
 export interface ReporterRecordDeploymentRequest {
+  /** Only this bucket (it must serve the repo and environment); else every bucket the token may operate on that does. */
+  bucket?: string;
   repo: string;
   environment: string;
   commit: string;
@@ -144,8 +151,8 @@ export interface ReporterRecordDeploymentRequest {
 }
 
 /**
- * Is this ticket's fix live in an environment. `deployed`: the environment's current commit is a fix commit or contains one (ancestry
- * proven by the server in a checkout of the repo, or by the git host's compare API with a credential the bucket already has).
+ * Is this ticket's fix live in an environment. `deployed`: the environment's current commit (see `confidence`) is a fix commit or
+ * contains one (ancestry proven by the server in a checkout of the repo).
  * `not-deployed`: proven absent. `unknown`: no fix commit known, no build seen for that environment, or ancestry could not be
  * checked; `reason` says which. Never guessed.
  */
@@ -158,6 +165,12 @@ export interface ReporterDeploymentState {
   /** The fix commit found in it, when deployed. */
   fixCommit: string | null;
   reason: 'no-fix-commit' | 'no-build-seen' | 'ancestry-unchecked' | null;
+  /**
+   * Where `currentCommit` comes from, when there is one: `pipeline` = a deployment a pipeline posted (authoritative); `observed` = a
+   * build a signed-in widget saw whose commit exists in the repo, used only while the bucket has no pipeline for this environment. A
+   * `deployed` from `observed` is shown with a lower-confidence marker.
+   */
+  confidence?: 'pipeline' | 'observed';
 }
 
 /** What the panel tells the SDK in its `ready` message: whether this bucket and origin may use the widget at all. */
@@ -720,11 +733,15 @@ export interface ReporterCallout {
 export type ReporterHostMessage =
   | { type: 'pilot-reporter:hello'; bridge: typeof REPORTER_BRIDGE_VERSION; sdkVersion: string; page: { url: string; title: string }; build: ReporterBuildInfo }
   | { type: 'pilot-reporter:navigated'; page: { url: string; title: string } }
-  /** The capture the panel asked for. The screenshot travels as a transferred ArrayBuffer. */
-  | { type: 'pilot-reporter:capture-result'; requestId: string; screenshot: ArrayBuffer; mediaType: 'image/png' | 'image/jpeg' | 'image/webp'; evidence: ReporterEvidence }
+  /**
+   * The capture the panel asked for. The screenshot travels as a transferred ArrayBuffer. `target`: what the capture toolbar's
+   * Ticket | Session switch says, preselected on the report form (or the review's submit form); a session target the bucket does not
+   * offer now (or sessionId '' = "the default session") becomes the bucket's first available target, else Ticket.
+   */
+  | { type: 'pilot-reporter:capture-result'; requestId: string; screenshot: ArrayBuffer; mediaType: 'image/png' | 'image/jpeg' | 'image/webp'; evidence: ReporterEvidence; target?: ReporterReportTarget }
   | { type: 'pilot-reporter:capture-cancelled'; requestId: string; reason: 'user' | 'error'; message?: string }
   /** A capture the person started with a hotkey: the panel opens on the report form with it. */
-  | { type: 'pilot-reporter:capture-started'; requestId: string; mode: 'full' | 'crop' }
+  | { type: 'pilot-reporter:capture-started'; requestId: string; mode: 'full' | 'crop'; target?: ReporterReportTarget }
   | { type: 'pilot-reporter:panel-opened' }
   | { type: 'pilot-reporter:callout-clicked'; key: string; captureId: string }
   /** The showcase moved (Prev / Next on the caption card) or ended. */
@@ -791,7 +808,10 @@ export const REPORTER_ROUTES = {
    */
   events: '/reporter/v1/events',
   sessionTargets: '/reporter/v1/session-targets', // GET: the bucket's targets with each session's live status
-  /** POST the build the page declared, once per page load of a signed-in panel: recorded as a `widget` deployment for the SITE's repo and environment. */
+  /**
+   * POST the build the page declared, once per page load of a signed-in panel: recorded as an OBSERVED (`widget`) deployment of the
+   * token's bucket for the SITE's repo and environment, verified only when the commit exists in a checkout of the repo.
+   */
   observedBuild: '/reporter/v1/observed-build',
   sessions: '/reporter/v1/sessions', // GET
   knowledge: '/reporter/v1/knowledge', // GET ?q=

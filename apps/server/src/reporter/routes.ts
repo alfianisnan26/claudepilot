@@ -97,11 +97,14 @@ export function createReporterOwnerRoutes(service: ReporterService, deps: Report
     const key = who.actor.kind === 'token' ? who.actor.tokenId : 'token';
     if (posts.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many deployments recorded. Wait a while.');
     posts.fail(key);
-    const body = await jsonBody<{ repo: string; environment: string; commit: string; branch: string; label: string }>(c);
+    const body = await jsonBody<{ bucket: string; repo: string; environment: string; commit: string; branch: string; label: string }>(c);
     const repo = typeof body.repo === 'string' ? body.repo.trim() : '';
     const env = typeof body.environment === 'string' ? body.environment.trim().toLowerCase() : '';
-    // Some bucket the token may operate on has a site serving this repo and environment; else the same not found.
+    const only = typeof body.bucket === 'string' && body.bucket ? body.bucket.trim().toUpperCase() : null;
+    // Recorded for each bucket the token may operate on whose site serves this repo and environment (or the one `bucket` names): a token
+    // of one bucket never writes what another bucket reads. None: the same not found.
     const buckets = service.bucketsServing(repo, env).filter((b) => {
+      if (only && b !== only) return false;
       try {
         requireCan(who.actor, 'operate', ticketBucketRef(b));
         return true;
@@ -110,7 +113,9 @@ export function createReporterOwnerRoutes(service: ReporterService, deps: Report
       }
     });
     if (!buckets.length) throw new AppError('NOT_FOUND', 'No bucket you can operate on has a site for that repo and environment.');
-    const d = service.recordDeployment({ repo, environment: env, commit: String(body.commit ?? ''), branch: typeof body.branch === 'string' ? body.branch : null, source: 'pipeline', via: typeof body.label === 'string' && body.label ? body.label : who.label });
+    const via = typeof body.label === 'string' && body.label ? body.label : who.label;
+    const recorded = buckets.map((b) => service.recordDeployment({ bucketKey: b, repo, environment: env, commit: String(body.commit ?? ''), branch: typeof body.branch === 'string' ? body.branch : null, source: 'pipeline', via }));
+    const d = recorded[0]!;
     deps.audit?.('reporter.deployment_recorded', { repo: d.repo, environment: d.environment, commit: d.commit, buckets }, actorString(who.actor));
     return c.json(success<ReporterDeployment>(d), 201);
   });
@@ -249,7 +254,9 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     c.header('X-Frame-Options', 'DENY');
     const who = deps.signedIn(c);
     const here = deps.portalOrigin(c);
-    const base = { bucketKey: bucket, bucketName: '', origin, environment: '', repo: '', person: '', nonce, signInUrl: `${here}/` };
+    // Sign in, then back to THIS connect page (the login page follows `next` only for a /reporter/v1/connect path: features/auth/next.ts).
+    const back = `/reporter/v1/connect?${new URLSearchParams({ bucket, origin, nonce: NONCE.test(nonce) ? nonce : '' }).toString()}`;
+    const base = { bucketKey: bucket, bucketName: '', origin, environment: '', repo: '', person: '', nonce, signInUrl: `${here}/login?next=${encodeURIComponent(back)}` };
     if (!who) return c.html(connectPage({ ...base, state: 'sign-in' }, script));
     const site = origin && NONCE.test(nonce) ? service.allowedSite(bucket, origin) : null;
     if (!site) return c.html(connectPage({ ...base, state: 'refused' }, script));
@@ -372,7 +379,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
 
   api.post('/duplicates', json, async (c) => c.json(success({ candidates: service.duplicates(ctxOf(c), await jsonBody(c), base(c)) })));
   api.get('/session-targets', (c) => c.json(success(service.sessionTargets(ctxOf(c)))));
-  api.post('/observed-build', json, async (c) => c.json(success(service.observedBuild(ctxOf(c), await jsonBody(c)))));
+  api.post('/observed-build', json, async (c) => c.json(success(await service.observedBuild(ctxOf(c), await jsonBody(c)))));
   api.get('/sessions', (c) => c.json(success(service.sessions(ctxOf(c), base(c)))));
   api.get('/knowledge', (c) => c.json(success(service.knowledge(ctxOf(c), c.req.query('q') ?? '', base(c)))));
   api.get('/knowledge/note', (c) => c.json(success(service.note(ctxOf(c), c.req.query('path') ?? ''))));

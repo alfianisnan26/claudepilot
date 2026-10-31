@@ -34,7 +34,7 @@ export class FakeChat implements ReporterChat {
   }
 }
 
-/** Git as a table: ancestry answers per "fix>live" pair (true, false, or null = cannot tell) and trailer commits per ref. */
+/** Git as a table: ancestry answers per "fix>live" pair (true, false, or null = cannot tell), trailer commits per ref, known commits. */
 export class FakeGit implements ReporterGit {
   ancestry = new Map<string, boolean | null>();
   trailers = new Map<string, string[]>();
@@ -43,6 +43,11 @@ export class FakeGit implements ReporterGit {
   }
   async trailerCommits(_repo: string, refs: string[]) {
     return refs.flatMap((r) => this.trailers.get(r) ?? []);
+  }
+  /** The commits the checkout has; null = no checkout to ask (commitExists answers null). */
+  commits: Set<string> | null = null;
+  async commitExists(_repo: string, commit: string) {
+    return this.commits ? this.commits.has(commit) : null;
   }
 }
 

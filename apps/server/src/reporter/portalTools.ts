@@ -54,7 +54,7 @@ export function registerReporterTools(service: ReporterService, tickets: Tickets
     handler(ctx, args) {
       const bucket = args.bucket.toUpperCase();
       if (!service.bucketsServing(args.repo.trim(), args.environment.trim().toLowerCase()).includes(bucket)) throw new AppError('NOT_FOUND', 'That bucket has no reporter site for this repo and environment.');
-      const d = service.recordDeployment({ repo: args.repo, environment: args.environment, commit: args.commit, branch: args.branch ?? null, source: 'pipeline', via: args.label || ctx.principal.label });
+      const d = service.recordDeployment({ bucketKey: bucket, repo: args.repo, environment: args.environment, commit: args.commit, branch: args.branch ?? null, source: 'pipeline', via: args.label || ctx.principal.label });
       ctx.affected(`reporter:${d.repo}:${d.environment}`);
       return { summary: `${d.repo} ${d.environment} is at ${d.commit.slice(0, 12)}.`, deployment: { repo: d.repo, environment: d.environment, commit: d.commit, branch: d.branch, first_seen_at: d.firstSeenAt, last_seen_at: d.lastSeenAt } };
     },

@@ -43,15 +43,17 @@ export function redactText(text: string): string {
   return redact(text).replace(JWT, '[redacted]').replace(PREFIXED_KEY, (m) => (/[0-9]/.test(m) && /[A-Z]/.test(m) ? '[redacted]' : m));
 }
 
-/** A URL with every query VALUE replaced (keys kept) and the userinfo dropped; what is not a URL is redacted as text. */
+/** A URL with every query VALUE replaced (keys kept), secret-looking path segments redacted and the userinfo dropped; what is not a URL is redacted as text. */
 export function redactUrl(raw: string): string {
   try {
     const u = new URL(raw);
     u.username = '';
     u.password = '';
+    const segs = u.pathname.split('/');
+    u.pathname = segs.map((seg, i) => redactSegment(seg, i > 0 ? segs[i - 1] : undefined)).join('/');
     const keys = [...u.searchParams.keys()];
     if (keys.length) u.search = keys.map((k) => `${encodeURIComponent(k)}=[redacted]`).join('&');
-    return redactText(u.toString());
+    return redactText(u.toString().replace(/%5Bredacted%5D/g, '[redacted]'));
   } catch {
     return redactText(raw.replace(/([?&][^=&#]+=)[^&#]*/g, '$1[redacted]'));
   }
@@ -71,6 +73,11 @@ function str(v: unknown, max: number, field: string, opts: { nullable?: boolean;
   return redactText(v.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, max));
 }
 const strOrNull = (v: unknown, max: number, field: string): string | null => (v === null || v === undefined ? null : str(v, max, field));
+/** A one-line value (a branch, a browser name): line breaks and tabs out as well, so it can never forge a line where it is quoted. */
+const lineOrNull = (v: unknown, max: number, field: string): string | null => {
+  const s = strOrNull(v, max, field);
+  return s === null ? null : s.replace(/[\r\n\t\u2028\u2029]+/g, ' ').trim() || null;
+};
 
 function num(v: unknown, field: string, opts: { min?: number; max?: number; nullable?: boolean } = {}): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) throw invalid(field, `${field} must be a number.`);
@@ -168,12 +175,12 @@ export function cleanBuild(raw: unknown): ReporterBuildInfo {
     return s && /^[0-9a-fA-F]{7,40}$/.test(s) ? s.toLowerCase() : null;
   };
   return {
-    version: strOrNull(b.version, 80, 'build.version'),
+    version: lineOrNull(b.version, 80, 'build.version'),
     commit: sha(b.commit),
-    branch: strOrNull(b.branch, 200, 'build.branch'),
-    environment: strOrNull(b.environment, 40, 'build.environment'),
-    builtAt: strOrNull(b.builtAt, 40, 'build.builtAt'),
-    repo: strOrNull(b.repo, 200, 'build.repo'),
+    branch: lineOrNull(b.branch, 200, 'build.branch'),
+    environment: lineOrNull(b.environment, 40, 'build.environment'),
+    builtAt: lineOrNull(b.builtAt, 40, 'build.builtAt'),
+    repo: lineOrNull(b.repo, 200, 'build.repo'),
   };
 }
 
@@ -182,15 +189,31 @@ const rect = (v: unknown, field: string) => {
   return { x: num(v.x, `${field}.x`), y: num(v.y, `${field}.y`), w: num(v.w, `${field}.w`, { min: 0 }), h: num(v.h, `${field}.h`, { min: 0 }) };
 };
 
-/** A path plus search, no hash, starting with "/", query values redacted. */
+/** A segment that follows one of these names is a secret by its place (a reset link, a magic sign-in link, an invite). */
+const SECRET_AFTER = /^(?:reset|reset-password|password-reset|token|tokens|magic|magic-link|invite|invites|invitation|verify|verification|confirm|activate|activation|auth|login|signin|sign-in|unsubscribe|share|s)$/i;
+
+/** One path segment, redacted when it looks like a secret: a credential shape, a long random-looking run, or what follows a SECRET_AFTER name. */
+function redactSegment(seg: string, prev: string | undefined): string {
+  if (!seg) return seg;
+  const r = redactText(seg);
+  if (r !== seg) return '[redacted]';
+  if (/^[A-Za-z0-9_-]{32,}$/.test(seg) && /[0-9]/.test(seg) && /[A-Za-z]/.test(seg)) return '[redacted]';
+  if (prev !== undefined && SECRET_AFTER.test(prev) && /^[A-Za-z0-9_.~%-]{16,}$/.test(seg)) return '[redacted]';
+  return seg;
+}
+
+/** A path plus search, no hash, starting with "/": control characters out, secret-looking segments and every query value redacted. */
 export function cleanPath(raw: unknown, field = 'path'): string {
   if (typeof raw !== 'string' || !raw.startsWith('/') || raw.startsWith('//') || raw.length > 2000) throw invalid(field, 'A path starting with "/".');
-  const noHash = raw.split('#')[0]!;
+  const noHash = raw.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '').split('#')[0]!;
+  if (noHash.startsWith('//')) throw invalid(field, 'A path starting with "/".');
   const q = noHash.indexOf('?');
-  if (q < 0) return noHash;
+  const segs = (q < 0 ? noHash : noHash.slice(0, q)).split('/');
+  const path = segs.map((seg, i) => redactSegment(seg, i > 0 ? segs[i - 1] : undefined)).join('/');
+  if (q < 0) return path;
   const keys = new URLSearchParams(noHash.slice(q + 1));
   const ks = [...keys.keys()];
-  return ks.length ? `${noHash.slice(0, q)}?${ks.map((k) => `${encodeURIComponent(k)}=[redacted]`).join('&')}` : noHash.slice(0, q);
+  return ks.length ? `${path}?${ks.map((k) => `${encodeURIComponent(k)}=[redacted]`).join('&')}` : path;
 }
 
 /** Just the path, no search: what callouts and "this page" match on. */
@@ -274,7 +297,7 @@ function page(v: unknown): ReporterPageInfo {
 
 function nameVersion(v: unknown, field: string) {
   const o = isObj(v) ? v : {};
-  return { name: strOrNull(o.name, 80, `${field}.name`), version: strOrNull(o.version, 80, `${field}.version`) };
+  return { name: lineOrNull(o.name, 80, `${field}.name`), version: lineOrNull(o.version, 80, `${field}.version`) };
 }
 
 function device(v: unknown): ReporterDeviceInfo {
@@ -469,6 +492,36 @@ export function parseEvidence(bytes: Buffer): ReporterEvidence {
     checks: checks(raw.checks),
     errorSignatures: list(raw.errorSignatures, 50, 'errorSignatures', (x, i) => str(x, 300, `errorSignatures[${i}]`)).items,
   };
+}
+
+/**
+ * The evidence of a page of THIS site (the token's origin), or refused (422): page.origin, page.url and page.host must name the site, and
+ * page.path must be a path on it. Empty values are filled in from the site. Run before anything is stored or a repro is built from it, so a
+ * page cannot point a ticket's steps or its Playwright file at another origin.
+ */
+export function pinEvidence(e: ReporterEvidence, origin: string): ReporterEvidence {
+  const site = new URL(origin);
+  const refuse = (f: string) => invalid(`evidence.page.${f}`, 'The evidence is not of this site.');
+  if (e.page.origin && normalizeOrigin(e.page.origin) !== origin) throw refuse('origin');
+  if (e.page.host && e.page.host.toLowerCase() !== site.host) throw refuse('host');
+  if (e.page.url) {
+    let u: URL;
+    try {
+      u = new URL(e.page.url);
+    } catch {
+      throw refuse('url');
+    }
+    if (u.origin !== origin) throw refuse('url');
+  }
+  let path = '/';
+  if (e.page.path) {
+    try {
+      path = pathOnly(cleanPath(e.page.path, 'evidence.page.path'));
+    } catch {
+      throw refuse('path');
+    }
+  }
+  return { ...e, page: { ...e.page, origin, host: site.host, path } };
 }
 
 /** The few numbers a list row, a description and a duplicate search need from one evidence bundle. */

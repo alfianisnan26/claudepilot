@@ -4019,6 +4019,20 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 901,
+    name: 'UI reporter: deployments are kept per bucket, and an observed build says whether its commit was found in a checkout (PILOT-1111)',
+    up(db) {
+      // docs/prd/ui-reporter.md "Deployed" (PILOT-1111, security review): a deployment row belongs to the bucket that recorded it, so a token of
+      // one bucket never moves another bucket's state; a widget-observed commit is `verified` only when the server found it in a checkout of
+      // the repo. Additive only (D-92): two columns with defaults and an index; no data is rewritten (rows without a bucket are not read).
+      db.exec(`
+        ALTER TABLE reporter_deployments ADD COLUMN bucket_key TEXT;
+        ALTER TABLE reporter_deployments ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX IF NOT EXISTS reporter_deployments_bucket ON reporter_deployments (bucket_key, repo, environment, source, last_seen_at);
+      `);
+    },
+  },
 ];
 
 /**

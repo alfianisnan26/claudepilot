@@ -1,8 +1,9 @@
 // UI reporter: read-only git in a checkout of a site's repo, for "is this fix deployed?" (docs/prd/ui-reporter-server.md). A checkout is a
 // repository the workspace-git scan found (repos module) whose remote names the repo, in a running workspace: the bucket's default
-// workspace first. Two commands only, as an argument list (no shell): `git merge-base --is-ancestor <fix> <live>` and a `git log` of the
-// commits with a `Ticket: <ref>` trailer. Nothing fetches, nothing writes, no credential is read or printed. Anything that cannot be
-// answered (no checkout, the workspace away, an unknown commit) is null: unknown, never guessed.
+// workspace first. Three commands only, as an argument list (no shell): `git merge-base --is-ancestor <fix> <live>`, a `git log` of the
+// commits with a `Ticket: <ref>` trailer, and `git rev-parse --verify --quiet <sha>^{commit}` (does an observed commit exist). Nothing
+// fetches, nothing writes, no credential is read or printed. Anything that cannot be answered (no checkout, the workspace away, an unknown
+// commit) is null: unknown, never guessed.
 
 import type { RepoNode, ReposOverview, WorkspaceRepos } from '@portal/contracts';
 import type { ReporterGit } from './service.js';
@@ -87,6 +88,14 @@ export function workspaceGit(deps: ReporterGitDeps): ReporterGit {
       if (!co) return null;
       const r = await run(co.workspaceId, ['git', '-C', co.path, 'merge-base', '--is-ancestor', ancestor, descendant]).catch(() => null);
       // 0: an ancestor; 1: not; anything else (128: a commit this checkout does not have) is unknown.
+      return r?.code === 0 ? true : r?.code === 1 ? false : null;
+    },
+    async commitExists(repo, commit) {
+      if (!SHA.test(commit)) return false;
+      const co = await checkout(repo);
+      if (!co) return null;
+      const r = await run(co.workspaceId, ['git', '-C', co.path, 'rev-parse', '--verify', '--quiet', `${commit}^{commit}`]).catch(() => null);
+      // 0: a commit this checkout has; 1: no such commit (--quiet); anything else (not a repository, a timeout) is unknown.
       return r?.code === 0 ? true : r?.code === 1 ? false : null;
     },
     async trailerCommits(repo, refs) {

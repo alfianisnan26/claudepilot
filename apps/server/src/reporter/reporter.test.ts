@@ -98,7 +98,7 @@ test('token scope: other bucket, other origin, expired, revoked, origin removed,
   const h = await reporterHarness({ now: () => new Date(now) });
   try {
     h.service.updateConfig('OTHER', { enabled: true, sites: [{ origin: 'https://other.example', environment: 'prod', repo: 'x/y', label: null, branch: null }] }, 'test');
-    const t = h.mint().token;
+    let t = h.mint().token;
     const me = (token: string, headers: Record<string, string> = {}) => h.call('/reporter/v1/me', { token, headers });
     assert.equal((await me(t)).status, 200);
     assert.equal((await h.call('/reporter/v1/me')).status, 401, 'no token');
@@ -115,9 +115,12 @@ test('token scope: other bucket, other origin, expired, revoked, origin removed,
     const other = h.tickets.create(UI, { summary: 'theirs', bucket: 'OTHER' });
     await same404(await h.call(`/reporter/v1/tickets/${other.key}`, { token: t }), 'a ticket of another bucket');
 
+    // A new connect by the same person on the same site replaces (revokes) the older token.
     const revoked = h.mint().token;
+    await same404(await me(t), 'replaced by a newer connect');
     h.service.revoke(h.service.verify(revoked)!.id, 'test');
     await same404(await me(revoked), 'revoked');
+    t = h.mint().token;
 
     h.service.updateConfig('KONF', { sites: [{ origin: UAT, environment: 'uat', repo: REPO, label: null, branch: null }] }, 'test');
     await same404(await me(t), 'its origin removed from the config');
@@ -476,10 +479,13 @@ test('deployments: deployed by ancestry, not deployed, unknown with the reason, 
     await h.service.refreshTicket(n);
     assert.equal(states().stg!.reason, 'no-build-seen');
 
-    // The widget on stg posts the page's build: recorded for the SITE (stg), even though the page claims prod.
+    // The widget on stg posts the page's build: recorded for the SITE (stg), even though the page claims prod; the checkout has live1, so it
+    // is a verified observed build (no pipeline yet).
+    h.git.commits = new Set([live1]);
     await h.postJson('/reporter/v1/observed-build', stg, { build: { ...build(live1), environment: 'prod', repo: 'other/repo' } });
-    assert.equal(h.service.currentDeployment(REPO, 'stg')!.commit, live1);
-    assert.equal(h.service.currentDeployment('other/repo', 'prod'), null);
+    assert.equal(h.service.currentDeployment('KONF', REPO, 'stg')!.commit, live1);
+    assert.equal(h.service.currentDeployment('KONF', REPO, 'stg')!.confidence, 'observed');
+    assert.equal(h.service.currentDeployment('KONF', 'other/repo', 'prod'), null);
 
     // Ancestry cannot be checked yet: unknown, never a guess.
     await h.service.refreshTicket(n);
@@ -487,7 +493,7 @@ test('deployments: deployed by ancestry, not deployed, unknown with the reason, 
     // Git says the fix is in live1 on stg; uat runs live2, which git says does not contain it.
     h.git.ancestry.set(`${fix}>${live1}`, true);
     h.git.ancestry.set(`${fix}>${live2}`, false);
-    h.service.recordDeployment({ repo: REPO, environment: 'uat', commit: live2, source: 'pipeline', via: 'ci' });
+    h.service.recordDeployment({ bucketKey: 'KONF', repo: REPO, environment: 'uat', commit: live2, source: 'pipeline', via: 'ci' });
     await h.service.refreshTicket(n);
     assert.equal(states().stg!.status, 'deployed');
     assert.equal(states().stg!.fixCommit, fix);
@@ -497,9 +503,9 @@ test('deployments: deployed by ancestry, not deployed, unknown with the reason, 
     const v = h.service.ticket(ctx, made.key, PORTAL);
     assert.equal(v.phase, 'deployed');
     assert.equal(v.deployments.length, 2);
-    assert.match(h.tickets.get(UI, made.key).ticket.description, /stg deployed \(fffffff\) · uat not deployed/);
+    assert.match(h.tickets.get(UI, made.key).ticket.description, /stg deployed \(fffffff\) \(observed by the widget, no pipeline yet\) · uat not deployed/);
     // A new live commit on uat that IS the fix: deployed without git.
-    h.service.recordDeployment({ repo: REPO, environment: 'uat', commit: fix, source: 'pipeline', via: 'ci' });
+    h.service.recordDeployment({ bucketKey: 'KONF', repo: REPO, environment: 'uat', commit: fix, source: 'pipeline', via: 'ci' });
     assert.equal(states().uat!.status, 'deployed');
     // A trailer git finds is a fix commit too.
     h.git.trailers.set(made.key, ['e'.repeat(40)]);

@@ -83,9 +83,12 @@ seconds with what arrived. A failure keeps the ticket, adds a comment saying so,
 
 ## Deployments
 
-- Recorded per (repo, environment): by a signed-in panel (`POST /reporter/v1/observed-build`, for the SITE's repo and environment, never the
-  page's claim), by a pipeline (`POST /api/reporter/deployments` with a Portal MCP token, operate, on a bucket whose site serves that repo
-  and environment), or by an agent (`reporter_record_deployment`).
+- Recorded per (bucket, repo, environment) (migration 901 adds `bucket_key` and `verified`): by a pipeline (`POST /api/reporter/deployments`
+  with a Portal MCP token, operate, for each bucket it may operate on whose site serves that repo and environment, or only `bucket`), or by an
+  agent (`reporter_record_deployment`): AUTHORITATIVE. By a signed-in panel (`POST /reporter/v1/observed-build`, for the token's bucket and
+  the SITE's repo and environment, never the page's claim): OBSERVED, `verified` only when `git rev-parse --verify --quiet <sha>^{commit}`
+  finds it in a checkout. The live commit is the newest pipeline row; only while there is none for that environment, the newest verified
+  observed row (`confidence: 'observed'` on the state). Unverified rows are history only. See docs/prd/ui-reporter.md section 8.
 - Konfersi stg, after a deploy (the token in a CI secret, never in the file):
 
   ```sh
@@ -95,7 +98,7 @@ seconds with what arrived. A failure keeps the ticket, adds a comment saying so,
 
 - Fix commits per ticket: `ticket_close` with `fix_commit`, a `Ticket: <KEY>` (or `T-n`) trailer found by `git log` in a workspace checkout
   of the repo, or a closing summary naming one ("commit abc1234", "fixed in abc1234").
-- State per environment of the ticket's repo (every site of the bucket with that repo): `deployed` when the live commit is a fix commit, or
+- State per environment of the ticket's repo (every site of the bucket with that repo), from the live commit above: `deployed` when it is a fix commit, or
   `git merge-base --is-ancestor <fix> <live>` says so in a checkout; `not-deployed` when git says none is in it; else `unknown` with
   `no-fix-commit`, `no-build-seen` or `ancestry-unchecked`. Never guessed. A checkout is a repository the workspace-git scan found whose
   remote names the repo, in a running workspace; git runs read-only, as an argument list, nothing is fetched and no credential is read.
