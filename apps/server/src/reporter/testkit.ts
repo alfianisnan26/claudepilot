@@ -127,6 +127,8 @@ export const build = (commit = 'a'.repeat(40)) => ({ version: '1.2.3', commit, b
 
 /** A whole evidence bundle; `over` replaces top-level parts. */
 export function evidence(over: Partial<Record<keyof ReporterEvidence, unknown>> = {}): Record<string, unknown> {
+  // Times as the SDK stamps them: epoch milliseconds from the real clock (small numbers here hid PILOT-1111's 422).
+  const t = Date.now() - 5000;
   return {
     schema: REPORTER_EVIDENCE_SCHEMA,
     sdkVersion: '1.0.0',
@@ -152,13 +154,13 @@ export function evidence(over: Partial<Record<keyof ReporterEvidence, unknown>> 
     dom: { selector: '#hero', path: 'html > body > main > #hero', snippet: '<section id="hero">' },
     components: [{ name: 'Hero', depth: 3 }],
     framework: 'react',
-    console: [{ ts: 1, level: 'error', text: 'TypeError: x is undefined' }],
-    network: [{ ts: 2, method: 'GET', url: `${STG}/api/plans?id=1`, status: 500, durationMs: 120, initiator: 'fetch', sizeBytes: 10 }],
+    console: [{ ts: t + 1, level: 'error', text: 'TypeError: x is undefined' }],
+    network: [{ ts: Math.round(performance.timeOrigin + performance.now()), method: 'GET', url: `${STG}/api/plans?id=1`, status: 500, durationMs: 120, initiator: 'fetch', sizeBytes: 10 }],
     performance: { navigation: { ttfbMs: 100, domContentLoadedMs: 500, loadMs: 900, type: 'navigate' }, vitals: { lcpMs: 1800, cls: 0.01, inpMs: 80, fcpMs: 700 }, longTasks: { count: 1, totalMs: 60 }, memory: { usedJsHeapBytes: null, totalJsHeapBytes: null } },
     interactions: [
-      { ts: 1, kind: 'navigate', selector: null, label: null, detail: '/' },
-      { ts: 2, kind: 'click', selector: 'a[href="/pricing"]', label: 'Pricing' },
-      { ts: 3, kind: 'input', selector: '#email', label: 'Email', value: 'someone@example.com' },
+      { ts: t, kind: 'navigate', selector: null, label: null, detail: '/' },
+      { ts: t + 2, kind: 'click', selector: 'a[href="/pricing"]', label: 'Pricing' },
+      { ts: t + 3, kind: 'input', selector: '#email', label: 'Email', value: 'someone@example.com' },
     ],
     checks: { ran: true, findings: [{ source: 'target-size', rule: 'target-44', severity: 'serious', message: 'Button is 32x32', selector: '#buy', help: null }] },
     errorSignatures: ['TypeError: x is undefined @ app.js:hero'],

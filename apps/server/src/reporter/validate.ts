@@ -86,6 +86,12 @@ function num(v: unknown, field: string, opts: { min?: number; max?: number; null
   if (v < min || v > max) throw invalid(field, `${field} is out of range.`);
   return v;
 }
+/**
+ * A wall-clock time in epoch milliseconds, as the SDK stamps console, network and interaction entries (Date.now(), or
+ * performance.timeOrigin + startTime for resources): from 1970 to a day ahead of this server's clock (a device clock runs fast at times).
+ * The generic number range (+-1e12, about September 2001) refused every real report (PILOT-1111).
+ */
+export const epochMs = (v: unknown, field: string, now = Date.now()): number => num(v, field, { min: 0, max: now + 86_400_000 });
 const numOrNull = (v: unknown, field: string, opts: { min?: number; max?: number } = {}): number | null =>
   v === null || v === undefined ? null : num(v, field, opts);
 const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
@@ -367,7 +373,7 @@ function state(v: unknown): ReporterPageState {
 function consoleEntry(x: unknown, i: number): ReporterConsoleEntry {
   const f = `console[${i}]`;
   if (!isObj(x)) throw invalid(f, 'A console entry.');
-  const e: ReporterConsoleEntry = { ts: num(x.ts, `${f}.ts`), level: oneOf(x.level, ['log', 'info', 'warn', 'error', 'debug'] as const, `${f}.level`, 'log'), text: str(x.text, T, `${f}.text`) };
+  const e: ReporterConsoleEntry = { ts: epochMs(x.ts, `${f}.ts`), level: oneOf(x.level, ['log', 'info', 'warn', 'error', 'debug'] as const, `${f}.level`, 'log'), text: str(x.text, T, `${f}.text`) };
   if (x.stack !== undefined && x.stack !== null) e.stack = str(x.stack, T, `${f}.stack`);
   return e;
 }
@@ -376,7 +382,7 @@ function networkEntry(x: unknown, i: number): ReporterNetworkEntry {
   const f = `network[${i}]`;
   if (!isObj(x)) throw invalid(f, 'A network entry.');
   const e: ReporterNetworkEntry = {
-    ts: num(x.ts, `${f}.ts`),
+    ts: epochMs(x.ts, `${f}.ts`),
     method: str(x.method, 12, `${f}.method`).toUpperCase() || 'GET',
     url: redactUrl(str(x.url, 2000, `${f}.url`)),
     status: numOrNull(x.status, `${f}.status`, { min: 0, max: 999 }),
@@ -416,7 +422,7 @@ function interaction(x: unknown, i: number): ReporterInteraction {
   const f = `interactions[${i}]`;
   if (!isObj(x)) throw invalid(f, 'An interaction.');
   const kind = oneOf(x.kind, ['click', 'input', 'change', 'submit', 'navigate', 'key', 'scroll'] as const, `${f}.kind`);
-  const out: ReporterInteraction = { ts: num(x.ts, `${f}.ts`), kind, selector: strOrNull(x.selector, 500, `${f}.selector`), label: strOrNull(x.label, 120, `${f}.label`) };
+  const out: ReporterInteraction = { ts: epochMs(x.ts, `${f}.ts`), kind, selector: strOrNull(x.selector, 500, `${f}.selector`), label: strOrNull(x.label, 120, `${f}.label`) };
   // Input values are never kept, whatever the SDK sent: text is masked, only a select's label or a check state passes.
   if (x.value !== undefined && x.value !== null) {
     const v = str(x.value, 120, `${f}.value`);
