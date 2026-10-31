@@ -1,0 +1,157 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import type { ReporterAnchor, ReporterDeploymentState } from '@portal/contracts';
+import { readFileSync } from 'node:fs';
+import { countBySeverity, cropBox, deployLine, deployMark, deploymentText, envStrip, gapsLine, pathnameOf, samePage, shotCaption } from './shared';
+import { deployCurl, emptyRow, originError, siteErrors, siteOf, sitesValid, snippet, targetsValid } from './sites';
+
+const row = (over: Partial<ReturnType<typeof emptyRow>> = {}) => ({ ...emptyRow(), origin: 'https://stg.konfersi.com', environment: 'stg', repo: 'platform/konfersi-landing-page', branch: 'stg', ...over });
+
+test('a site origin is exactly an origin: no path, no wildcard, https unless localhost', () => {
+  assert.equal(originError('https://stg.konfersi.com'), null);
+  assert.equal(originError('http://localhost:5173'), null);
+  assert.match(originError('https://stg.konfersi.com/')!, /Only the origin/);
+  assert.match(originError('https://stg.konfersi.com/pricing')!, /Only the origin/);
+  assert.ok(originError('https://*.konfersi.com'));
+  assert.match(originError('http://stg.konfersi.com')!, /https/);
+  assert.ok(originError('ftp://x.example'));
+  assert.equal(originError(''), 'Required.');
+});
+
+test('sites: the same origin twice is refused; environment, repo and branch are checked', () => {
+  assert.ok(sitesValid([row(), row({ origin: 'https://konfersi.com', environment: 'prod', branch: 'main' })]), 'two environments of one repo');
+  const e = siteErrors([row(), row({ environment: 'STG ' })]);
+  assert.match(e[1]!.origin!, /row 1/);
+  assert.equal(siteErrors([row({ environment: 'Staging Env Long Name Here' })])[0]!.environment !== undefined, true);
+  assert.ok(siteErrors([row({ repo: 'konfersi' })])[0]!.repo);
+  assert.ok(siteErrors([row({ branch: 'has space' })])[0]!.branch);
+  assert.deepEqual(siteOf(row({ environment: ' STG ', branch: ' ', label: '' })), {
+    origin: 'https://stg.konfersi.com',
+    environment: 'stg',
+    repo: 'platform/konfersi-landing-page',
+    branch: null,
+    label: null,
+  });
+});
+
+test('direct-report targets need a name and appear once', () => {
+  assert.ok(targetsValid([{ sessionId: 's1', label: 'Lead' }]));
+  assert.ok(!targetsValid([{ sessionId: 's1', label: ' ' }]));
+  assert.ok(!targetsValid([{ sessionId: 's1', label: 'a' }, { sessionId: 's1', label: 'b' }]));
+});
+
+test('the script tag names the portal, bucket, repo, environment and branch, escaped', () => {
+  const s = snippet('https://pilot.example', 'KONF', siteOf(row()));
+  assert.match(s, /src="https:\/\/pilot\.example\/reporter\/v1\/reporter\.js"/);
+  assert.match(s, /data-bucket="KONF"/);
+  assert.match(s, /data-repo="platform\/konfersi-landing-page"/);
+  assert.match(s, /data-env="stg"/);
+  assert.match(s, /data-branch="stg"/);
+  assert.doesNotMatch(snippet('https://p.example"><x', 'KONF', siteOf(row())), /"><x/);
+});
+
+test('the deploy hook posts repo, environment and the commit from the shell', () => {
+  const c = deployCurl('https://pilot.example', siteOf(row()));
+  assert.match(c, /^curl -fsS -X POST https:\/\/pilot\.example\/api\/reporter\/deployments /);
+  assert.match(c, /\$PILOT_TOKEN/);
+  assert.match(c, /"commit":"'"\$COMMIT"'"/);
+  assert.match(c, /"environment":"stg"/);
+});
+
+const dep = (environment: string, status: ReporterDeploymentState['status'], reason: ReporterDeploymentState['reason'] = null): ReporterDeploymentState => ({
+  environment,
+  status,
+  currentCommit: status === 'unknown' ? null : 'c'.repeat(40),
+  seenAt: null,
+  fixCommit: status === 'deployed' ? 'f'.repeat(40) : null,
+  reason,
+});
+
+test('the environment strip and its words never claim more than the server proved', () => {
+  const list = [dep('stg', 'deployed'), dep('uat', 'not-deployed'), dep('prod', 'unknown', 'no-build-seen')];
+  assert.equal(envStrip(list), 'stg ✓ · uat – · prod ?');
+  assert.equal(deploymentText(list[0]!), 'stg: deployed (fix fffffff) in ccccccc');
+  assert.equal(deploymentText(list[1]!), 'uat: not deployed (live ccccccc)');
+  assert.equal(deploymentText(list[2]!), 'prod: unknown, no build seen in this environment');
+});
+
+test('a deployed state from a widget-observed build carries the lower-confidence marker; a pipeline one does not', () => {
+  const pipeline = { ...dep('stg', 'deployed'), confidence: 'pipeline' as const };
+  const observed = { ...dep('uat', 'deployed'), confidence: 'observed' as const };
+  assert.equal(envStrip([pipeline, observed]), 'stg ✓ · uat ✓*');
+  assert.equal(deploymentText(pipeline), 'stg: deployed (fix fffffff) in ccccccc');
+  assert.equal(deploymentText(observed), 'uat: deployed (fix fffffff) in ccccccc, seen by the widget, no pipeline yet');
+  assert.equal(deployMark({ ...dep('uat', 'not-deployed'), confidence: 'observed' }), '–');
+});
+
+test('pages match on the path alone', () => {
+  assert.equal(pathnameOf('/pricing?plan=pro#faq'), '/pricing');
+  assert.equal(pathnameOf('https://stg.konfersi.com/about/'), '/about');
+  assert.equal(pathnameOf('/'), '/');
+  assert.ok(samePage('/pricing/', '/pricing?x=1'));
+  assert.ok(!samePage('/pricing', '/pricing-old'));
+});
+
+test('UI check findings are counted by severity', () => {
+  const f = (severity: 'critical' | 'minor') => ({ source: 'axe' as const, rule: 'r', severity, message: 'm', selector: null, help: null });
+  assert.deepEqual(countBySeverity([f('critical'), f('minor'), f('minor')]), { critical: 1, serious: 0, moderate: 0, minor: 2 });
+});
+
+const anchor = (over: Partial<ReporterAnchor> = {}): ReporterAnchor => ({
+  path: '/',
+  selector: null,
+  relative: null,
+  rect: { x: 39, y: 1000, w: 195, h: 84.4 },
+  viewport: { w: 390, h: 844, dpr: 2 },
+  mode: 'crop',
+  ...over,
+});
+
+test('the crop box on a screen shot is offset by the scroll at capture time', () => {
+  // A phone Snap: 780x1688 (390x844 at 2x), scrolled to y=950.
+  const b = cropBox({ w: 780, h: 1688 }, anchor(), { x: 0, y: 950 })!;
+  assert.equal(Math.round(b.left), 10);
+  assert.equal(Math.round(b.top), 6);
+  assert.equal(Math.round(b.width), 50);
+  assert.equal(Math.round(b.height), 10);
+});
+
+test('the crop box on a full-page shot uses document coordinates; none for a full report or a shot that is the crop', () => {
+  const b = cropBox({ w: 390, h: 3000 }, anchor({ viewport: { w: 390, h: 844, dpr: 1 } }), { x: 0, y: 950 })!;
+  assert.equal(Math.round(b.top), 33);
+  assert.equal(cropBox({ w: 390, h: 3000 }, anchor({ mode: 'full' }), null), null);
+  assert.equal(cropBox({ w: 390, h: 169 }, anchor(), null), null, 'the image has the crop’s aspect: it is the crop');
+  assert.equal(cropBox({ w: 0, h: 0 }, anchor(), null), null);
+});
+
+// PILOT-1111 copy: the card listed "Deployed" over "Unknown"; each environment now says what it is.
+test('deployLine: one line per environment, with the reason in words', () => {
+  const d = (over: Partial<ReporterDeploymentState>): ReporterDeploymentState =>
+    ({ environment: 'stg', status: 'unknown', reason: null, fixCommit: null, currentCommit: null, confidence: 'pipeline', ...over }) as ReporterDeploymentState;
+  assert.equal(deployLine(d({ reason: 'no-fix-commit' })), 'stg: unknown (no fix commit yet)');
+  assert.equal(deployLine(d({ environment: 'uat', status: 'deployed', currentCommit: 'abcdef1234' })), 'uat: deployed (live abcdef1)');
+  assert.equal(deployLine(d({ status: 'not-deployed' })), 'stg: not yet');
+  assert.equal(deployLine(d({ status: 'unknown' })), 'stg: unknown');
+});
+
+test('shotCaption: "Shot n · path", the root named', () => {
+  assert.equal(shotCaption(1, '/'), 'Shot 1 · / (home)');
+  assert.equal(shotCaption(2, 'https://stg.example/pricing/?x=1'), 'Shot 2 · /pricing');
+});
+
+test('ticket keys never wrap in the panel', () => {
+  const src = (f: string) => readFileSync(new URL(`../../embed/${f}`, import.meta.url), 'utf8');
+  assert.match(src('TicketsTab.tsx'), /whitespace-nowrap tabular-nums">\{t\.key\}/);
+  assert.match(src('ReportTab.tsx'), /whitespace-nowrap tabular-nums">\{d\.key\}/, 'the duplicate banner');
+  assert.match(src('ReportTab.tsx'), /whitespace-nowrap tabular-nums">\{ticketKey\}/, 'the Filed row');
+  // The session row's second line (status · key) is one truncated line: a key never breaks onto its own.
+  assert.match(src('OtherTabs.tsx'), /block truncate text-\[12px\] text-muted">\s*\{s\.status\}\s*\{s\.ticketKey/);
+  assert.match(src('ChatView.tsx'), /whitespace-nowrap text-accent tabular-nums/, 'the chat header’s ticket chip');
+});
+
+test('the evidence viewer names what the screenshot could not draw, in one line; nothing when the shot is complete', () => {
+  assert.equal(gapsLine({ captureGaps: ['image not readable (no CORS): cdn.example', 'canvas: drawn blank (WebGL without a kept buffer, or empty)'] }), 'Not captured: image not readable (no CORS): cdn.example; canvas: drawn blank (WebGL without a kept buffer, or empty)');
+  assert.equal(gapsLine({ captureGaps: [] }), null);
+  assert.equal(gapsLine({ captureGaps: [' '] }), null);
+  assert.equal(gapsLine({}), null, 'an older SDK sends none');
+});

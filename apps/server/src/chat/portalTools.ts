@@ -19,6 +19,7 @@ import { fullInput } from '../portalmcp/compact.js';
 import { costFields } from '../portalmcp/tools/common.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { SPAWN_CLAUDE_HELP, WORKER_REPORTS, spawnModel, type SpawnClaudeWhy, type WorkerReport } from './agents.js';
+import { ControlTimeout } from './controller.js';
 
 // The chat's own tools for the Portal MCP (interface I2): the ones a session's Claude may call about itself. They are
 // bound to the session its per-session token (I8) was minted for; nothing here lets one session act on another.
@@ -365,19 +366,22 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       // Mode first. A narrowing mode asked by name and not confirmed ends the worker before it gets any instruction (fail closed); any other
       // is said, not fatal. Bypass not kept (the policy, the parent left it) falls back to Auto where the worker may run in it, else dontAsk
       // (T-2997), so the worker never waits on a person.
-      const setMode = async (m: ChatPermissionMode) => {
+      // T-3215 (PILOT-1112, folds PILOT-1025; owner 2026-10-31: "default mode should be auto, if bypass is on lead, should bypass"): a
+      // worker never runs in default (it starts in it) unless default was asked by name, and never falls back to dontAsk (no Bash, T-3041).
+      // Any other mode its Claude refuses (Auto, say) ends the worker before it gets any instruction, and the lead is told why. A switch
+      // with no answer in time may still apply, so it is "not confirmed" as before, except for a narrowing mode asked by name (fail closed).
+      const setMode = async (m: ChatPermissionMode): Promise<void> => {
         try {
           await chat.control(child.id, 'mode', { mode: m }, { actor: ctx.actor });
           applied.push(`mode ${m}`);
         } catch (e) {
-          if (args.mode && NARROWING.has(args.mode)) {
-            await chat.end(child.id).catch(() => undefined);
-            throw new AppError(
-              'CONFLICT',
-              `The worker could not be confirmed in ${args.mode} mode (${whyOf(e)}), so it was ended before it got any instruction. Try again.`,
-            );
-          }
-          unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
+          const narrowAsked = !!args.mode && NARROWING.has(args.mode);
+          if (m === 'default' || (e instanceof ControlTimeout && !narrowAsked)) return void unconfirmed.push(`mode ${m}: ${whyOf(e)}`);
+          await chat.end(child.id).catch(() => undefined);
+          throw new AppError(
+            'CONFLICT',
+            `The worker could not be confirmed in ${m} mode (${whyOf(e)}), so it was ended before it got any instruction${NARROWING.has(m) ? '' : ': it would have run in default and waited on a person'}. Try again, or start it on another Claude.`,
+          );
         }
       };
       const applyMode = async () => {

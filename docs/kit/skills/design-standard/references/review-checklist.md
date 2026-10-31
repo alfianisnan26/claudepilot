@@ -7,6 +7,8 @@ Standard read: <document and section>             | none found (said so on the t
 Tokens only: no new colour, spacing, size, radius, duration
 No decoration: no gradient, glow, emoji; glass only where the standard names it
 Existing components reused: <which>
+Adjusted first: the existing token, opacity, spacing or prop was tuned; any new element or wrapper says why no adjustment could do
+Sibling pages sharing the look got the same fix: <which>
 390 px, light   screenshot: <link>
 390 px, dark    screenshot: <link>
 1280 px, light  screenshot: <link>

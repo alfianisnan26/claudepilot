@@ -3236,6 +3236,30 @@ export class Tickets {
   }
 
   /**
+   * T-3220 (PILOT-1115): the unfinished tickets the orphan sweep moved BY TITLE (`#successorOf` reason `title`) off one of `from` to a
+   * live session that still holds them, the fallback being their latest `assigned` entry (a deliberate hand-off since is kept). The title
+   * match is a guess made while nobody continued the ended chat; its continuation, once it exists, is the heir. Oldest first.
+   */
+  #titleMovedFrom(from: readonly string[]): { row: Row; from: string; holder: string }[] {
+    if (!from.length) return [];
+    const rows = this.#db
+      .prepare(
+        `SELECT t.*, json_extract(e.data, '$.from.sessionId') AS moved_from FROM tickets t
+           JOIN ticket_events e ON e.id = (SELECT MAX(x.id) FROM ticket_events x WHERE x.ticket_number = t.number AND x.kind = 'assigned')
+          WHERE t.assignee_kind = 'session' AND t.status IN (${OPEN_SQL})
+            AND json_extract(e.data, '$.fallback') = 1 AND json_extract(e.data, '$.reason') = 'title'
+            AND json_extract(e.data, '$.from.sessionId') IN (${from.map(() => '?').join(', ')})
+            AND t.assignee_ref = json_extract(e.data, '$.to.sessionId')
+          ORDER BY t.number`,
+      )
+      .all(...from) as unknown as (Row & { moved_from: string })[];
+    return rows.map(({ moved_from, ...r }) => {
+      const row = this.#keyed(r as unknown as Row);
+      return { row, from: moved_from, holder: row.assignee_ref! };
+    });
+  }
+
+  /**
    * A continuation was created (chat controller `continueTickets`, inside its transaction): every unfinished ticket held by the ENDED
    * sessions of `from` (the predecessor and its ended predecessors) is assigned to `to`, an `assigned` entry each (actor system,
    * `continued: true`, as migration 772 wrote them), status kept. A `from` that is not ended, or in another workspace, is skipped.
@@ -3260,6 +3284,19 @@ export class Tickets {
           });
           out.push(ticketIdOf(r.number));
         }
+      }
+      // T-3220: what the sweep moved by title off the ended chain before this continuation existed comes back to it (the heir).
+      const chain = from.filter((f) => f !== to && this.sessions.get(f)?.state === 'ended' && this.sessions.get(f)?.workspaceId === head.workspaceId);
+      for (const m of this.#titleMovedFrom(chain)) {
+        if (m.holder === to || !(m.row.workspace_id === null || this.#isIn(m.row, head.workspaceId))) continue;
+        this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(to, at, m.row.number);
+        this.#addEvent(m.row.number, 'assigned', w, null, {
+          from: { kind: 'session', sessionId: m.holder },
+          to: { kind: 'session', sessionId: to },
+          continued: true,
+          heirOf: m.from,
+        });
+        out.push(ticketIdOf(m.row.number));
       }
       return out;
     });
@@ -3289,14 +3326,31 @@ export class Tickets {
     // Another workspace's session doesn't exist for it, as its tickets don't.
     if (!from || from.workspaceId !== me.workspaceId) throw new AppError('NOT_FOUND', 'No such session in your workspace.');
     if (from.id === me.id) throw invalid('from_session', 'That is your own session.');
-    if (from.state !== 'ended')
-      throw new AppError('CONFLICT', 'That session is still live: it keeps its tickets. Ask it, or wait until it has ended.');
+    if (from.state !== 'ended') {
+      // T-3220: a live session that got your predecessor's tickets by the title fallback: say where to take them from.
+      const pred = this.#titleMovedFrom(this.#ancestors(me)).find((m) => m.holder === from.id)?.from;
+      throw new AppError(
+        'CONFLICT',
+        pred
+          ? `That session is still live, but the tickets it got by title from your predecessor ${pred} are yours: ticket_adopt from_session ${pred}.`
+          : 'That session is still live: it keeps its tickets. Ask it, or wait until it has ended.',
+      );
+    }
     const grant = this.#forEnded(me, from.id);
     if (!grant) throw new AppError('FORBIDDEN', 'A live session continues that one: its tickets are that session’s to take.');
-    const tickets = this.#heldBy(from.id)
-      .filter((r) => (r.workspace_id === null || this.#isIn(r, me.workspaceId)) && this.#visible(caller, r))
-      .map((r) => ticketIdOf(r.number));
+    const tickets = this.#adoptRows(caller, me, from.id, grant.why).map((m) => ticketIdOf(m.row.number));
     return { me, from: from.id, why: grant.why, tickets };
+  }
+
+  /**
+   * What `ticket_adopt` from `from` moves: the unfinished tickets it holds, and (T-3220) when the caller continues it, those the orphan sweep
+   * moved off it by title to another live session (the title match is a guess; the continuation is the heir). `holder` is who holds each now.
+   */
+  #adoptRows(caller: Caller, me: TicketSessionInfo, from: string, why: EndedGrantReason): { row: Row; holder: string }[] {
+    const ok = (r: Row) => (r.workspace_id === null || this.#isIn(r, me.workspaceId)) && this.#visible(caller, r);
+    const own = this.#heldBy(from).map((row) => ({ row, holder: from }));
+    const byTitle = why === 'lineage' ? this.#titleMovedFrom([from]).filter((m) => m.holder !== me.id) : [];
+    return [...own, ...byTitle].filter((m) => ok(m.row)).sort((a, b) => a.row.number - b.row.number);
   }
 
   /**
@@ -3313,14 +3367,14 @@ export class Tickets {
     const moved = this.#tx(() => {
       const out: string[] = [];
       const at = this.#now().toISOString();
-      for (const r of this.#heldBy(plan.from)) {
-        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId)) || !this.#visible(caller, r)) continue;
+      for (const { row: r, holder } of this.#adoptRows(caller, plan.me, plan.from, plan.why)) {
         this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(plan.me.id, at, r.number);
         this.#addEvent(r.number, 'assigned', w, null, {
-          from: { kind: 'session', sessionId: plan.from },
+          from: { kind: 'session', sessionId: holder },
           to: { kind: 'session', sessionId: plan.me.id },
           adopted: true,
           why: plan.why,
+          ...(holder !== plan.from ? { heirOf: plan.from } : {}),
         });
         out.push(ticketIdOf(r.number));
       }

@@ -16,7 +16,11 @@ on:
       gate:
         type: boolean
         default: true
-        description: Run the release gate (typecheck, web build, server suite) on the commit first.
+        description: Run the release gate on the commit first (change-scoped, D-106; full_gate runs all of it).
+      full_gate:
+        type: boolean
+        default: false
+        description: 'Run the whole gate (typecheck, web build and tests, every server test) instead of the change-scoped one.'
       deploy:
         type: boolean
         default: true

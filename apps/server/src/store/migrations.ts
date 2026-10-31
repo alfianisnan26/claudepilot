@@ -3885,6 +3885,183 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 900,
+    name: 'UI reporter: per-bucket config and sites, scoped tokens, captures and evidence of reported tickets, draft reviews, deployments',
+    up(db) {
+      // docs/prd/ui-reporter-server.md (owner request 2026-10-31). A new area block, 900-909 (docs/coord/PLAN.md); no number past 884 is used on
+      // integration or any open branch. Additive only (D-92): new objects with IF NOT EXISTS. No secret is stored: a token is its SHA-256.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS reporter_configs (
+          bucket_key TEXT PRIMARY KEY,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          callouts_default INTEGER NOT NULL DEFAULT 1,
+          session_targets TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(session_targets)),
+          updated_at TEXT,
+          updated_by TEXT
+        ) STRICT;
+        -- An origin belongs to one site of one bucket in the whole portal: the primary key is the origin.
+        CREATE TABLE IF NOT EXISTS reporter_sites (
+          origin TEXT PRIMARY KEY,
+          bucket_key TEXT NOT NULL,
+          environment TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          label TEXT,
+          branch TEXT,
+          position INTEGER NOT NULL DEFAULT 0
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_sites_bucket ON reporter_sites (bucket_key, position);
+        CREATE INDEX IF NOT EXISTS reporter_sites_repo ON reporter_sites (repo, environment);
+        CREATE TABLE IF NOT EXISTS reporter_tokens (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          bucket_key TEXT NOT NULL,
+          origin TEXT NOT NULL,
+          actor_user TEXT NOT NULL,
+          actor_label TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT,
+          revoked_reason TEXT,
+          last_used_at TEXT
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_tokens_bucket ON reporter_tokens (bucket_key, origin);
+        -- One row per reported ticket: the site it came from (frozen), the build the page declared, where it was sent.
+        CREATE TABLE IF NOT EXISTS reporter_ticket_evidence (
+          ticket_number INTEGER PRIMARY KEY REFERENCES tickets (number) ON DELETE CASCADE,
+          bucket_key TEXT NOT NULL,
+          origin TEXT NOT NULL,
+          environment TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          declared_repo TEXT,
+          declared_environment TEXT,
+          mismatch INTEGER NOT NULL DEFAULT 0,
+          build TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(build)),
+          sdk_version TEXT NOT NULL DEFAULT '',
+          target TEXT NOT NULL DEFAULT '{"kind":"ticket"}' CHECK (json_valid(target)),
+          delivery TEXT,
+          delivery_error TEXT,
+          text TEXT NOT NULL DEFAULT '',
+          token_id TEXT,
+          actor_user TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_ticket_evidence_repo ON reporter_ticket_evidence (repo);
+        CREATE TABLE IF NOT EXISTS reporter_ticket_captures (
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          capture_id TEXT NOT NULL,
+          idx INTEGER NOT NULL,
+          page_url TEXT NOT NULL,
+          path TEXT NOT NULL,
+          anchor TEXT NOT NULL CHECK (json_valid(anchor)),
+          rect_y REAL NOT NULL DEFAULT 0,
+          selector TEXT,
+          note TEXT,
+          body TEXT,
+          screenshot_attachment INTEGER,
+          evidence_attachment INTEGER,
+          facts TEXT CHECK (facts IS NULL OR json_valid(facts)),
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (ticket_number, capture_id)
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_ticket_captures_path ON reporter_ticket_captures (path, rect_y);
+        CREATE TABLE IF NOT EXISTS reporter_reviews (
+          id TEXT PRIMARY KEY,
+          bucket_key TEXT NOT NULL,
+          author_user TEXT NOT NULL,
+          origin TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'discarded')),
+          title TEXT NOT NULL DEFAULT '',
+          build TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(build)),
+          sdk_version TEXT NOT NULL DEFAULT '',
+          ticket_keys TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(ticket_keys)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_reviews_author ON reporter_reviews (bucket_key, author_user, status);
+        CREATE TABLE IF NOT EXISTS reporter_review_comments (
+          review_id TEXT NOT NULL REFERENCES reporter_reviews (id) ON DELETE CASCADE,
+          capture_id TEXT NOT NULL,
+          idx INTEGER NOT NULL,
+          page_url TEXT NOT NULL,
+          path TEXT NOT NULL,
+          anchor TEXT NOT NULL CHECK (json_valid(anchor)),
+          note TEXT,
+          body TEXT NOT NULL DEFAULT '',
+          screenshot_sha TEXT,
+          screenshot_type TEXT,
+          screenshot_size INTEGER,
+          evidence_sha TEXT,
+          evidence_size INTEGER,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (review_id, capture_id)
+        ) STRICT;
+        -- Builds seen live per (repo, environment): a row per distinct commit, its first and last sighting.
+        CREATE TABLE IF NOT EXISTS reporter_deployments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repo TEXT NOT NULL,
+          environment TEXT NOT NULL,
+          commit_sha TEXT NOT NULL,
+          branch TEXT,
+          source TEXT NOT NULL CHECK (source IN ('widget', 'pipeline')),
+          via TEXT NOT NULL DEFAULT '',
+          first_seen_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_deployments_env ON reporter_deployments (repo, environment, last_seen_at);
+        CREATE TABLE IF NOT EXISTS reporter_fix_commits (
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          commit_sha TEXT NOT NULL,
+          source TEXT NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (ticket_number, commit_sha)
+        ) STRICT;
+        -- The last decided deployment state per ticket and environment (proven by git in a checkout; never guessed).
+        CREATE TABLE IF NOT EXISTS reporter_deploy_states (
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          environment TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('deployed', 'not-deployed', 'unknown')),
+          current_commit TEXT,
+          seen_at TEXT,
+          fix_commit TEXT,
+          reason TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (ticket_number, environment)
+        ) STRICT;
+        -- What the reporter last read and last wrote on a ticket's thread, for the unread badge.
+        CREATE TABLE IF NOT EXISTS reporter_reads (
+          ticket_number INTEGER NOT NULL REFERENCES tickets (number) ON DELETE CASCADE,
+          actor_user TEXT NOT NULL,
+          last_read_event INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (ticket_number, actor_user)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 901,
+    name: 'UI reporter: deployments are kept per bucket, and an observed build says whether its commit was found in a checkout (PILOT-1111)',
+    up(db) {
+      // docs/prd/ui-reporter.md "Deployed" (PILOT-1111, security review): a deployment row belongs to the bucket that recorded it, so a token of
+      // one bucket never moves another bucket's state; a widget-observed commit is `verified` only when the server found it in a checkout of
+      // the repo. Additive only (D-92): two columns with defaults and an index; no data is rewritten (rows without a bucket are not read).
+      db.exec(`
+        ALTER TABLE reporter_deployments ADD COLUMN bucket_key TEXT;
+        ALTER TABLE reporter_deployments ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX IF NOT EXISTS reporter_deployments_bucket ON reporter_deployments (bucket_key, repo, environment, source, last_seen_at);
+      `);
+    },
+  },
+  {
+    version: 902,
+    name: 'UI reporter: the client address a widget report came from, as the portal saw it (PILOT-1111 context)',
+    up(db) {
+      // docs/prd/ui-reporter-server.md "Context": the server adds the reporter's address (the socket, or the trusted proxy's X-Forwarded-For
+      // entry) to the evidence record; the page never sends it. Additive only (D-92): one nullable column, older rows stay null ("unknown").
+      db.exec(`ALTER TABLE reporter_ticket_evidence ADD COLUMN reporter_ip TEXT;`);
+    },
+  },
 ];
 
 /**
