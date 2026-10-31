@@ -12,6 +12,8 @@ import { SPAWN_CLAUDE_HELP, WORKER_REPORTS, spawnModel, type SpawnClaudeWhy, typ
 
 /** What the tools need of the chat controller. */
 export interface ChatToolHost {
+  /** T-3215: how long a worker's queued start waits for a slot before it is ended with the cap's reason. */
+  readonly agentSlotWaitMs?: number;
   rename(sessionId: string, title: unknown, opts: { actor: string }): ChatSession;
   get(id: string): ChatSession | null;
   create(
@@ -300,7 +302,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
       const where = on.claudeId === parent.claudeId ? whyText : `${on.name}, ${whyText}`;
       return {
         summary: waits
-          ? `Worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''} waits to start: ${waits}. It gets its settings and your instruction when it starts, and reports to you; message it with session_message.`
+          ? `Worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''} waits to start: ${waits}. It gets its settings and your instruction when it starts${chat.agentSlotWaitMs ? `; if no slot frees within ${Math.ceil(chat.agentSlotWaitMs / 1000)} s it is ended and you are told why` : ''}, and reports to you; message it with session_message.`
           : `Started worker ${child.id} on ${where}${child.worktree ? `, branch ${child.worktree.branch}` : ''}${applied.length ? `, ${applied.join(', ')}` : ''}.` +
             `${notInherited ? ` ${notInherited}.` : ''}` +
             `${unconfirmed.length ? ` Not confirmed: ${unconfirmed.join('; ')}.` : ''} It reports to you; message it with session_message.`,
