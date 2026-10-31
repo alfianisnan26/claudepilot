@@ -6,7 +6,7 @@
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-12 |
 | Depends on | [Pools foundation](foundation-pools.md), [Portal MCP](portal-mcp.md), [Chat sessions](chat-sessions.md) |
-| Related | [Identity and onboarding](identity-onboarding.md), [Authorization](authorization.md), [Sharing](sharing.md), [Teams](teams.md), [Web app & PWA](web-app-pwa.md) §12, [Platform roadmap](platform-roadmap.md), [Claude usage](claude-usage.md) |
+| Related | [Identity and onboarding](identity-onboarding.md), [Authorization](authorization.md), [Sharing](sharing.md), [Teams](teams.md), [Organizations](organizations.md) (2026-10-31: orgs, org SSO, and a review of this PRD against the code in its §14), [Web app & PWA](web-app-pwa.md) §12, [Platform roadmap](platform-roadmap.md), [Claude usage](claude-usage.md) |
 
 ## 1. Summary
 
