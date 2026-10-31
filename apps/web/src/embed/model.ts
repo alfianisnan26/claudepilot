@@ -62,6 +62,8 @@ export function buildQuery(p: ListPrefs, currentPath: string | null, extra: Part
   if (p.mine) q.mine = true;
   if (p.q.trim()) q.q = p.q.trim();
   if (p.scope === 'page' && currentPath) q.path = pathnameOf(currentPath);
+  // Before the host has said which page it is on there is no path, and position needs one (the server answers 422).
+  if (q.sort === 'position' && !q.path && !extra.path) q.sort = 'updated';
   return { ...q, ...extra };
 }
 

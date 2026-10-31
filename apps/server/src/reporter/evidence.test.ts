@@ -3,7 +3,7 @@
 // "network[0].ts is out of range" to every real report.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { epochMs, parseEvidence } from './validate.js';
+import { epochMs, parseEvidence, pinEvidence } from './validate.js';
 import { evidence } from './testkit.js';
 
 const bytes = (v: unknown) => Buffer.from(JSON.stringify(v));
@@ -33,4 +33,13 @@ test('evidence: a time far in the future or before 1970 is still refused', () =>
   assert.throws(() => epochMs(now + 2 * 86_400_000, 'ts', now), /out of range/);
   assert.throws(() => epochMs(-1, 'ts', now), /out of range/);
   assert.throws(() => parseEvidence(bytes(evidence({ network: [{ ts: now + 2 * 86_400_000, method: 'GET', url: 'https://stg.konfersi.com/', status: 200, durationMs: 1, initiator: 'fetch', sizeBytes: 1 }] }))), /network\[0\]\.ts/);
+});
+
+test('evidence: a site with a port accepts the SDK page.host (location.hostname, no port); another host is still refused', () => {
+  const site = 'http://localhost:4700';
+  const page = (host: string) => ({ url: `${site}/a`, origin: site, host, path: '/a', search: '', hash: '', title: '', referrer: '', lang: 'en', route: null, historyLength: 1 });
+  const e = (host: string) => parseEvidence(bytes(evidence({ page: page(host) })));
+  assert.equal(pinEvidence(e('localhost'), site).page.host, 'localhost:4700');
+  assert.equal(pinEvidence(e('localhost:4700'), site).page.host, 'localhost:4700');
+  assert.throws(() => pinEvidence(e('evil.example'), site), /not of this site/);
 });

@@ -509,7 +509,8 @@ export function pinEvidence(e: ReporterEvidence, origin: string): ReporterEviden
   const site = new URL(origin);
   const refuse = (f: string) => invalid(`evidence.page.${f}`, 'The evidence is not of this site.');
   if (e.page.origin && normalizeOrigin(e.page.origin) !== origin) throw refuse('origin');
-  if (e.page.host && e.page.host.toLowerCase() !== site.host) throw refuse('host');
+  // The SDK sends location.hostname (no port); a port-ful site (http://localhost:3000) is still the same site.
+  if (e.page.host && e.page.host.toLowerCase() !== site.host && e.page.host.toLowerCase() !== site.hostname) throw refuse('host');
   if (e.page.url) {
     let u: URL;
     try {

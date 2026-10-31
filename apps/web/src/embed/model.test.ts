@@ -266,3 +266,10 @@ test('targetNotice: a session the bucket cannot take is refused with a clear mes
   assert.match(targetNotice({ kind: 'session', sessionId: '' }, [])!, /No session is set up/);
   assert.match(targetNotice({ kind: 'session', sessionId: 'lead' }, [{ sessionId: 'lead', available: false }])!, /No target session is available/);
 });
+
+// PILOT-1111 (found by the connect e2e): a freshly loaded panel lists "this page" before the host said which page it is on; sort=position
+// without a path was a 422 from the server.
+test('buildQuery: no position sort without a path', () => {
+  assert.equal(buildQuery(DEFAULT_PREFS, null).sort, 'updated');
+  assert.equal(buildQuery(DEFAULT_PREFS, '/pricing').sort, 'position');
+});
