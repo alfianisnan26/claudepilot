@@ -1,7 +1,7 @@
 # The release gate (scripts/gate.sh) as a Job in the cluster, on CPUs other than the development pod's (T-37). Started only by
 # scripts/gate-job.sh, which fills in NAME, COMMIT, STEPS, IMAGE and VERDICT (its own scripts/gate-verdict.sh, base64, so an older commit is
 # read the same way), makes the Secret NAME (the GitHub Packages token for npm ci,
-# the private @isnanme packages) for the Job's life, and reads the verdict from the log. Several can run at once, one per name.
+# the private @isnanme packages; owned by the Job) for the Job's life, and reads the verdict from the log. Several can run at once, one per name.
 # It prefers a node WITHOUT a development workspace pod (anti-affinity below): on the same node as the pod its 100m request lost every
 # fight for CPU against the agents (deploy 10: 0.4 CPU used on k3s-node2 at 95% while k3s-master was at 27%, the suite ran twice as long and
 # timing tests failed). The request is 1 CPU so the node's share is real; the limit lets it use up to 4 where it lands.
@@ -18,6 +18,9 @@ metadata:
   namespace: isnan-claudepilot
   labels: {app: claudepilot-gate, claudepilot-gate/by: BY_WHOM}
 spec:
+  # Made suspended: gate-job.sh then creates the Secret NAME already owned by this Job (one create, no patch: the workspaces'
+  # least-privilege accounts may not read Secrets) and lets the Job go (the deadline counts from there).
+  suspend: true
   backoffLimit: 0
   activeDeadlineSeconds: 5400
   ttlSecondsAfterFinished: 3600
