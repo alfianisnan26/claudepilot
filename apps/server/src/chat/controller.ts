@@ -339,6 +339,9 @@ export const KEEPGOING_BYPASS_WINDOW_MS = 24 * 60 * 60_000;
 
 /** Modes a chat session may switch to; Bypass is never one of them, and Auto only where {@link autoModeAllowed} says so. */
 const MODES = new Set<string>(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']);
+/** T-3222: a spawn's mode as a queued worker shows it (`plannedMode`, display only), or null for none or one no session reports. */
+const plannedModeOf = (mode: string | null | undefined): ChatPermissionMode | null =>
+  typeof mode === 'string' && (MODES.has(mode) || mode === 'bypassPermissions') ? (mode as ChatPermissionMode) : null;
 /** The UI's names for the modes, used in the transcript's system rows. */
 const MODE_LABELS: Record<string, string> = {
   default: 'Manual',
@@ -752,6 +755,11 @@ export class ChatController {
   readonly #inputHolds = new Map<string, Promise<void>>();
   /** T-417: per session waiting for a slot, why (what `slotWait` shows). */
   readonly #slotWaits = new Map<string, string>();
+  /**
+   * T-3222: per worker queued for a slot, the mode its spawn applies at start (what `plannedMode` shows). Display only: in memory, never
+   * stored, never read by a permission check; the mode control at start runs every check as for any other worker.
+   */
+  readonly #plannedModes = new Map<string, ChatPermissionMode>();
   /** T-417: the sessions whose Bypass is being put back after a wake (a retry inside it wakes it again: never twice). */
   readonly #wakeBypass = new Set<string>();
   /**
@@ -1871,6 +1879,9 @@ export class ChatController {
     if (this.#launchedLeadRules.has(session.id) && out.process === 'live') out = { ...out, leadRules: true };
     const slotWait = this.#slotWaits.get(session.id);
     if (slotWait) out = { ...out, slotWait };
+    // T-3222: until its process runs, a queued worker shows the mode its spawn applies then; once it runs, its real mode alone.
+    const plannedMode = out.process === 'live' ? undefined : this.#plannedModes.get(session.id);
+    if (plannedMode) out = { ...out, plannedMode };
     // T-1098: the key the screens show for its ticket (one primary-key read), so a list never asks per row.
     if (out.ticketId && this.ticketKeyOf) {
       let ticketKey: string | null = null;
@@ -2353,7 +2364,7 @@ export class ChatController {
         actor,
         detail: inherited ? { how: 'inherit', parent: parentId } : { how: 'start' },
       });
-    if (full) return this.#queueStart(id, installed, full);
+    if (full) return this.#queueStart(id, installed, full, parentId ? plannedModeOf(spawn?.mode) : null);
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
     void this.#startProcess(id, { checked: installed })
       .catch(() => undefined)
@@ -2366,9 +2377,11 @@ export class ChatController {
    * waits for a slot (`#slot`), showing why at once, in what this returns too. A message sent meanwhile waits for that start (it is the
    * session's lifecycle work). When the wait runs out it reads Interrupted with the cap's reason, and a later message starts it.
    */
-  #queueStart(id: string, checked: boolean, full: SlotFull): ChatSession {
+  #queueStart(id: string, checked: boolean, full: SlotFull, planned: ChatPermissionMode | null = null): ChatSession {
     const row = this.#chat.row(id)!;
     this.#chat.patchSession(id, { process: 'asleep' });
+    // T-3222: shown (`plannedMode`) until this start settles, whichever way; set before the first emit below.
+    if (planned) this.#plannedModes.set(id, planned);
     this.#showSlotWait(id, slotWaitText(full.scope, full.limit, full.running, row.workspace_id));
     // The wait is this session's lifecycle work (`#busy`) until the launch takes over (it holds `#busy` itself).
     let held: Promise<void> | undefined;
@@ -2415,6 +2428,13 @@ export class ChatController {
     this.#busy.set(id, held);
     void held.finally(() => {
       if (this.#busy.get(id) === held) this.#busy.delete(id);
+      // T-3222: the start settled (it runs, or it was refused or ended): from here the real mode alone shows.
+      if (this.#plannedModes.delete(id))
+        try {
+          this.#emitSession(id);
+        } catch {
+          // the store went away (shutdown)
+        }
     });
     return this.#decorate(this.#chat.get(id)!);
   }

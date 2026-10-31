@@ -154,7 +154,10 @@ export function Controls({
   // The model in effect, by name: steady whether or not the list has loaded (an alias such as
   // "Default (recommended)" names a choice, not the model running).
   const modelName = session.model ? prettyModel(session.model) : current?.displayName || 'Model';
-  const mode = MODES[session.mode] ?? MODES.default;
+  // T-3222: a worker queued for a slot shows the mode its spawn applies when it starts (display only); the picker keeps the real one.
+  const planned = session.plannedMode ?? null;
+  const shownMode = planned ?? session.mode;
+  const mode = MODES[shownMode] ?? MODES.default;
   const ModeIcon = mode.icon;
   const effort = session.effort !== null ? effortLabel(session.effort) : null;
   const close = () => setOpen(null);
@@ -176,8 +179,9 @@ export function Controls({
         </Quiet>
         <Quiet
           onClick={() => setOpen('mode')}
-          ariaLabel={`Permission mode: ${mode.label}`}
-          tone={mode.danger ? 'danger' : session.mode !== 'default' ? 'gold' : undefined}
+          ariaLabel={`Permission mode: ${mode.label}${planned ? ', when it starts' : ''}`}
+          title={planned ? `${mode.label} when it starts` : undefined}
+          tone={mode.danger ? 'danger' : shownMode !== 'default' ? 'gold' : undefined}
           iconOnPhone
           className="shrink-0"
         >

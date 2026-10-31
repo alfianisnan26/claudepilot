@@ -470,7 +470,9 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         state: s.state,
         claude: s.claudeName,
         agent: s.agent ?? null,
-        mode: s.mode,
+        // T-3222: a worker queued for a slot shows the mode its spawn applies when it starts, marked as planned.
+        mode: s.plannedMode ?? s.mode,
+        ...(s.plannedMode ? { mode_planned: true } : {}),
         asleep: s.process === 'asleep',
         waiting_for_a_person: s.waiting > 0,
         turns: s.turns,

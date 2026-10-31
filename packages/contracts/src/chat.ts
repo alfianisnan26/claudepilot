@@ -249,6 +249,12 @@ export interface ChatSession {
    * kubernetes/x (Settings › Running agents)"). Absent or null when it doesn't wait.
    */
   slotWait?: string | null;
+  /**
+   * T-3222: a worker queued for a slot ({@link slotWait}) has no process yet, so its {@link mode} reads `default`: this is the mode its
+   * spawn applies when the process starts, for display only (never stored, never read by a permission check; Auto is still checked at start).
+   * Absent once the process runs: then {@link mode} is the real one, which wins when the start refused the planned mode.
+   */
+  plannedMode?: ChatPermissionMode | null;
 }
 
 /**
