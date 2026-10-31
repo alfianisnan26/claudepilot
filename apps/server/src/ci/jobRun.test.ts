@@ -398,7 +398,7 @@ test('a run: the suspended Job manifest, the stream, the exit code, the artifact
   assert.equal(pod.automountServiceAccountToken, false);
   assert.match(
     JSON.stringify(pod.affinity),
-    /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces"\].*"claudepilot.managed":"true"/,
+    /"podAntiAffinity".*"namespaces":\["isnan-claudepilot-workspaces","isnan-pilot-ws-isnan","isnan-pilot-ws-konfersi","isnan-pilot-ws-kohilabs"\].*"claudepilot.managed":"true"/,
   );
   // T-524: memory requested = limited, so the scheduler only places the Job where all of it fits; /tmp (in memory) inside that limit.
   assert.deepEqual(c.resources, { requests: { cpu: '500m', memory: '3Gi' }, limits: { cpu: '4', memory: '3Gi' } });
@@ -750,6 +750,23 @@ test('T-524 the per-program cap: two Konfersi Jobs running (one from before the 
   assert.equal(e.code, 0, e.out);
   assert.ok(w.applied().some((m) => /job-run\/program: event\}/.test(m)));
   assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: 'x' }).code, 2, 'the cap is a number');
+});
+
+test('workspace migration 2026-10-31: JOB_RUN_MAX_PER_PROGRAM per program (konfersi:1,claudepilot:2): Konfersi waits at its own cap, ClaudePilot goes', async () => {
+  const w = world([{ name: 'claudepilot-job-0000000a', chat: 'chat-x', program: 'konfersi' }]);
+  const caps = { JOB_RUN_MAX_PER_PROGRAM: 'konfersi:1,claudepilot:2' };
+  const k = w.start(['--repo', 'konfersi:platform/konfersi-backend', '--ref', 'main', '--', 'true'], { ...caps, PILOT_SESSION_ID: 'chat-a' });
+  await waitFor('konfersi queued at 1', () => /queued behind 1 \(at most 3 at once, 2 per chat, konfersi:1,claudepilot:2 per program\)/.test(k.out()));
+  const c = await w.start(['--repo', 'claudepilot', '--ref', 'main', '--', 'true'], { ...caps, PILOT_SESSION_ID: 'chat-b' }).done;
+  assert.equal(c.code, 0, c.out);
+  assert.doesNotMatch(c.out, /queued behind/, 'ClaudePilot has its own cap');
+  w.edit((st) => {
+    Object.assign(st.jobs[0] ?? {}, { done: true, rc: 0 });
+  });
+  assert.equal((await k.done).code, 0);
+  for (const bad of ['konfersi:x', 'konfersi=6', 'konfersi:6,', 'Konfersi:6', 'a b:1'])
+    assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: bad }).code, 2, bad);
+  assert.equal(w.run(['--list'], { JOB_RUN_MAX_PER_PROGRAM: 'konfersi:6,*:3' }).code, 0, 'a default for the rest');
 });
 
 test('T-524 --big: 8Gi requested = limited, /tmp 4Gi; the default is 3Gi with /tmp 2Gi; both prefer a node other than the control plane', () => {

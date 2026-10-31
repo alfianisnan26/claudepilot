@@ -73,7 +73,7 @@
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 12 since D-96, 2026-10-23; 8 before; 3 until T-1624, when k3s-node3 joined and the master and node3 had room for
 # about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (4 since T-2966, 2026-10-29: a lead's Agent lanes share its chat; was 2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
-# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
+# claudepilot, event, konfersi: T-524; a number, or per program as `konfersi:6,claudepilot:4,event:2[,*:<n>]`, unnamed ones 9: 2026-10-31). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
 # Priority lane (T-2967, 2026-10-29; Konfersi T-2822 waited 2364 s): a Job whose role is in JOB_RUN_PRIORITY_ROLES (comma list, default
 # konfersi-stg-deploy) goes ahead of every waiting Job and is not held by the per-chat cap (pipeline runs all share the chat "manual") or the
 # per-program cap; the cluster-wide cap still holds, so it takes the next free slot. It still counts in the totals the other Jobs see. The Job stops when this script is interrupted or killed (the next run removes a Job whose
@@ -105,7 +105,14 @@ event_repo=isnanme/event # fixed on purpose (T-491): the door names one reposito
 mem_std=3Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
-for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+for n in "$max" "$per" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+# JOB_RUN_MAX_PER_PROGRAM (workspace migration, 2026-10-31): one number for every program, or a map `konfersi:6,claudepilot:4,event:2`; a program
+# the map does not name gets `*:<n>` when given, else 9. No jq here either: the shape check leaves nothing to escape.
+if [[ $pprog =~ ^[0-9]+$ ]]; then pprog_json="{\"*\":$pprog}"
+elif [[ $pprog =~ ^(([a-z][a-z0-9-]*|\*):[0-9]+)(,([a-z][a-z0-9-]*|\*):[0-9]+)*$ ]]; then
+  pprog_json="{$(printf '%s' "$pprog" | sed -E 's/([^,:]+):([0-9]+)/"\1":\2/g')}"
+  case ",$pprog" in *",*:"*) ;; *) pprog_json="${pprog_json%\}},\"*\":9}" ;; esac
+else die "the caps are numbers (JOB_RUN_MAX_PER_PROGRAM: a number, or program:number[,program:number])"; fi
 prio_roles=${JOB_RUN_PRIORITY_ROLES-konfersi-stg-deploy}
 [[ $prio_roles =~ ^([a-z0-9][a-z0-9.-]*(,[a-z0-9][a-z0-9.-]*)*)?$ ]] || die "JOB_RUN_PRIORITY_ROLES is a comma list of role labels (a-z, 0-9, . and -)"
 # No jq here: a missing jq is reported later, with its own message (T-2865). The shape check above leaves nothing to escape.
@@ -614,7 +621,7 @@ def key: [(pri | not), .metadata.creationTimestamp, .metadata.name];
     | (reduce $q[] as $j ({total: ($run | length), per: (reduce $run[] as $r ({}; .[$r | chat] += 1)),
           prog: (reduce $run[] as $r ({}; .[$r | prog] += 1)), done: false, go: false};
         if .done or $j.spec.suspend != true then .
-        elif .total < $max and (($j | pri) or (((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < $pprog))) then
+        elif .total < $max and (($j | pri) or (((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < ($pprog[$j | prog] // $pprog["*"])))) then
           .total += 1 | .per[$j | chat] += 1 | .prog[$j | prog] += 1 | (if $j.metadata.name == $me then .go = true | .done = true else . end)
         elif $j.metadata.name == $me then .done = true
         else . end)) as $s
@@ -635,7 +642,7 @@ gate_waiting() {
 }
 last=
 while :; do
-  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" --argjson prio "$prio_json" "$QUEUE_JQ" 2>/dev/null || true)
+  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog_json" --argjson prio "$prio_json" "$QUEUE_JQ" 2>/dev/null || true)
   if [ "$d" = go ] && gate_waiting; then d=gate; fi
   case "$d" in
     go) break ;;
