@@ -171,7 +171,7 @@ test('T-417 review 2: a queued worker gets its mode, then its first instruction,
 test('T-417 review 3: a queued worker whose start fails is ended at once, waits only once, and its lead is told why', async () => {
   const r = await mcpRig();
   try {
-    r.s.controller.slotWaitMs = 200;
+    r.s.controller.agentSlotWaitMs = 200; // T-3215: a worker's queued start waits the agent wait
     const starts = r.s.ws.starts;
     const spawned = await r.h.call(r.a.secret, 'session_spawn', { prompt: 'Check the parser.', title: 'Parser', model: 'sonnet', effort: 'high' });
     const id = (spawned.result!.structuredContent.session as { id: string }).id;

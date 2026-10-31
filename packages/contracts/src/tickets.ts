@@ -299,9 +299,10 @@ export interface TicketVerdictBatch {
 }
 
 /**
- * T-2014 (tickets PRD FR36e): what the merge gate (the merge-gate lead of a flow program, or a worker it started) says of a ticket's pull
- * request in one repo. `ready`: open with the verdicts it needs on `prHead`; `merged`; `conflict`: needs a rebase; `waiting`: open, verdicts
- * on its head not yet in; `no_pr`: no pull request is open for it; `failed`: the gate tried and could not merge (`reason`).
+ * T-2014 (tickets PRD FR36e): what the merge gate (a lead of a flow program, the lead whose crew holds the ticket (T-3198), or a worker
+ * either started) says of a ticket's pull request in one repo. `ready`: open with the verdicts it needs on `prHead`; `merged`; `conflict`:
+ * needs a rebase; `waiting`: open, verdicts on its head not yet in; `no_pr`: no pull request is open for it; `failed`: the gate tried and
+ * could not merge (`reason`).
  */
 export const TICKET_MERGE_STATES = ['ready', 'merged', 'conflict', 'waiting', 'no_pr', 'failed'] as const;
 export type TicketMergeState = (typeof TICKET_MERGE_STATES)[number];
@@ -309,7 +310,7 @@ export type TicketMergeState = (typeof TICKET_MERGE_STATES)[number];
 export interface TicketMergeStatus {
   /** `owner/name` as the forge spells it. */
   repo: string;
-  /** The pull request number; null only with `no_pr`. */
+  /** The pull request number; null with `no_pr`, and with `merged` for a fast-forward merge that had no pull request (T-3198). */
   pr: number | null;
   /** The pull request's head when the gate looked: a full 40-character sha, lowercase; null only with `no_pr`. */
   prHead: string | null;

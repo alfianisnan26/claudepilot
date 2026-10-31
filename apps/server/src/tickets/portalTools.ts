@@ -71,6 +71,10 @@ export function ticketWorkspaceOf(ctx: PortalToolContext, given: string | undefi
 export interface TicketToolOptions {
   /** T-1105: whether a workspace (`<target>/<name>`) exists now, for a token's default workspace; index.ts asks the workspace identities. */
   workspaceExists?: (workspaceId: string) => boolean;
+  /** UI reporter (docs/prd/ui-reporter-server.md): a short note when the ticket came from the reporter widget, so ticket_get says so. */
+  reporterNote?: (ticketId: string) => Record<string, unknown> | null;
+  /** UI reporter: a fix commit named on close (ticket_close fix_commit), for the per-environment deployment state. */
+  onFixCommit?: (ticketId: string, commit: string) => void;
 }
 
 /** Where ticket text came from, for the label the model sees. */
@@ -216,6 +220,15 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
   const bucketArg = z.string().max(6).optional();
   /** Every tool names a ticket either way (FR38): the stable id or its bucket key. */
   const ticketIdArg = z.string().max(20).describe('The ticket: T-12 or its bucket key (KONF-3).');
+  /** UI reporter: `reporter` on ticket_get when the ticket came from the widget (what it holds and how to read it). */
+  const reporterOf = (id: string): { reporter?: Record<string, unknown> } => {
+    try {
+      const note = opts.reporterNote?.(id);
+      return note ? { reporter: note } : {};
+    } catch {
+      return {};
+    }
+  };
   const uiUrl = (id: string) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`;
 
   registerPortalTool({
@@ -396,6 +409,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
           events: d.events.map((e) => eventView(ctx, e)),
           checks: d.checks.map((c) => ({ name: ctx.untrusted(c.name, 'ci', 80), state: c.state, run_id: c.runId, commit: c.commit, link: ctx.untrusted(c.link, 'ci', 300), updated_at: c.updatedAt })),
           attachments: (d.attachments ?? []).map((a) => attachmentView(ctx, a)),
+          ...reporterOf(t.id),
           ui: uiUrl(t.id),
         };
       const cut: string[] = [];
@@ -413,6 +427,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
         ...(d.sessions.length ? { sessions: d.sessions.slice(0, 3).map((s) => ({ id: s.id, state: s.state })) } : {}),
         ...(d.checks.length ? { checks: d.checks.map((c) => ({ name: ctx.untrusted(c.name, 'ci', 80), state: c.state, run_id: c.runId })) } : {}),
         ...(d.attachments?.length ? { attachments: d.attachments.map((a) => attachmentView(ctx, a)) } : {}),
+        ...reporterOf(t.id),
         ...(cut.length ? { cut } : {}),
       };
     },
@@ -422,7 +437,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_create',
     title: 'Create a ticket',
     description:
-      'Adds a ticket to the queue. Leave it unassigned for work any agent can take. An agent assigns a person (assignee user) only with an allowed tag (default production, D-62): otherwise it is refused; decide by the written default instead. Never put a secret in a ticket: describe where it lives. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+      'Adds a ticket to the queue. Leave it unassigned for work any agent can take. An agent assigns a person (assignee user) only with an allowed tag (default production, D-62): otherwise it is refused; decide by the written default instead. Never put a secret in a ticket: describe where it lives. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key). Pick the bucket by what the ticket is about (T-3069): pipeline, portal, allow-list, brief or harness problems go to PILOT, whatever workspace you are in; name bucket PILOT or tag claudepilot.',
     scope: 'agent',
     input: z.object({
       bucket: bucketArg.describe('The bucket (project) by its key, like KONF (ticket_buckets lists them). Left out: the bucket your tags imply (tickets.bucketRoutes, e.g. konfersi-migration or area-* to KONF, claudepilot to PILOT), else the parent’s bucket, else your workspace’s, else the bucket of the ticket you or your lead work on, else PILOT. The result says which and why.'),
@@ -589,10 +604,22 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       id: ticketIdArg,
       summary: z.string().min(1).max(2_000).describe('What was done, or why not. Markdown.'),
       outcome: z.enum(['done', 'wont_do']).optional().describe('done (default) or wont_do.'),
+      fix_commit: z
+        .string()
+        .regex(/^[0-9a-fA-F]{7,40}$/)
+        .optional()
+        .describe('The commit that fixes it (full or short sha), when there is one: the portal then shows per environment whether the fix is deployed.'),
       session_id: sessionIdArg,
     }),
     handler(ctx, args) {
       const t = tickets.close(callerOf(ctx), args.id, { summary: args.summary, outcome: args.outcome as 'done' | 'wont_do' | undefined }, { sessionId: args.session_id });
+      if (args.fix_commit) {
+        try {
+          opts.onFixCommit?.(t.id, args.fix_commit);
+        } catch {
+          // the close stands; the fix commit can be found from its trailer later
+        }
+      }
       ctx.affected(`ticket:${t.id}`);
       return { summary: `Closed ${t.id} as ${t.status}.`, ticket: { id: t.id, status: t.status, closing_summary: ctx.untrusted(t.closingSummary, sourceOf(t), 2_000) } };
     },
@@ -602,7 +629,7 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_adopt',
     title: 'Take over an ended session’s tickets',
     description:
-      'Takes over every unfinished ticket of a chat session that has ENDED in your workspace: the one you continue (an earlier chat of your track), or one nobody continues. Use it when ticket_comment or ticket_update says a ticket is assigned to another session that ended: it is a tool step, not something to ask a person for. Refused for a live session (it keeps its work), for a session another live chat continues, and outside your workspace. Asks for confirmation first (shows the tickets); returns the ids moved. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+      'Takes over every unfinished ticket of a chat session that has ENDED in your workspace: the one you continue (an earlier chat of your track), or one nobody continues. From the session you continue it also takes back the tickets the portal moved off it by title to another chat before you started. Use it when ticket_comment or ticket_update says a ticket is assigned to another session that ended: it is a tool step, not something to ask a person for. Refused for a live session (it keeps its work), for a session another live chat continues, and outside your workspace. Asks for confirmation first (shows the tickets); returns the ids moved. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
     scope: 'agent',
     input: z.object({
       from_session: z.string().min(1).max(80).describe('The id of the ended session whose tickets you take over.'),
@@ -719,12 +746,17 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
     name: 'ticket_merge_status',
     title: 'Record or read a ticket’s PR merge state',
     description:
-      'The merge gate’s record of a ticket’s pull request in one repo: the PR number, its CURRENT head (the full 40-character sha) and its state: ready (open, the verdicts it needs are on that head), merged, conflict (needs a rebase), waiting (verdicts on that head not yet in), no_pr (no pull request is open; leave pr and pr_head out) or failed (tried and could not merge; say why in reason). The flow watchdog judges the QA PASS on that head, skips merged tickets, and tells the unit lead about conflict and no_pr. Only a lead of a flow program the ticket belongs to (D-99: each unit lead records its own rows), or a worker that lead started, may record; record again whenever the PR head or its state changes. Without state it reads the latest record per repo. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
+      'The merge gate’s record of a ticket’s pull request in one repo: the PR number, its CURRENT head (the full 40-character sha) and its state: ready (open, the verdicts it needs are on that head), merged (a merge with no PR: leave pr out), conflict (needs a rebase), waiting (verdicts on that head not yet in), no_pr (no pull request is open; leave pr and pr_head out) or failed (tried and could not merge; say why in reason). The flow watchdog judges the QA PASS on that head, skips merged tickets, and tells the unit lead about conflict and no_pr. Only a lead of a flow program the ticket belongs to (D-99), the lead whose crew holds the ticket (T-3198), or a worker either started, may record; record again whenever the PR head or its state changes. Without state it reads the latest record per repo. A ticket is named by its stable id (T-12) or its bucket key (KONF-3); results that show a ticket carry both (id and key).',
     scope: 'agent',
     input: z.object({
       id: ticketIdArg,
       repo: z.string().max(TICKET_MERGE_LIMITS.repo).optional().describe('owner/name as the forge spells it. Needed to record.'),
-      pr: z.number().int().positive().optional().describe('The pull request number. Needed for every state but no_pr.'),
+      pr: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('The pull request number. Needed for every state but no_pr and merged (a fast-forward merge has none).'),
       pr_head: z.string().max(64).optional().describe('The PR’s head now: the full 40-character sha. Needed for every state but no_pr.'),
       state: z.enum(TICKET_MERGE_STATES).optional().describe('ready, merged, conflict, waiting, no_pr or failed. Leave out to read.'),
       reason: z.string().max(TICKET_MERGE_LIMITS.reason).optional().describe('One line, e.g. why it failed.'),
@@ -739,7 +771,12 @@ export function registerTicketTools(tickets: Tickets, registry: ToolRegistry = p
       }
       const m = tickets.recordMergeStatus(caller, args.id, { repo: args.repo, pr: args.pr, prHead: args.pr_head, state: args.state, reason: args.reason }, { sessionId: args.session_id });
       ctx.affected(`ticket:${stable(ctx, args.id)}`);
-      return { summary: `Recorded ${m.repo}#${m.pr ?? '-'} ${m.state} for ${args.id}.`, id: stable(ctx, args.id), key: tickets.keyOf(callerOf(ctx), stable(ctx, args.id)) ?? stable(ctx, args.id), merge: view(m) };
+      return {
+        summary: `Recorded ${m.repo}${m.pr ? `#${m.pr}` : ''} ${m.state} for ${args.id}.`,
+        id: stable(ctx, args.id),
+        key: tickets.keyOf(callerOf(ctx), stable(ctx, args.id)) ?? stable(ctx, args.id),
+        merge: view(m),
+      };
     },
   });
 

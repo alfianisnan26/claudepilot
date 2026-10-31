@@ -1,0 +1,35 @@
+/* The panel's styles: Tailwind over the design tokens, scanning only the panel's own files (the app's classes stay out). */
+@import 'tailwindcss' source(none);
+@import '@isnanme/tokens/tailwind.css';
+@source './';
+@source '../features/reporter/shared.ts';
+@source '../components/LogoMark.tsx';
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  /* The panel sits in a frame over someone else's page: it never rubber-bands or chains its scroll to the host. */
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--color-surface-2), var(--color-line), var(--color-surface-2));
+  background-size: 200% 100%;
+  animation: skeleton 1.4s ease-in-out infinite;
+}
+@keyframes skeleton {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}

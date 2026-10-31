@@ -45,7 +45,7 @@ import { METRICS_MEMO_MS } from './lab/metricsService.js';
 import { createRepos, registerRepoTools } from './repos/index.js';
 import { changesGlance, createGlance } from './glance/index.js';
 import { approvalAttentionSource, createApprovals, registerApprovalTools } from './approvals/index.js';
-import { APPROVAL_CHANNEL, fileRefusalRequests, markUsedPasses } from './approvals/outbox.js';
+import { APPROVAL_CHANNEL, expireRefusalsOnEnd, fileRefusalRequests, markUsedPasses } from './approvals/outbox.js';
 import { bridgeAttentionNotify, createAttention, registerAttentionTools } from './attention/index.js';
 import { createPlatform } from './platform/index.js';
 import { createCodespaces } from './codespaces/index.js';
@@ -79,6 +79,10 @@ import { ChatTicketSessions } from './tickets/sessions.js';
 import { registerChatTools } from './chat/portalTools.js';
 import { registerArtifactTools } from './chat/artifacts/portalTools.js';
 import { registerTicketTools } from './tickets/portalTools.js';
+import { workspaceGit } from './reporter/git.js';
+import { sdkVersion, vendorDirs } from './reporter/pages.js';
+import { registerReporterTools } from './reporter/portalTools.js';
+import { ReporterService } from './reporter/service.js';
 import { PoolService } from './pools/service.js';
 import { createApp, PLAIN_NAME } from './app.js';
 import { config } from './config.js';
@@ -502,6 +506,10 @@ chatController.onEvent((id, msg) => {
   portalMcp.agents.revokeSession(id, reason);
   portalMcp.managers.revokeSession(id, reason);
 });
+// T-3114: a session that ended, was archived or deleted waits for none of its refused calls: their cards leave Needs you now.
+chatController.onEvent(
+  (id, msg) => void expireRefusalsOnEnd(approvals, id, msg, (what, e) => console.error(`[approvals] ${what}: ${(e as Error).message}`)),
+);
 registerBuiltInPortalTools({
   store,
   module: portalMcp,
@@ -607,7 +615,19 @@ chatController.onRecoverCapped = (i) => {
   );
 };
 // T-1105: a token's default workspace is used only while the workspace is there (resolve answers null for a removed one).
-registerTicketTools(tickets, undefined, { workspaceExists: (id) => workspaces.resolve(id) !== null });
+// UI reporter (docs/prd/ui-reporter-server.md): ticket_get says when a ticket has widget evidence; ticket_close takes a fix commit. The
+// reporter service is made further down (it needs the repos module); these read it when called.
+let reporterService: ReporterService | null = null;
+registerTicketTools(tickets, undefined, {
+  workspaceExists: (id) => workspaces.resolve(id) !== null,
+  reporterNote: (id) => {
+    const e = reporterService?.evidence(id);
+    return e
+      ? { from: 'ui-reporter', origin: e.origin, environment: e.site.environment, repo: e.site.repo, commit: e.build.commit, captures: e.captures.length, read: `reporter_evidence ${id} for the page, device, console, network and deployment state; ticket_attachment_get for the screenshots` }
+      : null;
+  },
+  onFixCommit: (id, commit) => void reporterService?.addFixCommit(id, commit, 'close'),
+});
 // The chat's own tools for its Claude (rename itself); bound to the session its token was minted for.
 registerChatTools(chatController);
 // Chat content: the agent hands a file to the person as an artifact card (artifact_publish).
@@ -734,6 +754,47 @@ const repos = createRepos({
 });
 repos.start();
 registerRepoTools(repos);
+// UI reporter (docs/prd/ui-reporter-server.md): a web page's widget files tickets with screenshots and evidence; deployments per environment
+// are recorded by the widget and by pipelines, and a fix is "deployed" only when git in a workspace checkout of the repo proves it.
+const reporterVendor = vendorDirs(config.paths.root);
+const reporter = new ReporterService({
+  store,
+  tickets,
+  chat: chatController,
+  knowledge: {
+    search: (vault, q) => knowledge.search(vault, q, { limit: 20 }).hits.map((h) => ({ path: h.path, title: h.title, snippet: h.snippet?.text ?? '' })),
+    note: (vault, path) => {
+      const n = knowledge.getNote(vault, path);
+      return { path: n.path, title: n.title, content: n.content };
+    },
+  },
+  git: workspaceGit({
+    repos,
+    exec: async (workspaceId, command) => {
+      const slash = workspaceId.indexOf('/');
+      return workspaces.exec(workspaceId.slice(0, slash), workspaceId.slice(slash + 1), command);
+    },
+  }),
+  sdkVersion: () => sdkVersion(reporterVendor),
+});
+reporterService = reporter;
+registerReporterTools(reporter, tickets);
+{
+  const was = tickets.onEvent;
+  tickets.onEvent = (e) => {
+    was?.(e);
+    reporter.onTicketEvent(e);
+  };
+}
+// Draft reviews untouched for REPORTER_LIMITS.draftDays go, with their files; checked every six hours.
+const reporterSweep = setInterval(() => {
+  try {
+    reporter.sweepDrafts();
+  } catch {
+    // the next pass tries again
+  }
+}, 6 * 60 * 60_000);
+reporterSweep.unref?.();
 // Glance widgets: what waits on a person (approvals, tickets, failed CI) and who is working, counted once for every open page; the chat
 // controller's events feed it directly, tickets and CI changes are chained onto the hooks that already tell their own pages (docs/prd/glance-widgets.md).
 const glance = createGlance({ chat: chatController, tickets, ci, notify: () => notify('glance'), watching: () => live.watching('glance') });
@@ -811,6 +872,7 @@ const app = createApp(portal, workspaces, store, accounts, pools, reconciler, he
   claudeVersions,
   connect,
   appPorts,
+  reporter: { service: reporter, vendorDirs: reporterVendor },
 });
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();

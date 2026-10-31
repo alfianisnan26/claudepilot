@@ -17,7 +17,10 @@
 #                                                       differs. Prints "PROOF: passes on <ref>, fails on <against>" (exit 0) or "NO PROOF: <why>"
 #                                                       (exit 1; 2 when <ref> or a kept path is missing). Without it nothing changes.
 #     --keep-tests <paths>                              with --against: these files (comma separated) are taken from --ref onto the other ref
-#     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg
+#     --also <org>/<repo>[@<ref>]                     one more repository cloned next to it (Konfersi's file:../konfersi-shared), ref stg;
+#                                                       one folder per repository name: an --also of the --ref repository (or of a name
+#                                                       already used) is refused, rc 2 (T-1063): put both changes on one pushed commit;
+#                                                       platform/konfersi-lab-platform also sets KONFERSI_LAB_PLATFORM_DIR to its clone (T-3006)
 #     --steps npm-ci|none                               before the command (default npm-ci, at the root of the repository and of each --also clone that has a package-lock.json)
 #     --deploy-layout                                   (T-2865, needs --also) the --also clones get no npm ci and no install scripts (no node_modules), as
 #                                                       stg-deploy lays them out; only the main repository installs. Without it nothing changes
@@ -35,6 +38,11 @@
 #     --big                                             8Gi of memory instead of 4Gi (T-524; /tmp 4Gi instead of 2Gi), for a run that was OOMKilled;
 #                                                       only k3s-node2 has room for it. Memory is requested = limited: the scheduler places a Job
 #                                                       only where it fits, says why it is Pending, and an OOMKilled Job says so with its limit.
+#     --node <name>                                     (T-3071) run on this k3s node only (a perf or Lighthouse Job on a quiet node): a node of the
+#                                                       worker pool (label isnan.me/pool=worker), read before any Job; a control-plane node, or one
+#                                                       that cannot be read, is refused (rc 2). The Job's REQUIRED rule names the node AND the pool.
+#     --cpu <n>                                         (T-3071) n whole cores (1 to 4) requested = limited, in both containers, so the pod is
+#                                                       Guaranteed (memory is requested = limited already). Default: 500m requested, limit 4.
 #     --pool-env <NAME>                               (repeatable, T-426) a credential from this workspace's Secrets pool for the
 #                                                       command (Konfersi's stg e2e: Cloudflare Access, the QA test accounts). Any name the pool
 #                                                       delivers as env (expose on), except the deny-list (PILOT-998: write, admin, prod, master,
@@ -56,7 +64,7 @@
 # Reuse (T-731), OPT-IN with --reuse: a run with it that PASSED (exit 0) is saved, masked log, exit code and the Job's name, under JOB_RUN_CACHE_DIR
 # (default ~/.cache/claudepilot-job-run, one workspace home: any session there can write an entry). A later --reuse run with the same repo URL, FULL
 # commit, exact command, --against, --keep-tests, --also, --deploy-layout, --steps, --big and runner image, on the same job-run.sh and job-run.yaml (their hash is in
-# the key), returns that log and exit code at once with no Job, naming the Job that passed. Not reused: a ref that is not a full 40-hex commit (a
+# the key; --node and --cpu too, T-3071), returns that log and exit code at once with no Job, naming the Job that passed. Not reused: a ref that is not a full 40-hex commit (a
 # branch moves), an --also or --against ref that is not one, a run with --artifacts, and a run with --pool-env (refused together with --reuse, rc 2:
 # a pass without a credential must never stand for a run with it, and a log made with a credential is never saved). A failure is never saved. A
 # result older than JOB_RUN_REUSE_MAX_AGE_DAYS (7) is a miss. A reused log is the saved one, as it was: its PLACEMENT lines name the node of the
@@ -64,8 +72,11 @@
 #   scripts/job-run.sh --list                           the Jobs, their chat, role and state
 #   scripts/job-run.sh --stop [<job> | --chat <id>]     stop Jobs (all, one, or a chat's) and delete their Secrets
 # Caps: JOB_RUN_MAX Jobs at once cluster-wide (default 12 since D-96, 2026-10-23; 8 before; 3 until T-1624, when k3s-node3 joined and the master and node3 had room for
-# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
-# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K". The Job stops when this script is interrupted or killed (the next run removes a Job whose
+# about 6 more 4Gi Jobs while Konfersi Jobs queued a median 6 min to run 5-60 s), JOB_RUN_MAX_PER_CHAT per chat (4 since T-2966, 2026-10-29: a lead's Agent lanes share its chat; was 2) and JOB_RUN_MAX_PER_PROGRAM per program (9 since D-96; 6, was 2;
+# claudepilot, event, konfersi: T-524). A Job over a cap is created suspended and waits its turn (creation order), with "queued behind K".
+# Priority lane (T-2967, 2026-10-29; Konfersi T-2822 waited 2364 s): a Job whose role is in JOB_RUN_PRIORITY_ROLES (comma list, default
+# konfersi-stg-deploy) goes ahead of every waiting Job and is not held by the per-chat cap (pipeline runs all share the chat "manual") or the
+# per-program cap; the cluster-wide cap still holds, so it takes the next free slot. It still counts in the totals the other Jobs see. The Job stops when this script is interrupted or killed (the next run removes a Job whose
 # script is gone), and when the chat ends (the Claude process, CLAUDE_PID or JOB_RUN_WATCH_PID, exits).
 # A failed `npm ci` in the Job is tried once more (it says so in the log). Exit 0 of a proof means the proof held, not only the command.
 # Credentials (the npm token for GitHub Packages, Gitea's from git's credential helper) go to kubectl on stdin into a Secret that belongs to
@@ -75,12 +86,14 @@
 # only the --pool-env values (T-426) as env. They are kept out of the environment of npm rebuild and the lifecycle scripts, but a lifecycle script of the same user can still read /proc/<ppid>/environ (the shell's start-up environment); the real boundary is the --pool-env deny-list (PILOT-998: no write, admin, production or master credential, and none of the runner's own tokens, goes in; a delivered name outside it does, the T-2823 read-only Koneviro keys included). The raw
 # log in the cluster is unmasked until the Job is cleaned up (TTL); only the streamed copy is masked. The whole log: JOB_RUN_LOG
 # (default /tmp/job-run-<job>.log). Exit: the command's code; 1 when the Job did not finish, 2 for a usage error, 124 past the deadline.
+# A Job stopped (deleted: --stop, a later run's cleanup, kubectl delete) while queued, before its pod started or before its exit line is
+# exit 1 with a last line that says the command never ran or gave no result: never 0 (T-523).
 set -eu
 # Under xtrace (bash -x, SHELLOPTS) the trace would print the credentials this script handles: refuse (T-426).
 case $- in *x*) echo "job-run: refuses to run under xtrace (set -x / bash -x would print the credentials)" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")/.." && pwd)
 ns=${JOB_RUN_NAMESPACE:-isnan-claudepilot}; registry=${DEPLOY_REGISTRY:-registry.int.isnan.me}
-max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-2}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
+max=${JOB_RUN_MAX:-12}; per=${JOB_RUN_MAX_PER_CHAT:-4}; pprog=${JOB_RUN_MAX_PER_PROGRAM:-9}; poll=${JOB_RUN_POLL_S:-5}
 queue_wait=${JOB_RUN_QUEUE_WAIT_S:-3600}; start_wait=${JOB_RUN_START_WAIT_S:-900}; art_max=${JOB_RUN_ARTIFACT_MAX:-4194304}
 gitea=${JOB_RUN_GITEA:-git.konfersi.com}; github_repo=${JOB_RUN_GITHUB_REPO:-alfianisnan26/claudepilot}
 event_repo=isnanme/event # fixed on purpose (T-491): the door names one repository, no override
@@ -93,6 +106,10 @@ mem_std=3Gi; tmp_std=2Gi; mem_big=8Gi; tmp_big=4Gi
 master_max=${JOB_RUN_MASTER_MAX_PCT:-85}
 die() { echo "job-run: $*" >&2; exit 2; }
 for n in "$max" "$per" "$pprog" "$art_max"; do [[ $n =~ ^[0-9]+$ ]] || die "the caps are numbers"; done
+prio_roles=${JOB_RUN_PRIORITY_ROLES-konfersi-stg-deploy}
+[[ $prio_roles =~ ^([a-z0-9][a-z0-9.-]*(,[a-z0-9][a-z0-9.-]*)*)?$ ]] || die "JOB_RUN_PRIORITY_ROLES is a comma list of role labels (a-z, 0-9, . and -)"
+# No jq here: a missing jq is reported later, with its own message (T-2865). The shape check above leaves nothing to escape.
+prio_json="[$(printf '%s' "$prio_roles" | sed 's/[^,][^,]*/"&"/g')]"
 # The placement numbers are used in $(( )): at most 3 / 6 digits (no wrap-around to a negative), and base 10 (a leading 08 is not octal) (T-611 C1 C2).
 [[ $master_max =~ ^[0-9]{1,3}$ ]] || die "JOB_RUN_MASTER_MAX_PCT is a percentage (at most 3 digits)"
 master_max=$((10#$master_max))
@@ -144,12 +161,14 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pool=(); reuse=; run_image=; image_given=; layout=
+repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pin=; pin_given=; cpu=; cpu_given=; pool=(); reuse=; run_image=; image_given=; layout=
 argv0=("$@") # T-2885: the run's exact arguments, for an approval request (pool_approval)
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env|--image) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env|--image|--node|--cpu) [ $# -ge 2 ] || die "$1 needs a value" ;;&
     --pool-env) pool+=("$2"); shift 2 ;;
+    --node) pin=$2; pin_given=1; shift 2 ;;
+    --cpu) cpu=$2; cpu_given=1; shift 2 ;;
     --image) run_image=$2; image_given=1; shift 2 ;;
     --big) big=1; shift ;;
     --reuse) reuse=1; shift ;;
@@ -186,6 +205,17 @@ if [ -n "$image_given" ]; then
   steps=none; echo "job-run: note: --image given: the npm steps are skipped (the image may have no node)" >&2
 fi
 { [[ $timeout =~ ^[0-9]+$ ]] && [ "$timeout" -ge 60 ] && [ "$timeout" -le 5400 ]; } || die "--timeout: 60 to 5400 seconds"
+# T-3071: --node is a node name (the value is not echoed when it is not one: a newline could forge a "=== JOB-RUN" line); its pool is read
+# from the cluster later, before any Job. --cpu is whole cores, at most cpu_max: the limit every Job already has, so a pinned Job never
+# takes more than a normal one may burst to.
+cpu_max=4
+# The variable is pin, not node: node is the pod's node at the end.
+if [ -n "$pin_given" ]; then
+  [[ $pin =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || die "--node: a k3s node name (letters, digits, . and -); the argument is not shown"
+  for n in ${avoid_list[@]+"${avoid_list[@]}"}; do [ "$n" != "$pin" ] || die "--node $pin is in JOB_RUN_AVOID_NODES ($avoid_txt): the Job could never start"; done
+fi
+[ -z "$cpu_given" ] || { [[ $cpu =~ ^[1-9][0-9]?$ ]] && [ "$cpu" -le "$cpu_max" ]; } || die "--cpu: whole cores, 1 to $cpu_max"
+if [ -n "$cpu" ]; then cpu_req=$cpu; cpu_lim=$cpu; else cpu_req=500m; cpu_lim=4; fi
 for a in $artifacts; do [[ $a =~ ^[A-Za-z0-9_.][A-Za-z0-9_./*-]*$ && ! $a =~ (^|/)\.\.(/|$) ]] || die "--artifacts: paths inside the repository (got $a)"; done
 [[ -z $against || ( $against =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ && ! $against =~ \.\. ) ]] || die "--against: a branch or commit name (got $against)"
 [ -z "$keep" ] || [ -n "$against" ] || die "--keep-tests needs --against"
@@ -327,9 +357,18 @@ case "$repo" in claudepilot|event) program=$repo ;; *) program=konfersi ;; esac
 if [ -n "$big" ]; then memory=$mem_big; tmp_size=$tmp_big; else memory=$mem_std; tmp_size=$tmp_std; fi
 [ "$repo" != event ] || [ ${#also[@]} -eq 0 ] || die "--also cannot be used with --repo event (T-491: the Event Job's token is for isnanme/event alone)"
 alsos=
+# T-1063: the Job checks each repository out into a folder named after it (/tmp/w/<repo>, the main one last), so an --also of the --ref
+# repository, or two --also of the same name, would land in one folder and the last checkout would silently win. Refused here, before
+# anything is created. (Rejected: a second folder name; one combined pushed commit, or two Jobs, does the same with no new layout.)
+main_dir=$(basename "$url" .git); also_dirs=" $main_dir "
 for a in ${also[@]+"${also[@]}"}; do
   [[ ! $a =~ \.\. && $a =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(@([A-Za-z0-9][A-Za-z0-9._/-]{0,199}))?$ ]] || die "--also <org>/<repo>[@<ref>] (got $a)"
   p=${BASH_REMATCH[1]}; r=${BASH_REMATCH[3]:-stg}
+  if [ "${p#*/}" = "$main_dir" ]; then
+    die "--also $p: the same repository folder as --ref's ($main_dir): the Job has one checkout per repository name, so this one would be dropped. Put both changes on one pushed commit (a qa/ branch) or run two Jobs (T-1063)"
+  fi
+  [[ $also_dirs != *" ${p#*/} "* ]] || die "--also $p: another --also already uses the folder ${p#*/} (one checkout per repository name, T-1063)"
+  also_dirs="$also_dirs${p#*/} "
   if [ "$kind" = gitea ]; then base=https://$gitea; else base=https://github.com; fi
   alsos="$alsos ${p#*/}=$base/$p.git@$r"
 done
@@ -379,7 +418,7 @@ if [ -n "$reuse" ]; then
     exact=1
     for a in ${also[@]+"${also[@]}"}; do [[ ${a##*@} != "$a" && ${a##*@} =~ $hex40 ]] || exact=; done
     if [ -n "$exact" ]; then
-      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos" "$layout"; } | sha256sum | cut -d' ' -f1)
+      key=$({ printf '%s\0' v2 "$(cat "$0" "$here/deploy/k3s-build/job-run.yaml" | sha256sum | cut -d' ' -f1)" "$image" "${big:+big}" "$url" "$ref" "$cmd" "$against" "$keep" "$steps" "$alsos" "$layout" "$pin" "$cpu"; } | sha256sum | cut -d' ' -f1)
     fi
   fi
   [ -n "$key" ] || echo "job-run: --reuse: this run has no exact key (a full commit is needed for --ref, --against and --also; no --artifacts): it runs as a Job and is not saved" >&2
@@ -391,6 +430,14 @@ if [ -n "$key" ] && [ -s "$cache/$key.log" ] && [ "$(cat "$cache/$key.rc" 2>/dev
   cat "$cache/$key.log"
   [ -n "${JOB_RUN_LOG:-}" ] && cp "$cache/$key.log" "$JOB_RUN_LOG"
   exit 0
+fi
+
+# T-3071: --node is for the worker pool alone. Its label is read here, before any Job (fail closed: a node that cannot be read, or whose
+# isnan.me/pool is not worker, is refused), and the Job's required rule names the pool as well (rule_placement), so the scheduler keeps
+# the line even if the label changes later. The label's value is never shown (it comes from the cluster).
+if [ -n "$pin" ]; then
+  npool=$(kubectl get node "$pin" -o 'jsonpath={.metadata.labels.isnan\.me/pool}' 2>/dev/null) || npool=
+  [ "$npool" = worker ] || die "--node $pin: not a node of the worker pool (label isnan.me/pool=worker), or it could not be read; control-plane nodes are refused"
 fi
 
 # Who owns a Job: this host, this script's PID and its start time. A Job whose script is gone (killed before its trap ran) is removed here.
@@ -464,12 +511,15 @@ placement() {
   fi
   rule_placement
 }
-# The required rule: the control-plane expression (when the memory decision says so) AND the avoid-nodes expression (always, when set), in ONE term.
+# The required rule: the control-plane expression (when the memory decision says so) AND the avoid-nodes expression (always, when set) AND the
+# --node expressions (always, when given), in ONE term.
 # master_aff is the JSON of the rule (for the release patch), master_rule the same as the line the template takes (flow YAML accepts JSON).
 rule_placement() {
   local ex=
   [ -z "$master_rule_why" ] || ex='{"key":"isnan.me/pool","operator":"NotIn","values":["control"]}'
   [ -z "$avoid_json" ] || ex="${ex:+$ex,}{\"key\":\"kubernetes.io/hostname\",\"operator\":\"NotIn\",\"values\":[$avoid_json]}"
+  # T-3071 --node: that node AND the worker pool, always (the name was checked against the node regex: nothing in it needs escaping).
+  [ -z "$pin" ] || ex="${ex:+$ex,}{\"key\":\"kubernetes.io/hostname\",\"operator\":\"In\",\"values\":[\"$pin\"]},{\"key\":\"isnan.me/pool\",\"operator\":\"In\",\"values\":[\"worker\"]}"
   master_aff=; master_rule=
   [ -z "$ex" ] || { master_aff="{\"nodeSelectorTerms\":[{\"matchExpressions\":[$ex]}]}"; master_rule="requiredDuringSchedulingIgnoredDuringExecution: $master_aff"; }
 }
@@ -505,7 +555,7 @@ done
 pool_refs=${pool_refs#\\n}
 [ -n "$pool_refs" ] || pool_refs='            # no --pool-env'
 sed -e "s|^ *# __POOL_ENV__.*\$|$pool_refs|" -e "s#__MASTER_REQUIRED__#$master_rule#" -e "s#__NAME__#$job#g" -e "s#__CHAT__#$chat#g" -e "s#__ROLE__#$role#g" -e "s#__REPO__#$repo_label#g" -e "s#__PROGRAM__#$program#g" \
-    -e "s#__MEMORY__#$memory#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
+    -e "s#__MEMORY__#$memory#g" -e "s#__CPU_REQUEST__#$cpu_req#g" -e "s#__CPU_LIMIT__#$cpu_lim#g" -e "s#__TMP_SIZE__#$tmp_size#" -e "s#__OWNER__#$host/$$/$(starttime $$)#" \
     -e "s#__DEADLINE__#$timeout#" -e "s#__IMAGE__#$image#" -e "s#__RUN_IMAGE__#${run_image:-$image}#" -e "s#__REPO_URL__#$url#" -e "s#__REF__#$ref#" -e "s#__ALSO__#$alsos#" -e "s#__LAYOUT__#$layout#g" \
     -e "s#__AGAINST__#$against#" -e "s#__KEEP__#$keep#" -e "s#__STEPS__#$steps#" -e "s#__ARTIFACTS__#$artifacts#" -e "s#__ARTMAX__#$art_max#" -e "s#__CMD__#$(printf '%s' "$cmd" | base64 -w0)#" \
     "$here/deploy/k3s-build/job-run.yaml" | kubectl apply -f - >/dev/null
@@ -553,7 +603,8 @@ echo "job-run: $job: $repo@${ref:0:12} ($steps) on $image${run_image:+; the comm
 QUEUE_JQ="$JQ_FIN"'
 def chat: (.metadata.labels["job-run/chat"] // "manual");
 def prog: (.metadata.labels["job-run/program"] // (.metadata.labels["job-run/repo"] // "" | if . == "claudepilot" or . == "event" then . else "konfersi" end));
-def key: [.metadata.creationTimestamp, .metadata.name];
+def pri: (.metadata.labels["job-run/role"] // "") as $r | any($prio[]; . == $r);
+def key: [(pri | not), .metadata.creationTimestamp, .metadata.name];
 ([.items[] | select(.metadata.deletionTimestamp == null and (fin | not))] | sort_by(key)) as $q
 | ([$q[] | select(.metadata.name == $me)] | first) as $mine
 | if $mine == null then "gone"
@@ -563,7 +614,7 @@ def key: [.metadata.creationTimestamp, .metadata.name];
     | (reduce $q[] as $j ({total: ($run | length), per: (reduce $run[] as $r ({}; .[$r | chat] += 1)),
           prog: (reduce $run[] as $r ({}; .[$r | prog] += 1)), done: false, go: false};
         if .done or $j.spec.suspend != true then .
-        elif .total < $max and ((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < $pprog) then
+        elif .total < $max and (($j | pri) or (((.per[$j | chat] // 0) < $per) and ((.prog[$j | prog] // 0) < $pprog))) then
           .total += 1 | .per[$j | chat] += 1 | .prog[$j | prog] += 1 | (if $j.metadata.name == $me then .go = true | .done = true else . end)
         elif $j.metadata.name == $me then .done = true
         else . end)) as $s
@@ -584,12 +635,14 @@ gate_waiting() {
 }
 last=
 while :; do
-  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" "$QUEUE_JQ" 2>/dev/null || true)
+  d=$(jobs_json | jq -r --arg me "$job" --argjson max "$max" --argjson per "$per" --argjson pprog "$pprog" --argjson prio "$prio_json" "$QUEUE_JQ" 2>/dev/null || true)
   if [ "$d" = go ] && gate_waiting; then d=gate; fi
   case "$d" in
     go) break ;;
     gate) [ "$d" = "$last" ] || echo "job-run: waits: a gate Job is Pending for room, and gates go first (JOB_RUN_GATE_FIRST=0 turns it off)"; last=$d ;;
-    gone) echo "job-run: $job was stopped while queued" >&2; exit 1 ;;
+    # T-523: a queued Job is stopped (deleted) by job-run.sh --stop (all, that Job, or its chat), by a later run's cleanup of a Job whose
+    # job-run.sh it takes to be gone (reap), or by a kubectl delete. The command never ran: never exit 0.
+    gone) echo "job-run: $job was stopped while queued: the command never ran (exit 1)" >&2; exit 1 ;;
     wait\ *) [ "$d" = "$last" ] || echo "job-run: queued behind ${d#wait } (at most $max at once, $per per chat, $pprog per program)"; last=$d ;;
   esac
   [ $(( $(date +%s) - t0 )) -lt "$queue_wait" ] || { echo "job-run: still queued after ${queue_wait}s: giving up" >&2; exit 1; }
@@ -625,7 +678,12 @@ fi
 kubectl -n "$ns" patch job "$job" --type merge -p '{"spec":{"suspend":false}}' >/dev/null
 t1=$(date +%s); tw=$t1; phase=running
 job_state() { # Complete, Failed:<reason>, gone, or nothing while it runs
-  kubectl -n "$ns" get job "$job" -o json 2>/dev/null | jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // ""' 2>/dev/null || echo gone
+  # T-523: "gone" only when the API says the Job does not exist (--ignore-not-found prints nothing, exit 0); a failed read is "" (still
+  # running), so a passing API hiccup never ends a run. Before, a deleted Job read as "" too, and the run waited out its whole deadline.
+  local j
+  j=$(kubectl -n "$ns" get job "$job" --ignore-not-found -o json 2>/dev/null) || return 0
+  [ -n "$j" ] || { echo gone; return 0; }
+  jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | if .type == "Failed" then "Failed:\(.reason // "")" else .type end] | first // ""' <<<"$j" 2>/dev/null || true
 }
 pod_json() { kubectl -n "$ns" get pods -l "job-name=$job" -o json 2>/dev/null || true; }
 pod_get() { jq -r "$1"' // ""' <<<"$2" 2>/dev/null || true; }
@@ -633,15 +691,20 @@ said=; why=
 while :; do
   pj=$(pod_json); ph=$(pod_get '.items[0].status.phase' "$pj")
   case "$ph" in Running|Succeeded|Failed) break ;; esac
-  [ -z "$(job_state)" ] || break
+  js=$(job_state)
+  [ "$js" != gone ] || { echo "job-run: $job was stopped before it started: the command never ran (exit 1)" >&2; exit 1; }
+  [ -z "$js" ] || break
   # The fetch container (T-401: the clone and npm ci, with the credentials) is running: started, so the start wait does not apply (the
   # Job's deadline does); its log comes out of the run container.
   if [ -n "$(pod_get '.items[0].status.initContainerStatuses[0].state.running.startedAt' "$pj")" ]; then tw=$(date +%s); sleep "$poll"; continue; fi
   # Pending because no node can hold it (T-524): say so once, instead of a silent wait.
   why=$(pod_get '[.items[0].status.conditions[]? | select(.type == "PodScheduled" and .status == "False" and .reason == "Unschedulable") | .message] | first' "$pj")
   # With the required rule on (T-611) an affinity mismatch is the master being over its line, whatever else the message adds.
-  if [ -n "$master_rule_why" ]; then rk=rule; elif [ -n "$master_rule" ]; then rk=avoid; else rk=none; fi
+  if [ -n "$pin" ]; then rk=node; elif [ -n "$master_rule_why" ]; then rk=rule; elif [ -n "$master_rule" ]; then rk=avoid; else rk=none; fi
   case "$rk:$why" in
+    node:*affinity*) [ "$said" = affinity ] || { said=affinity
+        echo "job-run: $job is Pending: it may run only on $pin (--node), which has no room for it now ($why; waits up to ${start_wait}s)" >&2
+        plog "=== JOB-RUN PLACEMENT pending=affinity pinned=$pin decision=waits-for-pinned-node" >/dev/null; } ;;
     avoid:*affinity*) [ "$said" = affinity ] || { said=affinity
         echo "job-run: $job is Pending: it may not run on the nodes named in JOB_RUN_AVOID_NODES ($avoid_txt), and no other node fits ($why; waits up to ${start_wait}s)" >&2
         plog "=== JOB-RUN PLACEMENT pending=affinity avoid=$avoid_txt decision=waits-off-avoided-nodes" >/dev/null; } ;;
@@ -728,6 +791,7 @@ if [ -z "$rc" ]; then
   case "$st" in
     Failed:DeadlineExceeded) rc=124; echo "job-run: past the deadline (${timeout}s)" >&2 ;;
     '') rc=1; echo "job-run: the Job did not finish" >&2; phase=setup ;;
+    gone) rc=1; echo "job-run: $job was stopped before it finished: no exit code, no result (exit 1)" >&2 ;;
     *) rc=1; echo "job-run: the Job ended without an exit code ($st)" >&2 ;;
   esac
 fi
@@ -787,8 +851,8 @@ if [ -n "$artifacts" ] && [ -s "$work/art.b64" ]; then
 fi
 node=$(pod_get '.items[0].spec.nodeName' "$pj")
 t2=$(date +%s)
-plog "=== JOB-RUN PLACEMENT node=${node:-?} pct=${master_pct:-unknown} decision=$([ -n "$master_rule_why" ] && echo required-away || echo preferred) queued=$((t1 - t0))s${avoid_txt:+ avoid=$avoid_txt}" >/dev/null
-echo "job-run: $job rc=$rc in $((t2 - t1))s (queued $((t1 - t0))s) on ${node:-?} with $memory; log: $log"
+plog "=== JOB-RUN PLACEMENT node=${node:-?} pct=${master_pct:-unknown} decision=$([ -n "$master_rule_why" ] && echo required-away || echo preferred) queued=$((t1 - t0))s${avoid_txt:+ avoid=$avoid_txt}${pin:+ pinned=$pin}${cpu:+ cpu=$cpu}" >/dev/null
+echo "job-run: $job rc=$rc in $((t2 - t1))s (queued $((t1 - t0))s) on ${node:-?} with $memory${cpu:+ and $cpu CPU (Guaranteed)}; log: $log"
 # Save a pass (T-731, --reuse only): rc is 0 (it is only ever set to 0 from the command's own last "=== JOB-RUN EXIT 0" line), the Job itself ended
 # Complete, and the leak check RAN and found nothing (a missing $work/n, written by the log filter, is not a pass: fail closed). The log on disk is
 # the masked one. Written to a temporary name and moved, so a reader never sees half of it; the rc file goes last and decides. Only the store's own

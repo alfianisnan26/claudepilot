@@ -41,6 +41,7 @@ npm run build -w @portal/web
 (cd apps/server && npm test)                      # about 2,400 tests, a few minutes
 scripts/gate.sh                                   # the same on a clean copy of HEAD: the release gate
 scripts/gate-job.sh <commit> [steps]              # the release gate as a Job in the cluster (other CPUs); the commit must be on GitHub
+scripts/quick-check.sh --test <file>              # before CI (D-66), one cluster Job on the pushed HEAD: format, lint, the named tests and the gate's context-pack freshness check (T-3173), every check runs, the last line names all failures
 scripts/scratch-portal.sh start 3403              # a clean-environment portal; tools/qa/*.mjs drive a real browser against it
 scripts/worktree-deps.sh <worktree>               # links a worktree's node_modules to this checkout's install (no npm ci); refuses, exit 2, when a package file differs (cluster npm ci needed) or the worktree is outside ~/work/claudepilot.worktrees; --main/--root are test-only (WORKTREE_TEST_MODE=1)
 scripts/typecheck-worktree.sh <worktree>          # the gate's typecheck (contracts, server, web) on a worktree with this checkout's install and the worktree's own @portal/contracts (T-1982); errors only, exit 0 clean, 1 errors, 3 only an environment gap (packages the install lacks and could not get), 2 refused (package files differ: use the cluster)
@@ -51,7 +52,7 @@ kubectl -n isnan-claudepilot logs deploy/claudepilot-portal --tail=50
 
 ## Releasing to the cluster
 
-The deploy pipeline (next section) does these steps for you, with a person's approval before the release; this is the manual way.
+The deploy pipeline (next section) does these steps for you, with an approval before the release while `production` is protected; this is the manual way.
 
 1. Work and commit on `integration`; push it. `scripts/gate.sh <commit>` must be green.
 2. **Build the images in the cluster** with `scripts/k3s-build.sh portal|workspace|workspace-dev <tag> [commit]` (the nodes are amd64, the registry is `registry.int.isnan.me`, pushing from outside fails). The portal build uses a temporary Secret with the GitHub token, deleted on exit; the script searches the log for the token.
@@ -66,9 +67,9 @@ It is started by hand only: in the portal, or by a session over the Portal MCP (
 
 | Job      | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| gate     | `scripts/gate-job.sh` on the commit: the release gate as a Job in the cluster (next section); fails on any red step or failing test (input `gate: false` skips it; `DEPLOY_GATE_IN_CLUSTER=false` in the workspace's `~/.profile` runs `scripts/gate.sh` here instead)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| gate     | the change-scoped release gate (D-106, "The change-scoped gate" below): reuses a green result for documents, else `scripts/gate-job.sh` on the commit with typecheck plus what the change since the last green gated commit on `main` reaches, as a Job in the cluster (next section); the whole gate for shared core or with input `full_gate: true`; fails on any red step or failing test (input `gate: false` skips it; `DEPLOY_GATE_IN_CLUSTER=false` in the workspace's `~/.profile` runs the whole `scripts/gate.sh` here instead)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | build    | `scripts/k3s-build.sh` per image of input `images` (`portal`, `workspace`, `workspace-dev`, or `none`) with the next date tag (`2026.10.13-2`, `2.1.296-2026.10.13-1`, `2.1.296-dev-2026.10.13-1`); the commit must be on GitHub's `integration`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| release  | **waits for a person's approval** (environment `production`); then bumps the two tags in `deploy/k3s/portal.yaml` on top of the commit and pushes it to `main` (fast-forward only: that push is the deploy) and then brings `integration` up to date as its own step (a merge of `main` into the current `integration`, never a force; a conflict only warns). Input `deploy: false` leaves it out (build only) (when `integration` moved on while the release waited for its approval, the release is merged into its new tip; `main` still gets exactly the approved commit plus the tags; run #4 of 2026-10-13 was refused before this)                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| release  | **waits for an approval in the portal while the environment `production` is protected** (when it is not: a run a person started releases without asking, a run an agent started is refused, T-3004); then bumps the two tags in `deploy/k3s/portal.yaml` on top of the commit and pushes it to `main` (fast-forward only: that push is the deploy) and then brings `integration` up to date as its own step (a merge of `main` into the current `integration`, never a force; a conflict only warns). Input `deploy: false` leaves it out (build only) (when `integration` moved on while the release waited for its approval, the release is merged into its new tip; `main` still gets exactly the approved commit plus the tags; run #4 of 2026-10-13 was refused before this)                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | verify   | Argo CD Synced and Healthy at the pushed commit, rollout status, the new image, `/healthz` and `/login` through the in-cluster service, no fatal line and no restart in the portal's log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | chats    | (T-277 layer 4) the chats the release step recorded as attached to a live process (its log: `chats: N attached ...`, one line per chat with short id, Claude, mode, open control requests, workspace; `.pilot/out/chats.env`) are watched in the new portal's log until 10 minutes after the new pod started (`DEPLOY_CHATS_WINDOW_S`). One that **ended for integrity** fails the run: `ENDED: <id8> ended for integrity at <time>: <why>` and the error line name it (recover it in place: Resume). Survivors are listed with their `cp-session tail` follower count (counted for the chats of this workspace; 1 is right, 2 is the double read behind "a second control response"). Its own job, not part of verify, so it never starts a rollback (a second restart) of a healthy release. Before its push the release step also waits, at most 2 minutes (`DEPLOY_CHATS_WAIT_S`), while an attached chat has a control request the portal asked and Claude Code has not answered. A portal that does not say (one from before this change) leaves the record `unavailable`, and chats passes with a warning |
 | rollback | only when release or verify failed: the previous tags on top of `main` (a new commit, never a force), pushed, then Argo CD, rollout and `/healthz` again                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -86,7 +87,12 @@ deploy/claudepilot-portal | grep -E '^\[(deploy-chats|chat)\]'`. Logs pass the p
 **The approval.** The portal holds the release job (`waiting`, a raised hand on the run) until a person presses **Approve** on the run page; **Reject**
 ends the run as cancelled. The runner gets the key to start that job only from the portal, when a person approves; every approval and rejection is
 in the platform audit (Access). Agents can start the pipeline (`ci_run_trigger`) but no tool approves. Turn the prompt off per environment in
-CI → Remotes → claudepilot → production (asked once more: agents could then deploy on their own). What it does NOT stop: a session in this
+CI → Remotes → claudepilot → production (asked once more). With protection off, a run a person started in the portal releases without asking,
+and a run an agent started (`session:`, `manager:` or `portal-mcp:` actor) is refused before any job runs, with a "What to do" line (T-3004,
+incident T-2893); only `stg` may deploy unattended for an agent (D-62). The environment's auto-approve rule (FR41a) still decides for a protected
+environment as `rule:<environment>`. **What the record says:** the run's deployment row (`approval`, `decided_by`) is the truth; the release
+commit says "approved in the portal (the run records who decided)" when the job waited for a decision, and "auto-approved (no person decided)"
+when it did not (the portal sets `PILOT_APPROVAL=held|auto` on the deploying job). What it does NOT stop: a session in this
 workspace has cluster-admin `kubectl` and the owner's GitHub token in its shell, so it could deploy without the pipeline at all; the approval
 guards the sanctioned path (and every caller that only has MCP or the API), not a shell here.
 
@@ -99,7 +105,7 @@ guards the sanctioned path (and every caller that only has MCP or the API), not 
    `production`, protected.
 
 **Every deploy:** push `integration` to GitHub and to `pilot` (`git push origin integration && git push pilot integration`), then run `/deploy`
-(or Run in the portal), approve when the hand shows, and `git pull` afterwards (the release commit is on `integration`).
+(or Run in the portal), approve when the hand shows (no hand while `production` is unprotected: check the run's `deployments[].approval`), and `git pull` afterwards (the release commit is on `integration`).
 
 **Upstream sync** (optional, local-git-ci PRD FR8a, T-486): a remote can follow its GitHub repository, so a push there reaches `pilot`
 without a hand push. The owner sets it on the remote (URL, a read token by Secrets & env name for a private one). For a sync at once on
@@ -137,6 +143,42 @@ memory), up to <GATE_JOB_WAIT_S>s`, and `gate job <name>: scheduled after Ns Pen
 - **The commit must be on GitHub** (any branch: a sub-agent's pushed branch, `integration`, or `wip/orchestrator-local-backup` for an
   unpushed merge). The deploy pipeline's gate job uses it by default.
 
+## The change-scoped gate
+
+D-106 (owner, 2026-10-31: the whole gate for every release, docs-only ones included, wasted 15-25 min and 3 GiB on k3s-node2). The deploy
+pipeline's gate job (`.pilot/scripts/gate.sh`) decides what to run with `scripts/gate-select.mjs` (plain node, no dependency, a git read in
+the pod) from the green results recorded in the cluster:
+
+- **Records.** `scripts/gate-job.sh` records every green verdict per commit (`scripts/gate-record.sh write`, ConfigMaps
+  `claudepilot-gate-result-<commit>` in `isnan-claudepilot`, newest 200 kept): `full` for the whole gate (also a gate a person or a lead ran by
+  hand), `scoped` with the base it was scoped against, `reuse` with the result it reused. `scripts/gate-record.sh list` shows them. Only green
+  is recorded; `GATE_RECORD=0` records nothing.
+- **Reuse.** A commit whose tree differs from a recorded green commit only in documents (`docs/**`, `*.md`) that no code reads from the
+  repository is green by that result: no Job, the context-pack check runs in the workspace, the log names the reused commit and the diff. A
+  document named by code that finds repository files (`import.meta.url`, `process.cwd()`; e.g. `docs/context-pack.md`, which
+  `personas/contextPack.test.ts` reads) is not reusable: its readers run instead.
+- **Always:** typecheck (the whole program) and the context-pack check.
+- **Scoped:** the diff base is the last green recorded commit walking back from `origin/main` (the last deploy, normally). Web build and web
+  tests run when the change reaches `apps/web`. Server test files: those the change reaches through the import graph of `apps/server/src`,
+  `packages/contracts/src` and `apps/web` (a test runs when it imports a changed file, directly or through other files), through references
+  (a string literal in code, or the text of a script or pipeline, that names a changed script, manifest or document: a test that reads
+  `.pilot/scripts/check.sh` runs when it changes; one hop through a script that names it), and every test that walks the repository's
+  folders (12 files today). They go to the Job as `GATE_FILES`.
+- **Full:** shared core changed (`apps/server/src/store/**` with the migrations, `authz/**`, `app.ts`, `index.ts`, `config.ts`,
+  `apps/server/scripts/**`, `packages/contracts/**`, any `package.json` or `package-lock.json`, `tsconfig*`, `.npmrc`, the gate scripts and
+  `gate-job.yaml`), no green base known on `main`, the graph can not be built, the change reaches more than half of the server test files, or
+  asked: deploy input `full_gate: true`, or `FULL=1` for `node scripts/gate-select.mjs`.
+- **Dry run by hand:** `node scripts/gate-select.mjs --head <commit> --base <green commit> --format text` (reasons per file on stderr), or
+  `--base-ref origin/main --records <(scripts/gate-record.sh list)` as the pipeline does.
+- **The nightly net** (`.pilot/nightly.yml`, `.pilot/scripts/nightly.sh`): the whole gate on the run's head (integration), recorded `full`;
+  skipped when a full green result already covers the tree; it waits (up to an hour) while another claudepilot gate Job is active so two gates
+  never share a node; red fails the run with a `NIGHTLY FULL GATE RED` banner, and the portal notifies a failed CI run. local-git-ci has no
+  `on.schedule` yet (FR16), so the nightly START needs a portal cron trigger the owner creates once: Triggers > New, source Cron
+  `0 19 * * *` (02:00 WIB), action Session in workspace `kubernetes/kohi-event`, template "Start the CI pipeline `nightly` on `integration` of
+  the remote `claudepilot` with ci_run_trigger and report its result". Until then, an agent or a person starts it (`ci_run_trigger`).
+- **Known limits:** a test that reads a file through a path it builds at run time from pieces that name neither the file nor a folder above it
+  is not seen (the nightly catches it within a day); the records are as trusted as whoever can create ConfigMaps in the namespace.
+
 ## Heavy agent work in the cluster
 
 In the workspace pod, call it as `/home/node/work/claudepilot/scripts/job-run.sh` (the main checkout's copy): the allow list names only that path (T-631), so a dontAsk lane's relative `scripts/job-run.sh` from its worktree is refused. The examples below use the short form.
@@ -151,6 +193,7 @@ git push origin HEAD:wip/<name>                                              # t
 scripts/job-run.sh -- 'cd apps/server && node --import tsx --test src/ci/jobRun.test.ts'
 scripts/job-run.sh --repo konfersi:platform/konfersi-backend --ref <branch> --also platform/konfersi-shared -- 'npx vitest run'   # platform/, not the manifest's stale shared/
 scripts/job-run.sh --repo konfersi:platform/<app> --ref <commit> --also platform/konfersi-shared@stg --deploy-layout -- '<build>'   # T-2865: the sibling gets no npm ci (no node_modules), as stg-deploy lays it out; only the app installs
+scripts/job-run.sh --repo konfersi:platform/<lab-plugin> --ref <branch> --also platform/konfersi-lab-platform@<ref> -- 'npm test'   # T-3006: the command gets KONFERSI_LAB_PLATFORM_DIR (the clone's absolute path); a value the command sets wins
 scripts/job-run.sh --artifacts test-results --out /tmp/cp-shots -- 'npx playwright test'   # files back, at most 4 MiB compressed
 # Scripts that rewrite the checkout (tools/qa/rtk-history.sh, rtk-classes.sh, rtk-measure.sh, and the mutant runner rtk-guard-mutants.sh; T-736) refuse unless the Job's own env var JR_REPO_URL is set and the tree is clean.
 scripts/job-run.sh --list ; scripts/job-run.sh --stop --chat <session id>
@@ -168,6 +211,13 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   npm or git: the checkout and its short sha come from `fetch` (the workspace image), so a Debian-based image such as `python:3.11-slim` plus pytest
   runs as is; alpine or distroless images do not work (no bash) (T-379 live proof: `python -m pytest -q` rc 0). The npm steps are skipped with a note (`--steps npm-ci` is refused) and `--against` is refused. Without `--image` nothing changes.
 
+- **A stopped Job is never green (T-523):** a Job deleted while queued, before its pod started or before its exit line (by
+  `job-run.sh --stop`, a later run's cleanup of a Job whose `job-run.sh` is gone, or a `kubectl delete`) ends with exit 1 and a last line
+  that says the command never ran or gave no result, at once (it no longer waits out the start or run deadline). Read the exit code of
+  `job-run.sh` itself: a pipe (`| tail`) reports the last stage's code. Note `job-run.sh --stop` with no argument stops every Job of every chat.
+- **One folder per repository name (T-1063):** each checkout is `/tmp/w/<repo name>`. An `--also` of the `--ref` repository (another
+  ref of it, or a fork of the same name) or two `--also` of one name are refused before anything is made (rc 2); put both changes on one
+  pushed commit (a `qa/` branch), or run two Jobs.
 - **The code:** `--repo` and `--ref` default to the current folder's origin and HEAD (it must be on the remote). ClaudePilot comes from GitHub
   (the npm token for `@isnanme` in the Job's Secret), Konfersi from Gitea (git's credential helper gives the token; in the Job a credential helper
   reads it from the environment, never a URL). The Secret belongs to the Job and is deleted on exit; the streamed log is masked for the token.
@@ -237,9 +287,12 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   in a HAR or inside the Playwright HTML report's `index.html` (it can embed the report as a base64 zip). Switch the trace off or leave zips and
   the HTML report out of `--artifacts`; `job-out/` is git-ignored (an `--out` elsewhere is not); (4) the script refuses to run under
   `bash -x` / xtrace, which would print the values.
-- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (2) per chat (`PILOT_SESSION_ID`) and `JOB_RUN_MAX_PER_PROGRAM`
+- **Caps:** `JOB_RUN_MAX` (3) Jobs at once cluster-wide, `JOB_RUN_MAX_PER_CHAT` (4 since T-2966; was 2) per chat (`PILOT_SESSION_ID`; a lead's Agent sub-agent lanes share its chat) and `JOB_RUN_MAX_PER_PROGRAM`
   (2) per program (claudepilot, event, konfersi; T-524). A Job over a cap is created suspended and waits in creation order ("queued behind K").
   Jobs carry the labels `job-run/chat`, `job-run/role` (`PILOT_AGENT`), `job-run/repo`, `job-run/program`.
+  Priority lane (T-2967): a Job whose `--role` is in `JOB_RUN_PRIORITY_ROLES` (comma list, default `konfersi-stg-deploy`; empty turns it off)
+  goes ahead of every waiting Job and is not held by the per-chat or per-program cap (pipeline runs all share the chat `manual`); the
+  cluster-wide cap still holds.
 - **Placement (T-611):** the scheduler counts memory requests, but the control-plane node's own pods use far more for real. Before it creates a
   Job, `job-run.sh` reads that node's real memory (`kubectl top nodes`). The test is on the node's use PLUS the Job's expected peak (use x pct /
   used gives allocatable, no new verb): `JOB_RUN_EXPECTED_PEAK_MI` (default 2300 Mi, the measured p99 of Job peaks, 2270 Mi in the T-731 note;
@@ -285,6 +338,12 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   `--big`; a Job Pending because no node has the memory free says so once, instead of a silent wait. `/tmp` and `/dev/shm` (1Gi) are both
   in memory and count against the same limit: with `/tmp` and `/dev/shm` full, a 4Gi Job has 1Gi left for its processes. A full `/tmp` is a
   full tmpfs, so the command gets `No space left on device` (no eviction); a failed Job with that text in its log gets the `--big` hint too.
+- **A quiet node and a real CPU (T-3071):** `--node <name>` runs the Job on that node only; it must be in the worker pool (label
+  `isnan.me/pool=worker`, read before any Job: a control-plane node, an unlabelled or unknown node is refused, rc 2), and the Job's required
+  rule names the node AND the pool. `--cpu <n>` (1 to 4 whole cores) sets the CPU request = limit = n in both containers, so the pod is
+  Guaranteed (memory is requested = limited already); without it a Job requests 500m with a limit of 4, as before. A perf or Lighthouse Job
+  (scores swing with a slow or busy node, T-2811) runs as `--node k3s-node3 --cpu 2`. Pending on the pinned node says so once, naming it.
+  Both are in the `--reuse` key.
 - **Placement (T-365, T-524):** preferred, never required (a required rule left every Job Pending): away from the control-plane node, the
   portal's node and workspace pods. The scheduler scales each rule to 0..100 before adding them, so with two nodes the control-plane and the
   portal rules cancel and the node with the most free memory and CPU after the request wins; the honest request is what keeps the master
@@ -297,6 +356,24 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   (cgroup v2 `memory.stat`, not `memory.current`) + 350 MB per session and per running sub-agent + 1.5 GiB headroom is over `memory.max`
   (409 `MEMORY_BUDGET`, audited `memory.refused`; chat PRD FR39b). Past 85% a Needs you item and a push name the largest processes. If an
   agent's spawn or wake is refused for memory: end or sleep a session there, or move the heavy job into the cluster; never raise the limit.
+
+## Reading Gitea Actions runs (the Actions door)
+
+`scripts/actions-door.mjs` (T-3192) lets a lead or a lane cite a Konfersi CI step as evidence. A narrow door: GET only, the host pinned to
+`https://git.konfersi.com`, repositories `platform/konfersi-*` only, the token read from the file named by `GITEA_ACTIONS_READ_TOKEN_FILE`
+(a Gitea token with read on the repository's actions and nothing more, delivered by the Secrets pool) and never printed. It is light (two
+or three API calls), so it runs in the pod:
+
+```sh
+node /home/node/work/claudepilot/scripts/actions-door.mjs runs konfersi-compute stg            # recent runs (--limit N, at most 20): run id, head sha, each job's steps and results
+node /home/node/work/claudepilot/scripts/actions-door.mjs log konfersi-compute 9001 'Run pytest' # the step's last 40 lines (--lines N, at most 200; --job <name> when two jobs share it)
+```
+
+Printed log lines are cleaned of control characters and of credential shapes (the token, `Authorization:` and `token=` values, known key
+prefixes, hex runs of 32 or more, long base64): a commit sha inside a log line shows as `[redacted]`; the run's head sha is printed whole.
+Exit codes: 1 bad arguments, 2 no token, 3 the token lacks actions read (401/403), 4 not found, 5 another HTTP answer, a network error or the
+20 s timeout. The step's section is found by act_runner's `⭐ Run <stage> <step>` marker; without one the door says so and prints the whole
+job's tail. Tests: `apps/server/src/qa/actionsDoor.test.ts` (a mocked API).
 
 ## Building an image in the cluster
 

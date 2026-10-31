@@ -52,8 +52,9 @@ export const TICKET_VERDICT_TOOL_POLICIES = {
   ticket_verdict: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
   // T-1987 (FR36d, D-93): a QA batch's verdicts, each item through the same rule and the same not found; one audit row per ticket.
   ticket_verdict_batch: { kind: 'agent', reach: 'workspace', audit: 'ticket.verdict' },
-  // T-2014 (FR36e): the merge gate's record of a ticket's PR. The service allows only the merge-gate lead of a flow program the ticket
-  // belongs to, or a worker it started; a ticket the caller cannot see is the same not found. Audited (ticket.merge_status).
+  // T-2014 (FR36e): the merge gate's record of a ticket's PR. The service allows only a lead of a flow program the ticket belongs to
+  // (D-99), the lead whose crew holds the ticket (T-3198, the crew root of its holder), or a worker either started; a ticket the caller
+  // cannot see is the same not found. Audited (ticket.merge_status, with why; refusals ticket.merge_status_refused).
   ticket_merge_status: { kind: 'agent', reach: 'workspace', audit: 'ticket.merge_status' },
 } satisfies ToolPolicies;
 

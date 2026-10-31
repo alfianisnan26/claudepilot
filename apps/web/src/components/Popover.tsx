@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { guards, placePopover, safeInsets, visibleBox } from '@/lib/popover';
+import { guards, placePopover, refocusAnchorAfterOutside, safeInsets, visibleBox } from '@/lib/popover';
 
 /**
  * A small panel anchored to the control that opened it (T-102): on the side `prefer` asks when it fits, inside the visible viewport and the
@@ -46,7 +46,14 @@ export function Popover({
     if (!open) return;
     const away = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (!anchor.current?.contains(t) && !panel.current?.contains(t)) onClose();
+      if (anchor.current?.contains(t) || panel.current?.contains(t)) return;
+      onClose();
+      // A press on a part of the page that cannot take focus leaves it on the body: after the click, put it back on the control (T-2955).
+      const back = anchor.current;
+      setTimeout(() => {
+        const a = document.activeElement;
+        if (back?.isConnected && refocusAnchorAfterOutside(t as Element, !a || a === document.body)) back.focus({ preventScroll: true });
+      }, 0);
     };
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     const scrolled = (e: Event) => {

@@ -7,7 +7,8 @@
 // of Bypass on a bypass-capable session is put back in Bypass when it was in it within 24 hours (PILOT-996, D-103: the portal's gated keep
 // path, which allows the tool cards raised meanwhile), else reported; an interrupted chat, or a
 // sleeping one that is due a nudge, is woken; an idle chat (T-41: no turn, no task, nothing waiting) is told to continue once per idle
-// period, after `nudgeAfterMin`, at most `maxNudgesPerDay` times.
+// period, after `nudgeAfterMin`, at most `maxNudgesPerDay` times. T-3189: unless it is drained (it holds tickets, none open or in progress,
+// nothing changed on them since its last activity, no worker of it runs): then neither the nudge nor the wake before it, and nothing counts.
 //
 // `causes` says which reportable causes stand right now, so the engine clears the ones that no longer do.
 
@@ -16,8 +17,21 @@ import type { PolicyRow, ReportRow } from './store.js';
 
 const MIN = 60_000;
 
+/** Why nothing is done this round. T-3189: `drained`, the chat has nothing to act on (not nudged, not counted). */
+export type NoneWhy =
+  | 'busy'
+  | 'working'
+  | 'waiting'
+  | 'backoff'
+  | 'recent_nudge'
+  | 'not_yet'
+  | 'nudged_period'
+  | 'reported'
+  | 'restart_gap'
+  | 'drained';
+
 export type Decision =
-  | { act: 'none'; why: 'busy' | 'working' | 'waiting' | 'backoff' | 'recent_nudge' | 'not_yet' | 'nudged_period' | 'reported' | 'restart_gap' }
+  | { act: 'none'; why: NoneWhy }
   | { act: 'stand_down'; reason: string }
   | { act: 'answer'; request: ChatRequest }
   /** `why`: for `down`, what keeps it down (written on the ticket). */
@@ -50,6 +64,11 @@ export interface DecideInput {
   ticketClosed?: boolean;
   /** PILOT-996: when the chat was last in Bypass (now while it is; its last `bypass.left` otherwise), or null. */
   bypassSeenAt?: string | null;
+  /**
+   * T-3189: asked only when a nudge (or the wake before one) is due: true when the chat has nothing to act on (it holds tickets, none open or
+   * in progress, nothing changed on them since its last activity, no worker of it runs). Absent: false (today's behaviour).
+   */
+  drained?: () => boolean;
 }
 
 export interface DecideOutput {
@@ -147,7 +166,11 @@ export function decide(x: DecideInput): DecideOutput {
   const idleMin = Math.max(0, (now - ms(s.lastActivityAt)) / MIN);
   const idle = s.state === 'idle' && !s.tasksOnly && (s.agentsRunning ?? 0) === 0;
   const nudgeDue = p.continueOwed || (idleMin >= p.nudgeAfterMin && p.nudgedPeriod !== s.lastActivityAt);
+  // T-3189: drained (nothing to act on): no nudge, and no wake that would only lead to one. Not counted, so the cap is not spent on it. An
+  // interrupted chat (a turn cut short) and a continue owed after a wake keep today's behaviour.
+  const drained = (): boolean => !p.continueOwed && s.state !== 'interrupted' && x.drained?.() === true;
   if (s.state === 'interrupted' || (idle && s.process === 'asleep' && nudgeDue)) {
+    if (drained()) return out({ act: 'none', why: 'drained' });
     if (wakesCapped) {
       causes.add('cap');
       return out(stands('cap') ? { act: 'none', why: 'reported' } : { act: 'capped', what: 'wakes' });
@@ -161,6 +184,7 @@ export function decide(x: DecideInput): DecideOutput {
     if (idleMin < p.nudgeAfterMin) return out({ act: 'none', why: 'not_yet' });
     if (p.nudgedPeriod === s.lastActivityAt) return out({ act: 'none', why: 'nudged_period' });
     if (x.lastNudgeAt && now - ms(x.lastNudgeAt) < C.nudgeGapMin * MIN) return out({ act: 'none', why: 'recent_nudge' });
+    if (drained()) return out({ act: 'none', why: 'drained' });
   }
   if (nudgesCapped) {
     causes.add('cap');

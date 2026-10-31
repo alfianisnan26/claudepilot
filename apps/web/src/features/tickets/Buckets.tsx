@@ -1,6 +1,7 @@
-import { ConfirmDialog, FormDialog, Select, TextField } from '@isnanme/ui';
+import { Button, ConfirmDialog, FormDialog, Select, TextField } from '@isnanme/ui';
 import { TICKET_BUCKET_KEY, type TicketBucket, type Workspace } from '@portal/contracts';
 import { useEffect, useState } from 'react';
+import { ReporterDialog } from '@/features/reporter/ReporterDialog';
 import { api, errorText } from '@/lib/api';
 import { ticketsApi } from './api';
 import { mergeText } from './labels';
@@ -41,12 +42,15 @@ export function BucketsDialog({
   // A merge cannot be undone: the primary button asks first (UI check of T-1967).
   const [confirming, setConfirming] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  // The UI reporter's settings for the picked bucket (its own dialog, in this one's place while open).
+  const [reporterFor, setReporterFor] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setPick(NEW);
+    setReporterFor(null);
     setError(null);
     let current = true;
     api.workspaces.list().then(
@@ -117,7 +121,7 @@ export function BucketsDialog({
   return (
     <>
       <FormDialog
-        open={open}
+        open={open && !reporterFor}
         onClose={onClose}
         title="Buckets"
         onSubmit={submit}
@@ -179,10 +183,16 @@ export function BucketsDialog({
                 onChange={(e) => setTags(e.target.value)}
               />
               <TextField label="Vault" optional autoComplete="off" spellCheck={false} value={vaultId} onChange={(e) => setVaultId(e.target.value)} />
+              {!isNew && (
+                <Button variant="secondary" onClick={() => setReporterFor(pick)}>
+                  Reporter…
+                </Button>
+              )}
             </>
           )}
         </div>
       </FormDialog>
+      <ReporterDialog bucket={open ? reporterFor : null} onClose={() => setReporterFor(null)} />
       <ConfirmDialog
         open={confirming}
         title={`Merge ${pick} into ${mergeInto}?`}

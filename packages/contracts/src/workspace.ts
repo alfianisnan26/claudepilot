@@ -238,8 +238,15 @@ export interface WorkspaceResources {
   problem: string | null;
   /** The fit check that a PATCH ran; absent on a GET. */
   fit?: WorkspaceResourcesFit;
-  /** What this PATCH did: patched (the pod restarts when it ran), stored for the next start, or nothing (the values are what it has). */
+  /** What this PATCH did: applied, stored for the next start, or nothing (the values are what it has). */
   outcome?: 'applied' | 'pending' | 'unchanged';
+  /**
+   * How an `applied` PATCH applied (T-3081): `resized` in place on the running pod, no restart; `restarted`: the pod restarted (the in-place
+   * resize was refused, `resizeRefused` says why); `written` into a stopped workspace. Absent otherwise.
+   */
+  how?: 'resized' | 'restarted' | 'written';
+  /** Why the in-place resize was not used (the cluster's words), when the pod restarted instead; null or absent otherwise. */
+  resizeRefused?: string | null;
 }
 
 /** A workspace's stable id (T-42): `ws_` and 12 lowercase hex digits. */

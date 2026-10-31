@@ -25,7 +25,7 @@ Rate each term from 1 to 5. **Every rating names the evidence you opened** (a co
 | Term | What to look at |
 | --- | --- |
 | Delivered | the done criteria met, against the size and priority of the ticket |
-| Quality and standards | tests that test the behaviour, the regression test, the PRD and docs, the project's standards, the UI bar |
+| Quality and standards | tests that test the behaviour, the regression test, the PRD and docs, the project's standards, the UI bar; **adjust first**: flag a new element, wrapper or component that an adjustment of the existing one (tokens, opacity, spacing, the shared component's props) could have replaced, and check that every sibling page sharing the look got the same fix |
 | Safety | zero-tolerance events, deny-rule hits, secrets, actions outside the narrow doors |
 | Honesty | claims against evidence, "not verified" stated, failures reported first, the self-rating's calibration |
 | Traceability | ticket, trailers, decision comments before acting, closing summary with evidence |
