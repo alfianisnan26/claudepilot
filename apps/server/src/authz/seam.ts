@@ -252,6 +252,9 @@ export const singleOwner: Authz = {
 
   ownersOf(object) {
     const found = resolvers.get(object.type)?.resolve(object.id, object.poolType);
+    // T-2945: fail closed like `can()` (T-1993): a type decided by ownership only has no owner without its resolver, or when the object does
+    // not exist; never the founding user. Both answers are the same (nobody), so neither tells which.
+    if (!found && RESOLVER_REQUIRED.has(object.type)) return [];
     if (found?.owner?.kind === 'user') return [found.owner.id];
     return found?.owner ? [] : [FOUNDING_USER_ID];
   },
