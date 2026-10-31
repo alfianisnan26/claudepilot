@@ -64,7 +64,7 @@ spec:
             - weight: 100
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
-                namespaces: [isnan-claudepilot-workspaces]
+                namespaces: [isnan-claudepilot-workspaces, isnan-pilot-ws-isnan, isnan-pilot-ws-konfersi, isnan-pilot-ws-kohilabs]
                 labelSelector: {matchLabels: {claudepilot.managed: "true"}}
       # T-1643: at most one more lane Job on a node than on the least used one, when the scheduler can (never blocks a Job).
       topologySpreadConstraints:

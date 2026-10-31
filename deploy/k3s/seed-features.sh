@@ -1,6 +1,6 @@
 #!/bin/sh
 # Turns on the portal's optional (beta) features through the settings API; safe to run again.
-#   PORTAL_URL=https://pilot.ai.isnan.me PORTAL_SERVER_CODE=<8 characters> sh deploy/k3s/seed-features.sh
+#   PORTAL_URL=https://pilot.ai.isnan.me PORTAL_SERVER_CODE=<8 characters> [PORTAL_DEV_WORKSPACES="isnan/x konfersi/y"] sh deploy/k3s/seed-features.sh
 # Left OFF on purpose (they are protections or cost switches, not features): sessions.allowBypass, automove.allowApiKey (automove.allowBypass is ON: the owner's choice),
 # mcp.accountOff, mcp.poolOnly. The "This machine" target is an environment switch (PORTAL_LOCAL_ENABLED) and stays off.
 set -eu
@@ -27,5 +27,10 @@ put_json() { # path, json body
   echo "$1 $2 -> HTTP $code"; [ "$code" = 200 ] || { cat /tmp/seed-features.out; echo; return 1; }
 }
 put_json /api/portal-mcp/settings '{"enabled":true,"sessionControl":true}'
-put_json "/api/portal-mcp/agents/${PORTAL_DEV_WORKSPACE:-kubernetes/kohi-event}" '{"enabled":true}'
+# Agent access for the workspaces named in PORTAL_DEV_WORKSPACES (space-separated `<target>/<name>`, for example
+# "isnan/isnan konfersi/konfersi"; PORTAL_DEV_WORKSPACE, one id, still works). No default: a workspace id is the operator's to name.
+for w in ${PORTAL_DEV_WORKSPACES:-${PORTAL_DEV_WORKSPACE:-}}; do
+  case $w in */*) put_json "/api/portal-mcp/agents/$w" '{"enabled":true}' ;; *) echo "skipped \"$w\": not <target>/<name>" >&2 ;; esac
+done
+[ -n "${PORTAL_DEV_WORKSPACES:-${PORTAL_DEV_WORKSPACE:-}}" ] || echo "agent access: no PORTAL_DEV_WORKSPACES given, none turned on"
 rm -f /tmp/seed-features.out
