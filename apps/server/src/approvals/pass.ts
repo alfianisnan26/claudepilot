@@ -58,7 +58,9 @@ export function digestInput(tool: string, input: Record<string, unknown>): Recor
   if (!fields) return input;
   const out = digestFields(input, fields);
   if (tool === 'MultiEdit' && Array.isArray(out.edits))
-    out.edits = out.edits.map((e: unknown) => (e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e as Record<string, unknown>, ['old_string', 'new_string']) : e));
+    out.edits = out.edits.map((e: unknown) =>
+      e && typeof e === 'object' && !Array.isArray(e) ? digestFields(e as Record<string, unknown>, ['old_string', 'new_string']) : e,
+    );
   return out;
 }
 
@@ -88,14 +90,51 @@ export function cleanRefusal(payload: unknown): unknown {
  * T-2885 review M1: job-run.sh's `pool_denied` as patterns; keep the two lists in step. A shell `case` glob: `*` is any run of characters.
  */
 export const JOBRUN_DENIED_GLOBS = [
-  '*_RW_*', '*ADMIN*', '*PROD*', '*_PRD_*', 'CLOUDFLARE_API_TOKEN', 'GITEA_*', 'GITHUB_*', '*_MASTER_*',
-  '*_RW', 'RW_*', '*_PRD', 'PRD_*', '*_MASTER', 'MASTER_*', 'GH_*', 'NODE_AUTH_TOKEN', 'ANTHROPIC_*', 'CLAUDE_*', 'CLAUDEPILOT_*', 'PILOT_*',
+  '*_RW_*',
+  '*ADMIN*',
+  '*PROD*',
+  '*_PRD_*',
+  'CLOUDFLARE_API_TOKEN',
+  'GITEA_*',
+  'GITHUB_*',
+  '*_MASTER_*',
+  '*_RW',
+  'RW_*',
+  '*_PRD',
+  'PRD_*',
+  '*_MASTER',
+  'MASTER_*',
+  'GH_*',
+  'NODE_AUTH_TOKEN',
+  'ANTHROPIC_*',
+  'CLAUDE_*',
+  'CLAUDEPILOT_*',
+  'PILOT_*',
 ] as const;
-const globRe = (g: string) => new RegExp(`^${g.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+const globRe = (g: string) =>
+  new RegExp(
+    `^${g
+      .split('*')
+      .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+      .join('.*')}$`,
+  );
 const DENIED = JOBRUN_DENIED_GLOBS.map(globRe);
 export const jobRunDenies = (name: string) => DENIED.some((r) => r.test(name));
 /** job-run.sh's options that take a value (its `case` before `--pool-env)`): each consumes the next word. */
-const JOBRUN_VALUE_OPTS = new Set(['--repo', '--ref', '--against', '--keep-tests', '--also', '--steps', '--artifacts', '--out', '--timeout', '--role', '--pool-env', '--image']);
+const JOBRUN_VALUE_OPTS = new Set([
+  '--repo',
+  '--ref',
+  '--against',
+  '--keep-tests',
+  '--also',
+  '--steps',
+  '--artifacts',
+  '--out',
+  '--timeout',
+  '--role',
+  '--pool-env',
+  '--image',
+]);
 /** The `--pool-env` names of a run, parsed as job-run parses its arguments (a value option takes the next word; `--` ends the options). */
 export function poolEnvNames(args: readonly unknown[]): string[] {
   const out: string[] = [];
@@ -122,7 +161,10 @@ export function refusedByJobRun(p: Record<string, unknown>): boolean {
 /** Whether a stored payload lost parts to redaction (then it is not the exact call, and gets no pass). */
 export const wasRedacted = (payload: unknown) => JSON.stringify(payload ?? null).includes(REDACTED);
 
-const digest = (parts: string[]) => createHash('sha256').update(parts.map((p) => `${p}\0`).join('')).digest('hex');
+const digest = (parts: string[]) =>
+  createHash('sha256')
+    .update(parts.map((p) => `${p}\0`).join(''))
+    .digest('hex');
 
 /** T-3206: a refusal payload with its tool input's free-text `description` left out (anything else: unchanged). */
 export function withoutDescription<T>(payload: T): T {

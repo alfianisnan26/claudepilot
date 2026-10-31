@@ -41,12 +41,18 @@ async function portal(opts: { now?: () => number } = {}) {
   const sessions: Record<string, string> = { [CHAT]: WS, 'chat-elsewhere': 'docker/ws2' };
   const chat: ApprovalChat = {
     enterBypass: () => Promise.reject(new Error('not in this test')),
-    get: (id) => (sessions[id] ? { id, title: 't', workspaceId: sessions[id]!, bypassCapable: false, mode: 'default', state: 'idle' } : null),
+    get: (id) =>
+      sessions[id] ? { id, title: 't', workspaceId: sessions[id]!, bypassCapable: false, mode: 'default', state: 'idle' } : null,
     send: async () => undefined,
   };
   // T-2889: delivery is a fake that records which workspace it was asked to deliver again.
   const delivered: string[] = [];
-  const approvals = new Approvals({ db: () => store.db, chat, delivery: { passesChanged: (ws) => void delivered.push(ws) }, ...(opts.now ? { now: opts.now } : {}) });
+  const approvals = new Approvals({
+    db: () => store.db,
+    chat,
+    delivery: { passesChanged: (ws) => void delivered.push(ws) },
+    ...(opts.now ? { now: opts.now } : {}),
+  });
   after(() => store.close());
   return { store, approvals, delivered };
 }
@@ -66,9 +72,22 @@ function guardRig() {
   let passOwner = process.getuid!();
   const run = (tool: string, toolInput: Record<string, unknown>, session = CLAUDE_SESSION, cwd = repo) => {
     const r = spawnSync(process.execPath, [script], {
-      input: JSON.stringify({ session_id: session, transcript_path: '/dev/null', cwd, permission_mode: 'default', hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput }),
+      input: JSON.stringify({
+        session_id: session,
+        transcript_path: '/dev/null',
+        cwd,
+        permission_mode: 'default',
+        hook_event_name: 'PreToolUse',
+        tool_name: tool,
+        tool_input: toolInput,
+      }),
       cwd: repo,
-      env: { HOME: home, PATH: process.env.PATH ?? '/usr/bin:/bin', CLAUDEPILOT_GUARD_PASSES_FILE: passes, CLAUDEPILOT_GUARD_PASSES_UID: String(passOwner) },
+      env: {
+        HOME: home,
+        PATH: process.env.PATH ?? '/usr/bin:/bin',
+        CLAUDEPILOT_GUARD_PASSES_FILE: passes,
+        CLAUDEPILOT_GUARD_PASSES_UID: String(passOwner),
+      },
       encoding: 'utf8',
       timeout: 20_000,
     });
@@ -92,14 +111,22 @@ test('a guard refusal files exactly one request with the exact call, shows its i
   assert.ok(r.stderr.startsWith(RULE_GUARD_MESSAGE), r.stderr);
   const id = idIn(r.stderr);
   assert.ok(id, `the refusal shows the request id: ${r.stderr}`);
-  assert.match(r.stderr, /When it is allowed, run this same call again \(same input, same folder\) within 15 minutes; it goes through once\./);
+  assert.match(
+    r.stderr,
+    /When it is allowed, run this same call again \(same input, same folder\) within 15 minutes; it goes through once\./,
+  );
   // One line, the exact call (tool, its whole input, the folder, the form), and the session.
   assert.equal(g.lines().length, 1);
   const line = JSON.parse(g.lines()[0]!) as Record<string, unknown>;
   assert.equal(line.id, id);
   assert.equal(line.kind, 'guard.refusal');
   assert.equal(line.claudeSession, CLAUDE_SESSION);
-  assert.deepEqual(line.payload, { tool: 'Bash', input: { command, description: 'x' }, cwd: g.repo, form: (line.payload as { form: string }).form });
+  assert.deepEqual(line.payload, {
+    tool: 'Bash',
+    input: { command, description: 'x' },
+    cwd: g.repo,
+    form: (line.payload as { form: string }).form,
+  });
   // An allowed call files nothing.
   assert.equal(g.run('Bash', { command: 'echo hi > notes.txt', description: 'x' }).code, 0);
   assert.equal(g.lines().length, 1, 'no request for an allowed call');
@@ -164,8 +191,14 @@ test('T-2889 Allow on a guard refusal issues a pass the guard honours for exactl
   assert.equal(ok.code, 0, ok.stderr);
   assert.match(ok.stderr, /runs once on a one-time pass a person allowed \(T-2889\)/);
   assert.equal(readFileSync(join(g.home, '.claudepilot', 'approval-passes-used'), 'utf8'), `${pass}\n`);
-  const usedLine = g.lines().slice(before).map((l) => JSON.parse(l) as { id: string; type: string; pass: string });
-  assert.deepEqual(usedLine.map((l) => [l.type, l.pass]), [['used', pass]]);
+  const usedLine = g
+    .lines()
+    .slice(before)
+    .map((l) => JSON.parse(l) as { id: string; type: string; pass: string });
+  assert.deepEqual(
+    usedLine.map((l) => [l.type, l.pass]),
+    [['used', pass]],
+  );
   // Again, the file not yet redelivered: refused.
   assert.equal(g.run('Bash', input).code, 2, 'used once already');
   // The portal pulls the used line: the pass is marked used, the workspace is delivered again, and the file drops it.
@@ -185,7 +218,7 @@ test('T-2889 Allow on a guard refusal issues a pass the guard honours for exactl
 
 // T-3233 (PILOT-1119): T-3206 folds refusals of one Bash command whose free-text `description` differs (Claude Code writes a new one on
 // most retries). The pass must ignore it too, on both sides (the guard's hash and passOf), or the retry after Allow is refused again.
-test('T-3233 a Bash call\'s description is no part of its pass: after Allow on a folded card, a retry with another description runs once; another command is refused', async () => {
+test("T-3233 a Bash call's description is no part of its pass: after Allow on a folded card, a retry with another description runs once; another command is refused", async () => {
   const g = guardRig();
   const command = `echo '{"x":1}' > .claude/settings.json`;
   // Two refusals of one command, each with its own description: one card.
@@ -208,9 +241,17 @@ test('T-3233 a Bash call\'s description is no part of its pass: after Allow on a
   chmodSync(g.passes, 0o644);
   const usedFile = join(g.home, '.claudepilot', 'approval-passes-used');
   // A changed command, another field, another folder: refused, and the pass stays unused.
-  assert.equal(g.run('Bash', { command: `echo '{"x":2}' > .claude/settings.json`, description: 'Write the settings' }).code, 2, 'another command');
+  assert.equal(
+    g.run('Bash', { command: `echo '{"x":2}' > .claude/settings.json`, description: 'Write the settings' }).code,
+    2,
+    'another command',
+  );
   assert.equal(g.run('Bash', { command, description: 'Write the settings', run_in_background: true }).code, 2, 'another field');
-  assert.equal(g.run('Bash', { command, description: 'Write the settings' }, CLAUDE_SESSION, join(g.repo, '.claude')).code, 2, 'another folder');
+  assert.equal(
+    g.run('Bash', { command, description: 'Write the settings' }, CLAUDE_SESSION, join(g.repo, '.claude')).code,
+    2,
+    'another folder',
+  );
   assert.ok(!existsSync(usedFile), 'no pass used yet');
   // The same command with a third description: through, once, on the very pass the portal issued.
   const ok = g.run('Bash', { command, description: 'Third attempt at the settings write' });
@@ -224,7 +265,7 @@ test('T-3233 a Bash call\'s description is no part of its pass: after Allow on a
 
 // T-3233 decision: only a Bash call's `description` is left out. Bash documents it as a label that does not change what runs; another tool
 // (an MCP server's) may give a `description` field meaning (a body it writes), so there it stays bound: Allow covers that exact text only.
-test('T-3233 a non-Bash tool\'s description stays part of its pass: another description is refused, the allowed one runs once', async () => {
+test("T-3233 a non-Bash tool's description stays part of its pass: another description is refused, the allowed one runs once", async () => {
   const g = guardRig();
   const tool = 'mcp__fs__write_file';
   const input = { path: join(g.repo, '.claude', 'settings.json'), content: '{}', description: 'Reset the settings' };
@@ -250,8 +291,12 @@ test('T-3233 a non-Bash tool\'s description stays part of its pass: another desc
 test('T-2889 the passes file is root-owned 0644 outside every workspace folder, only the policy owner may write it, and a change to it is no configuration change', () => {
   assert.equal(APPROVAL_PASSES_PATH, '/etc/claudepilot/approval-passes');
   assert.ok(mayWrite('policy', APPROVAL_PASSES_PATH));
-  for (const o of ['secrets', 'mcpset', 'skillset', 'persona', 'context', 'browser', 'account', 'settings', 'foundation'] as const) assert.ok(!mayWrite(o, APPROVAL_PASSES_PATH), o);
-  const content = passesContent([{ pass: 'a'.repeat(64), until: 2_000_000_000_000 }, { pass: 'not-a-hash', until: 2_000_000_000_000 }]);
+  for (const o of ['secrets', 'mcpset', 'skillset', 'persona', 'context', 'browser', 'account', 'settings', 'foundation'] as const)
+    assert.ok(!mayWrite(o, APPROVAL_PASSES_PATH), o);
+  const content = passesContent([
+    { pass: 'a'.repeat(64), until: 2_000_000_000_000 },
+    { pass: 'not-a-hash', until: 2_000_000_000_000 },
+  ]);
   assert.match(content, /^# claudepilot: one-time passes/);
   assert.ok(content.endsWith(`${'a'.repeat(64)} 2000000000\n`) && !content.includes('not-a-hash'), 'only hashes, with expiry in seconds');
   const files = (passesFile: string) => ({ [MANIFEST_PATH]: 'm', [APPROVAL_PASSES_PATH]: passesFile });
@@ -265,8 +310,14 @@ test('T-2889 job-run and the portal hash a run the same way; a kind with no pass
   assert.equal(passOf('jobrun.pool_env', { name: 'GITHUB_TOKEN', args: argv, cwd: '/w' }), createHash('sha256').update(nul).digest('hex'));
   assert.notEqual(passOf('jobrun.pool_env', { args: argv, cwd: '/w2' }), passOf('jobrun.pool_env', { args: argv, cwd: '/w' }));
   // Key order does not matter (canonical JSON), the value does.
-  assert.equal(passOf('guard.refusal', { tool: 'Bash', input: { a: 1, b: [1, { d: 2, c: 3 }] }, cwd: '/w' }), passOf('guard.refusal', { tool: 'Bash', input: { b: [1, { c: 3, d: 2 }], a: 1 }, cwd: '/w' }));
-  assert.notEqual(passOf('guard.refusal', { tool: 'Bash', input: { a: 1 }, cwd: '/w' }), passOf('guard.refusal', { tool: 'Bash', input: { a: 2 }, cwd: '/w' }));
+  assert.equal(
+    passOf('guard.refusal', { tool: 'Bash', input: { a: 1, b: [1, { d: 2, c: 3 }] }, cwd: '/w' }),
+    passOf('guard.refusal', { tool: 'Bash', input: { b: [1, { c: 3, d: 2 }], a: 1 }, cwd: '/w' }),
+  );
+  assert.notEqual(
+    passOf('guard.refusal', { tool: 'Bash', input: { a: 1 }, cwd: '/w' }),
+    passOf('guard.refusal', { tool: 'Bash', input: { a: 2 }, cwd: '/w' }),
+  );
   assert.equal(passOf('test.echo', { text: 'x' }), null);
 });
 
@@ -297,14 +348,28 @@ test('the portal files only the outbox kinds, only for a chat of the pulled work
   // Not an outbox kind (Bypass, a secret write): dropped, whatever the line says.
   assert.deepEqual(fileRefusalRequests(approvals, store, WS, [line({ kind: 'session.bypass', payload: { sessionId: CHAT } })]), []);
   // Another workspace's chat, an unknown chat, no session: dropped.
-  assert.deepEqual(fileRefusalRequests(approvals, store, WS, [line({ session: 'chat-elsewhere' }), line({ session: 'chat-nobody' }), line({ session: undefined })]), []);
+  assert.deepEqual(
+    fileRefusalRequests(approvals, store, WS, [
+      line({ session: 'chat-elsewhere' }),
+      line({ session: 'chat-nobody' }),
+      line({ session: undefined }),
+    ]),
+    [],
+  );
   // The same chat pulled from another workspace: dropped.
   assert.deepEqual(fileRefusalRequests(approvals, store, 'docker/ws2', [line()]), []);
   // A secret-shaped value in the payload, a payload of the wrong shape, an id not of the service's shape: refused by the service.
   const fake = `ghp_${randomBytes(18).toString('hex').slice(0, 36)}`;
   const logged: string[] = [];
-  const bad = [line({ payload: { name: 'GITHUB_TOKEN', args: ['--', `echo ${fake}`], cwd: '/w' } }), line({ payload: { name: 'lower', args: ['x'], cwd: '/w' } }), line({ id: 'apr-nothex' })];
-  assert.deepEqual(fileRefusalRequests(approvals, store, WS, bad, (what, e) => logged.push(`${what}: ${(e as Error).message}`)), []);
+  const bad = [
+    line({ payload: { name: 'GITHUB_TOKEN', args: ['--', `echo ${fake}`], cwd: '/w' } }),
+    line({ payload: { name: 'lower', args: ['x'], cwd: '/w' } }),
+    line({ id: 'apr-nothex' }),
+  ];
+  assert.deepEqual(
+    fileRefusalRequests(approvals, store, WS, bad, (what, e) => logged.push(`${what}: ${(e as Error).message}`)),
+    [],
+  );
   assert.equal(logged.length, 3);
   assert.ok(!logged.join('\n').includes(fake), 'the log never holds the payload');
   // Five wait at once per session; the sixth is dropped until one is decided.
@@ -332,7 +397,10 @@ test('T-2885 review M2: a refused Write stores the path and a digest of the cont
   const raw = g.lines().join('\n');
   assert.ok(!raw.includes(pw), 'the outbox line never holds the content');
   const digest = `sha256:${createHash('sha256').update(content).digest('hex')}`;
-  assert.deepEqual((JSON.parse(g.lines()[0]!) as { payload: { input: unknown } }).payload.input, { file_path: input.file_path, content: digest });
+  assert.deepEqual((JSON.parse(g.lines()[0]!) as { payload: { input: unknown } }).payload.input, {
+    file_path: input.file_path,
+    content: digest,
+  });
   // The card: the same.
   const { store, approvals } = await portal();
   assert.deepEqual(fileRefusalRequests(approvals, store, WS, g.pulled()), [id]);
@@ -340,7 +408,13 @@ test('T-2885 review M2: a refused Write stores the path and a digest of the cont
   assert.ok(!JSON.stringify(card).includes(pw), 'the card never holds the content');
   assert.deepEqual((card.payload as { input: unknown }).input, { file_path: input.file_path, content: digest });
   // A line written by hand with raw content (an old guard, a forged line): the portal digests it before it stores it.
-  const forged: OutboxEvent = { id: `apr-${randomBytes(9).toString('hex')}`, type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Write', input, cwd: g.repo, form: 'forged' } };
+  const forged: OutboxEvent = {
+    id: `apr-${randomBytes(9).toString('hex')}`,
+    type: 'request',
+    kind: 'guard.refusal',
+    claudeSession: CLAUDE_SESSION,
+    payload: { tool: 'Write', input, cwd: g.repo, form: 'forged' },
+  };
   const [fid] = fileRefusalRequests(approvals, store, WS, [forged]);
   assert.ok(fid);
   assert.ok(!JSON.stringify(approvals.getFor(ownerActor(), fid!)).includes(pw));
@@ -366,7 +440,12 @@ test('T-2885 review M1: a forged outbox line buys no pass for a call that was ne
     { name: 'STG_SEARCH_READ_KEY', args: ['--pool-env', 'STG_SEARCH_READ_KEY', '--', 'true'], cwd: '/w' },
     { name: 'GITHUB_TOKEN', args: ['--', 'echo GITHUB_TOKEN'], cwd: '/w' },
   ];
-  const jobIds = fileRefusalRequests(approvals, store, WS, runs.map((payload) => ({ id: newId(), type: 'request', kind: 'jobrun.pool_env', session: CHAT, payload })));
+  const jobIds = fileRefusalRequests(
+    approvals,
+    store,
+    WS,
+    runs.map((payload) => ({ id: newId(), type: 'request', kind: 'jobrun.pool_env', session: CHAT, payload })),
+  );
   assert.equal(jobIds.length, 2);
   for (const id of jobIds) {
     const r = await approvals.allow(ownerActor(), id);
@@ -376,7 +455,13 @@ test('T-2885 review M1: a forged outbox line buys no pass for a call that was ne
   // guard: a call whose secret part redaction removed is not the exact call: no pass, and the card never holds the value.
   const fake = `ghp_${randomBytes(18).toString('hex').slice(0, 36)}`;
   const [redId] = fileRefusalRequests(approvals, store, WS, [
-    { id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: { command: `echo ${fake} > .claude/settings.json` }, cwd: g.repo, form: 'forged' } },
+    {
+      id: newId(),
+      type: 'request',
+      kind: 'guard.refusal',
+      claudeSession: CLAUDE_SESSION,
+      payload: { tool: 'Bash', input: { command: `echo ${fake} > .claude/settings.json` }, cwd: g.repo, form: 'forged' },
+    },
   ]);
   assert.ok(redId);
   assert.ok(!JSON.stringify(approvals.getFor(ownerActor(), redId!)).includes(fake));
@@ -388,7 +473,15 @@ test('T-2885 review M1: a forged outbox line buys no pass for a call that was ne
   // guard: a forged line for a call the guard allows anyway. Allow makes a pass, but the guard consults passes only when it refuses,
   // so the pass is never used: the call runs as it always did, nothing is marked used, and a refused call is not helped by it.
   const allowedCall = { command: 'echo hi > notes.txt', description: 'x' };
-  const [aid] = fileRefusalRequests(approvals, store, WS, [{ id: newId(), type: 'request', kind: 'guard.refusal', claudeSession: CLAUDE_SESSION, payload: { tool: 'Bash', input: allowedCall, cwd: g.repo, form: 'forged' } }]);
+  const [aid] = fileRefusalRequests(approvals, store, WS, [
+    {
+      id: newId(),
+      type: 'request',
+      kind: 'guard.refusal',
+      claudeSession: CLAUDE_SESSION,
+      payload: { tool: 'Bash', input: allowedCall, cwd: g.repo, form: 'forged' },
+    },
+  ]);
   assert.equal((await approvals.allow(ownerActor(), aid!)).result?.ok, true);
   writeFileSync(g.passes, passesContent(approvals.livePasses(WS)));
   chmodSync(g.passes, 0o644);
@@ -402,14 +495,40 @@ test('T-2885 review M1: a forged outbox line buys no pass for a call that was ne
 test('T-2889 review m4: the job-run card names every deny-listed name the run passes; the arguments parse as job-run parses them', async () => {
   const { store, approvals } = await portal();
   // Two deny-listed names, one delivered freely, and words after `--` (the command, not options).
-  const args = ['--ref', 'main', '--pool-env', 'GITHUB_TOKEN', '--pool-env', 'STG_SEARCH_READ_KEY', '--pool-env', 'X_RW_Y', '--pool-env', 'GITHUB_TOKEN', '--', 'echo', '--pool-env', 'PROD_X'];
+  const args = [
+    '--ref',
+    'main',
+    '--pool-env',
+    'GITHUB_TOKEN',
+    '--pool-env',
+    'STG_SEARCH_READ_KEY',
+    '--pool-env',
+    'X_RW_Y',
+    '--pool-env',
+    'GITHUB_TOKEN',
+    '--',
+    'echo',
+    '--pool-env',
+    'PROD_X',
+  ];
   assert.deepEqual(poolEnvNames(args), ['GITHUB_TOKEN', 'STG_SEARCH_READ_KEY', 'X_RW_Y', 'GITHUB_TOKEN']);
   assert.deepEqual(deniedPoolEnvNames(args), ['GITHUB_TOKEN', 'X_RW_Y']);
   // A value option takes the next word, even one that looks like --pool-env: job-run would not read it as an option.
   assert.deepEqual(poolEnvNames(['--ref', '--pool-env', 'GITHUB_TOKEN']), []);
-  const [id] = fileRefusalRequests(approvals, store, WS, [{ id: `apr-${randomBytes(9).toString('hex')}`, type: 'request', kind: 'jobrun.pool_env', session: CHAT, payload: { name: 'GITHUB_TOKEN', args, cwd: '/w' } }]);
+  const [id] = fileRefusalRequests(approvals, store, WS, [
+    {
+      id: `apr-${randomBytes(9).toString('hex')}`,
+      type: 'request',
+      kind: 'jobrun.pool_env',
+      session: CHAT,
+      payload: { name: 'GITHUB_TOKEN', args, cwd: '/w' },
+    },
+  ]);
   assert.ok(id);
-  const title = APPROVAL_KIND_DEFS['jobrun.pool_env'].title(approvals.getFor(ownerActor(), id!).payload as Record<string, unknown>, approvals.deps);
+  const title = APPROVAL_KIND_DEFS['jobrun.pool_env'].title(
+    approvals.getFor(ownerActor(), id!).payload as Record<string, unknown>,
+    approvals.deps,
+  );
   assert.match(title, /GITHUB_TOKEN/);
   assert.match(title, /X_RW_Y/);
   assert.doesNotMatch(title, /STG_SEARCH_READ_KEY|PROD_X/);
@@ -417,6 +536,9 @@ test('T-2889 review m4: the job-run card names every deny-listed name the run pa
 
 test('approval_request may not ask for a refusal kind as the portal (no session)', async () => {
   const { approvals } = await portal();
-  assert.throws(() => approvals.create({ kind: 'jobrun.pool_env', payload: { name: 'GITHUB_TOKEN', args: ['x'], cwd: '/w' } }, null), /Only an agent session/);
+  assert.throws(
+    () => approvals.create({ kind: 'jobrun.pool_env', payload: { name: 'GITHUB_TOKEN', args: ['x'], cwd: '/w' } }, null),
+    /Only an agent session/,
+  );
   assert.throws(() => approvals.create({ kind: 'test.echo', payload: { text: 'x' } }, null, { id: 'apr-1' }), /Not an approval id/);
 });
