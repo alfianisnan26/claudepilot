@@ -2,6 +2,7 @@
 // target's runtime gets, the runtimes on the in-process fake API server (no cluster: KUBERNETES SAFETY RULE; a kubeconfig file in a temporary
 // folder points at the fake, so the runtime is made the way index.ts makes it), the manager routing `<target>/<name>` to the right runtime,
 // and the deploy/k3s manifests: the value portal.yaml sets parses, its namespaces exist with the old namespace's guard rails and Role.
+import { ownerActor } from '../authz/seam.js';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -229,7 +230,7 @@ test('the manager lists every target, routes `<target>/<name>` to its runtime, c
   assert.equal(ws.runtimeFor('isnan'), a);
   assert.equal(ws.runtimeFor('konfersi'), b);
 
-  const made = await ws.create({ name: 'office', target: 'konfersi' });
+  const made = await ws.create({ name: 'office', target: 'konfersi' }, ownerActor());
   assert.equal(made.id, 'konfersi/office');
   for (let i = 0; i < 100 && !(await b.list()).some((w) => w.name === 'office'); i++) await new Promise((r) => setTimeout(r, 10));
   assert.ok([...konfersi.deployments.values()].some((d) => (d as unknown as Obj).metadata.labels?.['claudepilot.workspace'] === 'office'), 'made in the konfersi namespace');
