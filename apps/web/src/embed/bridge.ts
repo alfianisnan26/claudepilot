@@ -6,6 +6,7 @@ import {
   type ReporterEvidence,
   type ReporterHostMessage,
   type ReporterPanelMessage,
+  type ReporterReportTarget,
 } from '@portal/contracts';
 
 /*
@@ -36,6 +37,17 @@ export function isBuild(v: unknown): v is ReporterBuildInfo {
     strOrNull(v.builtAt, 100) &&
     strOrNull(v.repo, 300)
   );
+}
+
+/**
+ * The capture toolbar's Ticket | Session choice: absent, { kind: 'ticket' }, or { kind: 'session', sessionId } with a session id of the
+ * server's shape ('' = the bucket's default session). Anything else drops the whole message, like every other field.
+ */
+export function isTargetField(v: unknown): v is ReporterReportTarget | undefined {
+  if (v === undefined) return true;
+  if (!isObj(v)) return false;
+  if (v.kind === 'ticket') return Object.keys(v).length === 1;
+  return v.kind === 'session' && Object.keys(v).length === 2 && typeof v.sessionId === 'string' && /^[A-Za-z0-9_-]{0,80}$/.test(v.sessionId);
 }
 
 const isRect = (v: unknown) =>
@@ -71,7 +83,8 @@ export function parseHostMessage(data: unknown): ReporterHostMessage | null {
         d.screenshot.byteLength > 0 &&
         d.screenshot.byteLength <= REPORTER_LIMITS.screenshotBytes &&
         (MEDIA as readonly unknown[]).includes(d.mediaType) &&
-        isEvidence(d.evidence)
+        isEvidence(d.evidence) &&
+        isTargetField(d.target)
         ? (d as ReporterHostMessage)
         : null;
     case 'pilot-reporter:capture-cancelled':
@@ -79,7 +92,7 @@ export function parseHostMessage(data: unknown): ReporterHostMessage | null {
         ? (d as ReporterHostMessage)
         : null;
     case 'pilot-reporter:capture-started':
-      return isId(d.requestId) && (d.mode === 'full' || d.mode === 'crop') ? (d as ReporterHostMessage) : null;
+      return isId(d.requestId) && (d.mode === 'full' || d.mode === 'crop') && isTargetField(d.target) ? (d as ReporterHostMessage) : null;
     case 'pilot-reporter:panel-opened':
     case 'pilot-reporter:focus-ended':
       return { type: d.type } as ReporterHostMessage;

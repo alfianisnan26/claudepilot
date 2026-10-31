@@ -13,6 +13,7 @@ import {
   isChangeEvent,
   parseHotkeys,
   parsePrefs,
+  pickTarget,
   playlist,
   querySearch,
   samePageHref,
@@ -242,4 +243,18 @@ test('events: the server stream (NDJSON hello, ping, changed) triggers a refresh
   const { events } = splitStream('{"type":"hello","at":"x"}\n{"type":"ping"}\n{"type":"changed","at":"y"}\n');
   assert.deepEqual(events.map(isChangeEvent), [false, false, true]);
   assert.equal(isChangeEvent(null), false);
+});
+
+test('pickTarget: the toolbar wish preselects the form; an unavailable or default session becomes the first available, else Ticket', () => {
+  const targets = [
+    { sessionId: 'gone', available: false },
+    { sessionId: 'lead', available: true },
+    { sessionId: 'second', available: true },
+  ];
+  assert.deepEqual(pickTarget(undefined, targets), { kind: 'ticket' });
+  assert.deepEqual(pickTarget({ kind: 'ticket' }, targets), { kind: 'ticket' });
+  assert.deepEqual(pickTarget({ kind: 'session', sessionId: 'second' }, targets), { kind: 'session', sessionId: 'second' });
+  assert.deepEqual(pickTarget({ kind: 'session', sessionId: 'gone' }, targets), { kind: 'session', sessionId: 'lead' });
+  assert.deepEqual(pickTarget({ kind: 'session', sessionId: '' }, targets), { kind: 'session', sessionId: 'lead' });
+  assert.deepEqual(pickTarget({ kind: 'session', sessionId: 'lead' }, []), { kind: 'ticket' }, 'no target set up: a ticket');
 });

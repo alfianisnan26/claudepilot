@@ -16,7 +16,7 @@ import { SEVERITIES, countBySeverity, cropBox, pathnameOf } from '@/features/rep
 import type { ReporterClient } from './api';
 import { usePanel, type Capture } from './context';
 import { Icon } from './icons';
-import { proposedSummary, sentText, ticketsFor } from './model';
+import { pickTarget, proposedSummary, sentText, ticketsFor } from './model';
 import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './ui';
 
 const TYPES: TicketType[] = ['bug', 'feature', 'task', 'question'];
@@ -278,12 +278,18 @@ function Sticky({ children }: { children: ReactNode }) {
 
 /** The quick path: one shot, one ticket. */
 function QuickForm({ capture }: { capture: Capture }) {
-  const { client, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build } = usePanel();
+  const { client, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build, hostTarget } = usePanel();
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState<TicketType>('bug');
   const [priority, setPriority] = useState<TicketPriority>('normal');
-  const [target, setTarget] = useState<ReporterReportTarget>({ kind: 'ticket' });
+  // Preselected from the capture toolbar's Ticket | Session switch (host message), when it said one.
+  const [target, setTarget] = useState<ReporterReportTarget>(() => pickTarget(capture.target ?? hostTarget, targets));
+  useEffect(() => {
+    if (capture.target) setTarget(pickTarget(capture.target, targets));
+    // A new capture's choice only; the person's own switch afterwards wins.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capture.captureId]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -605,7 +611,7 @@ function CommentRow(props: {
 
 /** Finish review: how the comments become tickets (one, one per page, one per comment) or join an open ticket. */
 function SubmitForm({ onBack, onDone }: { onBack: () => void; onDone: () => void }) {
-  const { client, review, setReview, refresh, notify, setTab, select, targets, post } = usePanel();
+  const { client, review, setReview, refresh, notify, setTab, select, targets, post, hostTarget } = usePanel();
   const [summary, setSummary] = useState(() => (review ? proposedSummary(review) : ''));
   const [description, setDescription] = useState('');
   const [type, setType] = useState<TicketType>('bug');
@@ -614,7 +620,7 @@ function SubmitForm({ onBack, onDone }: { onBack: () => void; onDone: () => void
   const [mode, setMode] = useState<ReporterFileMode | 'existing'>('single');
   const [existing, setExisting] = useState('');
   const [open, setOpen] = useState<ReporterTicket[]>([]);
-  const [target, setTarget] = useState<ReporterReportTarget>({ kind: 'ticket' });
+  const [target, setTarget] = useState<ReporterReportTarget>(() => pickTarget(hostTarget, targets));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

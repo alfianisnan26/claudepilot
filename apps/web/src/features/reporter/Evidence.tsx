@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { reporterApi } from './api';
-import { DEPLOY_MARK, DEPLOY_REASON, cropBox, deploymentText, shortCommit } from './shared';
+import { DEPLOY_REASON, OBSERVED_NOTE, cropBox, deployMark, deploymentText, isObserved, shortCommit } from './shared';
 
 /** The ticket's reporter evidence (null when the ticket did not come from the widget, undefined while loading). */
 export function useReporterEvidence(ticketId: string, reloadKey: unknown) {
@@ -28,7 +28,7 @@ export function DeploymentChips({ evidence }: { evidence: TicketReporterEvidence
       {evidence.deployments.map((d) => (
         <Badge key={d.environment} tone={d.status === 'deployed' ? 'success' : d.status === 'not-deployed' ? 'warning' : 'neutral'}>
           <span title={deploymentText(d)}>
-            {d.environment} {DEPLOY_MARK[d.status]}
+            {d.environment} {deployMark(d)}
           </span>
           <span className="sr-only">{deploymentText(d)}</span>
         </Badge>
@@ -133,10 +133,10 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
                 <li key={d.environment} className="break-words">
                   <span className="font-semibold">{d.environment}</span>{' '}
                   <span className={d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}>
-                    {d.status === 'deployed' ? 'deployed' : d.status === 'not-deployed' ? 'not yet' : 'unknown'}
+                    {d.status === 'deployed' ? (isObserved(d) ? 'deployed*' : 'deployed') : d.status === 'not-deployed' ? 'not yet' : 'unknown'}
                   </span>
                   <span className="text-[12.5px] text-muted">
-                    {d.status === 'unknown' && d.reason ? ` · ${DEPLOY_REASON[d.reason]}` : d.currentCommit ? ` · live ${shortCommit(d.currentCommit)}` : ''}
+                    {d.status === 'unknown' && d.reason ? ` · ${DEPLOY_REASON[d.reason]}` : d.currentCommit ? ` · live ${shortCommit(d.currentCommit)}${isObserved(d) ? ` · ${OBSERVED_NOTE}` : ''}` : ''}
                   </span>
                 </li>
               ))}

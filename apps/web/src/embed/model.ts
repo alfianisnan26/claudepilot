@@ -285,3 +285,14 @@ export function sentText(keys: string[], target: ReporterReportTarget, delivery:
   if (failedFiles.length) parts.push(`Upload failed: ${failedFiles.join(', ')}.`);
   return { text: parts.join(' '), tone: failed ? 'error' : 'ok' };
 }
+
+/**
+ * The target a form starts on, from what the host's capture toolbar asked for: Ticket stays Ticket; a session the bucket offers and is
+ * available now is kept; any other session wish (gone, unknown, or '' = the default) becomes the first available target; none: Ticket.
+ */
+export function pickTarget(wanted: ReporterReportTarget | null | undefined, targets: { sessionId: string; available: boolean }[]): ReporterReportTarget {
+  if (!wanted || wanted.kind === 'ticket') return { kind: 'ticket' };
+  const usable = targets.filter((t) => t.available);
+  const hit = usable.find((t) => t.sessionId === wanted.sessionId) ?? usable[0];
+  return hit ? { kind: 'session', sessionId: hit.sessionId } : { kind: 'ticket' };
+}

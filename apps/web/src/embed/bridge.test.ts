@@ -140,6 +140,18 @@ test('a capture result needs a real buffer within the limit, a known image type 
   assert.equal(parseHostMessage({ ...ok, evidence: { ...evidenceFixture(), anchor: { ...evidenceFixture().anchor, mode: 'zoom' } } }), null);
 });
 
+test('the capture toolbar target on capture-result and capture-started: optional, and checked like every other field', () => {
+  const ok = { type: 'pilot-reporter:capture-result', requestId: 'r1', screenshot: new ArrayBuffer(8), mediaType: 'image/png', evidence: evidenceFixture() };
+  const started = { type: 'pilot-reporter:capture-started', requestId: 'r2', mode: 'crop' };
+  for (const base of [ok, started]) {
+    assert.ok(parseHostMessage(base), 'no target: still fine (older SDK)');
+    for (const target of [{ kind: 'ticket' }, { kind: 'session', sessionId: 'lead_1' }, { kind: 'session', sessionId: '' }])
+      assert.deepEqual((parseHostMessage({ ...base, target }) as { target?: unknown }).target, target, JSON.stringify(target));
+    for (const target of [null, 'session', { kind: 'session' }, { kind: 'session', sessionId: 'a b' }, { kind: 'session', sessionId: 'x'.repeat(81) }, { kind: 'session', sessionId: 7 }, { kind: 'ticket', sessionId: 'x' }, { kind: 'urgent' }, { kind: 'session', sessionId: 'a', extra: 1 }])
+      assert.equal(parseHostMessage({ ...base, target }), null, JSON.stringify(target));
+  }
+});
+
 test('the opened-for origin must be an exact http(s) origin', () => {
   assert.equal(exactOrigin(HOST), HOST);
   assert.equal(exactOrigin('http://localhost:5173'), 'http://localhost:5173');

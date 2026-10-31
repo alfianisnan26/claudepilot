@@ -1,6 +1,6 @@
 import type { ReporterDeploymentState, ReporterWorkPhase } from '@portal/contracts';
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
-import { DEPLOY_MARK, PHASE_LABEL, PHASE_TONE, deploymentText } from '@/features/reporter/shared';
+import { PHASE_LABEL, PHASE_TONE, deployMark, deploymentText } from '@/features/reporter/shared';
 import type { ReporterClient } from './api';
 import { Icon, type IconName } from './icons';
 
@@ -103,7 +103,7 @@ export function EnvStrip({ deployments, current }: { deployments: ReporterDeploy
           {i > 0 && <span aria-hidden="true" className="mr-1.5 text-muted">·</span>}
           <span className="sr-only">{deploymentText(d)}</span>
           <span aria-hidden="true" className={d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}>
-            {d.environment} {DEPLOY_MARK[d.status]}
+            {d.environment} {deployMark(d)}
           </span>
         </span>
       ))}

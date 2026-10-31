@@ -32,16 +32,25 @@ export const DEPLOY_REASON: Record<NonNullable<ReporterDeploymentState['reason']
   'ancestry-unchecked': 'Could not check whether the build contains the fix',
 };
 
+/** A deployed state seen only by the widget (no pipeline for that environment yet): shown with a lower-confidence marker. */
+export const isObserved = (d: ReporterDeploymentState): boolean => d.confidence === 'observed';
+
+/** The mark of one environment: ✓ – ?, and ✓* when "deployed" rests on a widget-observed build rather than a pipeline. */
+export const deployMark = (d: ReporterDeploymentState): string => (d.status === 'deployed' && isObserved(d) ? `${DEPLOY_MARK.deployed}*` : DEPLOY_MARK[d.status]);
+
+export const OBSERVED_NOTE = 'seen by the widget, no pipeline yet';
+
 /** "stg ✓ · uat – · prod ?" in the server's order. */
 export function envStrip(deployments: ReporterDeploymentState[]): string {
-  return deployments.map((d) => `${d.environment} ${DEPLOY_MARK[d.status]}`).join(' · ');
+  return deployments.map((d) => `${d.environment} ${deployMark(d)}`).join(' · ');
 }
 
 /** One environment's state in words, for a tooltip or a screen reader. */
 export function deploymentText(d: ReporterDeploymentState): string {
   const short = (c: string | null) => (c ? c.slice(0, 7) : null);
-  if (d.status === 'deployed') return `${d.environment}: deployed${d.fixCommit ? ` (fix ${short(d.fixCommit)})` : ''}${d.currentCommit ? ` in ${short(d.currentCommit)}` : ''}`;
-  if (d.status === 'not-deployed') return `${d.environment}: not deployed${d.currentCommit ? ` (live ${short(d.currentCommit)})` : ''}`;
+  const seen = isObserved(d) ? `, ${OBSERVED_NOTE}` : '';
+  if (d.status === 'deployed') return `${d.environment}: deployed${d.fixCommit ? ` (fix ${short(d.fixCommit)})` : ''}${d.currentCommit ? ` in ${short(d.currentCommit)}` : ''}${seen}`;
+  if (d.status === 'not-deployed') return `${d.environment}: not deployed${d.currentCommit ? ` (live ${short(d.currentCommit)})` : ''}${seen}`;
   return `${d.environment}: unknown${d.reason ? `, ${DEPLOY_REASON[d.reason].toLowerCase()}` : ''}`;
 }
 

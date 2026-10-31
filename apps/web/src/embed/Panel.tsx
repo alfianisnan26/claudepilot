@@ -1,4 +1,4 @@
-import { REPORTER_BRIDGE_VERSION, type ReporterBuildInfo, type ReporterHostMessage, type ReporterReview, type ReporterSessionTargetStatus, type ReporterStatus } from '@portal/contracts';
+import { REPORTER_BRIDGE_VERSION, type ReporterBuildInfo, type ReporterHostMessage, type ReporterReportTarget, type ReporterReview, type ReporterSessionTargetStatus, type ReporterStatus } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clearToken, createClient, memoryStorage, parseConnectMessage, readToken, safeStorage, writeToken, type StoredToken } from './api';
 import { createPanelBridge, exactOrigin, type PanelBridge } from './bridge';
@@ -57,6 +57,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const [capture, setCaptureState] = useState<Capture | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [targets, setTargets] = useState<ReporterSessionTargetStatus[]>([]);
+  const [hostTarget, setHostTarget] = useState<ReporterReportTarget | null>(null);
   const [tick, setTick] = useState(0);
   const [toast, setToast] = useState<{ text: string; tone: 'info' | 'error' | 'ok'; id: number } | null>(null);
   const coarse = useMemo(() => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches, []);
@@ -268,13 +269,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         return;
       case 'pilot-reporter:capture-started':
         setPending(m.requestId);
+        if (m.target) setHostTarget(m.target);
         setTab('report');
         return;
       case 'pilot-reporter:capture-result': {
         // Only the capture we asked for (or the one a hotkey announced): a page cannot push reports on its own.
         if (m.requestId !== pendingRef.current) return;
         const screenshot = new Blob([m.screenshot], { type: m.mediaType });
-        setCapture({ captureId: newId(), requestId: m.requestId, screenshot, previewUrl: URL.createObjectURL(screenshot), evidence: m.evidence });
+        if (m.target) setHostTarget(m.target);
+        setCapture({ captureId: newId(), requestId: m.requestId, screenshot, previewUrl: URL.createObjectURL(screenshot), evidence: m.evidence, ...(m.target ? { target: m.target } : {}) });
         setPending(null);
         setTab('report');
         return;
@@ -347,6 +350,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         pending,
         requestCapture,
         targets,
+        hostTarget,
         signOut: () => {
           void client.revoke().catch(() => undefined);
           signOut();

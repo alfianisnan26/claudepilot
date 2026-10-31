@@ -12,7 +12,7 @@ import {
   type TicketType,
 } from '@portal/contracts';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { DEPLOY_REASON, SEVERITIES, pathnameOf, shortCommit } from '@/features/reporter/shared';
+import { DEPLOY_REASON, OBSERVED_NOTE, SEVERITIES, isObserved, pathnameOf, shortCommit } from '@/features/reporter/shared';
 import { usePanel } from './context';
 import { Icon } from './icons';
 import { Md } from './markdown';
@@ -457,10 +457,10 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
                   <li key={d.environment} className={`flex flex-wrap items-baseline gap-x-2 ${d.environment === env ? 'font-semibold' : ''}`}>
                     <span className="w-12 shrink-0">{d.environment}</span>
                     <span className={d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}>
-                      {d.status === 'deployed' ? 'Deployed' : d.status === 'not-deployed' ? 'Not yet' : 'Unknown'}
+                      {d.status === 'deployed' ? (isObserved(d) ? 'Deployed*' : 'Deployed') : d.status === 'not-deployed' ? 'Not yet' : 'Unknown'}
                     </span>
                     <span className="min-w-0 text-[12px] font-normal break-words text-muted">
-                      {d.status === 'unknown' && d.reason ? DEPLOY_REASON[d.reason] : d.currentCommit ? `live ${shortCommit(d.currentCommit)}` : ''}
+                      {d.status === 'unknown' && d.reason ? DEPLOY_REASON[d.reason] : d.currentCommit ? `live ${shortCommit(d.currentCommit)}${isObserved(d) ? ` · ${OBSERVED_NOTE}` : ''}` : ''}
                     </span>
                   </li>
                 ))}

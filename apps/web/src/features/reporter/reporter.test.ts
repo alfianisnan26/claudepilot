@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ReporterAnchor, ReporterDeploymentState } from '@portal/contracts';
-import { countBySeverity, cropBox, deploymentText, envStrip, pathnameOf, samePage } from './shared';
+import { countBySeverity, cropBox, deployMark, deploymentText, envStrip, pathnameOf, samePage } from './shared';
 import { deployCurl, emptyRow, originError, siteErrors, siteOf, sitesValid, snippet, targetsValid } from './sites';
 
 const row = (over: Partial<ReturnType<typeof emptyRow>> = {}) => ({ ...emptyRow(), origin: 'https://stg.konfersi.com', environment: 'stg', repo: 'platform/konfersi-landing-page', branch: 'stg', ...over });
@@ -72,6 +72,15 @@ test('the environment strip and its words never claim more than the server prove
   assert.equal(deploymentText(list[0]!), 'stg: deployed (fix fffffff) in ccccccc');
   assert.equal(deploymentText(list[1]!), 'uat: not deployed (live ccccccc)');
   assert.equal(deploymentText(list[2]!), 'prod: unknown, no build seen in this environment');
+});
+
+test('a deployed state from a widget-observed build carries the lower-confidence marker; a pipeline one does not', () => {
+  const pipeline = { ...dep('stg', 'deployed'), confidence: 'pipeline' as const };
+  const observed = { ...dep('uat', 'deployed'), confidence: 'observed' as const };
+  assert.equal(envStrip([pipeline, observed]), 'stg ✓ · uat ✓*');
+  assert.equal(deploymentText(pipeline), 'stg: deployed (fix fffffff) in ccccccc');
+  assert.equal(deploymentText(observed), 'uat: deployed (fix fffffff) in ccccccc, seen by the widget, no pipeline yet');
+  assert.equal(deployMark({ ...dep('uat', 'not-deployed'), confidence: 'observed' }), '–');
 });
 
 test('pages match on the path alone', () => {

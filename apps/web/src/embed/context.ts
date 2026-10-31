@@ -2,6 +2,7 @@ import type {
   ReporterBuildInfo,
   ReporterEvidence,
   ReporterPanelMessage,
+  ReporterReportTarget,
   ReporterReview,
   ReporterSessionTargetStatus,
   ReporterStatus,
@@ -16,6 +17,8 @@ export interface Capture {
   screenshot: Blob;
   previewUrl: string;
   evidence: ReporterEvidence;
+  /** What the capture toolbar's Ticket | Session switch said (host message), if it said anything. */
+  target?: ReporterReportTarget;
 }
 
 export type Tab = 'tickets' | 'report' | 'sessions' | 'knowledge' | 'settings';
@@ -56,6 +59,8 @@ export interface PanelState {
   pending: string | null;
   requestCapture(mode: 'full' | 'crop', precise?: boolean): void;
   targets: ReporterSessionTargetStatus[];
+  /** The last Ticket | Session choice the host's capture toolbar sent (capture-started or capture-result); null when it never said. */
+  hostTarget: ReporterReportTarget | null;
   signOut(): void;
   calloutsVisible: boolean;
   setCalloutsVisible(v: boolean): void;
