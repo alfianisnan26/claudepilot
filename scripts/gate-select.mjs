@@ -434,6 +434,10 @@ function main(argv) {
   } catch {
     die(`unknown head ${opt.head}`);
   }
+  if (opt.base) {
+    const r = spawnSync('git', ['rev-parse', '--verify', '-q', `${opt.base}^{commit}`], { cwd: opt.repo, encoding: 'utf8' });
+    if (r.status === 0) opt.base = r.stdout.trim();
+  }
   opt.records = [];
   if (recordsFile) {
     let text = '';
