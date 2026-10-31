@@ -32,7 +32,11 @@ async function rig() {
   // After the fallback a person hands t3 on deliberately: that is kept.
   h.tickets.update(UI, t3, { assignee: { kind: 'session', sessionId: 'third' } });
   const holder = (id: string) => h.tickets.get(UI, id).ticket.assignee;
-  const lastAssigned = (id: string) => h.tickets.get(UI, id).events.filter((e) => e.kind === 'assigned').at(-1)!;
+  const lastAssigned = (id: string) =>
+    h.tickets
+      .get(UI, id)
+      .events.filter((e) => e.kind === 'assigned')
+      .at(-1)!;
   return { ...h, t1, t2, t3, mine, holder, lastAssigned };
 }
 
@@ -46,7 +50,12 @@ test('T-3220: a Keep going continuation created after a title fallback takes bac
       assert.deepEqual(r.holder(id), { kind: 'session', sessionId: 'cont' });
       const e = r.lastAssigned(id);
       assert.equal(e.actor, 'system');
-      assert.deepEqual(e.data, { from: { kind: 'session', sessionId: 'other' }, to: { kind: 'session', sessionId: 'cont' }, continued: true, heirOf: 'old' });
+      assert.deepEqual(e.data, {
+        from: { kind: 'session', sessionId: 'other' },
+        to: { kind: 'session', sessionId: 'cont' },
+        continued: true,
+        heirOf: 'old',
+      });
     }
     assert.equal(r.tickets.get(UI, r.t2).ticket.status, 'in_review', 'the status stays');
     assert.deepEqual(r.holder(r.t3), { kind: 'session', sessionId: 'third' }, 'a deliberate hand-off after the fallback is kept');
@@ -75,7 +84,13 @@ test('T-3220: ticket_adopt from the continuation takes back what the title fallb
       assert.deepEqual(r.holder(id), { kind: 'session', sessionId: 'cont' });
       const e = r.lastAssigned(id);
       assert.equal(e.actor, 'session:cont');
-      assert.deepEqual(e.data, { from: { kind: 'session', sessionId: 'other' }, to: { kind: 'session', sessionId: 'cont' }, adopted: true, why: 'lineage', heirOf: 'old' });
+      assert.deepEqual(e.data, {
+        from: { kind: 'session', sessionId: 'other' },
+        to: { kind: 'session', sessionId: 'cont' },
+        adopted: true,
+        why: 'lineage',
+        heirOf: 'old',
+      });
     }
     // Now it may write to them (before: FORBIDDEN "assigned to another session").
     r.tickets.comment(me, r.t1, 'Progress from the continuation.');
