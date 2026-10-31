@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url';
 import { tempDirectory } from '../store/testTmp.js';
 
 const SCRIPT = fileURLToPath(new URL('../../../../scripts/actions-door.mjs', import.meta.url));
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const door: any = await import(SCRIPT);
 
 // Not a real credential: built at run time, in no known key shape, so only the door's literal scrub can catch it.
@@ -252,15 +251,17 @@ test('HTTP answers: 401 and 403 say the token lacks actions read (3), 404 is not
   const out: string[] = [];
   const slow = async (_url: string, init: RequestInit) =>
     new Promise<Response>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal?.reason)));
+  // AbortSignal.timeout's timer does not hold the event loop open (a real request's socket does): this one does, for the test.
+  const hold = setTimeout(() => {}, 10_000);
   const code = await door.main(['runs', 'konfersi-compute', 'stg'], {
     env: { [door.TOKEN_ENV]: tokenFile() },
     fetchImpl: slow,
     timeoutMs: 30,
     out: (l: string) => out.push(l),
     err: (l: string) => out.push(l),
-  });
+  }).finally(() => clearTimeout(hold));
   assert.equal(code, 5);
-  assert.match(out.join('\n'), /timed out after 0 s|timed out/);
+  assert.match(out.join('\n'), /actions-door: timed out after 0 s/);
 });
 
 test('the token never reaches stdout or stderr: not from the API’s answers, not from the log, not in errors', async () => {
