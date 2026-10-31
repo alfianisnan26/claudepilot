@@ -683,7 +683,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
                   className="flex w-28 flex-col gap-1 rounded-xl p-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
                   aria-label={`View shot ${c.index}`}
                 >
-                  <AuthImg client={client} src={c.screenshotUrl} alt={`Shot ${c.index}`} className="h-20 w-full rounded-lg" />
+                  <AuthImg client={client} src={c.annotatedUrl ?? c.screenshotUrl} alt={`Shot ${c.index}`} className="h-20 w-full rounded-lg" />
                   <span className="truncate text-[11.5px] text-muted">{shotCaption(c.index, c.anchor.path)}</span>
                 </button>
               </li>
@@ -742,9 +742,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
           <Composer value={reply} onChange={setReply} onSend={() => void send()} busy={sending} coarse={coarse} label="Reply" placeholder="Reply" />
         </>
       )}
-      {view?.screenshotUrl && (
-        <Viewer src={view.screenshotUrl} alt={shotCaption(view.index, view.anchor.path)} crop={{ anchor: view.anchor, scroll: null }} onClose={() => setView(null)} />
-      )}
+      {view?.screenshotUrl && <ShotViewer shot={view} onClose={() => setView(null)} />}
     </div>
   );
 }
@@ -756,4 +754,30 @@ function safePathname(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A filed shot full screen: the annotated image when there is one, with a switch to the original (owner, PILOT-1111 annotate). */
+function ShotViewer({ shot, onClose }: { shot: ReporterTicket['captures'][number]; onClose: () => void }) {
+  const [original, setOriginal] = useState(false);
+  const marked = !!shot.annotatedUrl && !original;
+  return (
+    <Viewer
+      src={marked ? shot.annotatedUrl! : shot.screenshotUrl!}
+      alt={shotCaption(shot.index, shot.anchor.path)}
+      crop={marked ? null : { anchor: shot.anchor, scroll: null }}
+      onClose={onClose}
+      actions={
+        shot.annotatedUrl ? (
+          <button
+            type="button"
+            aria-pressed={original}
+            onClick={() => setOriginal(!original)}
+            className="inline-flex min-h-11 items-center rounded-xl px-3 text-[13.5px] font-semibold text-white focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+          >
+            {original ? 'Marked' : 'Original'}
+          </button>
+        ) : undefined
+      }
+    />
+  );
 }

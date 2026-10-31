@@ -15,6 +15,8 @@ import {
 import { useEffect, useState, type ReactNode } from 'react';
 import { SEVERITIES, countBySeverity, shotCaption } from '@/features/reporter/shared';
 import type { ReporterClient } from './api';
+import { Annotator } from './Annotator';
+import { editorSource, uploadPlan } from './annotate';
 import { usePanel, type Capture } from './context';
 import { Icon, type IconName } from './icons';
 import { afterFiled, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
@@ -25,16 +27,26 @@ import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './u
 const TYPES: TicketType[] = ['bug', 'feature', 'task', 'question'];
 const PRIORITIES: TicketPriority[] = ['urgent', 'high', 'normal', 'low'];
 
-const captureInput = (c: Capture, note: string | null): ReporterCaptureInput => ({ captureId: c.captureId, pageUrl: c.evidence.page.url, anchor: c.evidence.anchor, note });
+const captureInput = (c: Capture, note: string | null): ReporterCaptureInput => ({
+  captureId: c.captureId,
+  pageUrl: c.evidence.page.url,
+  anchor: c.evidence.anchor,
+  note,
+  ...(c.annotations?.length ? { annotations: c.annotations } : {}),
+});
 
-/** Uploads a capture's screenshot and evidence; returns what failed (the ticket or comment exists either way). */
-async function uploadCapture(attach: (captureId: string, kind: 'screenshot' | 'evidence', blob: Blob) => Promise<unknown>, c: Capture): Promise<string[]> {
+/**
+ * Uploads a capture's screenshot (the blurred image when a mark blurs, never the original then), its annotated image, and its evidence;
+ * returns what failed (the ticket or comment exists either way).
+ */
+async function uploadCapture(attach: (captureId: string, kind: 'screenshot' | 'annotated' | 'evidence', blob: Blob) => Promise<unknown>, c: Capture): Promise<string[]> {
   const failed: string[] = [];
-  try {
-    await attach(c.captureId, 'screenshot', c.screenshot);
-  } catch {
-    failed.push('screenshot');
-  }
+  for (const f of uploadPlan(c))
+    try {
+      await attach(c.captureId, f.kind, f.blob);
+    } catch {
+      failed.push(f.kind === 'annotated' ? 'annotated image' : 'screenshot');
+    }
   const json = new Blob([JSON.stringify(c.evidence)], { type: 'application/json' });
   if (json.size > REPORTER_LIMITS.evidenceBytes) failed.push('evidence (too large)');
   else
@@ -192,8 +204,11 @@ function Home({ onOpenReview }: { onOpenReview: () => void }) {
 
 /** The report's shots as a strip: tap opens the viewer, × removes one, "+" adds another (Screen or Crop). */
 function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (id: string) => void; canAdd: boolean }) {
+  const { annotateShot } = usePanel();
   const [view, setView] = useState<Capture | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const edited = shots.find((c) => c.captureId === editing) ?? null;
   return (
     <div>
       <ul className="flex items-start gap-2 overflow-x-auto pt-1 pb-1">
@@ -206,6 +221,17 @@ function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (
               className="block size-20 overflow-hidden rounded-xl border border-line bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
             >
               <img src={c.previewUrl} alt="" className="size-full object-cover object-top" />
+            </button>
+            <button
+              type="button"
+              aria-label={`Annotate shot ${i + 1}`}
+              title="Annotate"
+              onClick={() => setEditing(c.captureId)}
+              className="absolute -bottom-3 -left-3 inline-flex size-11 items-center justify-center focus-visible:outline-hidden"
+            >
+              <span className={`inline-flex size-7 items-center justify-center rounded-full shadow ${c.annotations?.length ? 'bg-primary text-primary-ink' : 'bg-ink text-bg'}`}>
+                <Icon name="pencil" className="size-3.5" />
+              </span>
             </button>
             {onRemove && (
               <button
@@ -244,8 +270,32 @@ function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (
         <Viewer
           src={view.previewUrl}
           alt={`Shot ${shots.indexOf(view) + 1}`}
-          crop={{ anchor: view.evidence.anchor, scroll: view.evidence.state?.scroll ?? null }}
+          crop={view.annotations?.length ? null : { anchor: view.evidence.anchor, scroll: view.evidence.state?.scroll ?? null }}
           onClose={() => setView(null)}
+          actions={
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(view.captureId);
+                setView(null);
+              }}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-xl px-3 text-[14px] font-semibold text-white focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            >
+              <Icon name="pencil" className="size-[18px]" />
+              <span className="max-sm:sr-only">Annotate</span>
+            </button>
+          }
+        />
+      )}
+      {edited && (
+        <Annotator
+          src={editorSource(edited).url}
+          initial={editorSource(edited).marks}
+          onCancel={() => setEditing(null)}
+          onDone={(marks, image) => {
+            annotateShot(edited.captureId, marks, image);
+            setEditing(null);
+          }}
         />
       )}
     </div>
@@ -736,7 +786,7 @@ function CommentRow(props: {
           aria-label={`View comment ${c.index}`}
           className="shrink-0 rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
         >
-          <AuthImg client={client} src={c.screenshotUrl} alt="" className="size-14 rounded-lg" />
+          <AuthImg client={client} src={c.annotatedUrl ?? c.screenshotUrl} alt="" className="size-14 rounded-lg" />
         </button>
         <div className="min-w-0 flex-1">
           <p className="text-[12px] break-all text-muted">{shotCaption(c.index, c.anchor.path)}</p>
@@ -766,7 +816,7 @@ function CommentRow(props: {
           </>
         )}
       </div>
-      {view && c.screenshotUrl && <Viewer src={c.screenshotUrl} alt={shotCaption(c.index, c.anchor.path)} crop={{ anchor: c.anchor, scroll: null }} onClose={() => setView(false)} />}
+      {view && c.screenshotUrl && <Viewer src={c.annotatedUrl ?? c.screenshotUrl} alt={shotCaption(c.index, c.anchor.path)} crop={c.annotatedUrl ? null : { anchor: c.anchor, scroll: null }} onClose={() => setView(false)} />}
     </li>
   );
 }

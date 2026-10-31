@@ -164,7 +164,7 @@ export interface ReporterClient {
   ticket(key: string): Promise<ReporterTicket>;
   createTicket(req: ReporterCreateTicketRequest): Promise<ReporterCreateTicketResponse>;
   addCaptures(key: string, req: ReporterAddCapturesRequest): Promise<unknown>;
-  attach(key: string, captureId: string, kind: 'screenshot' | 'evidence', body: Blob): Promise<unknown>;
+  attach(key: string, captureId: string, kind: 'screenshot' | 'annotated' | 'evidence', body: Blob): Promise<unknown>;
   comments(key: string): Promise<ReporterTicketComment[]>;
   reply(key: string, body: string): Promise<unknown>;
   duplicates(q: ReporterDuplicateQuery): Promise<ReporterDuplicateCandidate[]>;
@@ -176,7 +176,7 @@ export interface ReporterClient {
   addComment(id: string, req: ReporterAddCommentRequest): Promise<unknown>;
   updateComment(id: string, captureId: string, req: ReporterUpdateCommentRequest): Promise<unknown>;
   deleteComment(id: string, captureId: string): Promise<unknown>;
-  reviewAttach(id: string, captureId: string, kind: 'screenshot' | 'evidence', body: Blob): Promise<unknown>;
+  reviewAttach(id: string, captureId: string, kind: 'screenshot' | 'annotated' | 'evidence', body: Blob): Promise<unknown>;
   submitReview(id: string, req: ReporterSubmitReviewRequest): Promise<ReporterSubmitReviewResponse>;
   sessionTargets(): Promise<ReporterSessionTargetStatus[]>;
   sessions(): Promise<ReporterSession[]>;
