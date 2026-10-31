@@ -146,8 +146,9 @@ test('T-2889 Allow on a guard refusal issues a pass the guard honours for exactl
   };
   deliver();
   assert.ok(!readFileSync(g.passes, 'utf8').includes(command), 'the file holds hashes, never the call');
-  // Another input, another folder, another tool: still refused (each files its own request).
-  assert.equal(g.run('Bash', { command, description: 'y' }).code, 2, 'another input');
+  // Another input, another folder, another tool: still refused (each files its own request). A Bash call's free-text `description` is no
+  // part of the call (T-3233, the test below), so "another input" is another command.
+  assert.equal(g.run('Bash', { command: `echo '{"x":2}' > .claude/settings.json`, description: 'x' }).code, 2, 'another input');
   assert.equal(g.run('Bash', input, CLAUDE_SESSION, join(g.repo, '.claude')).code, 2, 'another folder');
   assert.equal(g.run('Bash', { ...input, run_in_background: true }).code, 2, 'another field');
   // A file group or others may write, or one root does not own: ignored, so refused.
@@ -180,6 +181,70 @@ test('T-2889 Allow on a guard refusal issues a pass the guard honours for exactl
   rmSync(join(g.home, '.claudepilot', 'approval-passes-used'));
   writeFileSync(g.passes, passesContent([{ pass, until: Date.now() - 1000 }]));
   assert.equal(g.run('Bash', input).code, 2, 'expired');
+});
+
+// T-3233 (PILOT-1119): T-3206 folds refusals of one Bash command whose free-text `description` differs (Claude Code writes a new one on
+// most retries). The pass must ignore it too, on both sides (the guard's hash and passOf), or the retry after Allow is refused again.
+test('T-3233 a Bash call\'s description is no part of its pass: after Allow on a folded card, a retry with another description runs once; another command is refused', async () => {
+  const g = guardRig();
+  const command = `echo '{"x":1}' > .claude/settings.json`;
+  // Two refusals of one command, each with its own description: one card.
+  assert.equal(g.run('Bash', { command, description: 'Write the settings' }).code, 2);
+  assert.equal(g.run('Bash', { command, description: 'Try the settings write again' }).code, 2);
+  const { store, approvals } = await portal();
+  const ids = fileRefusalRequests(approvals, store, WS, g.pulled());
+  assert.equal(new Set(ids).size, 1, 'folded into one card');
+  assert.equal(approvals.getFor(ownerActor(), ids[0]!).count, 2);
+  const allowed = await approvals.allow(ownerActor(), ids[0]!);
+  assert.equal(allowed.result?.ok, true, allowed.result?.message);
+  const pass = (allowed.result?.output as { pass: string }).pass;
+  // The portal's pass is the same for every description of that command, and for none; not for another command or another field.
+  const bash = (input: Record<string, unknown>) => passOf('guard.refusal', { tool: 'Bash', input, cwd: g.repo });
+  assert.equal(bash({ command, description: 'anything else' }), pass);
+  assert.equal(bash({ command }), pass);
+  assert.notEqual(bash({ command: `echo '{"x":2}' > .claude/settings.json`, description: 'Write the settings' }), pass);
+  assert.notEqual(bash({ command, description: 'Write the settings', timeout: 5000 }), pass);
+  writeFileSync(g.passes, passesContent(approvals.livePasses(WS)));
+  chmodSync(g.passes, 0o644);
+  const usedFile = join(g.home, '.claudepilot', 'approval-passes-used');
+  // A changed command, another field, another folder: refused, and the pass stays unused.
+  assert.equal(g.run('Bash', { command: `echo '{"x":2}' > .claude/settings.json`, description: 'Write the settings' }).code, 2, 'another command');
+  assert.equal(g.run('Bash', { command, description: 'Write the settings', run_in_background: true }).code, 2, 'another field');
+  assert.equal(g.run('Bash', { command, description: 'Write the settings' }, CLAUDE_SESSION, join(g.repo, '.claude')).code, 2, 'another folder');
+  assert.ok(!existsSync(usedFile), 'no pass used yet');
+  // The same command with a third description: through, once, on the very pass the portal issued.
+  const ok = g.run('Bash', { command, description: 'Third attempt at the settings write' });
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stderr, /runs once on a one-time pass a person allowed \(T-2889\)/);
+  assert.equal(readFileSync(usedFile, 'utf8'), `${pass}\n`, 'the guard hashed the call as the portal did');
+  // Once only: the same command again, with yet another description or none, is refused.
+  assert.equal(g.run('Bash', { command, description: 'Fourth attempt' }).code, 2, 'used once already');
+  assert.equal(g.run('Bash', { command }).code, 2, 'used once already, no description');
+});
+
+// T-3233 decision: only a Bash call's `description` is left out. Bash documents it as a label that does not change what runs; another tool
+// (an MCP server's) may give a `description` field meaning (a body it writes), so there it stays bound: Allow covers that exact text only.
+test('T-3233 a non-Bash tool\'s description stays part of its pass: another description is refused, the allowed one runs once', async () => {
+  const g = guardRig();
+  const tool = 'mcp__fs__write_file';
+  const input = { path: join(g.repo, '.claude', 'settings.json'), content: '{}', description: 'Reset the settings' };
+  const r = g.run(tool, input);
+  assert.equal(r.code, 2, r.stderr);
+  const id = idIn(r.stderr)!;
+  const { store, approvals } = await portal();
+  assert.deepEqual(fileRefusalRequests(approvals, store, WS, g.pulled()), [id]);
+  const allowed = await approvals.allow(ownerActor(), id);
+  assert.equal(allowed.result?.ok, true, allowed.result?.message);
+  const pass = (allowed.result?.output as { pass: string }).pass;
+  assert.notEqual(passOf('guard.refusal', { tool, input: { ...input, description: 'Something else' }, cwd: g.repo }), pass);
+  assert.notEqual(passOf('guard.refusal', { tool, input: { path: input.path, content: input.content }, cwd: g.repo }), pass);
+  writeFileSync(g.passes, passesContent(approvals.livePasses(WS)));
+  chmodSync(g.passes, 0o644);
+  assert.equal(g.run(tool, { ...input, description: 'Something else' }).code, 2, 'another description');
+  assert.equal(g.run(tool, { path: input.path, content: input.content }).code, 2, 'no description');
+  const ok = g.run(tool, input);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.equal(g.run(tool, input).code, 2, 'used once already');
 });
 
 test('T-2889 the passes file is root-owned 0644 outside every workspace folder, only the policy owner may write it, and a change to it is no configuration change', () => {
