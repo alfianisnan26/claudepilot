@@ -31,6 +31,7 @@ spec:
             - --context=git://github.com/alfianisnan26/claudepilot.git#refs/heads/main#COMMIT
             - --dockerfile=deploy/k3s-build/portal.Dockerfile
             - --build-arg=NODE_AUTH_TOKEN=$(NODE_AUTH_TOKEN)
+            - --build-arg=PORTAL_RELEASE=RELEASE_TAG
             - --destination=registry.isnan-registry.svc.cluster.local:5000/claudepilot/portal:TAG
             - --insecure
             - --cache=false

@@ -36,3 +36,8 @@ test('client-side routes still get a page and API misses stay JSON', async () =>
     assert.ok(res.status === 200 || res.status === 404, `${path} -> ${res.status} (404 only when there is no built app)`);
   }
 });
+
+test('the built files allow cross-origin use (the reporter panel framed on a COEP require-corp site); the rest stays same-origin', async () => {
+  assert.equal((await get('/assets/embed-HASH.js')).headers.get('cross-origin-resource-policy'), 'cross-origin');
+  for (const path of ['/api/nothing-here', '/login', '/admin/workspaces']) assert.equal((await get(path)).headers.get('cross-origin-resource-policy'), 'same-origin', path);
+});

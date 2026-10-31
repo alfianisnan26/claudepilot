@@ -1,16 +1,19 @@
 // Chat in the widget (PILOT-1111): a session's stored transcript as the reporter panel shows it. Pure: no I/O, no access decision (the service
 // decides which sessions a token may see). The rule is "never more than the portal shows the owner": the person's and the assistant's text
 // (redacted when it was stored, and again here with the same chat/redact.ts shapes), a tool call as its name and one short line, an approval
-// as a line saying one waits (answered in pilot only), images by reference. Sub-agent lines, thinking, tool output, costs, system notes,
-// a move's context and side questions are left out.
+// as a line saying one waits (answered in pilot only), a tool result as whether it failed (with one short redacted line of its error, so the
+// panel can mark the call), images by reference. Sub-agent lines, thinking, tool output, costs, system notes, a move's context and side
+// questions are left out.
 
-import type { ChatEvent, ReporterChatMessage } from '@portal/contracts';
+import type { ChatEvent, ClaudeUsage, ReporterChatMessage, ReporterChatRuntime } from '@portal/contracts';
 import { redact } from '../chat/redact.js';
 
 /** The most of one line of text the panel gets (a long answer is cut; "Open in pilot" has the whole of it). */
 export const CHAT_TEXT_MAX = 6000;
 /** One line of a tool call's input. */
 export const CHAT_TOOL_LINE_MAX = 120;
+/** A failed tool's error line. */
+export const CHAT_TOOL_ERROR_MAX = 160;
 
 const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -51,7 +54,16 @@ export function toChatMessage(ev: ChatEvent, blobUrl: (blobId: string) => string
       return { ...base, kind: 'assistant', text: cut(redact(ev.text ?? ''), CHAT_TEXT_MAX) };
     case 'tool_use':
       if (ev.handoffId) return null;
-      return { ...base, images: [], kind: 'tool', tool: cut(oneLine(ev.toolName ?? 'tool'), 60), text: toolLine(ev.toolInput) };
+      return { ...base, images: [], kind: 'tool', tool: cut(oneLine(ev.toolName ?? 'tool'), 60), text: toolLine(ev.toolInput) || cut(oneLine(redact(ev.text ?? '')), CHAT_TOOL_LINE_MAX), toolId: ev.toolUseId ?? null };
+    case 'tool_result': {
+      // Only whether it failed, joined to its call by id (a result stored without one cannot be joined: left out). The output never comes.
+      if (!ev.toolUseId) return null;
+      const ok = !ev.isError;
+      // "Exit code 2" says little alone: the first two lines that say something ("Exit code 2 · ls: cannot access …").
+      const head = (ev.text ?? '').split('\n').filter((l) => l.trim()).slice(0, 2).map((l) => l.trim()).join(' · ');
+      const error = ok ? '' : cut(oneLine(redact(head)), CHAT_TOOL_ERROR_MAX) || 'Failed';
+      return { ...base, images: [], kind: 'tool_result', text: error, toolId: ev.toolUseId, ok };
+    }
     case 'request': {
       const r = ev.request;
       const what = r ? [r.title, r.detail].filter(Boolean).join(': ') : (ev.toolName ?? '');
@@ -75,3 +87,19 @@ export function toChatMessages(events: readonly ChatEvent[], blobUrl: (blobId: s
 
 /** A message's client id: what the portal's own composer sends (a UUID). */
 export const CHAT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A Claude's plan windows for the panel's chat header, from the portal's usage snapshot as it stands (never recomputed): the session window
+ * and the week window, each its percent used and reset time. Null when the snapshot has no plan reading for it (not on a plan, signed out,
+ * not read yet: the snapshot's own `unavailable`), so the panel says "unavailable" rather than 0 %.
+ */
+export function planOf(c: Pick<ClaudeUsage, 'runsOn' | 'unavailable' | 'windows'> | null): ReporterChatRuntime['plan'] {
+  if (!c || c.runsOn !== 'plan' || c.unavailable) return null;
+  const pick = (key: string) => {
+    const w = c.windows.find((x) => x.key === key);
+    return w ? { usedPct: typeof w.usedPct === 'number' ? w.usedPct : null, resetsAt: w.resetsAt ?? null } : null;
+  };
+  const session = pick('session');
+  const week = pick('week');
+  return session || week ? { session, week } : null;
+}

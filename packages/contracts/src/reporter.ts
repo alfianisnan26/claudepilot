@@ -596,7 +596,28 @@ export interface ReporterMe {
    */
   clientIp?: string | null;
   clientIpFamily?: 4 | 6 | null;
+  /** The portal release that answers (its image tag, PORTAL_RELEASE baked in at build); null when the server does not know it. Additive. */
+  portalRelease?: string | null;
 }
+
+/**
+ * Whether an address is private, loopback or cluster-internal (10/8, 172.16/12, 192.168/16, 127/8, fc00::/7, ::1, and those as IPv4-mapped
+ * IPv6). In the cluster, k3s's service load balancer rewrites the source before Traefik, so the portal sees a pod address (10.42.x.x) rather
+ * than the reporter's: such an address is labelled, never shown as the client's public IP.
+ */
+export function isInternalIp(ip: string | null | undefined): boolean {
+  const a = (ip ?? '').trim().toLowerCase().replace(/^::ffff:(?=(?:\d{1,3}\.){3}\d{1,3}$)/, '');
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/.exec(a);
+  if (v4) {
+    const [x, y] = [Number(v4[1]), Number(v4[2])];
+    return x === 10 || x === 127 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168);
+  }
+  if (!a.includes(':') || !/^[0-9a-f:]+$/.test(a)) return false;
+  return a === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(a);
+}
+
+/** An address as the reporter shows it: an internal one says so ("10.42.1.7 (internal: behind the cluster proxy)"). */
+export const reporterIpText = (ip: string) => (isInternalIp(ip) ? `${ip} (internal: behind the cluster proxy)` : ip);
 
 /** POST /reporter/v1/observed-build body: the build the page declared; the server records it for the SITE's repo and environment. */
 export interface ReporterObservedBuildRequest {
@@ -729,12 +750,17 @@ export interface ReporterSession {
 export interface ReporterChatMessage {
   seq: number;
   at: string;
-  kind: 'user' | 'assistant' | 'tool' | 'approval' | 'error';
+  kind: 'user' | 'assistant' | 'tool' | 'tool_result' | 'approval' | 'error';
+  /** For `tool_result`: empty when the tool succeeded, else its error as one short redacted line (never its output). */
   text: string;
   /** For `user`: who sent it when it was not the owner at the keyboard (a reporter, a ticket, another session). */
   from: string | null;
   /** For `tool`: the tool's name; `text` is one line of what it was given (a command, a path), cut short. */
   tool: string | null;
+  /** For `tool` and `tool_result`: the call's id, which joins a result to its call (the panel folds a run of calls into one row). */
+  toolId?: string | null;
+  /** For `tool_result`: false when the tool failed. */
+  ok?: boolean;
   /** Images on the line, served by `REPORTER_ROUTES.sessionBlob` with the bearer token. */
   images: { url: string; mediaType: string; width: number | null; height: number | null }[];
 }
@@ -752,6 +778,31 @@ export interface ReporterChatState {
   /** The ticket of the bucket it works on, when it works on one. */
   ticketKey: string | null;
   url: string;
+  /** What it runs with, as the portal's chat header shows it (the same session record and usage snapshot). Additive. */
+  runtime?: ReporterChatRuntime;
+}
+
+/** A plan window of the Claude a session runs on (the portal's usage snapshot): percent used and when it resets; null where unknown. */
+export interface ReporterUsageWindow {
+  usedPct: number | null;
+  resetsAt: string | null;
+}
+
+/**
+ * A session's runtime for the panel's chat header: model and effort, permission mode, the Claude it runs on by the portal's display name
+ * (never an email, account or plan id, token or credential), the context window, its cost so far, and that Claude's plan windows. Every
+ * value is the portal's own; null when the portal has none ("unavailable", never a guess).
+ */
+export interface ReporterChatRuntime {
+  model: string | null;
+  effort: string | null;
+  mode: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions' | null;
+  claude: string | null;
+  context: { usedTokens: number; windowTokens: number | null } | null;
+  /** What Claude Code reported the session cost (list price: for a plan not a bill). */
+  costUsd: number | null;
+  /** The Claude's plan windows; null when it has no plan reading (signed out, an API key, not read yet). */
+  plan: { session: ReporterUsageWindow | null; week: ReporterUsageWindow | null } | null;
 }
 
 /**
@@ -877,7 +928,13 @@ export type ReporterPanelMessage =
   | { type: 'pilot-reporter:target'; target: ReporterReportTarget }
   /** The open tickets of this bucket anchored on the current path; replaces what is drawn. Empty when signed out. */
   | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
-  | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }
+  | {
+      type: 'pilot-reporter:settings';
+      calloutsVisible: boolean;
+      hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string>;
+      /** The panel's effective theme, so the SDK's Close drawn over it can match (it cannot see the panel's colours). Additive. */
+      theme?: 'light' | 'dark';
+    }
   | { type: 'pilot-reporter:highlight'; key: string }
   /**
    * Showcase (owner, 2026-10-31: show and focus the tickets of this page so the issue is plain to see): scroll to the capture's area,

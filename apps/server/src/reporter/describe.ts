@@ -5,7 +5,7 @@
 // Everything quoted here came from a web page: it is untrusted, already redacted (validate.ts), and is fenced or escaped so it renders as
 // text, never as a link or an instruction.
 
-import { TICKET_LIMITS, type ReporterBuildInfo, type ReporterDeploymentState, type ReporterEvidence, type ReporterRepro, type ReporterTicketSite } from '@portal/contracts';
+import { TICKET_LIMITS, isInternalIp, type ReporterBuildInfo, type ReporterDeploymentState, type ReporterEvidence, type ReporterRepro, type ReporterTicketSite } from '@portal/contracts';
 
 /** Every control character and line or paragraph separator (C0, DEL, C1, U+2028, U+2029): what could start a new line in a prompt. */
 const BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
@@ -133,7 +133,7 @@ export function describeTicket(d: DescribeInput): string {
   if (first) out.push(`- Domain: ${code(first.page.host, 200)}, path ${code(first.page.path, 300)}${first.page.route ? `, route ${code(first.page.route, 200)}` : ''}`);
   out.push(`- Build: ${buildLine(d.build)}${d.build.environment ? `, declared environment ${code(d.build.environment, 20)}` : ''}`);
   if (first) out.push(`- Device: ${deviceLine(first)}`);
-  out.push(`- Reporter IP: ${d.reporterIp ? code(d.reporterIp, 64) : 'unknown'} (as the portal saw it)`);
+  out.push(`- Reporter IP: ${d.reporterIp ? `${code(d.reporterIp, 64)} (${isInternalIp(d.reporterIp) ? 'internal: behind the cluster proxy' : 'as the portal saw it'})` : 'unknown'}`);
   out.push(`- Reported with the UI reporter (SDK ${code(d.sdkVersion || 'unknown', 40)})${d.target.kind === 'session' ? `, sent straight to the session ${inline(d.target.label, 60)} (urgent)` : ''}.`);
   out.push('');
   for (const c of d.captures) out.push(captureSection(c, d.captures.length, d.ticketId), '');

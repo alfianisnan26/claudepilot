@@ -31,7 +31,7 @@ Code: `apps/server/src/reporter/` (`service.ts`, `routes.ts`, `validate.ts`, `de
 | --- | --- |
 | `GET /reporter.js` | `vendor/reporter.js`, the SDK build vendored by `scripts/vendor-reporter.sh <sdk commit>` (clones alfianisnan26/pilot-reporter at that commit, `npm ci`, builds, checks the build equals the committed `dist/reporter.js`; `vendor/VERSION` = `<package version>+<short commit>`), `text/javascript`, 5 minutes cache, ETag, `Cross-Origin-Resource-Policy: cross-origin`. |
 | `GET /axe.js` | `vendor/axe.min.js`, axe-core pinned by the same script (`vendor/AXE_VERSION`, licence in `vendor/axe-core.LICENSE`); 404 if it is missing: the SDK then records `checks.ran = false` with the reason. |
-| `GET /embed?bucket=&origin=` | The panel: `apps/web/dist/embed.html` (a placeholder when the web app was built without it). CSP `frame-ancestors <origin>` exactly, when the origin is a site of that enabled bucket. Otherwise an empty page with `frame-ancestors 'none'` and `X-Frame-Options: DENY`. |
+| `GET /embed?bucket=&origin=` | The panel: `apps/web/dist/embed.html` (a placeholder when the web app was built without it). CSP `frame-ancestors <origin>` exactly, when the origin is a site of that enabled bucket, with `Cross-Origin-Embedder-Policy: require-corp` and `Cross-Origin-Resource-Policy: cross-origin` so a site that isolates itself (COEP require-corp, the Konfersi Lab) can frame it (the panel loads only its own origin; `/assets/*` also answer `Cross-Origin-Resource-Policy: cross-origin`). Otherwise an empty page with `frame-ancestors 'none'` and `X-Frame-Options: DENY`. |
 | `GET /status?bucket=&origin=` | `ReporterStatus` for the panel's `ready`; every refusal reads the same (disabled, no site, no name). |
 | `GET /connect?bucket=&origin=&nonce=` | The popup. Not signed in: a sign-in link. Signed in and allowed: what is approved (bucket, site, environment, repo, person) and Connect. Its script POSTs same-origin and posts `ReporterConnectMessage` to `window.opener` with targetOrigin = the portal's own origin. |
 | `POST /connect` | Needs the portal cookie, `Origin` of the portal, JSON; refuses an origin not on the list (404). Rate limited per person. |
@@ -66,21 +66,31 @@ Every route of `REPORTER_ROUTES` under `/reporter/v1` from `me` down. No `Access
 - `GET /me` also returns `clientIp` and `clientIpFamily` (4 or 6): the request's address as the portal sees it, by the app's one rule
   (`clientAddress.ts`): the trusted proxy's LAST `X-Forwarded-For` entry when `PORTAL_TRUST_PROXY=true`, else the socket; a header a client
   sets is never believed. The same address is stored as `reporter_ip` on each widget ticket's evidence record (migration 902), named in the
-  description's "Where" section ("Reporter IP") and in the owner's Evidence viewer. The page never sends it.
+  description's "Where" section ("Reporter IP") and in the owner's Evidence viewer. The page never sends it. A private, loopback or cluster
+  address (10/8, 172.16/12, 192.168/16, 127/8, fc00::/7, ::1; `isInternalIp` in contracts) is labelled "<ip> (internal: behind the cluster
+  proxy)" in the Context view, the description and the Evidence viewer: in k3s the service load balancer rewrites the source before
+  Traefik, so the portal sees a pod address, never presented as the reporter's public IP.
+- `GET /me` also returns `portalRelease`: the image's release tag (`PORTAL_RELEASE`, baked in by `deploy/k3s-build` from the build's
+  tag; only a plain tag is believed), null when the server does not know it (the panel then says "unknown").
 
 ### Chat in the widget (PILOT-1111)
 
 `GET /sessions/:id/messages` (`?before=&limit=` a page counted back from the newest, or `?after=`), `POST /sessions/:id/messages`
 (`ReporterChatSendRequest`), `GET /sessions/:id/stream?after=` (NDJSON `ReporterChatStreamLine`: hello, update with new lines and the state,
 ping, gone; checked every second, closed after 5 minutes, at most 2 per token), `GET /sessions/:id/blobs/:blobId` (images only, sandboxed).
+The session state (`ReporterChatState`) carries `runtime` (`ReporterChatRuntime`): model, effort, mode, the Claude's display name (an email in
+it is cut, never an account id, plan id or credential), context, cost, copied from the portal's own session record, and the Claude's plan
+windows (session, week: percent and reset) from the usage snapshot the Usage page shows (`planOf`; read through a 30 s cache, never a
+probe); null where the portal has none. A runtime change is pushed on the stream like a state change.
 
 - **Which sessions.** Only a session of the token's bucket: one of its direct-report targets, linked to one of its tickets, or in its default
   workspace; and one the token's person may `view` (reads) or `operate` (send) through the seam. Anything else, an unknown id or no chat is
   the same 404, checked before any count.
 - **What it shows: never more than the portal shows the owner.** The person's and the assistant's text (redacted when stored, and again on the
-  way out with `chat/redact.ts`), a tool call as its name and one line of its input (a command, a path; at most 120 characters), an approval
-  as one line, an error as one line, images by reference. Sub-agent lines, thinking, tool output, costs, system notes, a move's context and
-  side questions are left out (`reporter/chat.ts`).
+  way out with `chat/redact.ts`), a tool call as its name and one line of its input (a command, a path; else the line the portal's row shows, such as an Agent call's description; at most 120 characters) with its call
+  id, a tool result as `tool_result` with that id and `ok` (a failure carries its first two non-empty lines, so "Exit code 2" comes with its reason, redacted, at most 160 characters; a success
+  carries nothing), an approval as one line, an error as one line, images by reference. Sub-agent lines, thinking, tool output, costs,
+  system notes, a move's context and side questions are left out (`reporter/chat.ts`).
 - **Sending.** The chat controller's own `send` (the path the portal's composer uses), as `portal-mcp:<token id>` named
   `<person> (reporter, <origin>)`: the transcript and Claude see that the message came through the widget on that site, not typed in the
   portal. Decided on the record (2026-10-31): the panel runs inside someone else's page, so its messages are framed like the reporter's

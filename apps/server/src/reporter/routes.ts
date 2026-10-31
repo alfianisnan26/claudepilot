@@ -153,7 +153,12 @@ export interface ReporterWidgetDeps {
   audit?: (kind: string, detail: Record<string, unknown>, actor: string) => void;
   /** The clock of the held approvals (tests); Date.now by default. */
   now?: () => number;
+  /** The portal's release (`releaseOf(process.env.PORTAL_RELEASE)`), shown in the panel's Context view; null when unknown. */
+  release?: string | null;
 }
+
+/** The release the image was built as (deploy/k3s-build passes the tag), or null: anything that is not a plain tag is not believed. */
+export const releaseOf = (v: string | undefined): string | null => (v && /^[A-Za-z0-9._-]{1,64}$/.test(v) ? v : null);
 
 const NONCE = /^[A-Za-z0-9_-]{16,128}$/;
 const notFound = () => new AppError('NOT_FOUND', 'Not found.');
@@ -257,6 +262,11 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     }
     const html = embedHtml(deps.webDist);
     c.header('Content-Security-Policy', embedCsp(html, origin));
+    // Framable by a site that isolates itself (Cross-Origin-Embedder-Policy: require-corp, as the Konfersi Lab does): such a page frames
+    // only a document that opts in with the same policy and allows cross-origin use. The panel loads only its own origin's files and API
+    // (and blob: images), so require-corp costs it nothing; require-corp rather than credentialless, which Safari does not support.
+    c.header('Cross-Origin-Embedder-Policy', 'require-corp');
+    c.header('Cross-Origin-Resource-Policy', 'cross-origin');
     return c.html(html, 200);
   });
 
@@ -373,7 +383,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     const x = ctxOf(c);
     const ip = x.clientIp && x.clientIp !== 'unknown' ? x.clientIp : null;
     return c.json(
-      success({ bucketKey: x.bucketKey, origin: x.origin, site: x.site, actorLabel: x.actorLabel, expiresAt: x.expiresAt, status: service.status(x.bucketKey, x.origin), clientIp: ip, clientIpFamily: ip ? ipFamily(ip) : null }),
+      success({ bucketKey: x.bucketKey, origin: x.origin, site: x.site, actorLabel: x.actorLabel, expiresAt: x.expiresAt, status: service.status(x.bucketKey, x.origin), clientIp: ip, clientIpFamily: ip ? ipFamily(ip) : null, portalRelease: deps.release ?? null }),
     );
   });
   // Sign out: the panel's own token revokes itself.
@@ -476,7 +486,9 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     c.header('X-Accel-Buffering', 'no');
     return stream(c, async (s) => {
       let after = from && /^\d{1,15}$/.test(from) ? Number(from) : first.lastSeq;
-      let mark = `${first.state}|${first.waiting}|${first.waitingFor ?? ''}`;
+      // A change of state, approvals or runtime (model, mode, context, plan usage) is pushed as an update too.
+      const markOf = (st: typeof first) => `${st.state}|${st.waiting}|${st.waitingFor ?? ''}|${JSON.stringify(st.runtime ?? null)}`;
+      let mark = markOf(first);
       const started = Date.now();
       let lastPing = Date.now();
       let alive = true;
@@ -494,7 +506,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
             await s.write(`${JSON.stringify({ type: 'gone' })}\n`);
             break;
           }
-          const now = `${st.state}|${st.waiting}|${st.waitingFor ?? ''}`;
+          const now = markOf(st);
           if (st.lastSeq > after || now !== mark) {
             const page = st.lastSeq > after ? service.chatPage(x, id, { after: String(after) }, origin) : { items: [], session: st };
             after = Math.max(after, st.lastSeq);

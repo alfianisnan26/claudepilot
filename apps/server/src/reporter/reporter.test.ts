@@ -21,6 +21,11 @@ test('embed: framed only by an allowed origin of an enabled bucket; anything els
     assert.match(ok.headers.get('content-security-policy') ?? '', new RegExp(`frame-ancestors ${STG.replace(/[.]/g, '\\.')}$`));
     assert.equal(ok.headers.get('x-frame-options'), null, 'no X-Frame-Options DENY on the allowed embed');
     assert.equal(ok.headers.get('access-control-allow-origin'), null);
+    // Framable by a page that isolates itself (COEP require-corp): the frame opts in with the same policy and allows cross-origin use.
+    assert.equal(ok.headers.get('cross-origin-embedder-policy'), 'require-corp');
+    assert.equal(ok.headers.get('cross-origin-resource-policy'), 'cross-origin');
+    const sdk = await h.call('/reporter/v1/reporter.js');
+    assert.equal(sdk.headers.get('cross-origin-resource-policy'), 'cross-origin', 'the SDK script loads on such a page');
 
     const refused = async (q: string, why: string) => {
       const r = await h.call(`/reporter/v1/embed?${q}`);
