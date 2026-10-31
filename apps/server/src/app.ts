@@ -1235,6 +1235,8 @@ export function createApp(
     // A helper's heartbeat (T-965, schedules/heartbeat.ts): an admin's Portal MCP token is its door, never a cookie, so it is mounted here,
     // before the schedules module's cookie-guarded routes under the same prefix. A beat is a few bytes: 4 KiB at most.
     app.use(SCHEDULES_API.heartbeat, loginLimit);
+    // The id rule of every /api route (QA-032): a hostile workspace id in the body is refused (422) before the token is looked up.
+    app.use(SCHEDULES_API.heartbeat, refuseHostileIds);
     app.route(
       SCHEDULES_API.heartbeat,
       createHeartbeatRoutes({
