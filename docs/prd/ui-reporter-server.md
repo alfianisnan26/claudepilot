@@ -24,8 +24,8 @@ Code: `apps/server/src/reporter/` (`service.ts`, `routes.ts`, `validate.ts`, `de
 
 | Route | What |
 | --- | --- |
-| `GET /reporter.js` | `vendor/reporter.js` (placeholder in this slice; the integration step vendors the real SDK and `vendor/VERSION`), `text/javascript`, 5 minutes cache, ETag, `Cross-Origin-Resource-Policy: cross-origin`. |
-| `GET /axe.js` | `vendor/axe.min.js` when vendored (pinned axe-core), else 404: the SDK then records `checks.ran = false` with the reason. |
+| `GET /reporter.js` | `vendor/reporter.js`, the SDK build vendored by `scripts/vendor-reporter.sh <sdk commit>` (clones alfianisnan26/pilot-reporter at that commit, `npm ci`, builds, checks the build equals the committed `dist/reporter.js`; `vendor/VERSION` = `<package version>+<short commit>`), `text/javascript`, 5 minutes cache, ETag, `Cross-Origin-Resource-Policy: cross-origin`. |
+| `GET /axe.js` | `vendor/axe.min.js`, axe-core pinned by the same script (`vendor/AXE_VERSION`, licence in `vendor/axe-core.LICENSE`); 404 if it is missing: the SDK then records `checks.ran = false` with the reason. |
 | `GET /embed?bucket=&origin=` | The panel: `apps/web/dist/embed.html` (a placeholder when the web app was built without it). CSP `frame-ancestors <origin>` exactly, when the origin is a site of that enabled bucket. Otherwise an empty page with `frame-ancestors 'none'` and `X-Frame-Options: DENY`. |
 | `GET /status?bucket=&origin=` | `ReporterStatus` for the panel's `ready`; every refusal reads the same (disabled, no site, no name). |
 | `GET /connect?bucket=&origin=&nonce=` | The popup. Not signed in: a sign-in link. Signed in and allowed: what is approved (bucket, site, environment, repo, person) and Connect. Its script POSTs same-origin and posts `ReporterConnectMessage` to `window.opener` with targetOrigin = the portal's own origin. |
@@ -112,5 +112,4 @@ seconds with what arrived. A failure keeps the ticket, adds a comment saying so,
 
 ## Not built in this slice
 
-- The real SDK and axe-core are not vendored yet (placeholders; the integration step does it).
 - Knowledge and session reads use the owner's access (single owner today); the multi-user layer narrows them to the token's person.
