@@ -65,7 +65,7 @@ const standIn = {
   },
 };
 
-const server = await createServer({ configFile: `${WEB}vite.config.ts`, root: WEB, logLevel: 'error', server: { port: 0, host: '127.0.0.1' }, optimizeDeps: { noDiscovery: true, include: [] }, plugins: [standIn] });
+const server = await createServer({ configFile: `${WEB}vite.config.ts`, root: WEB, logLevel: 'error', server: { port: 0, host: '127.0.0.1' }, optimizeDeps: { entries: ['embed.html'] }, plugins: [standIn] });
 await server.listen();
 const base = `http://127.0.0.1:${server.httpServer.address().port}`;
 const embed = `${base}/reporter/v1/embed?bucket=KONF&origin=${encodeURIComponent(HOST)}`;
