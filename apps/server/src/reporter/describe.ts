@@ -38,6 +38,11 @@ export interface DescribedCapture {
   evidence: ReporterEvidence | null;
   screenshotAttachmentId: number | null;
   evidenceAttachmentId: number | null;
+  /** The flattened image with the reporter's marks (annotation editor), when one was uploaded. */
+  annotatedAttachmentId?: number | null;
+  /** How many marks the capture carries, and whether one pixelated an area (the screenshot is then the blurred image itself). */
+  marks?: number;
+  blurred?: boolean;
 }
 
 export interface DescribeInput {
@@ -96,6 +101,7 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
   if (c.body) lines.push(untrustedMarkdown(c.body.trim()), '');
   else if (c.note) lines.push(`> ${inline(c.note, 1000)}`, '');
   lines.push(`- URL: ${code(c.pageUrl, 400)}`);
+  if (c.marks) lines.push(`- Annotated (${c.marks} ${c.marks === 1 ? 'mark' : 'marks'})${c.blurred ? '; blurred areas are removed from the screenshot (no original was uploaded)' : ''}`);
   const e = c.evidence;
   if (e) {
     if (e.page.route) lines.push(`- Route: ${code(e.page.route, 200)}`);
@@ -115,6 +121,7 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
   } else lines.push('- Evidence: not uploaded yet');
   const files = [
     c.screenshotAttachmentId !== null ? `screenshot (attachment ${c.screenshotAttachmentId})` : null,
+    c.annotatedAttachmentId != null ? `annotated screenshot (attachment ${c.annotatedAttachmentId})` : null,
     c.evidenceAttachmentId !== null ? `evidence JSON (attachment ${c.evidenceAttachmentId})` : null,
   ].filter(Boolean);
   if (files.length) lines.push(`- Files: ${files.join(', ')}; read them with ticket_attachment_get ${ticketId} or reporter_evidence ${ticketId}`);
