@@ -9,6 +9,9 @@ import {
   canRedo,
   canUndo,
   clearAll,
+  clientToImage,
+  downWhileTyping,
+  drawnScale,
   editorSource,
   emptyDoc,
   handles,
@@ -234,4 +237,57 @@ test('a shot after Done: without blur both images go, with blur only the flatten
   assert.equal('annotations' in cleared.next, false);
   assert.equal('original' in cleared.next, false);
   assert.deepEqual(uploadPlan(cleared.next).length, 1);
+});
+
+/* ---------- Pointer to image (the blur that landed off its drag, 2026.10.31-6) ---------- */
+
+// Where the image is drawn on screen: the stage's place plus the view's pan and zoom (what the canvas's getBoundingClientRect returns).
+const SIZE = { w: 1170, h: 2532 };
+const boxOf = (stage: { left: number; top: number }, view: { scale: number; x: number; y: number }) => ({
+  left: stage.left + view.x,
+  top: stage.top + view.y,
+  width: SIZE.w * view.scale,
+  height: SIZE.h * view.scale,
+});
+// The screen point of an image point under that drawing (what the finger touches).
+const screenOf = (stage: { left: number; top: number }, view: { scale: number; x: number; y: number }, p: { x: number; y: number }) => ({
+  x: stage.left + view.x + p.x * view.scale,
+  y: stage.top + view.y + p.y * view.scale,
+});
+const near = (a: { x: number; y: number }, b: { x: number; y: number }, what: string) => {
+  assert.ok(Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6, `${what}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
+};
+
+test('pointer to image: fitted, zoomed and panned, and on a moved stage, the finger maps to the image pixel under it', () => {
+  const secret = { x: 600, y: 1400 };
+  const cases = [
+    { what: 'fitted (a 3x shot on a 390 px phone)', stage: { left: 0, top: 88 }, view: { scale: 390 / 1170, x: 0, y: 0 } },
+    { what: 'zoomed in 2.5x', stage: { left: 0, top: 88 }, view: { scale: (390 / 1170) * 2.5, x: -310, y: -700 } },
+    { what: 'panned only', stage: { left: 0, top: 88 }, view: { scale: 0.25, x: 47, y: 12 } },
+    { what: 'stage inside a framed panel', stage: { left: 400, top: 160 }, view: { scale: 0.5, x: 20, y: -30 } },
+  ];
+  for (const c of cases) near(clientToImage(screenOf(c.stage, c.view, secret), boxOf(c.stage, c.view), SIZE), secret, c.what);
+  // Drawn scale = screen px per image px, for slop and handles.
+  assert.equal(drawnScale(boxOf(cases[1]!.stage, cases[1]!.view), SIZE), cases[1]!.view.scale);
+  assert.equal(drawnScale({ width: 0 }, SIZE), 1, 'nothing drawn yet: no division by zero');
+  assert.deepEqual(clientToImage({ x: 5, y: 5 }, { left: 0, top: 0, width: 0, height: 0 }, SIZE), { x: 0, y: 0 });
+});
+
+test('pointer to image: after a layout shift (the blur note pushing the stage 44 px down) only the CURRENT rect maps right', () => {
+  const view = { scale: 390 / 1170, x: 0, y: 0 };
+  const before = { left: 0, top: 88 };
+  const after = { left: 0, top: 88 + 44 };
+  const secret = { x: 300, y: 1500 };
+  const finger = screenOf(after, view, secret); // the picture moved down; the finger is on the secret where it is now
+  near(clientToImage(finger, boxOf(after, view), SIZE), secret, 'the rect read at the event');
+  const stale = clientToImage(finger, boxOf(before, view), SIZE);
+  assert.ok(Math.abs(stale.y - secret.y - 44 / view.scale) < 1e-6, 'a rect cached before the shift is 44 screen px (132 image px) off: the old bug');
+  // The same holds for a zoom that changed between pointer-down and the move (pinch, wheel, a refit on resize).
+  const zoomed = { scale: 0.9, x: -200, y: -500 };
+  near(clientToImage(screenOf(after, zoomed, secret), boxOf(after, zoomed), SIZE), secret, 'after a zoom');
+});
+
+test('a pointer-down while a text box is open: with Text it only ends the text; with any other tool it ends it and draws', () => {
+  assert.equal(downWhileTyping('text'), 'finish');
+  for (const t of ['blur', 'pen', 'rect', 'select', 'step'] as const) assert.equal(downWhileTyping(t), 'finish-and-draw', t);
 });

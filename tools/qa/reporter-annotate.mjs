@@ -3,7 +3,11 @@
 // blur, numbers, text with inline editing); select moves a mark; undo and redo; a two-finger pinch zooms and never draws; Done returns to
 // the form; filing uploads what it should: with a blur ONLY the flattened image as the screenshot, without one the original and the
 // annotated image. At 390 px with touch (blur path) and at 1280 px with a mouse and keyboard shortcuts (no blur), light and dark.
-// Checks: no horizontal scroll, every visible control at least 44x44 px, no page error. Self-contained (Vite dev server, stand-in API).
+// Checks: no horizontal scroll, every visible control at least 44x44 px, every tool reachable at 390 px, no page error.
+// The privacy pass (a bug in 2026.10.31-6: a blur landed off its drag and the secret was uploaded readable): at 390 px with touch (DPR 3)
+// and at 1280 px with a mouse, a blur over a known secret line, then Text left open, then a blur over a second secret line; File; then
+// the uploaded screenshot is compared pixel by pixel with the original: no dark (text) pixel is left in either secret, and every pixel
+// outside the blurs and the text is unchanged. The blur note must not move the stage. Self-contained (Vite dev server, stand-in API).
 //   QA_SHOTS=<dir> node tools/qa/reporter-annotate.mjs   ->  <dir>/annotate-*.png, exit 1 on a failed check
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
@@ -49,8 +53,16 @@ addEventListener('message', async (e) => {
     // A page with a "secret" line in the middle: what the blur must hide in the uploaded pixels.
     const c = document.createElement('canvas'); c.width = 390; c.height = 844; const g = c.getContext('2d');
     g.fillStyle = '#eef1f6'; g.fillRect(0, 0, 390, 844); g.fillStyle = '#1b2533'; g.fillRect(0, 0, 390, 64);
-    g.fillStyle = '#c33'; g.fillRect(20, 300, 200, 80); g.fillStyle = '#111'; g.font = 'bold 22px sans-serif'; g.fillText('API KEY 1234-5678-9999', 20, 470);
-    const buf = await (await new Promise((r) => c.toBlob(r, 'image/png'))).arrayBuffer();
+    g.fillStyle = '#c33'; g.fillRect(20, 300, 200, 80); g.fillStyle = '#111'; g.font = 'bold 22px sans-serif';
+    // Two secret lines; their exact boxes (image pixels) are kept for the privacy pass.
+    window.secrets = [['API KEY 1234-5678-9999', 470], ['PIN 0000-4321', 640]].map(([t, y]) => {
+      g.fillText(t, 20, y);
+      const m = g.measureText(t);
+      return { x: 20, y: Math.floor(y - m.actualBoundingBoxAscent), w: Math.ceil(m.width), h: Math.ceil(m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) };
+    });
+    const png = await new Promise((r) => c.toBlob(r, 'image/png'));
+    window.orig = png;
+    const buf = await png.arrayBuffer();
     f.contentWindow.postMessage({ type: 'pilot-reporter:capture-result', requestId: m.requestId, screenshot: buf, mediaType: 'image/png', evidence: evidence() }, location.origin, [buf]);
   }
 });
@@ -61,6 +73,12 @@ const standIn = {
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
       const path = req.url.split('?')[0];
+      if (path === '/__qa-shot') {
+        // The last uploaded screenshot (what the server would store), for the pixel comparison.
+        const u = uploads.filter((x) => x.kind === 'screenshot').at(-1);
+        res.setHeader('content-type', 'image/png');
+        return res.end(u?.body ?? Buffer.alloc(0));
+      }
       if (path === '/__qa-host') {
         res.setHeader('content-type', 'text/html');
         return res.end(HOST_PAGE);
@@ -75,7 +93,7 @@ const standIn = {
       for await (const c of req) chunks.push(c);
       const body = Buffer.concat(chunks);
       if (req.method === 'POST' && /\/attachments$/.test(path)) {
-        uploads.push({ kind: req.headers['x-reporter-kind'], capture: req.headers['x-reporter-capture'], type: req.headers['content-type'], size: body.length, png: body.subarray(1, 4).toString('ascii') === 'PNG' });
+        uploads.push({ kind: req.headers['x-reporter-kind'], capture: req.headers['x-reporter-capture'], type: req.headers['content-type'], size: body.length, png: body.subarray(1, 4).toString('ascii') === 'PNG', body });
         res.setHeader('content-type', 'application/json');
         return res.end(JSON.stringify({ data: { ok: true } }));
       }
@@ -106,6 +124,49 @@ const AUDIT = (doc) => `(() => {
     return e.offsetWidth < 43.5 || e.offsetHeight < 43.5;
   }).map((e) => (e.getAttribute('aria-label') || e.textContent || e.tagName).trim().slice(0, 40) + ' ' + e.offsetWidth + 'x' + e.offsetHeight);
   return { overflow: root.scrollWidth - root.clientWidth, small };
+})()`;
+
+/** The tool buttons that are not fully on screen (cut by the viewport or by their row): every tool must be reachable as it is. */
+const REACH = (doc) => `(() => {
+  const doc = ${doc}; const vw = doc.documentElement.clientWidth;
+  const row = [...doc.querySelectorAll('[role=toolbar][aria-label=Tools]')].find((e) => e.offsetWidth > 0);
+  if (!row) return ['no tool row'];
+  return [...row.querySelectorAll('button')].filter((e) => {
+    const r = e.getBoundingClientRect();
+    let p = e.parentElement; let cut = false;
+    while (p && p !== doc.body) { const c = p.getBoundingClientRect(); const s = doc.defaultView.getComputedStyle(p); if (s.overflowX !== 'visible' && (r.left < c.left - 0.5 || r.right > c.right + 0.5)) cut = true; p = p.parentElement; }
+    return cut || r.left < -0.5 || r.right > vw + 0.5 || r.width < 43.5;
+  }).map((e) => e.getAttribute('aria-label'));
+})()`;
+
+/** Compares the uploaded screenshot with the original (both decoded in the host page): per secret box, the dark (text) pixels before and
+ *  after; outside the blurs and the text, the pixels that changed. */
+const PIXELS = (blurPad, textBox) => `(async () => {
+  const load = async (blob) => { const bm = await createImageBitmap(blob); const c = new OffscreenCanvas(bm.width, bm.height); const g = c.getContext('2d'); g.drawImage(bm, 0, 0); return g.getImageData(0, 0, bm.width, bm.height); };
+  const a = await load(window.orig);
+  const r = await fetch('/__qa-shot'); const blob = await r.blob();
+  if (!blob.size) return { error: 'no screenshot was uploaded' };
+  const z = await load(blob);
+  if (a.width !== z.width || a.height !== z.height) return { error: 'size ' + z.width + 'x' + z.height + ' vs ' + a.width + 'x' + a.height };
+  const W = a.width, H = a.height;
+  const luma = (d, i) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+  const diff = (i) => Math.max(Math.abs(a.data[i] - z.data[i]), Math.abs(a.data[i + 1] - z.data[i + 1]), Math.abs(a.data[i + 2] - z.data[i + 2]));
+  const pad = ${blurPad};
+  const boxes = window.secrets.map((s) => ({ x: s.x - pad, y: s.y - pad, w: s.w + pad * 2, h: s.h + pad * 2 }));
+  const text = ${JSON.stringify(textBox)};
+  const inside = (b, x, y) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
+  const secrets = window.secrets.map((s) => {
+    let dark0 = 0, dark1 = 0, changed = 0, n = 0;
+    for (let y = s.y; y < s.y + s.h; y++) for (let x = s.x; x < s.x + s.w; x++) { const i = (y * W + x) * 4; n++; if (luma(a.data, i) < 90) dark0++; if (luma(z.data, i) < 90) dark1++; if (diff(i) > 2) changed++; }
+    return { n, dark0, dark1, changed };
+  });
+  let outside = 0, outsideN = 0, first = null;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (boxes.some((b) => inside(b, x, y)) || inside(text, x, y)) continue;
+    const i = (y * W + x) * 4; outsideN++;
+    if (diff(i) > 2) { outside++; first ??= [x, y]; }
+  }
+  return { size: [W, H], secrets, outside, outsideN, first };
 })()`;
 
 const failures = [];
@@ -192,6 +253,8 @@ try {
       await b.waitFor(`!!${q('[data-annotator] [data-stage] canvas')}`, 8000, 'the editor');
       await sleep(500);
       check(`${label} editor`, await b.eval(AUDIT(F)));
+      const clipped = await b.eval(REACH(F));
+      if (clipped.length) failures.push(`${label}: tools not reachable without scrolling: ${clipped.join(', ')}`);
       await shot('empty');
       // Keys go to the focused frame: the panel's, as after a click in it.
       await b.eval(`document.getElementById('panel').contentWindow.focus()`);
@@ -294,6 +357,131 @@ try {
       if (uploads.some((u) => u.kind !== 'evidence' && !u.png)) failures.push(`${label}: an image upload is not a PNG`);
       console.log(`${label}: marks ${types}; uploads ${uploads.map((u) => `${u.kind}:${u.size}`).join(' ')}`);
       await shot('filed');
+      if (b.errors.length) failures.push(`${label}: page errors ${b.errors.join(' | ')}`);
+    } finally {
+      await b.close();
+    }
+  }
+
+  // The privacy pass: the blur must land under the drag and hide the secret in the UPLOADED pixels, also right after the Text tool.
+  for (const [label, width, height, touch, dpr] of [
+    ['390-privacy', 390, 844, true, 3],
+    ['1280-privacy', 1280, 800, false, 1],
+  ]) {
+    uploads.length = 0;
+    filed.length = 0;
+    const b = await Browser.launch({ width, height, mobile: touch });
+    const shot = (n) => sleep(300).then(() => b.shot(`annotate-${label}-${n}`));
+    try {
+      await b.setViewport(width, height, touch, dpr);
+      const F = `document.getElementById('panel').contentDocument`;
+      const q = (sel) => `${F}.querySelector(${JSON.stringify(sel)})`;
+      const marks = () => b.eval(`Number(${q('[data-annotator]')}?.dataset.marks ?? -1)`);
+      /** Page coordinates of a point in the SCREENSHOT's pixels, from where the canvas is drawn now. */
+      const img = (ix, iy) =>
+        b.eval(`(() => { const fr = document.getElementById('panel').getBoundingClientRect(); const c = ${q('[data-stage] canvas')}; const s = c.getBoundingClientRect(); return { x: fr.x + s.x + ${ix} * s.width / c.width, y: fr.y + s.y + ${iy} * s.height / c.height }; })()`);
+      const stageTop = () => b.eval(`${q('[data-stage]')}.getBoundingClientRect().top`);
+      const down = (p) => (touch ? b.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: p.x, y: p.y, id: 1 }] }) : b.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', buttons: 1, clickCount: 1 }));
+      const move = (p) => (touch ? b.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: p.x, y: p.y, id: 1 }] }) : b.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'left', buttons: 1 }));
+      const up = (p) => (touch ? b.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }) : b.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', buttons: 0, clickCount: 1 }));
+      const tap = async (p) => {
+        if (!touch) await b.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+        await down(p);
+        await sleep(30);
+        await up(p);
+        await sleep(150);
+      };
+      /** A real tap (touch) or click (mouse) on a tool's visible button. */
+      const tapTool = async (name) => {
+        const p = await b.eval(`(() => { const fr = document.getElementById('panel').getBoundingClientRect(); const e = [...${F}.querySelectorAll('[aria-label^="${name} ("]')].find((x) => x.offsetWidth > 0); const r = e.getBoundingClientRect(); return { x: fr.x + r.x + r.width / 2, y: fr.y + r.y + r.height / 2 }; })()`);
+        await tap(p);
+        const on = await b.eval(`[...${F}.querySelectorAll('[aria-label^="${name} ("]')].some((e) => e.offsetWidth > 0 && e.getAttribute('aria-pressed') === 'true')`);
+        if (!on) failures.push(`${label}: a tap on ${name} did not pick it`);
+      };
+      /** A drag in image pixels, through 10 points, each mapped from the canvas as it is at that moment. */
+      const dragImg = async (x1, y1, x2, y2) => {
+        const steps = 10;
+        const p0 = await img(x1, y1);
+        if (!touch) await b.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p0.x, y: p0.y });
+        await down(p0);
+        let last = p0;
+        for (let i = 1; i <= steps; i++) {
+          last = await img(x1 + ((x2 - x1) * i) / steps, y1 + ((y2 - y1) * i) / steps);
+          await move(last);
+          await sleep(16);
+        }
+        await up(last);
+        await sleep(150);
+      };
+
+      await b.goto(`${base}/__qa-host`, 2500);
+      await b.eval(`${F}.defaultView.localStorage.setItem('pilot-reporter:token:KONF:' + location.origin, JSON.stringify({ token: '${token}', expiresAt: new Date(Date.now() + 36e5).toISOString(), actorLabel: 'Owner', bucketKey: 'KONF' }))`);
+      await b.goto(`${base}/__qa-host`, 3000);
+      await b.waitFor(`!!${q('[role=tab][aria-label=Report]')}`, 10000, 'the panel');
+      await b.eval(`${q('[role=tab][aria-label=Report]')}.click()`);
+      await sleep(400);
+      await b.eval(`[...${F}.querySelectorAll('button')].find((x) => /^Screen$/.test(x.textContent)).click()`);
+      await b.waitFor(`!!${q('[aria-label="Annotate shot 1"]')}`, 10000, 'the report form with the shot');
+      await b.eval(`${q('[aria-label="Annotate shot 1"]')}.click()`);
+      await b.waitFor(`!!${q('[data-annotator] [data-stage] canvas')}`, 8000, 'the editor');
+      await sleep(600);
+      const secrets = await b.eval('window.secrets');
+      const PAD = 8;
+      const clipped = await b.eval(REACH(F));
+      if (clipped.length) failures.push(`${label}: tools not reachable without scrolling: ${clipped.join(', ')}`);
+
+      // 1. A blur over the first secret, as the first thing.
+      const t0 = await stageTop();
+      await tapTool('Blur');
+      const [s1, s2] = secrets;
+      await dragImg(s1.x - PAD, s1.y - PAD, s1.x + s1.w + PAD, s1.y + s1.h + PAD);
+      if ((await marks()) !== 1) failures.push(`${label}: the first blur did not register (${await marks()} marks)`);
+      await sleep(300);
+      if (!/Blurred areas are removed from the uploaded image/.test(await b.eval(`${F}.body.innerText`))) failures.push(`${label}: the blur note is missing`);
+      const t1 = await stageTop();
+      if (Math.abs(t1 - t0) > 0.5) failures.push(`${label}: the blur note moved the stage by ${t1 - t0}px`);
+      await shot('blur-1');
+
+      // 2. Text, left open (the keyboard up), then Blur picked the way iOS does it (a tap on a button does not take the focus from the text
+      //    box: the click is dispatched without a focus change), then a blur over the second secret: it must count on the first drag.
+      await tapTool('Text');
+      const textAt = { x: 30, y: 760 };
+      await tap(await img(textAt.x, textAt.y));
+      await b.waitFor(`!!${q('[data-annotator] textarea[aria-label=Text]')}`, 4000, 'the inline text box');
+      await b.type('see');
+      await sleep(150);
+      await b.eval(`[...${F}.querySelectorAll('[aria-label^="Blur ("]')].find((x) => x.offsetWidth > 0).click()`);
+      await sleep(150);
+      if (await b.eval(`!!${q('[data-annotator] textarea[aria-label=Text]')}`)) failures.push(`${label}: switching the tool left the text box open`);
+      await dragImg(s2.x - PAD, s2.y - PAD, s2.x + s2.w + PAD, s2.y + s2.h + PAD);
+      const m2 = await marks();
+      if (m2 !== 3) failures.push(`${label}: after text and the second blur expected 3 marks, got ${m2}`);
+      await shot('blur-2');
+
+      await b.eval(`[...${F}.querySelectorAll('[data-annotator] button')].find((x) => /Done/.test(x.textContent)).click()`);
+      await b.waitFor(`!${q('[data-annotator]')}`, 8000, 'Done closes the editor');
+      await sleep(300);
+      const queue = await b.eval(`!![...${F}.querySelectorAll('[role=radio]')].find((x) => x.textContent === 'Queue')`);
+      if (queue) await b.eval(`[...${F}.querySelectorAll('[role=radio]')].find((x) => x.textContent === 'Queue').click()`);
+      await b.eval(`[...${F}.querySelectorAll('button')].find((x) => /^File ticket$/.test(x.textContent)).click()`);
+      await b.waitFor(`${F}.body.innerText.includes('Filed KONF-15')`, 10000, 'the Filed row');
+      const kinds = uploads.filter((u) => u.kind !== 'evidence').map((u) => u.kind).join(',');
+      if (kinds !== 'screenshot') failures.push(`${label}: with a blur only the flattened screenshot may upload, got ${kinds}`);
+
+      // The text box as drawn (font 12 units, 1.25 line height) with room for its halo.
+      const unit = Math.max(1, 844 / 420);
+      const textBox = { x: textAt.x - 8, y: textAt.y - 8, w: 200, h: Math.round(12 * unit * 1.25) + 16 };
+      const px = await b.eval(PIXELS(PAD, textBox));
+      if (px.error) failures.push(`${label}: pixels: ${px.error}`);
+      else {
+        px.secrets.forEach((r, i) => {
+          if (r.dark0 < 100) failures.push(`${label}: secret ${i + 1} has too few text pixels to judge (${r.dark0})`);
+          if (r.dark1 > 0) failures.push(`${label}: secret ${i + 1} is NOT blurred in the upload: ${r.dark1} of ${r.dark0} text pixels left`);
+          if (r.changed < r.n * 0.3) failures.push(`${label}: secret ${i + 1}: only ${r.changed} of ${r.n} pixels changed`);
+        });
+        if (px.outside > 0) failures.push(`${label}: ${px.outside} of ${px.outsideN} pixels outside the blurs and the text changed (first at ${px.first})`);
+        console.log(`${label}: upload ${px.size.join('x')}; secrets ${px.secrets.map((r, i) => `#${i + 1} text px ${r.dark0} -> ${r.dark1}, changed ${r.changed}/${r.n}`).join('; ')}; outside changed ${px.outside}/${px.outsideN}`);
+      }
       if (b.errors.length) failures.push(`${label}: page errors ${b.errors.join(' | ')}`);
     } finally {
       await b.close();

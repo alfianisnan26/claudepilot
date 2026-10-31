@@ -10,6 +10,9 @@ import {
   canRedo,
   canUndo,
   clearAll,
+  clientToImage,
+  downWhileTyping,
+  drawnScale,
   drawMark,
   emptyDoc,
   fontOf,
@@ -46,8 +49,9 @@ import { Icon, type IconName } from './icons';
 /**
  * The annotation editor (PILOT-1111, owner 2026-10-31): full screen over the panel, the screenshot with a canvas of marks in its own pixel
  * coordinates. One finger draws with the tool; two fingers pinch and pan (and drop a mark in progress, so a pinch never draws). Phone: the
- * tools pinned at the bottom in the safe area, scrolling sideways; desktop: one top bar. Done flattens the marks (blurs pixelate the real
- * pixels) into a PNG of the screenshot's size.
+ * tools pinned at the bottom in the safe area (two rows of five, every tool on screen); desktop: one top bar. Done flattens the marks (blurs
+ * pixelate the real pixels) into a PNG of the screenshot's size. A pointer maps to the image through the canvas's bounding rect read at
+ * that event (clientToImage), so a layout shift, a zoom or a pan between events can never move a mark (or a blur) off the finger.
  */
 const DARK = { background: '#0b0d12', color: '#fff' } as const;
 const DIM = { color: 'rgba(255, 255, 255, 0.72)' } as const;
@@ -211,9 +215,13 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
   }, [measure]);
   useEffect(draw, [draw, doc, selected, editing, view.scale, size]);
 
-  const toImage = (p: { x: number; y: number }) => {
-    const v = st.current.view;
-    return { x: (p.x - v.x) / v.scale, y: (p.y - v.y) / v.scale };
+  /** The pointer in image pixels and the drawn scale, from the canvas as it is on screen at this event (never a cached rect or view). */
+  const imageAt = (e: { clientX: number; clientY: number }) => {
+    const c = overlay.current;
+    const size = st.current.size;
+    if (!c) return { at: { x: 0, y: 0 }, k: st.current.view.scale };
+    const box = c.getBoundingClientRect();
+    return { at: clientToImage({ x: e.clientX, y: e.clientY }, box, size), k: drawnScale(box, size) };
   };
   const local = (e: { clientX: number; clientY: number }) => {
     const r = frame.current!.getBoundingClientRect();
@@ -261,9 +269,9 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
   const onDown = (e: RPointerEvent) => {
     if (busy || !img) return;
     if (st.current.editing) {
-      // A tap outside the text being written finishes it (and does nothing else).
+      // A tap outside the text being written finishes it; with the Text tool that is all, with another tool it also starts that mark.
       commitText();
-      return;
+      if (downWhileTyping(st.current.tool) === 'finish') return;
     }
     frame.current?.setPointerCapture?.(e.pointerId);
     const p = local(e);
@@ -278,18 +286,18 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
     }
     if (pointers.current.size > 2 || quiet.current) return;
     const s = st.current;
-    const at = toImage(p);
+    const { at, k } = imageAt(e);
     if (e.button === 1 || space.current) {
       op.current = { kind: 'pan', start: p, view: s.view };
       return;
     }
-    const slop = (e.pointerType === 'touch' ? 16 : 8) / s.view.scale;
+    const slop = (e.pointerType === 'touch' ? 16 : 8) / k;
     const w = widthFor(s.tool, s.sizeClass, s.unit);
     switch (s.tool) {
       case 'select': {
         const sel = s.doc.marks.find((m) => m.id === s.selected);
         if (sel) {
-          const reach = 22 / s.view.scale;
+          const reach = 22 / k;
           const h = handles(sel).findIndex((q) => Math.hypot(q.x - at.x, q.y - at.y) <= reach);
           if (h >= 0) {
             op.current = { kind: 'resize', from: sel, handle: h };
@@ -349,7 +357,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
     }
     const o = op.current;
     if (!o || quiet.current) return;
-    const at = toImage(p);
+    const { at, k } = imageAt(e);
     switch (o.kind) {
       case 'pan':
         setView(clampView({ ...o.view, x: o.view.x + p.x - o.start.x, y: o.view.y + p.y - o.start.y }, s.size, s.area));
@@ -360,7 +368,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
         else {
           const lx = m.points.at(-2)!;
           const ly = m.points.at(-1)!;
-          if (Math.hypot(at.x - lx, at.y - ly) < 1 / s.view.scale) return;
+          if (Math.hypot(at.x - lx, at.y - ly) < 1 / k) return;
           m.points.push(at.x, at.y);
         }
         draft.current = o.mark;
@@ -373,7 +381,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
       case 'move': {
         const dx = at.x - o.start.x;
         const dy = at.y - o.start.y;
-        if (!o.moved && Math.hypot(dx, dy) * s.view.scale < 4) return;
+        if (!o.moved && Math.hypot(dx, dy) * k < 4) return;
         o.moved = true;
         draft.current = moveMark(o.from, dx, dy);
         break;
@@ -436,6 +444,19 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
   };
 
   /* ---------- Actions ---------- */
+
+  /** The new text box takes the focus without scrolling the stage (autoFocus would scroll it into view and shift the picture). */
+  const focusText = useCallback((el: HTMLTextAreaElement | null) => el?.focus({ preventScroll: true }), []);
+
+  /** Switching the tool ends the text being written first (on iOS a tap on a button does not take the focus, so its blur never comes). */
+  const pick = useCallback(
+    (t: Tool) => {
+      if (st.current.editing) commitText();
+      setTool(t);
+      if (t !== 'select') setSelected(null);
+    },
+    [commitText],
+  );
 
   const doUndo = useCallback(() => {
     setSelected(null);
@@ -530,8 +551,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
       const t = toolForKey(e.key);
       if (t) {
         e.preventDefault();
-        setTool(t);
-        if (t !== 'select') setSelected(null);
+        pick(t);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -543,17 +563,18 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('keyup', onKeyUp, true);
     };
-  }, [doUndo, doRedo, deleteSelected, cancelOp, confirmClear]);
+  }, [doUndo, doRedo, deleteSelected, cancelOp, confirmClear, pick]);
 
   const blurred = hasBlur(doc.marks);
   const tooBig = img ? !canAnnotate(size) : false;
   const full = doc.marks.length >= REPORTER_LIMITS.annotations;
   const sel = doc.marks.find((m) => m.id === selected) ?? null;
 
-  const toolRow = (
-    <div role="toolbar" aria-label="Tools" className="flex shrink-0 items-center gap-0.5">
+  // Phone: two rows of five, so every tool (Blur and Number too) is on screen at 390 px with no hidden scroll; desktop: one row.
+  const toolRow = (phone: boolean) => (
+    <div role="toolbar" aria-label="Tools" className={phone ? 'grid grid-cols-5 justify-items-center gap-y-0.5 px-1' : 'flex shrink-0 items-center gap-0.5'}>
       {TOOLS.map((t) => (
-        <ToolBtn key={t.tool} icon={TOOL_ICON[t.tool]} label={`${t.label} (${t.key.toUpperCase()})`} on={tool === t.tool} onClick={() => setTool(t.tool)} />
+        <ToolBtn key={t.tool} icon={TOOL_ICON[t.tool]} label={`${t.label} (${t.key.toUpperCase()})`} on={tool === t.tool} onClick={() => pick(t.tool)} />
       ))}
     </div>
   );
@@ -607,7 +628,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
       <div className="flex shrink-0 items-center gap-1 pt-[env(safe-area-inset-top)] pr-12 pl-1">
         <BarBtn icon="x" label="Cancel" onClick={onCancel} />
         <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:flex">
-          {toolRow}
+          {toolRow(false)}
           <span className="mx-1 h-6 w-px shrink-0 bg-white/20" aria-hidden="true" />
           {styleRow}
         </div>
@@ -644,11 +665,6 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
           </button>
         </div>
       )}
-      {(blurred || error || tooBig || full) && (
-        <p role="status" className="shrink-0 px-3 pb-1 text-[12.5px] break-words" style={error || tooBig ? { color: '#ff8a96' } : DIM}>
-          {error ?? (tooBig ? 'This shot is too large to annotate.' : full ? `At most ${REPORTER_LIMITS.annotations} marks.` : 'Blurred areas are removed from the uploaded image.')}
-        </p>
-      )}
       <div
         ref={frame}
         data-stage
@@ -661,7 +677,18 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onCancelPointer}
+        onScroll={(e) => {
+          // overflow:hidden still scrolls when a focused child asks to be shown: the stage never moves under the finger.
+          e.currentTarget.scrollTop = 0;
+          e.currentTarget.scrollLeft = 0;
+        }}
       >
+        {(blurred || error || tooBig || full) && (
+          // Over the stage, not above it: the note appears with the first blur, mid-gesture, and must not push the canvas down.
+          <p role="status" className="pointer-events-none absolute inset-x-0 top-0 z-10 px-3 py-1 text-[12.5px] break-words" style={{ background: 'rgba(11, 13, 18, 0.82)', ...(error || tooBig ? { color: '#ff8a96' } : DIM) }}>
+            {error ?? (tooBig ? 'This shot is too large to annotate.' : full ? `At most ${REPORTER_LIMITS.annotations} marks.` : 'Blurred areas are removed from the uploaded image.')}
+          </p>
+        )}
         {failed && <p className="p-6 text-center text-[14px]" style={DIM}>This image could not load.</p>}
         {img && !tooBig && (
           <div className="absolute top-0 left-0 origin-top-left" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, width: size.w, height: size.h }}>
@@ -669,7 +696,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
             <canvas ref={overlay} aria-hidden="true" className="absolute inset-0 block" style={{ width: size.w, height: size.h }} />
             {editing && (
               <textarea
-                autoFocus
+                ref={focusText}
                 aria-label="Text"
                 value={editing.value}
                 maxLength={REPORTER_LIMITS.annotationTextChars}
@@ -691,7 +718,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
         )}
       </div>
       <div className="shrink-0 pb-[max(0.25rem,env(safe-area-inset-bottom))] sm:hidden">
-        <div className="overflow-x-auto px-1 [scrollbar-width:none]">{toolRow}</div>
+        {toolRow(true)}
         <div className="overflow-x-auto px-1 [scrollbar-width:none]">{styleRow}</div>
       </div>
     </div>
