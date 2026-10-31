@@ -17,8 +17,10 @@ export const REPORTER_EVIDENCE_SCHEMA = 1 as const;
 export const REPORTER_TOKEN_PREFIX = 'cprt_';
 
 export const REPORTER_LIMITS = {
-  /** Allowed page origins per bucket. */
-  origins: 20,
+  /** Sites (origin + environment + repo) per bucket. */
+  sites: 20,
+  /** Sessions a bucket offers as direct-report targets. */
+  sessionTargets: 10,
   /** Repos named as the bucket's context. */
   repos: 20,
   /** Screenshot (png, jpeg or webp). */
@@ -52,14 +54,39 @@ export const REPORTER_LIMITS = {
   draftDays: 30,
 } as const;
 
-/** Per-bucket switch and allowlist, set by the owner in the bucket's settings. Off until turned on. */
+/**
+ * A site: one origin, which environment of which repo it serves (owner, 2026-10-31: the same repo on different domains or
+ * environments must always know where a ticket belongs). An origin belongs to exactly one site of one bucket in the whole portal
+ * (unique), so a page always resolves to one bucket, one repo and one environment. The SERVER's site record decides; what the page
+ * declares (ReporterBuildInfo.repo / environment) is untrusted and only compared: a mismatch is stored and shown, never obeyed.
+ */
+export interface ReporterSite {
+  /** Exact origin (scheme, host, port), e.g. "https://stg.konfersi.com". No wildcards. */
+  origin: string;
+  /** "stg", "uat", "prod", "local"... Lowercase, 1-20 chars. */
+  environment: string;
+  /** "platform/konfersi-landing-page": the repo whose build this origin serves. */
+  repo: string;
+  /** Optional display name ("Landing stg"). */
+  label: string | null;
+  /** The repo's branch this environment deploys from ("stg"), when known: lets the server check a fix against that branch. */
+  branch: string | null;
+}
+
+/** A session a reporter may send a direct report to (owner, 2026-10-31: report straight to the lead, urgent). */
+export interface ReporterSessionTarget {
+  sessionId: string;
+  /** What the panel calls it ("Konfersi lead"). */
+  label: string;
+}
+
+/** Per-bucket switch, sites and session targets, set by the owner in the bucket's settings. Off until turned on. */
 export interface ReporterConfig {
   bucketKey: string;
   enabled: boolean;
-  /** Exact origins (scheme, host, port) whose pages may connect, e.g. "https://stg.konfersi.com". No wildcards. */
-  origins: string[];
-  /** Repo context of this bucket ("platform/konfersi-landing-page"); a page may name one of these as its repo. */
-  repos: string[];
+  sites: ReporterSite[];
+  /** Direct-report targets, the first is the default. Empty = the Session option is shown disabled with the reason. */
+  sessionTargets: ReporterSessionTarget[];
   /** Show open-ticket callouts by default (each viewer can still hide them in the widget). */
   calloutsDefault: boolean;
   updatedAt: string | null;
@@ -67,13 +94,76 @@ export interface ReporterConfig {
 
 export interface UpdateReporterConfigRequest {
   enabled?: boolean;
-  origins?: string[];
-  repos?: string[];
+  sites?: ReporterSite[];
+  sessionTargets?: ReporterSessionTarget[];
   calloutsDefault?: boolean;
+}
+
+/**
+ * Where a report goes (owner, 2026-10-31): `ticket` joins the bucket's queue; `session` is urgent, straight to a session (the
+ * lead): it still makes a ticket (priority urgent, tag "ui-urgent", assigned to that session) so it is traced and its deployment is
+ * tracked, AND posts it into that session's chat at once (summary, per-capture sections, the screenshots as images, the ticket
+ * key, asking for the reply on the ticket). The panel can switch target at any time before sending, while capturing too.
+ */
+export type ReporterReportTarget = { kind: 'ticket' } | { kind: 'session'; sessionId: string };
+
+/** The site a ticket came from, frozen at report time. */
+export interface ReporterTicketSite {
+  bucketKey: string;
+  origin: string;
+  environment: string;
+  repo: string;
+  /** What the page declared when it differed from the site record (shown as a warning). */
+  declaredMismatch: { repo: string | null; environment: string | null } | null;
+}
+
+/**
+ * A build seen live in an environment (owner, 2026-10-31: fundamental to know whether a fix is deployed). Sources: `widget` = a
+ * signed-in panel on that site reported the page's build (ReporterBuildInfo.commit) as it loaded; `pipeline` = a deploy pipeline
+ * or agent posted it with a portal token after deploying. Kept per (repo, environment): the current commit and a short history.
+ */
+export interface ReporterDeployment {
+  repo: string;
+  environment: string;
+  commit: string;
+  branch: string | null;
+  source: 'widget' | 'pipeline';
+  /** The origin it was seen on (widget) or the pipeline's label. */
+  via: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+/** POST /api/reporter/deployments (a portal token with operate on the bucket, for pipelines and agents after a deploy). */
+export interface ReporterRecordDeploymentRequest {
+  repo: string;
+  environment: string;
+  commit: string;
+  branch?: string;
+  label?: string;
+}
+
+/**
+ * Is this ticket's fix live in an environment. `deployed`: the environment's current commit is a fix commit or contains one (ancestry
+ * proven by the server in a checkout of the repo, or by the git host's compare API with a credential the bucket already has).
+ * `not-deployed`: proven absent. `unknown`: no fix commit known, no build seen for that environment, or ancestry could not be
+ * checked; `reason` says which. Never guessed.
+ */
+export interface ReporterDeploymentState {
+  environment: string;
+  status: 'deployed' | 'not-deployed' | 'unknown';
+  /** The environment's current commit, and when it was last seen. */
+  currentCommit: string | null;
+  seenAt: string | null;
+  /** The fix commit found in it, when deployed. */
+  fixCommit: string | null;
+  reason: 'no-fix-commit' | 'no-build-seen' | 'ancestry-unchecked' | null;
 }
 
 /** What the panel tells the SDK in its `ready` message: whether this bucket and origin may use the widget at all. */
 export interface ReporterStatus {
+  /** The site this origin resolved to (environment and repo come from here, not from the page). */
+  site: ReporterSite | null;
   enabled: boolean;
   bucketKey: string;
   bucketName: string;
@@ -336,6 +426,8 @@ export interface ReporterCreateTicketRequest {
   captures: ReporterCaptureInput[];
   build: ReporterBuildInfo;
   sdkVersion: string;
+  /** Default { kind: 'ticket' }. */
+  target?: ReporterReportTarget;
 }
 
 /** POST /reporter/v1/tickets/:key/captures: add captures to an open ticket this bucket's widget filed ("add to existing"). */
@@ -414,6 +506,8 @@ export interface ReporterSubmitReviewRequest {
   mode: ReporterFileMode;
   /** Add the comments to this open ticket of the bucket instead of creating tickets (mode is then ignored). */
   targetTicketKey?: string;
+  /** Default { kind: 'ticket' }; with a session, every resulting ticket is urgent and posted to it. */
+  target?: ReporterReportTarget;
 }
 
 export interface ReporterSubmitReviewResponse {
@@ -451,9 +545,9 @@ export interface ReporterTicketList {
 }
 
 /**
- * Where the work on a ticket stands, as the callout colours it (owner, 2026-10-31: live status). `fixed` = closed done with a fix
- * commit known; `deployed` = that commit is in the build the page declares (ReporterBuildInfo.commit is the fix commit or a
- * descendant, decided by the server from the bucket's repos where it can tell; otherwise it stays `fixed`, never guessed).
+ * Where the work on a ticket stands, as the callout colours it (owner, 2026-10-31: live status). Relative to the environment being
+ * VIEWED: `fixed` = done with a fix commit known but not proven live here; `deployed` = ReporterDeploymentState 'deployed' for this
+ * site's environment. A ticket reported on stg and viewed on uat (same repo) shows uat's state.
  */
 export type ReporterWorkPhase = 'open' | 'working' | 'review' | 'fixed' | 'deployed' | 'wont-do';
 
@@ -491,6 +585,13 @@ export interface ReporterTicket {
   build: ReporterBuildInfo | null;
   phase: ReporterWorkPhase;
   fix: ReporterFixInfo | null;
+  site: ReporterTicketSite | null;
+  /** Where it went: the queue, or straight to a session (urgent). */
+  target: { kind: 'ticket' } | { kind: 'session'; sessionId: string; label: string; status: string };
+  /** Every commit known to fix it (the "Ticket: KEY" trailers the server found, or set by the agent on close). */
+  fixCommits: string[];
+  /** One row per environment of this ticket's repo (all sites of the bucket with that repo), stg, uat, prod... */
+  deployments: ReporterDeploymentState[];
   /** Comments since the reporter last replied or read; an agent's open question shows as a badge on the callout. */
   unread: number;
   awaitingReporter: boolean;
@@ -524,6 +625,10 @@ export interface TicketReporterEvidence {
   build: ReporterBuildInfo;
   sdkVersion: string;
   origin: string;
+  site: ReporterTicketSite;
+  target: ReporterReportTarget;
+  fixCommits: string[];
+  deployments: ReporterDeploymentState[];
   createdAt: string;
   captures: (ReporterCapture & { screenshotAttachmentId: string | null; evidenceAttachmentId: string | null })[];
 }
@@ -550,6 +655,9 @@ export interface ReporterCallout {
   phase: ReporterWorkPhase;
   /** "Fixed in abc1234 (stg)" on the card. */
   fix: ReporterFixInfo | null;
+  /** This environment's deployment state of the fix, and where it was reported ("reported on stg"). */
+  deployment: ReporterDeploymentState | null;
+  reportedOn: { origin: string; environment: string } | null;
   /** A badge on the marker: someone asked the reporter something. */
   awaitingReporter: boolean;
   unread: number;
@@ -604,7 +712,8 @@ export type ReporterBridgeMessage = ReporterHostMessage | ReporterPanelMessage;
  * same-origin with the bearer `cprt_` token (no CORS: only the panel calls it). A denial is the same 404 as a missing object.
  */
 export const REPORTER_ROUTES = {
-  config: '/api/reporter/buckets/:key/config', // GET, PUT (owner)
+  config: '/api/reporter/buckets/:key/config', // GET, PUT (owner); a site origin used by another bucket is refused (409)
+  deploymentsOwner: '/api/reporter/deployments', // GET ?bucket=&repo= (owner), POST ReporterRecordDeploymentRequest (token, operate)
   evidence: '/api/tickets/:id/reporter-evidence', // GET (owner, ticket page)
   script: '/reporter/v1/reporter.js', // GET, public, the pinned SDK build
   embed: '/reporter/v1/embed', // GET page (iframe) ?bucket=&origin= ; frame-ancestors = that origin when allowed
@@ -631,6 +740,9 @@ export const REPORTER_ROUTES = {
    * reported tickets: phase, fix, comments. The panel re-sends callouts within seconds; it falls back to polling every 30 s.
    */
   events: '/reporter/v1/events',
+  sessionTargets: '/reporter/v1/session-targets', // GET: the bucket's targets with each session's live status
+  /** POST the build the page declared, once per page load of a signed-in panel: recorded as a `widget` deployment for the SITE's repo and environment. */
+  observedBuild: '/reporter/v1/observed-build',
   sessions: '/reporter/v1/sessions', // GET
   knowledge: '/reporter/v1/knowledge', // GET ?q=
   note: '/reporter/v1/knowledge/note', // GET ?path=
