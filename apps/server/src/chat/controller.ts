@@ -404,7 +404,7 @@ interface PendingControl {
 }
 
 /** A control request Claude Code didn't answer in time (as opposed to one it refused, or one never sent). */
-class ControlTimeout extends AppError {
+export class ControlTimeout extends AppError {
   constructor() {
     super('SERVICE_UNAVAILABLE', 'Claude Code didn’t answer in time. Try again.', { expose: true });
   }
