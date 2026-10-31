@@ -76,6 +76,9 @@ import {
   TRIGGER_API,
   type Trigger,
   type TriggerRun,
+  type TriggerInput,
+  type CreatedTrigger,
+  type TriggerRunPage,
   APP_PORTS_API,
   type AppPortSession,
   type DelegatedSession,
@@ -170,6 +173,12 @@ export const api = {
   schedules: () => request<{ items: ScheduleRow[] }>('GET', SCHEDULES_API.list).then((d) => d.items),
   setTriggerEnabled: (id: string, enabled: boolean) => request<Trigger>('PATCH', TRIGGER_API.one(id), { enabled }),
   runTrigger: (id: string) => request<TriggerRun>('POST', TRIGGER_API.run(id), {}),
+  // The triggers editor and the detail sheet on the Schedules page (T-2950): the trigger routes as they are.
+  trigger: (id: string) => request<Trigger>('GET', TRIGGER_API.one(id)),
+  triggerRuns: (id: string, limit = 5) => request<TriggerRunPage>('GET', `${TRIGGER_API.runs(id)}?limit=${limit}`),
+  createTrigger: (body: TriggerInput) => request<CreatedTrigger>('POST', TRIGGER_API.list, body),
+  updateTrigger: (id: string, body: Partial<TriggerInput>) => request<Trigger>('PATCH', TRIGGER_API.one(id), body),
+  deleteTrigger: (id: string) => request<{ ok: true }>('DELETE', TRIGGER_API.one(id)),
   appSessions: () => request<AppPortSession[]>('GET', APP_PORTS_API.sessions),
   closeAppSession: (id: string) => request<{ removed: boolean }>('DELETE', APP_PORTS_API.session(id)),
   // SSO (owner, 2026-10-17).

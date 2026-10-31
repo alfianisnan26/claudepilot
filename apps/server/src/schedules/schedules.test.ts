@@ -183,7 +183,9 @@ test('declared through the seam: view on the platform\'s system area, for the ro
   assert.deepEqual(SCHEDULES_POLICIES['GET /api/schedules'], { kind: 'platform', area: 'system', verb: 'view' });
   assert.equal(SCHEDULES_POLICIES['POST /api/schedules/heartbeat']!.kind, 'bearer', 'the heartbeat is its own door (heartbeat.test.ts)');
   assert.equal(SCHEDULES_POLICIES['POST /api/schedules/heartbeat']!.bearer, undefined, 'a first-party client token never opens it');
-  assert.deepEqual(SCHEDULES_TOOL_POLICIES, { schedules_list: { kind: 'platform', area: 'system', verb: 'view' } });
+  assert.deepEqual(SCHEDULES_TOOL_POLICIES.schedules_list, { kind: 'platform', area: 'system', verb: 'view' });
+  // T-2950: the three action tools (actions.test.ts checks them).
+  assert.deepEqual(Object.keys(SCHEDULES_TOOL_POLICIES).sort(), ['schedule_get', 'schedule_run_now', 'schedule_set_enabled', 'schedules_list']);
   assert.deepEqual(declaredPolicies().get('GET /api/schedules'), SCHEDULES_POLICIES['GET /api/schedules']);
   assert.deepEqual(declaredToolPolicies().get('schedules_list'), SCHEDULES_TOOL_POLICIES.schedules_list);
 });
