@@ -441,6 +441,39 @@ What the relay is not:
   `docs/prd/chat-sessions.md` §23.3), and a relay
   script: the steps above are by hand. T-104's lease will replace the sign-in code the helpers use.
 
+## Coordinator tools
+
+Small tools for the coordinator and its agents (owner request 2026-10-31, "do your harness better"). Each encodes a mistake that cost a gate,
+a deploy or a leaked secret that day. Put the ones an agent needs in its brief, by path.
+
+| Tool | What | Test |
+| --- | --- | --- |
+| `scripts/release-prep.sh [<ref>]` | Run **before merging a release**. Checks the context pack (`context-pack.sh --check`; regenerates it in the working tree when `<ref>` is HEAD; you commit it). Checks the migrations against `origin/main` and `origin/integration`: a duplicate number, an edited or dropped released one, a number the other branch used for another migration (the 884/900 conflict), a block nobody claimed in `docs/coord/PLAN.md` (`--allow-block <n>`). Checks that `package-lock.json` agrees with every `package.json` and holds the linux-x64 native builds the image needs (`lightningcss-linux-x64-gnu`, `@rollup/rollup-linux-x64-gnu`, ...). Prints what `gate-select.mjs` would run (scoped, full or reuse, and why). Exit 1 with the list of problems. | `bash scripts/release-prep.test.sh` |
+| `node scripts/ci-step-check.mjs <workflow.yml> [job] [step]` | Checks a workflow step's real `run:` block (GitHub, Gitea or `.pilot/*.yml`) with `bash -n`, after `${{ }}` is replaced (`--expr k=v`). Also checks every single-quoted script handed to a helper (`bash x.sh '...'`, `ssh host '...'`, `sh -c '...'`, `--nested-cmd <regex>`), and reports a `'...'` closed early by an inner quote. `--run --stub ssh --stub scripts/x.sh --env K=V` runs it in a temp folder with stubs that print the argv they got. `--list` shows the steps. Use it on every workflow edit before pushing. | `node --test scripts/ci-step-check.test.mjs` |
+| `tools/coordinator/portal-login.sh [<jar>]` | Signs in to `https://pilot.ai.isnan.me` with the lab code from the Sign-in row of `docs/dev-context.md` and never prints it (no trace, not in argv; curl reads it on stdin). Writes the cookie jar (0600; default `~/.cache/claudepilot/portal.jar`, or `$PORTAL_JAR`). Prints only `signed in` or the HTTP status. | `bash tools/coordinator/portal-tools.test.sh` |
+| `tools/coordinator/portal-api.sh METHOD /api/... [json\|@file]` | One call with that jar and the `origin` header. Prints the body; HTTP 400 and up goes to stderr with exit 1. | same |
+| `tools/coordinator/gitea.sh METHOD /repos/... [json\|@file]` | One Konfersi Gitea call (`https://git.konfersi.com/api/v1`), run inside the Konfersi workspace pod through `kubectl exec`, so the konfersi-orch token never leaves the pod. Finds the pod by label `claudepilot.workspace=kohi-event`, else the name prefix `ws-kohi-event`; `GITEA_POD` overrides. The token comes from `/home/node/.konfersi-orch/gitea-tokens.txt`, else `/etc/claudepilot/secrets/files/h__.konfersi-orch__gitea-tokens.txt` (the last field). It goes to curl `-K` from a 0600 temp file that is deleted after, and is never printed. | `bash tools/coordinator/gitea.test.sh` |
+
+The tests need no cluster and no network (fake `curl` and `kubectl`, values made at runtime). They are not part of the server suite: run
+them when you change a tool.
+
+## Coordinator rules
+
+- **Fold, don't restart.** Send a new request to the running agent of that area (SendMessage). Never restart a whole workflow for it.
+- **Agents test locally.** An agent runs only its own tests and the affected ones, plus the typecheck. It never starts the release gate,
+  and never two gates in parallel.
+- **One gate per release.** The coordinator merges and runs ONE gate (`scripts/gate-job.sh <commit>`) on the merged commit.
+- **Before merging, run `scripts/release-prep.sh`.** It catches a stale context pack, a migration number clash and a lock without the
+  linux-x64 builds before they cost a gate or a deploy.
+- **CI workflow edits are checked in context** with `scripts/ci-step-check.mjs` (with `--run` and stubs for a nested `'...'`), never
+  only as a loose line in a shell.
+- **Never print a credential.** Put `portal-login.sh`, `portal-api.sh` and `gitea.sh` in every brief that needs the portal or Gitea.
+  Never grep a code or token file, and never echo one.
+- **Done includes a live smoke** on the real site (the portal through `portal-api.sh`, the deployed app through its URL), with the output.
+- **Report once per milestone**, with evidence: commit, test output, gate verdict, smoke output.
+- **Deploy fast when integration moved under you.** If another team moved integration after your gate, cut a release branch at the exact
+  gated commit, deploy that, then merge main back into integration.
+
 ## Rules that hold
 
 - Never print, log or commit a token. No token-shaped literal anywhere in the repository (GitHub push protection): build fixtures at runtime.
