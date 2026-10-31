@@ -1,8 +1,12 @@
-// UI reporter (docs/prd/ui-reporter.md): a floating widget (the SDK, repo alfianisnan26/pilot-reporter) that a web app loads
-// with one script tag. It signs in to this portal for one ticket bucket, shows that bucket's sessions, tickets and knowledge,
-// files a ticket with evidence of the page (screenshot, component tree, network, console, performance, version), and redraws
-// open tickets as callouts where they were reported. Everything a page sends is untrusted input: the server re-validates,
-// caps and redacts it.
+// UI reporter (docs/prd/ui-reporter.md). Two halves:
+// - The SDK (repo alfianisnan26/pilot-reporter), loaded by a web app with one script tag: the floating widget button, the
+//   recorders (console, network, performance, component tree), the screenshot and crop capture, the callouts drawn on the page,
+//   and the hotkeys. It holds no token and calls no portal API.
+// - The panel, a page of this portal (/reporter/v1/embed) that the SDK opens in an iframe: sign-in, the bucket's sessions,
+//   tickets and knowledge, the report form, settings. It holds the scoped token (in its own, partitioned storage) and calls
+//   /reporter/v1/* same-origin, so the host page never sees the token and the API needs no CORS.
+// The two talk only through the ReporterBridge messages below, each side checking the other's origin and window.
+// Everything the page sends is untrusted input: the server re-validates, caps and redacts it.
 
 import type { TicketPriority, TicketStatus, TicketType } from './tickets.js';
 
@@ -52,7 +56,7 @@ export interface UpdateReporterConfigRequest {
   calloutsDefault?: boolean;
 }
 
-/** GET /reporter/v1/status?bucket=KEY (no token): may this origin use the widget at all. Answers only to an allowed Origin. */
+/** What the panel tells the SDK in its `ready` message: whether this bucket and origin may use the widget at all. */
 export interface ReporterStatus {
   enabled: boolean;
   bucketKey: string;
@@ -62,7 +66,10 @@ export interface ReporterStatus {
   sdkVersion: string;
 }
 
-/** What the connect popup posts to its opener (targetOrigin = the page's origin), after the signed-in person approves. */
+/**
+ * What the connect popup posts to its opener after the signed-in person approves. The opener is the panel iframe, so
+ * targetOrigin is the portal's own origin; the token never reaches the host page.
+ */
 export interface ReporterConnectMessage {
   type: 'pilot-reporter:connected';
   /** Echo of the nonce the widget passed to the popup. */
@@ -206,16 +213,56 @@ export interface TicketReporterEvidence {
   createdAt: string;
 }
 
+/** Bumped when a bridge message changes shape; both sides send it in hello/ready and refuse another major. */
+export const REPORTER_BRIDGE_VERSION = 1 as const;
+
+/** A ticket as the SDK needs it to draw a callout (no token, no screenshot URL). */
+export interface ReporterCallout {
+  key: string;
+  summary: string;
+  status: TicketStatus;
+  priority: TicketPriority;
+  /** The portal page of the ticket, opened in a new tab from the hover card. */
+  url: string;
+  anchor: ReporterAnchor;
+}
+
+/** Host page (SDK) -> panel iframe. The panel accepts these only from window.parent and only from the `origin` it was opened for. */
+export type ReporterHostMessage =
+  | { type: 'pilot-reporter:hello'; bridge: typeof REPORTER_BRIDGE_VERSION; sdkVersion: string; page: { url: string; title: string }; appVersion: string | null; repo: string | null }
+  | { type: 'pilot-reporter:navigated'; page: { url: string; title: string } }
+  /** The capture the panel asked for. The screenshot travels as a transferred ArrayBuffer. */
+  | { type: 'pilot-reporter:capture-result'; requestId: string; screenshot: ArrayBuffer; mediaType: 'image/png' | 'image/jpeg' | 'image/webp'; evidence: ReporterEvidence }
+  | { type: 'pilot-reporter:capture-cancelled'; requestId: string; reason: 'user' | 'error'; message?: string }
+  /** A capture the person started with a hotkey: the panel opens on the report form with it. */
+  | { type: 'pilot-reporter:capture-started'; requestId: string; mode: 'full' | 'crop' }
+  | { type: 'pilot-reporter:panel-opened' }
+  | { type: 'pilot-reporter:callout-clicked'; key: string };
+
+/** Panel iframe -> host page (SDK). The SDK accepts these only from its iframe's contentWindow and only from the portal origin. */
+export type ReporterPanelMessage =
+  | { type: 'pilot-reporter:ready'; bridge: typeof REPORTER_BRIDGE_VERSION; status: ReporterStatus; connected: boolean; actorLabel: string | null }
+  | { type: 'pilot-reporter:capture-request'; requestId: string; mode: 'full' | 'crop'; precise: boolean }
+  /** The open tickets of this bucket anchored on the current path; replaces what is drawn. Empty when signed out. */
+  | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
+  | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }
+  | { type: 'pilot-reporter:highlight'; key: string }
+  | { type: 'pilot-reporter:close' };
+
+export type ReporterBridgeMessage = ReporterHostMessage | ReporterPanelMessage;
+
 /**
- * Routes. Owner side under /api (cookie, the usual CSRF): the bucket's config. Widget side under /reporter/v1 (outside /api and its
- * cookie CSRF): bearer `cprt_` token, CORS answered only for the token's origin when that origin is still allowed, preflight with
- * Access-Control-Allow-Private-Network. A denial is the same 404 as a missing object.
+ * Routes. Owner side under /api (cookie, the usual CSRF): the bucket's config and a ticket's evidence. Widget side under
+ * /reporter/v1, outside /api: the public SDK script; the embed page, framed only by the bucket's allowed origins (CSP
+ * frame-ancestors) while the bucket is enabled; the connect popup (portal cookie, same-origin approve); and the panel's API,
+ * same-origin with the bearer `cprt_` token (no CORS: only the panel calls it). A denial is the same 404 as a missing object.
  */
 export const REPORTER_ROUTES = {
   config: '/api/reporter/buckets/:key/config', // GET, PUT (owner)
   evidence: '/api/tickets/:id/reporter-evidence', // GET (owner, ticket page)
   script: '/reporter/v1/reporter.js', // GET, public, the pinned SDK build
-  status: '/reporter/v1/status', // GET ?bucket=
+  embed: '/reporter/v1/embed', // GET page (iframe) ?bucket=&origin= ; frame-ancestors = that origin when allowed
+  status: '/reporter/v1/status', // GET ?bucket=&origin= (panel, same-origin, no token): ReporterStatus for the panel's ready message
   connect: '/reporter/v1/connect', // GET page (popup) ?bucket=&origin=&nonce=; POST approve (cookie, same-origin)
   me: '/reporter/v1/me', // GET
   tickets: '/reporter/v1/tickets', // GET ?status=open|all&path=, POST
