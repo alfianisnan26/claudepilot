@@ -4,6 +4,7 @@ import { type KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { api, errorText } from '@/lib/api';
 import { ciApi } from './api';
+import { remoteWorkspaces } from './remoteWorkspaces';
 import { Diagnostics } from './RunPage';
 
 /** Field errors the server names (`details: { name: '…' }`) and what is left over for the form. */
@@ -39,10 +40,10 @@ export function NewRemoteDialog({ open, onClose, onCreated }: { open: boolean; o
     setError(null);
     setErrors({});
     let current = true;
-    api.workspaces.list().then(
-      (all) => {
+    Promise.all([api.workspaces.list(), api.workspaces.targets()]).then(
+      ([all, targets]) => {
         if (!current) return;
-        const usable = all.filter((w) => w.status === 'running' && w.target !== 'kubernetes');
+        const usable = remoteWorkspaces(all, targets);
         setWorkspaces(usable);
         setWorkspaceId((id) => (usable.some((w) => w.id === id) ? id : (usable[0]?.id ?? '')));
       },

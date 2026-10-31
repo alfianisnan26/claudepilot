@@ -7,7 +7,9 @@ import {
   CustomObjectsApi,
   Exec,
   KubeConfig,
+  type V1Affinity,
   type V1Deployment,
+  type V1NodeAffinity,
   type V1Pod,
   type V1Status,
 } from '@kubernetes/client-node';
@@ -63,6 +65,17 @@ export interface KubernetesOptions {
   nodeSelector?: Record<string, string>;
   /** What a pod asks the scheduler to reserve, at most its limits (`PORTAL_K8S_CPU_REQUEST`, `PORTAL_K8S_MEMORY_REQUEST`); unset: the limits. */
   requests?: RequestOptions;
+  /** A target of `PORTAL_K8S_TARGETS` (kubeTargets.ts): its id and label; absent: the one `kubernetes` target. */
+  target?: { id: string; label: string };
+  /**
+   * Nodes this target prefers, in order (preferred node affinity), and the only nodes a create may name (then required). The home volume
+   * follows the pod: a WaitForFirstConsumer class (k3s local-path) binds it on the node the pod is first scheduled to, and keeps it there.
+   */
+  preferredNodes?: readonly string[];
+  /** CPU and memory a create that names none gets. */
+  defaults?: { cpus?: number; memoryMb?: number };
+  /** Whether a create first asks for the namespace (default yes). No for a PORTAL_K8S_TARGETS target: its namespace, quota and Role come from git. */
+  manageNamespace?: boolean;
   /**
    * Whether the fit check (fit.ts) may read the cluster's nodes and pods. Default: yes for the portal's own cluster, no for an enrolled one
    * (its agent's Role is namespaced and its policy refuses cluster-wide reads): there a create is not checked and a resources change is
@@ -96,6 +109,29 @@ function apiMessage(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).slice(0, 300);
 }
 
+const HOSTNAME = 'kubernetes.io/hostname';
+
+/**
+ * Where a workspace pod may go: the target's node selector (hard), its preferred nodes (soft, the first weighted most), and a node the create
+ * named (hard, by `kubernetes.io/hostname`). The PVC needs nothing of its own: with WaitForFirstConsumer binding it is provisioned on the node
+ * the pod lands on.
+ */
+export function placementOf(o: Pick<KubernetesOptions, 'nodeSelector' | 'preferredNodes'>, node?: string): { nodeSelector?: Record<string, string>; affinity?: V1Affinity } {
+  const preferred = node ? [] : (o.preferredNodes ?? []);
+  // A named node replaces a hostname in the selector (the target's usual node): the rest of the selector still holds.
+  const selector = node && o.nodeSelector ? Object.fromEntries(Object.entries(o.nodeSelector).filter(([k]) => k !== HOSTNAME)) : o.nodeSelector;
+  const nodeAffinity: V1NodeAffinity = {
+    ...(node ? { requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{ matchExpressions: [{ key: HOSTNAME, operator: 'In', values: [node] }] }] } } : {}),
+    ...(preferred.length
+      ? { preferredDuringSchedulingIgnoredDuringExecution: preferred.map((n, i) => ({ weight: Math.max(1, 100 - i * 10), preference: { matchExpressions: [{ key: HOSTNAME, operator: 'In', values: [n] }] } })) }
+      : {}),
+  };
+  return {
+    ...(selector && Object.keys(selector).length ? { nodeSelector: selector } : {}),
+    ...(Object.keys(nodeAffinity).length ? { affinity: { nodeAffinity } } : {}),
+  };
+}
+
 const same = (a: Partial<WorkspaceResourceValues>, b: Partial<WorkspaceResourceValues>) => a.cpus === b.cpus && a.memoryMb === b.memoryMb && a.cpuRequest === b.cpuRequest && a.memoryRequestMb === b.memoryRequestMb;
 
 /** One namespace in a cluster: a Deployment (scaled 1/0 to start/stop) and a PVC per workspace. */
@@ -119,7 +155,7 @@ export class KubernetesRuntime implements Runtime {
   ) {
     if (connect) this.#kc = connect.kubeConfig;
     else this.#kc.loadFromDefault();
-    this.#manageNamespace = connect?.manageNamespace ?? true;
+    this.#manageNamespace = connect ? (connect.manageNamespace ?? true) : (opts.manageNamespace ?? true);
     this.#enrolled = !!connect;
     this.#fitCheck = opts.fitCheck ?? !connect;
     this.#core = this.#kc.makeApiClient(CoreV1Api);
@@ -127,10 +163,14 @@ export class KubernetesRuntime implements Runtime {
     this.#metrics = this.#kc.makeApiClient(CustomObjectsApi);
     const context = connect ? null : this.#kc.getCurrentContext();
     this.target = {
-      id: connect?.target.id ?? 'kubernetes',
-      label: connect?.target.label ?? 'Kubernetes',
+      id: connect?.target.id ?? opts.target?.id ?? 'kubernetes',
+      label: connect?.target.label ?? opts.target?.label ?? 'Kubernetes',
       kind: 'kubernetes' as const,
       where: connect?.target.where ?? (context ? `${context} / ${opts.namespace}` : opts.namespace),
+      // The New workspace dialog offers a Node select from these (more than one); "Auto" leaves it to the preferences.
+      ...(!connect && opts.preferredNodes?.length ? { nodes: opts.preferredNodes.map((n) => ({ id: n, name: n, connected: true, drained: false })) } : {}),
+      // The New workspace dialog presets CPU and memory from these.
+      ...(!connect && opts.defaults && (opts.defaults.cpus || opts.defaults.memoryMb) ? { defaults: { ...opts.defaults } } : {}),
     };
     this.delivery = kubernetesDelivery(
       {
@@ -343,6 +383,13 @@ export class KubernetesRuntime implements Runtime {
       .readNamespacedDeployment({ name: runtimeName, namespace: ns })
       .then(() => true, (e) => (codeOf(e) === 404 ? false : Promise.reject(e)));
     if (exists) throw new AppError('CONFLICT', `A workspace named “${spec.name}” already exists here.`);
+    // A node is honoured only on a target that lists its nodes (PORTAL_K8S_TARGETS `preferredNodes`); elsewhere it is ignored, as before.
+    const node = spec.node && this.opts.preferredNodes?.length ? spec.node : undefined;
+    if (node && !this.opts.preferredNodes!.includes(node))
+      throw new AppError('VALIDATION_FAILED', 'Pick a node of this target.', { details: { node: 'Not a node of this target.' } });
+    const placement = placementOf(this.opts, node);
+    const cpus = spec.cpus ?? this.opts.defaults?.cpus;
+    const memoryMb = spec.memoryMb ?? this.opts.defaults?.memoryMb;
 
     if (this.#manageNamespace) {
       progress(`Preparing namespace ${ns}`);
@@ -355,14 +402,14 @@ export class KubernetesRuntime implements Runtime {
     const labels = {
       [LABEL.managed]: 'true',
       [LABEL.name]: spec.name,
-      ...(spec.cpus ? { [LIMIT.cpus]: String(spec.cpus) } : {}),
-      ...(spec.memoryMb ? { [LIMIT.memoryMb]: String(spec.memoryMb) } : {}),
+      ...(cpus ? { [LIMIT.cpus]: String(cpus) } : {}),
+      ...(memoryMb ? { [LIMIT.memoryMb]: String(memoryMb) } : {}),
     };
     const match = { [LABEL.managed]: 'true', [LABEL.name]: spec.name };
 
     const limits: Record<string, string> = {};
-    if (spec.cpus) limits.cpu = String(spec.cpus);
-    if (spec.memoryMb) limits.memory = `${spec.memoryMb}Mi`;
+    if (cpus) limits.cpu = String(cpus);
+    if (memoryMb) limits.memory = `${memoryMb}Mi`;
     const home = { name: 'home', persistentVolumeClaim: { claimName: claim } };
     const requests = Object.keys(limits).length ? requestsFor(limits, this.opts.requests) : undefined;
 
@@ -371,7 +418,7 @@ export class KubernetesRuntime implements Runtime {
     // checked: the create goes on as before.
     const need = needOf([{ resources: { limits, requests } }]);
     if (this.#fitCheck && (need.cpuMilli > 0 || need.memoryBytes > 0)) {
-      const fit = await checkFit(this.#core, { need, nodeSelector: this.opts.nodeSelector });
+      const fit = await checkFit(this.#core, { need, nodeSelector: placement.nodeSelector, ...(node ? { node } : {}) });
       if (fit.checked && !fit.fits) throw new AppError('CONFLICT', fit.reason);
       if (!fit.checked) console.log(`[kubernetes] ${spec.name}: ${fit.reason}`);
     }
@@ -405,7 +452,7 @@ export class KubernetesRuntime implements Runtime {
             metadata: { labels },
             spec: {
               hostname: spec.name,
-              nodeSelector: this.opts.nodeSelector,
+              ...placement,
               terminationGracePeriodSeconds: 5,
               securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
               imagePullSecrets: this.opts.imagePullSecret ? [{ name: this.opts.imagePullSecret }] : undefined,

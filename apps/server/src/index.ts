@@ -106,6 +106,7 @@ import { hostInstaller } from './chat/install.js';
 import { attachChat } from './chat/socket.js';
 import { registerChatAuthz } from './chat/authz.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
+import { kubeTargetRuntimes } from './workspaces/kubeTargets.js';
 import { LocalRuntime } from './workspaces/local.js';
 import { Workspaces } from './workspaces/manager.js';
 import { WorkspaceIdentities } from './workspaces/identity.js';
@@ -186,6 +187,8 @@ if (ws.kubernetes.enabled) {
   } catch (e) {
     console.error(`[workspaces] kubernetes target off: ${(e as Error).message}`);
   }
+  // PORTAL_K8S_TARGETS: one more target per namespace (an org each), on the same kubeconfig (workspaces/kubeTargets.ts).
+  runtimes.push(...kubeTargetRuntimes(ws.kubernetes, (opts) => new KubernetesRuntime(opts), (id, e) => console.error(`[workspaces] kubernetes target ${id} off: ${e.message}`)));
 }
 if (ws.local.enabled && !PLAIN_NAME.test(ws.local.name)) {
   console.error(`[workspaces] PORTAL_LOCAL_NAME “${ws.local.name}” is not a plain name (letters, digits, . _ -, up to 63): using "local".`);

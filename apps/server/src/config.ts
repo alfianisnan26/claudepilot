@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_IMAGE_REPO, claudeImageRef, DEFAULT_CLAUDE_CODE_VERSION } from '@portal/contracts';
+import { parseKubeTargets } from './workspaces/kubeTargets.js';
 import { parseNodeSelector } from './workspaces/nodeSelector.js';
 import { parseRequests } from './workspaces/requests.js';
 
@@ -128,6 +129,11 @@ export const config = {
       nodeSelector: parseNodeSelector(env('PORTAL_K8S_NODE_SELECTOR')),
       /** What a workspace pod asks the scheduler to reserve, at most its limits (for example `250m` and `1Gi`); unset: the limits. */
       requests: parseRequests(env('PORTAL_K8S_CPU_REQUEST'), env('PORTAL_K8S_MEMORY_REQUEST')),
+      /**
+       * More local targets, one namespace each (`PORTAL_K8S_TARGETS`, JSON; workspaces/kubeTargets.ts), beside the one above, which stays as
+       * it is. Same kubeconfig; only while Kubernetes is enabled.
+       */
+      targets: parseKubeTargets(env('PORTAL_K8S_TARGETS'), { namespaces: [env('PORTAL_K8S_NAMESPACE') ?? 'claudepilot-workspaces'] }),
     },
   },
   /** Local git and CI/CD (docs/prd/local-git-ci.md §11.5): how many runs a workspace carries at once. */
