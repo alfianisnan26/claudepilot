@@ -36,6 +36,8 @@ import {
 
 const RED = '#ef233c' as const;
 const pen = (id = 'a'): Mark => ({ id, type: 'pen', points: [0, 0, 10, 10, 20, 0], color: RED, width: 4 });
+const rectOf = (m: Mark) => (m as Mark & { rect: { x: number; y: number; w: number; h: number } }).rect;
+const ptsOf = (m: Mark) => (m as Mark & { points: number[] }).points;
 const rect = (id = 'r'): Mark => ({ id, type: 'rect', rect: { x: 10, y: 10, w: 100, h: 50 }, color: RED, width: 4 });
 
 test('history: add, move, undo, redo; a new change drops the redo branch; clear all is one undoable step', () => {
@@ -44,12 +46,12 @@ test('history: add, move, undo, redo; a new change drops the redo branch; clear 
   d = addMark(d, rect());
   assert.equal(d.marks.length, 2);
   d = replaceMark(d, moveMark(d.marks[1]!, 5, -5));
-  assert.deepEqual((d.marks[1] as Extract<Mark, { type: 'rect' }>).rect, { x: 15, y: 5, w: 100, h: 50 });
+  assert.deepEqual(rectOf(d.marks[1]!), { x: 15, y: 5, w: 100, h: 50 });
   d = undo(d);
-  assert.deepEqual((d.marks[1] as Extract<Mark, { type: 'rect' }>).rect, { x: 10, y: 10, w: 100, h: 50 });
+  assert.deepEqual(rectOf(d.marks[1]!), { x: 10, y: 10, w: 100, h: 50 });
   assert.ok(canRedo(d));
   d = redo(d);
-  assert.equal((d.marks[1] as Extract<Mark, { type: 'rect' }>).rect.x, 15);
+  assert.equal(rectOf(d.marks[1]!).x, 15);
   d = undo(d);
   d = removeMark(d, 'a');
   assert.equal(canRedo(d), false, 'a change after undo drops redo');
@@ -74,14 +76,14 @@ test('hit test finds the topmost mark, near strokes and inside boxes; handles re
   assert.equal(hitTest(marks, { x: 500, y: 500 }, 2), null);
   const r = rect();
   assert.equal(handles(r).length, 4);
-  const bigger = resizeMark(r, 2, { x: 210, y: 110 }) as Extract<Mark, { type: 'rect' }>;
-  assert.deepEqual(bigger.rect, { x: 10, y: 10, w: 200, h: 100 });
-  const flipped = resizeMark(r, 2, { x: 0, y: 0 }) as Extract<Mark, { type: 'rect' }>;
-  assert.deepEqual(flipped.rect, { x: 0, y: 0, w: 10, h: 10 }, 'dragged past the corner: still a positive box');
+  const bigger = resizeMark(r, 2, { x: 210, y: 110 });
+  assert.deepEqual(rectOf(bigger), { x: 10, y: 10, w: 200, h: 100 });
+  const flipped = resizeMark(r, 2, { x: 0, y: 0 });
+  assert.deepEqual(rectOf(flipped), { x: 0, y: 0, w: 10, h: 10 }, 'dragged past the corner: still a positive box');
   const line: Mark = { id: 'l', type: 'arrow', points: [0, 0, 10, 0], color: RED, width: 3 };
-  assert.deepEqual((resizeMark(line, 1, { x: 50, y: 5 }) as Extract<Mark, { type: 'arrow' }>).points, [0, 0, 50, 5]);
-  const s = resizeMark(pen(), 2, { x: 40, y: 20 }) as Extract<Mark, { type: 'pen' }>;
-  assert.deepEqual(s.points, [0, 0, 20, 20, 40, 0], 'a stroke scales with its box');
+  assert.deepEqual(ptsOf(resizeMark(line, 1, { x: 50, y: 5 })), [0, 0, 50, 5]);
+  const s = resizeMark(pen(), 2, { x: 40, y: 20 });
+  assert.deepEqual(ptsOf(s), [0, 0, 20, 20, 40, 0], 'a stroke scales with its box');
   assert.equal(handles({ id: 't', type: 'text', points: [0, 0], color: RED, width: 20, text: 'x' }).length, 0);
 });
 
@@ -205,7 +207,7 @@ test('flatten: the canvas is the screenshot size, blur pixels change, every othe
 test('a shot after Done: without blur both images go, with blur only the flattened one (as the screenshot); no marks restores it', () => {
   const orig = new Blob(['o'], { type: 'image/png' });
   const flat = new Blob(['f'], { type: 'image/png' });
-  const shot = { screenshot: orig, previewUrl: 'blob:orig' };
+  const shot: { screenshot: Blob; previewUrl: string; annotations?: ReporterAnnotation[]; annotated?: Blob; original?: { blob: Blob; url: string } } = { screenshot: orig, previewUrl: 'blob:orig' };
   let n = 0;
   const url = () => `blob:new${++n}`;
   const marked = withAnnotations(shot, [{ type: 'pen', points: [0, 0], color: RED, width: 2 }], flat, url);

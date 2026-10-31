@@ -603,7 +603,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
     : undefined;
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Annotate" className="fixed inset-0 z-[70] flex flex-col" style={DARK} data-annotator>
+    <div role="dialog" aria-modal="true" aria-label="Annotate" className="fixed inset-0 z-[70] flex flex-col" style={DARK} data-annotator data-marks={doc.marks.length} data-scale={view.scale.toFixed(3)}>
       <div className="flex shrink-0 items-center gap-1 pt-[env(safe-area-inset-top)] pr-12 pl-1">
         <BarBtn icon="x" label="Cancel" onClick={onCancel} />
         <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:flex">
