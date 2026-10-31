@@ -1,4 +1,9 @@
 import type {
+  ReporterCaptureMode,
+  ReporterContextCounts,
+  ReporterDeviceInfo,
+  ReporterMe,
+  ReporterPageInfo,
   ReporterBuildInfo,
   ReporterEvidence,
   ReporterPanelMessage,
@@ -54,10 +59,25 @@ export interface PanelState {
   review: ReporterReview | null;
   setReview(r: ReporterReview | null): void;
   reloadReview(): Promise<void>;
+  /** The newest shot of the report being written (null: none). */
   capture: Capture | null;
+  /** Replaces every shot with this one (null clears them all). */
   setCapture(c: Capture | null): void;
+  /** Every shot of the report being written, oldest first (the form's strip). */
+  shots: Capture[];
+  removeShot(captureId: string): void;
   pending: string | null;
-  requestCapture(mode: 'full' | 'crop', precise?: boolean): void;
+  /** Asks the SDK for a capture; `append` adds it to the shots instead of starting a new report. */
+  requestCapture(mode: ReporterCaptureMode, precise?: boolean, append?: boolean): void;
+  /** The session the in-panel chat shows (Sessions tab), with what led there; null: the session list. */
+  chat: ChatOpen | null;
+  openChat(c: ChatOpen | null): void;
+  /** What the SDK says the next report would carry (pilot-reporter:context); null until it says (an older SDK never does). */
+  hostContext: { page: ReporterPageInfo; device: ReporterDeviceInfo; build: ReporterBuildInfo; counts: ReporterContextCounts } | null;
+  /** /me: the token's facts and the client address the portal sees. */
+  me: ReporterMe | null;
+  /** Shows the Context sheet ("What's sent" on the report form opens it at its second section). */
+  showContext(section?: 'context' | 'carries'): void;
   targets: ReporterSessionTargetStatus[];
   /** The last Ticket | Session choice the host's capture toolbar sent (capture-started or capture-result); null when it never said. */
   hostTarget: ReporterReportTarget | null;
@@ -70,6 +90,17 @@ export interface PanelState {
   setCalloutsVisible(v: boolean): void;
   hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string>;
   setHotkeys(h: Record<'report' | 'crop' | 'callouts' | 'panel', string>): void;
+}
+
+/** The chat the panel opens: a session, and when a direct ask led there, the ticket it filed and whether delivery failed. */
+export interface ChatOpen {
+  sessionId: string;
+  /** The ticket a direct ask filed (a header chip links it). */
+  ticketKey?: string | null;
+  /** The direct ask's delivery failed: shown in the chat with Retry. */
+  failed?: { reason: string } | null;
+  /** What Retry sends as a chat message when delivery failed: the question and the first shot. */
+  retry?: { text: string; image: Blob | null } | null;
 }
 
 export const PanelContext = createContext<PanelState | null>(null);

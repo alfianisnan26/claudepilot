@@ -7,6 +7,7 @@ import {
   type ReporterHostMessage,
   type ReporterPanelMessage,
   type ReporterReportTarget,
+  type ReporterCaptureMode,
 } from '@portal/contracts';
 
 /*
@@ -63,10 +64,33 @@ export function targetMessage(target: unknown): ReporterPanelMessage | null {
 }
 
 /** `pilot-reporter:capture-request`, carrying the panel's current choice when it is a valid one (else without it). */
-export function captureRequest(requestId: string, mode: 'full' | 'crop', precise: boolean, target?: unknown): ReporterPanelMessage {
+export function captureRequest(requestId: string, mode: ReporterCaptureMode, precise: boolean, target?: unknown): ReporterPanelMessage {
   const t = panelTarget(target);
   return { type: 'pilot-reporter:capture-request', requestId, mode, precise, ...(t ? { target: t } : {}) };
 }
+
+const isMode = (v: unknown): v is ReporterCaptureMode => v === 'viewport' || v === 'full' || v === 'crop';
+const isCount = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000;
+const isNum = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+const isNumOrNull = (v: unknown) => v === null || isNum(v);
+const isStrOrNull = (v: unknown, max: number) => v === null || isStr(v, max);
+
+/** The device part of a context message: the fields the Context view prints, each the type the contract says. */
+export function isDevice(v: unknown): boolean {
+  if (!isObj(v) || !isStr(v.userAgent, 1000) || typeof v.touch !== 'boolean' || !(v.mobile === null || typeof v.mobile === 'boolean')) return false;
+  const { browser, os, screen, viewport, connection } = v;
+  if (!isObj(browser) || !isStrOrNull(browser.name, 100) || !isStrOrNull(browser.version, 100)) return false;
+  if (!isObj(os) || !isStrOrNull(os.name, 100) || !isStrOrNull(os.version, 100)) return false;
+  if (!isObj(screen) || !isNum(screen.w) || !isNum(screen.h) || !isNum(screen.dpr) || !isStrOrNull(screen.orientation, 60)) return false;
+  if (!isObj(viewport) || !isNum(viewport.w) || !isNum(viewport.h)) return false;
+  if (!isObj(connection) || !isStrOrNull(connection.effectiveType, 20) || !isNumOrNull(connection.downlinkMbps) || !isNumOrNull(connection.rttMs)) return false;
+  return isNumOrNull(v.hardwareConcurrency) && isNumOrNull(v.deviceMemoryGb) && isStrOrNull(v.timezone, 100) && isStrOrNull(v.locale, 50);
+}
+
+const isContextPage = (v: unknown) =>
+  isObj(v) && isStr(v.url, 4096) && isStr(v.host, 300) && isStr(v.path, 4096) && isStr(v.title, 1000) && isStr(v.referrer, 4096) && isStrOrNull(v.route, 300);
+
+const isCounts = (v: unknown) => isObj(v) && ['console', 'consoleErrors', 'network', 'networkFailed', 'interactions'].every((k) => isCount(v[k]));
 
 const isRect = (v: unknown) =>
   isObj(v) && ['x', 'y', 'w', 'h'].every((k) => typeof v[k] === 'number' && Number.isFinite(v[k] as number));
@@ -77,7 +101,7 @@ export function isEvidence(v: unknown): v is ReporterEvidence {
   if (!isObj(v.page) || !isStr(v.page.url, 4096) || !isStr(v.page.path, 4096)) return false;
   if (!isBuild(v.build)) return false;
   const a = v.anchor;
-  if (!isObj(a) || !isStr(a.path, 4096) || !isRect(a.rect) || !isObj(a.viewport) || (a.mode !== 'full' && a.mode !== 'crop')) return false;
+  if (!isObj(a) || !isStr(a.path, 4096) || !isRect(a.rect) || !isObj(a.viewport) || !isMode(a.mode)) return false;
   if (!(a.selector === null || isStr(a.selector, 2000))) return false;
   if (!(a.relative === null || isRect(a.relative))) return false;
   if (!Array.isArray(v.console) || v.console.length > REPORTER_LIMITS.consoleEntries) return false;
@@ -110,13 +134,15 @@ export function parseHostMessage(data: unknown): ReporterHostMessage | null {
         ? (d as ReporterHostMessage)
         : null;
     case 'pilot-reporter:capture-started':
-      return isId(d.requestId) && (d.mode === 'full' || d.mode === 'crop') && isTargetField(d.target) ? (d as ReporterHostMessage) : null;
+      return isId(d.requestId) && isMode(d.mode) && isTargetField(d.target) ? (d as ReporterHostMessage) : null;
     case 'pilot-reporter:panel-opened':
     case 'pilot-reporter:focus-ended':
       return { type: d.type } as ReporterHostMessage;
     case 'pilot-reporter:callout-clicked':
     case 'pilot-reporter:focus-changed':
       return isId(d.key) && isId(d.captureId) ? (d as ReporterHostMessage) : null;
+    case 'pilot-reporter:context':
+      return isContextPage(d.page) && isDevice(d.device) && isBuild(d.build) && isCounts(d.counts) ? (d as ReporterHostMessage) : null;
     case 'pilot-reporter:focus-missing':
       return isId(d.key) && (d.captureId === null || isId(d.captureId)) && (d.reason === 'other-page' || d.reason === 'not-found')
         ? (d as ReporterHostMessage)

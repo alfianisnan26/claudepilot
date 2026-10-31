@@ -1,6 +1,9 @@
 import {
   REPORTER_ROUTES,
   type ReporterAddCapturesRequest,
+  type ReporterChatPage,
+  type ReporterChatSendRequest,
+  type ReporterChatStreamLine,
   type ReporterAddCommentRequest,
   type ReporterConnectClaim,
   type ReporterConnectMessage,
@@ -184,6 +187,11 @@ export interface ReporterClient {
   blobUrl(url: string): Promise<string>;
   /** The events stream; resolves when it ends. */
   events(onEvent: (e: unknown) => void, signal: AbortSignal): Promise<void>;
+  /** Chat in the widget: a page of a session of this bucket (newest when `before` is null), or what came after `after`. */
+  chatPage(id: string, q: { before?: number | null; after?: number; limit?: number }): Promise<ReporterChatPage>;
+  chatSend(id: string, req: ReporterChatSendRequest): Promise<{ uuid: string }>;
+  /** The session's live stream (NDJSON lines); resolves when it ends. */
+  chatStream(id: string, after: number, onLine: (l: ReporterChatStreamLine) => void, signal: AbortSignal): Promise<void>;
 }
 
 export function createClient(opts: { token: () => string | null; onUnauthorized: () => void; fetchFn?: typeof fetch }): ReporterClient {
@@ -196,8 +204,31 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
     return h;
   };
 
+  /*
+   * Session ended (live bug 2026-10-31: a revoked token printed "Not found." on every tab). Every refusal of a token is the uniform 404 (or
+   * 401 without one), so a 404 on a call made WITH the token is checked once against /me: /me refused too means the token is gone, and the
+   * panel signs out ("Session ended. Connect again."); /me fine means the object itself is missing, and the view says so. One check at a time.
+   */
+  let checking: Promise<void> | null = null;
+  const refused = (status: number, path: string, withToken: boolean) => {
+    if (!withToken) return;
+    if (status === 401 || (status === 404 && path === R.me)) return opts.onUnauthorized();
+    if (status !== 404 || checking) return;
+    checking = f(R.me, { headers: headers(), credentials: 'omit' })
+      .then(
+        (r) => {
+          if (r.status === 401 || r.status === 404) opts.onUnauthorized();
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        checking = null;
+      });
+  };
+
   async function call<T>(method: string, path: string, body?: unknown, raw?: { blob: Blob; headers: Record<string, string> }): Promise<T> {
     let res: Response;
+    const withToken = !!opts.token() && path !== R.connectClaim && !path.startsWith(R.status);
     try {
       res = await f(path, {
         method,
@@ -209,7 +240,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
       throw new ReporterApiError('NETWORK_ERROR', 'Could not reach pilot.', 0);
     }
     const json: unknown = await res.json().catch(() => null);
-    if (res.status === 401) opts.onUnauthorized();
+    refused(res.status, path.split('?')[0]!, withToken);
     const env = json as { data?: unknown; error?: { code?: string; message?: string } } | null;
     if (res.ok) return (env && typeof env === 'object' && 'data' in env ? env.data : json) as T;
     const code = env?.error?.code ?? (res.status === 404 ? 'NOT_FOUND' : res.status === 429 ? 'RATE_LIMITED' : 'ERROR');
@@ -257,14 +288,29 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
     observedBuild: (req) => call('POST', R.observedBuild, req),
     blobUrl: async (url) => {
       const res = await f(url, { headers: headers(), credentials: 'omit' });
-      if (res.status === 401) opts.onUnauthorized();
+      refused(res.status, url, !!opts.token());
       if (!res.ok) throw new ReporterApiError('ERROR', `Image failed (${res.status}).`, res.status);
       return URL.createObjectURL(await res.blob());
     },
-    events: async (onEvent, signal) => {
-      const res = await f(R.events, { headers: headers({ Accept: 'text/event-stream' }), credentials: 'omit', signal });
-      if (res.status === 401) opts.onUnauthorized();
-      if (!res.ok || !res.body) throw new ReporterApiError('ERROR', `Events failed (${res.status}).`, res.status);
+    chatPage: (id, q) => {
+      const p = new URLSearchParams();
+      if (q.after !== undefined) p.set('after', String(q.after));
+      else if (q.before) p.set('before', String(q.before));
+      if (q.limit) p.set('limit', String(q.limit));
+      const qs = p.toString();
+      return call('GET', `${fill(R.sessionMessages, { id })}${qs ? `?${qs}` : ''}`);
+    },
+    chatSend: (id, req) => call('POST', fill(R.sessionMessages, { id }), req),
+    chatStream: (id, after, onLine, signal) => readLines(`${fill(R.sessionStream, { id })}?after=${after}`, (e) => onLine(e as ReporterChatStreamLine), signal),
+    events: (onEvent, signal) => readLines(R.events, onEvent, signal),
+  };
+
+  /** A streamed NDJSON response read line by line (fetch with the bearer token: EventSource cannot send it). */
+  async function readLines(url: string, onEvent: (e: unknown) => void, signal: AbortSignal): Promise<void> {
+    {
+      const res = await f(url, { headers: headers({ Accept: 'text/event-stream' }), credentials: 'omit', signal });
+      refused(res.status, url.split('?')[0]!, !!opts.token());
+      if (!res.ok || !res.body) throw new ReporterApiError(res.status === 404 ? 'NOT_FOUND' : 'ERROR', `Stream failed (${res.status}).`, res.status);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
@@ -276,6 +322,6 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
         buf = rest.length > 65_536 ? '' : rest;
         for (const e of events) onEvent(e);
       }
-    },
-  };
+    }
+  }
 }

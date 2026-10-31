@@ -29,6 +29,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { stream } from 'hono/streaming';
 import { actorOf, actorString, requireCan } from '../authz/seam.js';
+import { ipFamily, plainIp } from '../clientAddress.js';
 import { RateLimiter } from '../rateLimit.js';
 import { declareReporterPolicies } from './authz.js';
 import { BLANK_PAGE, REFUSED_CSP, connectCsp, connectPage, embedCsp, embedHtml, scriptNonce, vendorFile } from './pages.js';
@@ -202,6 +203,9 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   };
   const statusHits = new RateLimiter(300, 10 * 60_000);
   const streams = new Map<string, number>();
+  // Chat in the widget: messages to sessions per token, and live chat streams per token.
+  const chatSends = new RateLimiter(REPORTER_LIMITS.chatMessagesPer10Min, 10 * 60_000);
+  const chatStreams = new Map<string, number>();
 
   /* ----- Public files ----- */
 
@@ -344,7 +348,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   /* ----- The panel API (bearer) ----- */
 
   const api = new Hono<Vars>();
-  const guarded = ['/me', '/tickets', '/tickets/*', '/reviews', '/reviews/*', '/duplicates', '/events', '/session-targets', '/observed-build', '/sessions', '/knowledge', '/knowledge/*'];
+  const guarded = ['/me', '/tickets', '/tickets/*', '/reviews', '/reviews/*', '/duplicates', '/events', '/session-targets', '/observed-build', '/sessions', '/sessions/*', '/knowledge', '/knowledge/*'];
   for (const p of guarded) api.use(p, async (c, next) => {
     // '/tickets' and '/tickets/*' may both match one path: the token is checked (and counted) once.
     if (c.get('reporter')) return next();
@@ -357,7 +361,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     if (!ctx) throw notFound();
     if (perToken.blocked(ctx.id)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
     perToken.fail(ctx.id);
-    c.set('reporter', ctx);
+    c.set('reporter', { ...ctx, clientIp: plainIp(deps.clientKey(c)) });
     await next();
   });
   const ctxOf = (c: Context<Vars>) => c.get('reporter');
@@ -367,7 +371,10 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
 
   api.get('/me', (c) => {
     const x = ctxOf(c);
-    return c.json(success({ bucketKey: x.bucketKey, origin: x.origin, site: x.site, actorLabel: x.actorLabel, expiresAt: x.expiresAt, status: service.status(x.bucketKey, x.origin) }));
+    const ip = x.clientIp && x.clientIp !== 'unknown' ? x.clientIp : null;
+    return c.json(
+      success({ bucketKey: x.bucketKey, origin: x.origin, site: x.site, actorLabel: x.actorLabel, expiresAt: x.expiresAt, status: service.status(x.bucketKey, x.origin), clientIp: ip, clientIpFamily: ip ? ipFamily(ip) : null }),
+    );
   });
   // Sign out: the panel's own token revokes itself.
   api.delete('/me', (c) => {
@@ -439,6 +446,73 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   api.get('/session-targets', (c) => c.json(success(service.sessionTargets(ctxOf(c)))));
   api.post('/observed-build', json, async (c) => c.json(success(await service.observedBuild(ctxOf(c), await jsonBody(c)))));
   api.get('/sessions', (c) => c.json(success(service.sessions(ctxOf(c), base(c)))));
+  // Chat in the widget (PILOT-1111): only a session of the token's bucket (service.#bucketSession); any other id is the same 404.
+  api.get('/sessions/:id/messages', (c) =>
+    c.json(success(service.chatPage(ctxOf(c), c.req.param('id'), { before: c.req.query('before'), after: c.req.query('after'), limit: c.req.query('limit') }, base(c)))),
+  );
+  api.post('/sessions/:id/messages', tooLarge(5 * 1024 * 1024), async (c) => {
+    const x = ctxOf(c);
+    // The session is checked before the count: a refused id costs nothing and says nothing.
+    service.chatState(x, c.req.param('id'), base(c));
+    if (chatSends.blocked(x.id)) throw new AppError('RATE_LIMITED', 'Too many messages. Wait a few minutes.');
+    chatSends.fail(x.id);
+    const out = await service.chatSend(x, c.req.param('id'), await jsonBody(c));
+    deps.audit?.('reporter.chat_sent', { bucket: x.bucketKey, origin: x.origin, session: c.req.param('id'), tokenId: x.id }, `portal-mcp:${x.id}`);
+    return c.json(success(out), 201);
+  });
+  api.get('/sessions/:id/blobs/:blobId', (c) => image(c, service.chatBlob(ctxOf(c), c.req.param('id'), c.req.param('blobId'))));
+  // New lines of one session as NDJSON while the panel shows it: checked every second, a ping every 25 s, closed after 5 minutes (the panel
+  // reconnects with ?after=). At most 2 open per token. `gone` when the session stops being the bucket's or the token stops being valid.
+  api.get('/sessions/:id/stream', (c) => {
+    const x = ctxOf(c);
+    const id = c.req.param('id');
+    const first = service.chatState(x, id, base(c));
+    const open = chatStreams.get(x.id) ?? 0;
+    if (open >= 2) throw new AppError('RATE_LIMITED', 'Too many open chat streams.');
+    chatStreams.set(x.id, open + 1);
+    const from = c.req.query('after');
+    const origin = base(c);
+    c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
+    c.header('X-Accel-Buffering', 'no');
+    return stream(c, async (s) => {
+      let after = from && /^\d{1,15}$/.test(from) ? Number(from) : first.lastSeq;
+      let mark = `${first.state}|${first.waiting}|${first.waitingFor ?? ''}`;
+      const started = Date.now();
+      let lastPing = Date.now();
+      let alive = true;
+      s.onAbort(() => {
+        alive = false;
+      });
+      try {
+        await s.write(`${JSON.stringify({ type: 'hello', session: first })}\n`);
+        while (alive && Date.now() - started < 5 * 60_000) {
+          if (!service.verifyId(x.id)) break;
+          let st;
+          try {
+            st = service.chatState(x, id, origin);
+          } catch {
+            await s.write(`${JSON.stringify({ type: 'gone' })}\n`);
+            break;
+          }
+          const now = `${st.state}|${st.waiting}|${st.waitingFor ?? ''}`;
+          if (st.lastSeq > after || now !== mark) {
+            const page = st.lastSeq > after ? service.chatPage(x, id, { after: String(after) }, origin) : { items: [], session: st };
+            after = Math.max(after, st.lastSeq);
+            mark = now;
+            await s.write(`${JSON.stringify({ type: 'update', items: page.items, session: page.session })}\n`);
+          } else if (Date.now() - lastPing > 25_000) {
+            lastPing = Date.now();
+            await s.write(`${JSON.stringify({ type: 'ping' })}\n`);
+          }
+          await s.sleep(1_000);
+        }
+      } finally {
+        const n = (chatStreams.get(x.id) ?? 1) - 1;
+        if (n > 0) chatStreams.set(x.id, n);
+        else chatStreams.delete(x.id);
+      }
+    });
+  });
   api.get('/knowledge', (c) => c.json(success(service.knowledge(ctxOf(c), c.req.query('q') ?? '', base(c)))));
   api.get('/knowledge/note', (c) => c.json(success(service.note(ctxOf(c), c.req.query('path') ?? ''))));
 

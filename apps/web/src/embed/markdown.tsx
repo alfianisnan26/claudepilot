@@ -115,14 +115,28 @@ function renderInline(text: string): ReactNode[] {
   });
 }
 
+/** A code or log block long enough to collapse (more than 8 lines or 600 characters). */
+export const isLongCode = (v: string) => v.split('\n').length > 8 || v.length > 600;
+
 export function Md({ text, className = '' }: { text: string; className?: string }) {
   return (
     <div className={`flex flex-col gap-2 break-words ${className}`}>
       {blocks(text).map((b, i) =>
         b.t === 'pre' ? (
-          <pre key={i} className="overflow-x-auto rounded-lg bg-surface-2 p-2 text-[12px]">
-            {b.v}
-          </pre>
+          isLongCode(b.v) ? (
+            // A long log or code block is collapsed to its first lines; the summary opens it.
+            <details key={i} className="rounded-lg bg-surface-2">
+              <summary className="flex min-h-11 cursor-pointer items-center px-2 font-mono text-[12px] text-muted">
+                <span className="min-w-0 truncate">{b.v.split('\n')[0]}</span>
+                <span className="ml-auto shrink-0 pl-2 font-sans">{b.v.split('\n').length} lines</span>
+              </summary>
+              <pre className="overflow-x-auto p-2 pt-0 text-[12px]">{b.v}</pre>
+            </details>
+          ) : (
+            <pre key={i} className="overflow-x-auto rounded-lg bg-surface-2 p-2 text-[12px]">
+              {b.v}
+            </pre>
+          )
         ) : b.t === 'ul' ? (
           <ul key={i} className="list-disc pl-5">
             {b.items.map((it, j) => (

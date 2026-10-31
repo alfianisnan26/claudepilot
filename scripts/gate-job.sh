@@ -7,6 +7,7 @@
 #                                            typecheck,web-build for a heavy check without the suite
 # Prints the summary and one verdict line (scripts/gate-verdict.sh), exits 0 for green, 1 for red, 2 for a usage error. The whole log is kept
 # in GATE_JOB_LOG (default /tmp/gate-job-<sha>.log). GATE_IMAGE: the image (default: the newest development workspace image in the registry).
+# A green verdict is recorded for the change-scoped gate (D-106, scripts/gate-record.sh; GATE_RECORD=0 skips it).
 # The GitHub Packages token goes into a Secret that lives as long as the Job's wait and is deleted on exit; the log is searched for it.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
@@ -72,4 +73,12 @@ mem=$(grep -E '^memory peak=' "$out" | tail -n 1 || true)
 echo "${mem:-memory peak=unavailable (the gate Job printed no memory line)}"
 echo "log: $out"
 rc=0; bash scripts/gate-verdict.sh joblog "$out" || rc=$?
+# D-106: a green result is recorded per commit (scripts/gate-record.sh) for the change-scoped gate to reuse and diff against: the whole gate
+# as `full`, a scoped one as its caller says (GATE_RECORD_KIND=scoped, GATE_RECORD_BASE=<the green commit it was scoped against>). A subset
+# of steps nobody called scoped (a heavy check without the suite) is not a gate result. GATE_RECORD=0 records nothing.
+if [ "$rc" = 0 ] && [ "${GATE_RECORD:-1}" != 0 ]; then
+  kind=${GATE_RECORD_KIND:-}
+  [ -n "$kind" ] || { [ "$steps" = typecheck,web-build,web-tests,server-suite ] && [ -z "$files" ] && kind=full; }
+  [ -z "$kind" ] || bash scripts/gate-record.sh write "$commit" "$kind" "${GATE_RECORD_BASE:-}" "$steps" "$(wc -w <<< "$files" | tr -d ' ')" || true
+fi
 exit "$rc"

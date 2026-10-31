@@ -51,6 +51,8 @@ export interface DescribeInput {
   ticketId: string;
   deployments: ReporterDeploymentState[];
   fixCommits: string[];
+  /** The reporter's address as the portal saw it (added by the server, never sent by the page); null or absent: unknown. */
+  reporterIp?: string | null;
 }
 
 const deviceLine = (e: ReporterEvidence) => {
@@ -98,7 +100,8 @@ function captureSection(c: DescribedCapture, total: number, ticketId: string): s
   if (e) {
     if (e.page.route) lines.push(`- Route: ${code(e.page.route, 200)}`);
     lines.push(`- Device: ${deviceLine(e)}`);
-    lines.push(`- Area: ${e.anchor.mode === 'crop' ? 'crop' : 'full page'} at x ${Math.round(e.anchor.rect.x)}, y ${Math.round(e.anchor.rect.y)}, ${Math.round(e.anchor.rect.w)}x${Math.round(e.anchor.rect.h)}${e.anchor.selector ? `, element ${code(e.anchor.selector, 200)}` : ''}`);
+    if (e.captureGaps?.length) lines.push(`- Not captured: ${e.captureGaps.map((g) => inline(g, 200)).join('; ')}`);
+    lines.push(`- Area: ${areaWord(e.anchor.mode)} at x ${Math.round(e.anchor.rect.x)}, y ${Math.round(e.anchor.rect.y)}, ${Math.round(e.anchor.rect.w)}x${Math.round(e.anchor.rect.h)}${e.anchor.selector ? `, element ${code(e.anchor.selector, 200)}` : ''}`);
     const errors = e.console.filter((x) => x.level === 'error');
     const failed = e.network.filter((n) => n.error !== undefined || (n.status !== null && n.status >= 400));
     lines.push(`- Console errors: ${errors.length}; failed requests: ${failed.length}; LCP: ${e.performance.vitals.lcpMs === null ? 'unknown' : `${Math.round(e.performance.vitals.lcpMs)} ms`}`);
@@ -130,6 +133,7 @@ export function describeTicket(d: DescribeInput): string {
   if (first) out.push(`- Domain: ${code(first.page.host, 200)}, path ${code(first.page.path, 300)}${first.page.route ? `, route ${code(first.page.route, 200)}` : ''}`);
   out.push(`- Build: ${buildLine(d.build)}${d.build.environment ? `, declared environment ${code(d.build.environment, 20)}` : ''}`);
   if (first) out.push(`- Device: ${deviceLine(first)}`);
+  out.push(`- Reporter IP: ${d.reporterIp ? code(d.reporterIp, 64) : 'unknown'} (as the portal saw it)`);
   out.push(`- Reported with the UI reporter (SDK ${code(d.sdkVersion || 'unknown', 40)})${d.target.kind === 'session' ? `, sent straight to the session ${inline(d.target.label, 60)} (urgent)` : ''}.`);
   out.push('');
   for (const c of d.captures) out.push(captureSection(c, d.captures.length, d.ticketId), '');
@@ -239,4 +243,9 @@ export function buildRepro(e: ReporterEvidence, siteOrigin?: string): ReporterRe
     '',
   ].join('\n');
   return { steps, playwright };
+}
+
+/** How a capture's area reads in the ticket: a crop, what was on screen, or the whole page (an unknown mode reads as the whole page). */
+export function areaWord(mode: string): string {
+  return mode === 'crop' ? 'crop' : mode === 'viewport' ? 'screen (what was visible)' : 'full page';
 }

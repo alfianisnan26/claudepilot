@@ -75,6 +75,12 @@ export function shotCaption(index: number, pathOrUrl: string): string {
   return `Shot ${index} · ${p === '/' ? '/ (home)' : p}`;
 }
 
+/** "Not captured: image not readable (no CORS): cdn.example; canvas: drawn blank", or null when the shot is complete (or the SDK is older). */
+export function gapsLine(e: { captureGaps?: string[] }): string | null {
+  const gaps = (e.captureGaps ?? []).filter((g) => g.trim());
+  return gaps.length ? `Not captured: ${gaps.join('; ')}` : null;
+}
+
 export const SEVERITIES: ReporterCheckFinding['severity'][] = ['critical', 'serious', 'moderate', 'minor'];
 
 export function countBySeverity(findings: ReporterCheckFinding[]): Record<ReporterCheckFinding['severity'], number> {

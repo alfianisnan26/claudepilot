@@ -2,6 +2,7 @@ import type { ReporterNote, ReporterNoteHit, ReporterSession } from '@portal/con
 import { useEffect, useState } from 'react';
 import { usePanel } from './context';
 import { Icon } from './icons';
+import { sessionTitle } from './chatModel';
 import { Md } from './markdown';
 import { DEFAULT_HOTKEYS, hotkeyOf, type Hotkeys } from './model';
 import { Btn, IconBtn, Notice, inputClass } from './ui';
@@ -14,9 +15,12 @@ function OpenLink({ href, label = 'Open in pilot' }: { href: string; label?: str
   );
 }
 
-/** The bucket's sessions: the ones working its tickets and the ones in its default workspace, with the direct-report targets first. */
+/**
+ * The bucket's sessions: the direct-report targets first, then the ones working its tickets and the ones in its default workspace. A tap
+ * opens the chat right here (PILOT-1111); "Open in pilot" stays as the secondary link.
+ */
 export function SessionsTab() {
-  const { client, tick, targets, select, setTab } = usePanel();
+  const { client, tick, targets, select, setTab, openChat } = usePanel();
   const [list, setList] = useState<ReporterSession[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
@@ -29,19 +33,29 @@ export function SessionsTab() {
       live = false;
     };
   }, [client, tick]);
+  const dot = (status: string, available = true) => (!available || status === 'ended' ? 'bg-line-strong' : status === 'working' ? 'bg-flame' : status === 'waiting' ? 'bg-gold' : 'bg-accent');
+  const rest = list?.filter((s) => !targets.some((t) => t.sessionId === s.id)) ?? null;
   return (
     <div className="flex flex-col gap-3 p-3">
       {targets.length > 0 && (
         <section>
-          <h2 className="mb-1 px-1 text-[12.5px] font-semibold text-muted">Direct report</h2>
+          <h2 className="mb-1 px-1 text-[13px] font-semibold text-muted">Lead</h2>
           <ul className="flex flex-col gap-1">
             {targets.map((t) => (
-              <li key={t.sessionId} className="flex min-h-11 items-center gap-2 rounded-xl bg-surface-2 px-3 py-2">
-                <span className={`size-2 shrink-0 rounded-full ${!t.available ? 'bg-line-strong' : t.status === 'working' ? 'bg-flame' : 'bg-accent'}`} aria-hidden="true" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-semibold">{t.label}</span>
-                  <span className="block truncate text-[12px] text-muted">{t.available ? t.status : (t.reason ?? 'unavailable')}</span>
-                </span>
+              <li key={t.sessionId}>
+                <button
+                  type="button"
+                  disabled={!t.available}
+                  onClick={() => openChat({ sessionId: t.sessionId })}
+                  className="flex min-h-11 w-full items-center gap-2 rounded-xl bg-surface-2 px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-60"
+                >
+                  <span className={`size-2 shrink-0 rounded-full ${dot(t.status, t.available)}`} aria-hidden="true" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[14px] font-semibold">{t.label}</span>
+                    <span className="block truncate text-[12px] text-muted">{t.available ? t.status : (t.reason ?? 'unavailable')}</span>
+                  </span>
+                  {t.available && <Icon name="chevronRight" className="size-4 text-muted" />}
+                </button>
               </li>
             ))}
           </ul>
@@ -49,35 +63,37 @@ export function SessionsTab() {
       )}
       {failed && <Notice tone="error">{failed}</Notice>}
       {!list && !failed && <div className="skeleton h-24 rounded-2xl" aria-busy="true" />}
-      {list && list.length === 0 && <p className="py-6 text-center text-[13.5px] text-muted">No sessions.</p>}
-      {list && list.length > 0 && (
+      {rest && rest.length === 0 && !targets.length && <p className="py-6 text-center text-[13.5px] text-muted">No sessions.</p>}
+      {rest && rest.length > 0 && (
         <ul className="flex flex-col gap-1">
-          {list.map((s) => (
+          {rest.map((s) => (
             <li key={s.id} className="flex items-center gap-1 rounded-xl hover:bg-surface-2">
-              <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2">
-                <Icon name="bot" className="size-4 text-muted" />
+              <button type="button" onClick={() => openChat({ sessionId: s.id, ticketKey: s.ticketKey })} className="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
+                <span className={`size-2 shrink-0 rounded-full ${dot(s.status)}`} aria-hidden="true" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-semibold">{s.title}</span>
+                  <span className="block truncate text-[14px] font-semibold" title={s.title}>
+                    {sessionTitle(s.title)}
+                  </span>
                   <span className="block truncate text-[12px] text-muted">
                     {s.status}
-                    {s.ticketKey && (
-                      <>
-                        {' · '}
-                        <button
-                          type="button"
-                          className="font-semibold whitespace-nowrap text-accent underline"
-                          onClick={() => {
-                            select(s.ticketKey);
-                            setTab('tickets');
-                          }}
-                        >
-                          {s.ticketKey}
-                        </button>
-                      </>
-                    )}
+                    {s.ticketKey && ` · ${s.ticketKey}`}
                   </span>
                 </span>
-              </div>
+              </button>
+              {s.ticketKey && (
+                <button
+                  type="button"
+                  aria-label={`Ticket ${s.ticketKey}`}
+                  title={s.ticketKey}
+                  className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+                  onClick={() => {
+                    select(s.ticketKey);
+                    setTab('tickets');
+                  }}
+                >
+                  <Icon name="ticket" className="size-[18px]" />
+                </button>
+              )}
               <OpenLink href={s.url} />
             </li>
           ))}
@@ -162,8 +178,11 @@ export function SettingsTab() {
   const [recording, setRecording] = useState<keyof Hotkeys | null>(null);
   return (
     <div className="flex flex-col gap-4 p-3">
-      <label className="flex min-h-11 items-center justify-between gap-3 rounded-xl bg-surface-2 px-3">
-        <span className="text-[14px] font-semibold">Callouts</span>
+      <label className="flex min-h-11 items-center justify-between gap-3 rounded-xl bg-surface-2 px-3" title="Pins on the page where tickets were reported">
+        <span className="text-[14px] font-semibold">
+          Callouts
+          <span className="sr-only">: pins on the page where tickets were reported</span>
+        </span>
         <input type="checkbox" role="switch" checked={calloutsVisible} onChange={(e) => setCalloutsVisible(e.target.checked)} className="size-6 accent-[var(--color-accent)]" />
       </label>
       {!coarse && (
@@ -201,7 +220,9 @@ export function SettingsTab() {
           </Btn>
         </section>
       )}
-      <section className="flex flex-col gap-1 px-1 text-[12.5px] text-muted">
+      <details className="rounded-xl px-1 text-[13px] text-muted">
+        <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-ink-soft">About</summary>
+        <div className="flex flex-col gap-1 pb-2">
         {actorLabel && <p>Signed in as {actorLabel}</p>}
         {status.site && (
           <p className="break-all">
@@ -211,7 +232,8 @@ export function SettingsTab() {
         <p>
           SDK {sdkVersion || 'unknown'} · served {status.sdkVersion}
         </p>
-      </section>
+        </div>
+      </details>
       <Btn icon="logOut" onClick={signOut}>
         Sign out
       </Btn>

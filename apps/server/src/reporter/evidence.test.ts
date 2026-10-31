@@ -3,8 +3,10 @@
 // "network[0].ts is out of range" to every real report.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { REPORTER_LIMITS } from '@portal/contracts';
+import { describeTicket } from './describe.js';
 import { epochMs, parseEvidence, pinEvidence } from './validate.js';
-import { evidence } from './testkit.js';
+import { REPO, STG, build, evidence } from './testkit.js';
 
 const bytes = (v: unknown) => Buffer.from(JSON.stringify(v));
 
@@ -42,4 +44,40 @@ test('evidence: a site with a port accepts the SDK page.host (location.hostname,
   assert.equal(pinEvidence(e('localhost'), site).page.host, 'localhost:4700');
   assert.equal(pinEvidence(e('localhost:4700'), site).page.host, 'localhost:4700');
   assert.throws(() => pinEvidence(e('evil.example'), site), /not of this site/);
+});
+
+test('evidence: captureGaps (what the DOM shot could not draw) is kept, one line each, capped, redacted; absent stays absent', () => {
+  const secret = `Bearer ${'k'.repeat(30)}`;
+  const e = parseEvidence(
+    bytes(evidence({ captureGaps: ['image not readable (no CORS): cdn.example', `canvas: drawn blank\nforged line ${secret}`, '', 'x'.repeat(500)] })),
+  );
+  assert.equal(e.captureGaps!.length, 3, 'the empty one is dropped');
+  assert.equal(e.captureGaps![0], 'image not readable (no CORS): cdn.example');
+  assert.ok(!e.captureGaps![1]!.includes('\n'), 'one line each');
+  assert.ok(!e.captureGaps![1]!.includes('k'.repeat(30)), 'redacted like every string');
+  assert.equal(e.captureGaps![2]!.length, 200, 'truncated, not refused');
+  assert.equal('captureGaps' in parseEvidence(bytes(evidence())), false, 'an older SDK sends none');
+  assert.equal('captureGaps' in parseEvidence(bytes(evidence({ captureGaps: [] }))), false);
+  assert.throws(() => parseEvidence(bytes(evidence({ captureGaps: Array.from({ length: REPORTER_LIMITS.captureGaps + 1 }, (_, i) => `gap ${i}`) }))), /captureGaps/);
+  assert.throws(() => parseEvidence(bytes(evidence({ captureGaps: 'not a list' }))), /captureGaps/);
+  assert.throws(() => parseEvidence(bytes(evidence({ captureGaps: [42] }))), /captureGaps\[0\]/);
+});
+
+test('describe: the capture section names what the screenshot could not draw in one "Not captured" line', () => {
+  const ev = parseEvidence(bytes(evidence({ captureGaps: ['image not readable (no CORS): cdn.example', 'canvas: drawn blank'] })));
+  const input = (e: typeof ev) => ({
+    text: 'Broken',
+    site: { bucketKey: 'KONF', origin: STG, environment: 'stg', repo: REPO, declaredMismatch: null },
+    build: build(),
+    sdkVersion: '0.1.0',
+    target: { kind: 'ticket' as const },
+    captures: [{ captureId: 'c1', index: 1, pageUrl: `${STG}/`, path: '/', note: null, evidence: e, screenshotAttachmentId: null, evidenceAttachmentId: null }],
+    ticketId: 'T-1',
+    deployments: [],
+    fixCommits: [],
+  });
+  const lines = describeTicket(input(ev)).split('\n').filter((l) => l.includes('Not captured'));
+  // Page text is untrusted Markdown: inline() escapes its punctuation.
+  assert.deepEqual(lines, ['- Not captured: image not readable \\(no CORS\\): cdn.example; canvas: drawn blank']);
+  assert.ok(!describeTicket(input(parseEvidence(bytes(evidence())))).includes('Not captured'), 'a complete shot says nothing');
 });

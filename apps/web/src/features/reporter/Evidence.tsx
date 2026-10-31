@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { reporterApi } from './api';
-import { DEPLOY_REASON, OBSERVED_NOTE, cropBox, deployMark, deploymentText, isObserved, shortCommit } from './shared';
+import { DEPLOY_REASON, OBSERVED_NOTE, cropBox, deployMark, deploymentText, gapsLine, isObserved, shortCommit } from './shared';
 
 /** The ticket's reporter evidence (null when the ticket did not come from the widget, undefined while loading). */
 export function useReporterEvidence(ticketId: string, reloadKey: unknown) {
@@ -123,6 +123,9 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
             <span className="break-all">Session {evidence.target.sessionId.slice(0, 8)} (urgent)</span>
           </Row>
         )}
+        <Row label="IP">
+          {evidence.reporterIp ? <span className="break-all tabular-nums">{evidence.reporterIp}</span> : <span className="text-muted">Unknown</span>}
+        </Row>
         <Row label="Fix">
           {evidence.fixCommits.length ? <span className="break-all tabular-nums">{evidence.fixCommits.map((c) => shortCommit(c)).join(', ')}</span> : <span className="text-muted">No fix commit yet</span>}
         </Row>
@@ -178,7 +181,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
       {capture && (
         <div className="mt-4 flex flex-col gap-3">
           <p className="text-[12.5px] text-muted tabular-nums">
-            {capture.index} of {evidence.captures.length} · {capture.anchor.mode === 'crop' ? 'crop' : 'full'} · {capture.anchor.viewport.w}×{capture.anchor.viewport.h}
+            {capture.index} of {evidence.captures.length} · {capture.anchor.mode === 'crop' ? 'crop' : capture.anchor.mode === 'viewport' ? 'screen' : 'full'} · {capture.anchor.viewport.w}×{capture.anchor.viewport.h}
           </p>
           {capture.screenshotAttachmentId ? (
             <a href={TICKET_API.attachment(ticketId, Number(capture.screenshotAttachmentId))} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden rounded-xl border border-line bg-surface-2">
@@ -200,6 +203,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
           {capture.evidenceAttachmentId && bundle === null && <div className="skeleton h-24 rounded-xl" aria-busy="true" />}
           {b && (
             <>
+              {gapsLine(b) && <p className="text-[13px] break-words text-muted">{gapsLine(b)}</p>}
               <div role="tablist" aria-label="Evidence" className="flex flex-wrap gap-1.5">
                 {TABS.map((t) => (
                   <button key={t.value} type="button" role="tab" aria-selected={tab === t.value} onClick={() => setTab(t.value)} className={`${chipClass(tab === t.value)} min-h-11`}>
