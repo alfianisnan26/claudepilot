@@ -7,6 +7,12 @@
 //   - a token is capped by its scope (read = view, operate = operate, admin = manage), an agent by `operate` and by its own session and workspace;
 //   - for an object type that has a RESOLVER registered (`registerResolver`), `can()` already decides by ownership: the owner or nothing (and
 //     what the resolver calls `public`). That is how a module adopts default-deny early and tests it with two fake users (`u_a`, `u_b`).
+// ORGANIZATIONS SLICE 0 (docs/prd/organizations.md §13, P1 and P2): the signed-in person is real. The session middleware sets `actor` to the
+// account's OWN user id (`useSessionActor`; the server code and the one account marked founder are `u_owner`), sockets read the same
+// (`useSocketActor`), and tokens carry the user who minted them. `actorOf` never falls back to the owner: a request without an `actor` is
+// anonymous. D-82 ("admin accounts keep full access") holds through `useAccountRoles`: an ACTIVE admin account holds, on top of its own
+// rights, what the founding user holds (role read on every use), so a second admin is themselves in every audit row and every token but loses
+// nothing; a member, a disabled or a removed account holds only its own. Slice 1 (P3) narrows that when owners and resolvers land.
 // There are no grants, teams, roles or per-user sign-in here: the real layer (apps/server/src/authz/index.ts, work package A1) replaces the
 // implementation with `useAuthz()` and every call site keeps working, because it only ever calls what is exported below.
 //
@@ -200,6 +206,31 @@ export interface Authz {
 const ANONYMOUS: Actor = { kind: 'anonymous' };
 const owner = (): Actor => ({ kind: 'user', userId: FOUNDING_USER_ID, loginSessionId: 'legacy', via: 'ui' });
 
+/**
+ * What an email account is NOW, read on every use (portal.roleOf): its role while active, 'disabled', null when there is no such account, or
+ * 'unavailable' when the database could not be read. Unset (tests, scripts): every non-founding user is an account with no role (null).
+ */
+export type AccountRoleOf = (userId: UserId) => 'admin' | 'member' | 'disabled' | 'unavailable' | null;
+let accountRole: AccountRoleOf = () => null;
+/** app.ts installs the users' roles once at start-up; returns the one before (tests restore it). */
+export const useAccountRoles = (fn: AccountRoleOf): AccountRoleOf => {
+  const was = accountRole;
+  accountRole = fn;
+  return was;
+};
+const roleNow = (userId: UserId): ReturnType<AccountRoleOf> => {
+  try {
+    return accountRole(userId);
+  } catch {
+    return 'unavailable';
+  }
+};
+/**
+ * D-82 "admin accounts keep full access", without being the founder: an active admin account (not the founding user itself) also holds what
+ * the founding user holds. Anything else (a member, disabled, gone, a database that cannot be read) holds only its own: fail closed.
+ */
+const actsWithFounderRights = (userId: UserId): boolean => userId !== FOUNDING_USER_ID && roleNow(userId) === 'admin';
+
 const deny = (reason: DenyReason, level: Level = 'none'): Decision => ({ allow: false, reason, level });
 const SCOPE_CAP: Record<'read' | 'operate' | 'admin', Level> = { read: 'view', operate: 'operate', admin: 'manage' };
 
@@ -212,6 +243,8 @@ export const singleOwner: Authz = {
     if (actor.kind === 'system') return { allow: true, level: 'manage' };
     const userId = actor.userId;
     if (!isUserId(userId)) return deny('actor_disabled');
+    // A token or a job of an account that was disabled acts for nobody (a gone account holds only what it owns: nothing, once P3 reassigns).
+    if (userId !== FOUNDING_USER_ID && roleNow(userId) === 'disabled') return deny('actor_disabled');
 
     // What the way of acting allows at most.
     let cap: Level = 'manage';
@@ -223,18 +256,20 @@ export const singleOwner: Authz = {
       if (['platform', 'user', 'team', 'personal', 'target'].includes(object.type)) return deny('agent_box');
     }
 
-    // What the user holds: by ownership where the type has a resolver, else everything for the one owner.
+    // What the user holds: by ownership where the type has a resolver, else everything for the one owner. An active admin account also holds
+    // what the founding user holds (D-82; see the header).
     let held: Level;
     const resolver = resolvers.get(object.type);
     if (!resolver && RESOLVER_REQUIRED.has(object.type)) return deny('not_found');
-    if (!resolver) held = userId === FOUNDING_USER_ID ? 'manage' : 'none';
+    const founderToo = actsWithFounderRights(userId);
+    if (!resolver) held = userId === FOUNDING_USER_ID || founderToo ? 'manage' : 'none';
     else {
       const found = resolver.resolve(object.id, object.poolType);
       if (!found) return deny('not_found');
       if (found.owner === null) return deny('unowned');
-      const own = found.owner.kind === 'user' && found.owner.id === userId;
-      const platform = found.owner.kind === 'platform' && userId === FOUNDING_USER_ID;
-      held = maxLevel(own || platform ? 'manage' : 'none', found.publicLevel ?? 'none');
+      const holds = (u: UserId) => (found.owner?.kind === 'user' && found.owner.id === u) || (found.owner?.kind === 'platform' && u === FOUNDING_USER_ID);
+      const own = holds(userId) || (founderToo && holds(FOUNDING_USER_ID));
+      held = maxLevel(own ? 'manage' : 'none', found.publicLevel ?? 'none');
     }
 
     const level = minLevel(held, cap);
@@ -248,7 +283,7 @@ export const singleOwner: Authz = {
     return can(actor, 'manage', object).allow ? 'manage' : can(actor, 'operate', object).allow ? 'operate' : 'view';
   },
 
-  isPlatformAdmin: (userId) => userId === FOUNDING_USER_ID,
+  isPlatformAdmin: (userId) => userId === FOUNDING_USER_ID || actsWithFounderRights(userId),
 
   ownersOf(object) {
     const found = resolvers.get(object.type)?.resolve(object.id, object.poolType);
@@ -264,7 +299,7 @@ export const singleOwner: Authz = {
     void subject;
     if (actor.kind === 'system') return { all: true, userIds: [] };
     const userId = actorUserId(actor);
-    if (userId === FOUNDING_USER_ID) return { all: true, userIds: [] };
+    if (userId === FOUNDING_USER_ID || (userId && actsWithFounderRights(userId))) return { all: true, userIds: [] };
     return { all: false, userIds: userId ? [userId] : [] };
   },
 };
@@ -309,7 +344,7 @@ export function requireCan(actor: Actor, verb: Verb, object: ObjectRef): void {
 /** Keeps the rows the actor may view: what every list returns. The owner's single-owner fast path returns the rows as they are. */
 export function visible<T>(actor: Actor, type: ObjectType, rows: readonly T[], idOf: (row: T) => string, poolType?: ObjectRef['poolType']): T[] {
   if (actor.kind === 'system') return [...rows];
-  if (current.mode === 'single-owner' && !resolvers.has(type) && !RESOLVER_REQUIRED.has(type) && actor.kind !== 'agent' && actorUserId(actor) === FOUNDING_USER_ID) return [...rows];
+  if (current.mode === 'single-owner' && !resolvers.has(type) && !RESOLVER_REQUIRED.has(type) && actor.kind !== 'agent' && holdsFounderRights(actorUserId(actor))) return [...rows];
   return rows.filter((row) => current.can(actor, 'view', poolType ? { type, id: idOf(row), poolType } : { type, id: idOf(row) }).allow);
 }
 
@@ -323,8 +358,11 @@ export function visible<T>(actor: Actor, type: ObjectType, rows: readonly T[], i
  */
 export function seesEverything(actor: Actor): boolean {
   if (actor.kind === 'system') return true;
-  return current.mode === 'single-owner' && actor.kind === 'user' && actorUserId(actor) === FOUNDING_USER_ID;
+  return current.mode === 'single-owner' && actor.kind === 'user' && holdsFounderRights(actorUserId(actor));
 }
+
+/** The founding user, or an account that holds what the founding user holds (D-82): the single-owner fast paths' test. */
+const holdsFounderRights = (userId: UserId | null): boolean => userId === FOUNDING_USER_ID || (!!userId && actsWithFounderRights(userId));
 
 /* ---------- Actors ---------- */
 
@@ -339,25 +377,43 @@ export const anonymous = (): Actor => ANONYMOUS;
 type Ctx = { get(key: string): unknown };
 
 /**
- * Who is asking an HTTP request. The real layer's authenticate middleware sets `actor` on the context; until then a request that passed
- * `requireSession` (which sets `token`) is the owner. Call it in a handler, once.
+ * Who is asking an HTTP request: the `actor` the session middleware set (app.ts `requireSession`, from the signed-in account: organizations
+ * slice 0), or a bearer door's (VS Code). Nothing else: a request with no `actor` is anonymous, even if it carries a session token, so a route
+ * mounted without the middleware fails closed instead of acting as the owner. Call it in a handler, once.
  */
 export function actorOf(c: unknown): Actor {
   const ctx = c as Ctx;
   const set = ctx.get('actor');
   if (set && typeof set === 'object' && 'kind' in set) return set as Actor;
-  const token = ctx.get('token');
-  return typeof token === 'string' && token ? owner() : ANONYMOUS;
+  return ANONYMOUS;
 }
 
-/** Who opened a socket: the connection's `authorized` check (the module's own `portal.session(cookie)` call) decides signed in or not, until the real layer reads the user. */
+/** Reads the person a socket's handshake signed in as (its session cookie), or null. app.ts installs it once (`useSocketActor`). */
+export type SocketActorOf = (req: IncomingMessage) => Actor | null;
+let socketActor: SocketActorOf | null = null;
+/** app.ts installs it once at start-up; returns the one before (tests restore it). */
+export const useSocketActor = (fn: SocketActorOf | null): SocketActorOf | null => {
+  const was = socketActor;
+  socketActor = fn;
+  return was;
+};
+
+/**
+ * Who opened a socket. The connection's `authorized` check (the module's own `portal.session(cookie)` call) decides signed in or not; the
+ * person is the one the installed `useSocketActor` reads from the same cookie (organizations slice 0), so a second admin's socket is theirs.
+ * With none installed (a module's unit test) a signed-in socket is the founding user, as before.
+ */
 export function actorOfSocket(req: IncomingMessage, authorized: (req: IncomingMessage) => boolean): Actor {
-  return authorized(req) ? owner() : ANONYMOUS;
+  if (!authorized(req)) return ANONYMOUS;
+  if (!socketActor) return owner();
+  return socketActor(req) ?? ANONYMOUS;
 }
 
 /**
- * Who a Portal MCP principal is: an admin's token (`cpat_`), an agent's per-session token (`cpst_`), or the General Manager's (`cpmt_`). The
- * real layer reads the user from the token's owner.
+ * Who a Portal MCP principal is: an admin's token (`cpat_`), an agent's per-session token (`cpst_`), or the General Manager's (`cpmt_`).
+ * Organizations slice 0 (P2): a person's token (`cpat_`, the VS Code device flow's too) is the user who minted it (`pmcp_tokens.owner_id`,
+ * migration 461; tokens from before are the founding user's), capped by its scope; one with no valid owner acts for nobody. An agent's
+ * token is its session's owner (sessions are the founding user's until P3 records their creator).
  *
  * T-968 S1 (general-manager PRD §4): a manager IS its person for can(), resolved on every call: the same user actor the person's browser
  * session produces (`owner()` for the founding user), so a grant the person loses is lost by the manager on the next call, and there is no
@@ -365,7 +421,12 @@ export function actorOfSocket(req: IncomingMessage, authorized: (req: IncomingMe
  */
 export function actorOfPrincipal(p: { kind: 'user' | 'agent' | 'manager'; userId?: string; tokenId: string; scope: string; workspaceId: string | null; sessionId: string | null }): Actor {
   if (p.kind === 'manager') return p.userId ? { kind: 'user', userId: p.userId, loginSessionId: 'legacy', via: 'ui' } : ANONYMOUS;
-  if (p.kind === 'agent' && p.workspaceId && p.sessionId) return { kind: 'agent', userId: FOUNDING_USER_ID, tokenId: p.tokenId, sessionId: p.sessionId, workspaceId: p.workspaceId };
   const scope = p.scope === 'admin' || p.scope === 'operate' ? p.scope : 'read';
-  return { kind: 'token', userId: FOUNDING_USER_ID, tokenId: p.tokenId, scope };
+  if (p.kind === 'agent') {
+    const userId = isUserId(p.userId) ? p.userId : FOUNDING_USER_ID;
+    if (p.workspaceId && p.sessionId) return { kind: 'agent', userId, tokenId: p.tokenId, sessionId: p.sessionId, workspaceId: p.workspaceId };
+    return { kind: 'token', userId, tokenId: p.tokenId, scope };
+  }
+  if (!isUserId(p.userId)) return ANONYMOUS;
+  return { kind: 'token', userId: p.userId, tokenId: p.tokenId, scope };
 }

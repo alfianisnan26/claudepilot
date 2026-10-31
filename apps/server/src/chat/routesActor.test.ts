@@ -28,7 +28,7 @@ function harness(who: ReturnType<typeof ownerActor>) {
   return { seen, app, post };
 }
 
-const tokenActor = () => actorOfPrincipal({ kind: 'user', tokenId: 'tk_route', scope: 'admin', workspaceId: null, sessionId: null });
+const tokenActor = () => actorOfPrincipal({ kind: 'user', userId: 'u_owner', tokenId: 'tk_route', scope: 'admin', workspaceId: null, sessionId: null });
 
 test('T-723: the bypass, bypass/allow, models and restart routes pass `ui` for a person', async () => {
   const h = harness(ownerActor());

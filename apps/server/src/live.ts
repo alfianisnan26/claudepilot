@@ -1,7 +1,8 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { LIVE_PATH, LIVE_TOPICS, type LiveMessage, type LivePresence, type LiveTopic, type Workspace, type WorkspaceUsage } from '@portal/contracts';
+import { LIVE_PATH, LIVE_TOPICS, type Actor, type LiveMessage, type LivePresence, type LiveTopic, type Workspace, type WorkspaceUsage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
+import { actorOfSocket } from './authz/seam.js';
 
 const PING_MS = 25_000;
 /** While a page shows workspaces: how often they're listed again, for changes made outside the portal (Kubernetes). */
@@ -16,6 +17,8 @@ export interface LiveSources {
 }
 
 interface Client {
+  /** Organizations slice 0 (P1): who opened it, read once at the handshake; per-person filtering of what it is sent is slice 2 (P5). */
+  actor: Actor;
   topics: Set<LiveTopic>;
   /** The workspace-list version this client last received. */
   seen: number;
@@ -67,6 +70,11 @@ export class LiveHub {
     });
   }
 
+  /** Who each open tab is (organizations slice 0), for tests and diagnostics. */
+  actors(): Actor[] {
+    return [...this.#clients.values()].map((c) => c.actor);
+  }
+
   /** Something changed. Workspaces are listed again (and pushed if different); other topics tell pages to reload. */
   publish(topic: LiveTopic) {
     // Whatever was listed before this change is stale, even if nobody is watching right now.
@@ -100,7 +108,7 @@ export class LiveHub {
   }
 
   #join(ws: WebSocket, req: IncomingMessage) {
-    const client: Client = { topics: new Set(), seen: 0 };
+    const client: Client = { actor: actorOfSocket(req, this.authorized), topics: new Set(), seen: 0 };
     this.#clients.set(ws, client);
     let alive = true;
     const ping = setInterval(() => {

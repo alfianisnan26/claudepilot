@@ -136,7 +136,7 @@ test('negative twin: an expired, a revoked and an unknown token get the same 401
 test('negative twin: a refused mint throws with the code and no token, and mints nothing', async () => {
   const s = await setup();
   try {
-    s.actAs(actorOfPrincipal({ kind: 'user', tokenId: 'ptk_r', scope: 'read', workspaceId: null, sessionId: null }));
+    s.actAs(actorOfPrincipal({ kind: 'user', userId: 'u_owner', tokenId: 'ptk_r', scope: 'read', workspaceId: null, sessionId: null }));
     const lease = tokenLease({ api: s.api, label: 'coordinator', now: s.clock.now });
     await assert.rejects(lease.get(), (e: Error) => /^no Portal MCP token for "coordinator": \S+/.test(e.message) && !e.message.includes(PORTAL_TOKEN_PREFIX));
     assert.equal(lease.id, null);

@@ -122,14 +122,15 @@ test('requireCan answers 401, 404 or 403 and names what was needed', () => {
   }
 });
 
-test('actorOf reads the signed-in request, an actor the real layer set, or none', () => {
+test('actorOf reads the actor the session middleware set, or none (a token alone is no one: organizations slice 0)', () => {
   const ctx = (vars: Record<string, unknown>) => ({ get: (k: string) => vars[k] });
-  assert.deepEqual(actorOf(ctx({ token: 'abc' })), ownerActor());
+  assert.deepEqual(actorOf(ctx({ token: 'abc' })), anonymous());
   assert.deepEqual(actorOf(ctx({})), anonymous());
   const set = user('u_z');
   assert.equal(actorOf(ctx({ actor: set, token: 'abc' })), set);
   assert.deepEqual(actorOfPrincipal({ kind: 'agent', tokenId: 'agt_1', scope: 'agent', workspaceId: 'docker/api', sessionId: 'S1' }), agent);
-  assert.deepEqual(actorOfPrincipal({ kind: 'user', tokenId: 'ptk_1', scope: 'operate', workspaceId: null, sessionId: null }), token('operate'));
+  assert.deepEqual(actorOfPrincipal({ kind: 'user', userId: OWNER_ID, tokenId: 'ptk_1', scope: 'operate', workspaceId: null, sessionId: null }), token('operate'));
+  assert.deepEqual(actorOfPrincipal({ kind: 'user', tokenId: 'ptk_1', scope: 'operate', workspaceId: null, sessionId: null }), anonymous(), 'a token with no owner acts for nobody');
 });
 
 test('actor strings keep the portal’s old spellings and add user:', () => {

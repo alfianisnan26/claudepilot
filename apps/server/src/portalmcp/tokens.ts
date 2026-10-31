@@ -15,6 +15,8 @@ import {
   type PortalToken,
   type PortalTokenLabelConflict,
   type PortalTokenLifetime,
+  type UserId,
+  isUserId,
 } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import type { PortalPrincipal } from './registry.js';
@@ -36,6 +38,8 @@ interface Row {
   default_workspace_id: string | null;
   client?: string | null;
   client_instance?: string | null;
+  /** Migration 461: who minted it (u_owner for every token from before). */
+  owner_id: string;
 }
 
 /** T-1974: a token issued to a first-party client by its device flow, and the installation that signed in (replaced only by itself). */
@@ -78,6 +82,11 @@ export interface CreateTokenRules {
   /** Live admin-scope tokens one label may have (the setting `mcp.tokens.maxActivePerLabel`). */
   maxAdminPerLabel?: number;
 }
+
+/** Organizations slice 0 (P2): who mints a token, from the real actor. Required: a token nobody owns is never made. */
+export interface TokenMinter {
+  ownerId: UserId;
+}
 /** `last_used_at` is written at most this often per token: a busy script must not turn every call into a write. */
 const TOUCH_EVERY_MS = 60_000;
 
@@ -102,6 +111,7 @@ function view(r: Row): PortalToken {
     revokedReason: r.revoked_reason,
     defaultWorkspaceId: r.default_workspace_id ?? null,
     client: r.client === 'vscode' ? 'vscode' : null,
+    ownerId: r.owner_id,
   };
 }
 
@@ -171,9 +181,10 @@ export class PortalTokens {
    * Makes a token. Returns the view, the secret (which exists nowhere else) and the ids of the tokens a `replace` revoked, for the
    * caller's audit rows.
    */
-  create(req: Partial<CreatePortalTokenRequest>, rules: CreateTokenRules = {}, origin?: ClientTokenOrigin): { token: PortalToken; secret: string; replaced: string[] } {
+  create(req: Partial<CreatePortalTokenRequest>, rules: CreateTokenRules, minter: TokenMinter, origin?: ClientTokenOrigin): { token: PortalToken; secret: string; replaced: string[] } {
     const db = this.#writable;
     if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    if (!isUserId(minter?.ownerId)) throw new AppError('FORBIDDEN', 'A token is made by a signed-in person.');
     const label = typeof req.label === 'string' ? req.label.trim() : '';
     if (!label)
       throw new AppError('VALIDATION_FAILED', 'Give the token a label: it is the name shown wherever this client acts (chats, tickets, CI, audit).', { details: { label: 'Required.' } });
@@ -224,9 +235,20 @@ export class PortalTokens {
     const secret = newTokenSecret();
     const id = `ptk_${randomBytes(6).toString('hex')}`;
     db.prepare(
-      `INSERT INTO pmcp_tokens (id, label, token_hash, last4, scope, purpose, created_at, expires_at, client, client_instance)
-       VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?)`,
-    ).run(id, name, hashToken(secret), secret.slice(-4), req.scope, now.toISOString(), new Date(now.getTime() + ttl).toISOString(), origin?.client ?? null, origin?.instance ?? null);
+      `INSERT INTO pmcp_tokens (id, label, token_hash, last4, scope, purpose, created_at, expires_at, client, client_instance, owner_id)
+       VALUES (?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      name,
+      hashToken(secret),
+      secret.slice(-4),
+      req.scope,
+      now.toISOString(),
+      new Date(now.getTime() + ttl).toISOString(),
+      origin?.client ?? null,
+      origin?.instance ?? null,
+      minter.ownerId,
+    );
     this.onChange?.();
     return { token: this.get(id)!, secret, replaced };
   }
@@ -245,6 +267,8 @@ export class PortalTokens {
       token: view(row),
       principal: {
         kind: 'user',
+        // Organizations slice 0 (P2): the token acts as the person who minted it (the seam caps it by its scope).
+        userId: row.owner_id,
         tokenId: row.id,
         label: row.label,
         scope: row.scope,

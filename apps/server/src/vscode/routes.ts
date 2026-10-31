@@ -332,7 +332,10 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
     perToken.fail(v.token.id);
     // The seam caps a token by its scope; the device flow issues `operate`, and nothing here is ever more than that.
     const p = v.principal;
-    c.set('actor', actorOfPrincipal({ kind: 'user', tokenId: p.tokenId, scope: p.scope === 'admin' ? 'operate' : p.scope, workspaceId: null, sessionId: null }));
+    // Organizations slice 0 (P2): the person who approved the sign-in (the token's owner), not the founding user.
+    const who = actorOfPrincipal({ kind: 'user', userId: p.userId, tokenId: p.tokenId, scope: p.scope === 'admin' ? 'operate' : p.scope, workspaceId: null, sessionId: null });
+    if (who.kind === 'anonymous') throw UNAUTH();
+    c.set('actor', who);
     c.set('vscodeToken', v.token);
     await next();
   };

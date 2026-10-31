@@ -14,7 +14,7 @@ import type {
   UpdatePortalTokenRequest,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
-import { actorOf, actorString, requireCan } from '../authz/seam.js';
+import { actorOf, actorString, actorUserId, requireCan } from '../authz/seam.js';
 import { config } from '../config.js';
 import { declarePortalMcpPolicies, tokenRef } from './authz.js';
 import type { PortalMcpModule } from './module.js';
@@ -77,7 +77,8 @@ export function createPortalMcpRoutes(module: PortalMcpModule, deps?: PortalMcpR
     const actor = actorOf(c);
     requireCan(actor, 'manage', tokenRef());
     const req = await body<CreatePortalTokenRequest>(c);
-    return c.json(success(module.createToken(req, mcpUrl(c), actorString(actor))), 201);
+    // Organizations slice 0 (P2): bound to the person asking (a token's person when an admin token asks), never to the founding user by default.
+    return c.json(success(module.createToken(req, mcpUrl(c), actorString(actor), undefined, actorUserId(actor) ?? undefined)), 201);
   });
 
   // "Revoke older" and "Revoke all of this label" on the tokens page: one audit row per token, with who.

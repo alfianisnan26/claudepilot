@@ -14,7 +14,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import {
-  FOUNDING_USER_ID,
   REPORTER_LIMITS,
   REPORTER_TOKEN_PREFIX,
   TICKET_PRIORITIES,
@@ -535,8 +534,13 @@ export class ReporterService {
     return Number(r.changes) > 0;
   }
 
+  /**
+   * The person a token acts as: the user who approved it (`actor_user`), capped at operate. Organizations slice 0 (P2): a stored value that is
+   * not a user id acts for nobody (can() refuses anonymous) instead of falling back to the founding user; migration 461 backfilled the old ones.
+   */
   #actor(tokenId: string, userId: string): Actor {
-    return { kind: 'token', userId: (isUserId(userId) ? userId : FOUNDING_USER_ID) as UserId, tokenId, scope: 'operate' };
+    if (!isUserId(userId)) return { kind: 'anonymous' };
+    return { kind: 'token', userId: userId as UserId, tokenId, scope: 'operate' };
   }
 
   /** The tickets-service caller a token acts as: a token labelled with its origin, the person's rights capped at operate. */

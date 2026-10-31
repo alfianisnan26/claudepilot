@@ -372,3 +372,14 @@ Done here (✅): the seam's 11 tests and the 9 contract checks (`authz/contracts
 | Q3 | Per-topic relevance on `/api/live` nudges | Product |
 | Q4 | A quota per person (workspaces, sessions, spend)? Out of scope here | Product |
 
+
+## 20. Organizations slice 0: the real person on every request (2026-10-31)
+
+Organizations PRD §13 (branch `docs/orgs-design`), prerequisites P1 and P2, plus the minimal P6 linking rule. ✅ code, tests in `apps/server/src/{authz,identity,qa,reporter}/orgsSlice0.test.ts`.
+
+- **Actor.** `requireSession` sets `actor` once per request: the server code is `u_owner`; an admin account is its OWN user id. `actorOf` reads only that (a request with a session token and no actor is anonymous: fail closed). Sockets read the same person from the same cookie (`useSocketActor`); the live hub keeps it per tab (per-person filtering is P5, slice 2). Audit rows written through `actorString(actorOf(c))` and the account audit in `app.ts` name the person who acted.
+- **Founder account.** One email account may be the founding user (`users.founder`, migration 460): the earliest admin made in the portal (`created_by = 'ui'`, only the server code's holder could make the first), so the owner signing in by email stays `u_owner` (their sessions, buckets, notifications). It counts only while that account is an active admin; nothing sets it at sign-in or from a provider. 🔬 The owner should confirm which account it is (`SELECT email FROM users WHERE founder = 1`).
+- **D-82 holds.** An active admin account also holds what the founding user holds (`useAccountRoles`, the role read on every use), so a second admin loses nothing but is itself in audit rows and tokens. A member, a disabled or a removed account holds only its own; a disabled account's token or job acts for nobody. Slice 1 (P3) narrows this when owners and resolvers land.
+- **User ids** are `u_` plus base64url (`identity/users.ts`); `USER_ID_PATTERN` now takes both cases, `-` and `_` (the hex-only pattern refused every real account id).
+- **Tokens.** `pmcp_tokens.owner_id` (migration 461, backfilled `u_owner`): a Portal MCP or VS Code token acts as its minter, capped by its scope; no owner is nobody. A reporter token is its approver (`actor_user`; a value that is not a user id acts for nobody, the old ones were backfilled). Agent tokens stay their session's owner (the founding user until sessions record a creator).
+- **SSO.** A provider that makes admins makes each as its own user (never the founder). An email match never links an account that has a password of its own (`users.password_set`), is an admin or the founder, or is held by any other SSO identity.

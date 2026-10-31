@@ -312,7 +312,7 @@ test('routes: list, one change with the confirmation the server enforces, the au
   try {
     const app = new Hono<{ Variables: { token: string } }>();
     // A stand-in for the sign-in guard (app.ts sets the session token): the routes ask the seam, which answers the owner (T-329).
-    app.use(async (c, next) => (c.set('token', 'signed-in'), next()));
+    app.use(async (c, next) => ((c.set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' })), next()));
     app.onError((err, c) => (isAppError(err) ? c.json({ success: false, error: { code: err.code, message: err.message } }, err.status as ContentfulStatusCode) : c.json({}, 500)));
     app.route('/api/settings', createSettingsRoutes(h.mod));
     const call = async <T>(method: string, path: string, body?: unknown) => {
@@ -350,7 +350,7 @@ test('audit route pages (D-58): 25 by default, 100 at most, a walk with changes 
     const ins = db.prepare('INSERT INTO setting_changes (at, key, old_value, new_value, actor) VALUES (?, ?, ?, ?, ?)');
     for (let i = 0; i < 230; i++) ins.run(`2026-02-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`, 'k', 'false', 'true', 'Admin');
     const app = new Hono<{ Variables: { token: string } }>();
-    app.use(async (c, next) => (c.set('token', 'signed-in'), next()));
+    app.use(async (c, next) => ((c.set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' })), next()));
     app.onError((err, c) => (isAppError(err) ? c.json({ success: false, error: { code: err.code, message: err.message } }, err.status as ContentfulStatusCode) : c.json({}, 500)));
     app.route('/api/settings', createSettingsRoutes(h.mod));
     const get = async (qs: string) => {

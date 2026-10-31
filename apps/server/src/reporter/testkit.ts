@@ -113,7 +113,7 @@ export async function reporterHarness(opts: { now?: () => Date } = {}) {
     '/api/reporter',
     createReporterOwnerRoutes(service, {
       guard: async (c, next) => {
-        (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+        ((c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
         await next();
       },
       portalToken: (s) => portalTokens.get(s) ?? null,

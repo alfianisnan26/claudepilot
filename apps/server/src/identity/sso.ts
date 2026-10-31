@@ -337,6 +337,11 @@ export class SsoProviders {
       // mailbox the provider gave to someone else). An admin unlinks it first (removing and re-adding the provider, or the account).
       if (user && db.prepare('SELECT 1 FROM sso_identities WHERE provider_id = ? AND user_id = ? AND subject != ?').get(r.id, user.id, claims.sub))
         throw new SsoError('no_account', 'This email belongs to an account another sign-in already holds.');
+      // Organizations slice 0 (P6, organizations PRD §9.4): an email match alone never takes over an account with a password of its own, an
+      // admin (the founder included) or one any other SSO identity holds: whoever runs the IdP could otherwise sign in as them. An admin
+      // links such an account from inside the portal (later slice), or the person keeps signing in with their password.
+      if (user && !this.users.linkableByEmail(user.id))
+        throw new SsoError('no_account', 'An account with this email exists. Sign in with its password, or ask an admin to link it.');
       if (!user) {
         if (r.auto_create !== 1) throw new SsoError('no_account', 'There is no account for this email. Ask an admin.');
         const name = typeof claims.name === 'string' ? claims.name : typeof claims.preferred_username === 'string' ? claims.preferred_username : '';

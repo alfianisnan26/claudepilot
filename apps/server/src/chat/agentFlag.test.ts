@@ -160,7 +160,7 @@ test('T-294: the app’s create (POST /api/chat/sessions) takes an agent; a bad 
       return c.json(err.toJSON(), err.status as 422);
     });
     app.use(async (c, next) => {
-      (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+      ((c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
       await next();
     });
     app.route('/', createChatRoutes(s.controller));

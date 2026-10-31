@@ -160,7 +160,7 @@ export async function triggerHarness(opts: { masterOn?: boolean; workspace?: 'ok
   mountReceiver(hooks, { store, runner, clientAddress: (c) => c.req.header('x-test-addr') ?? '10.0.0.1', now: clock.now });
   const app = new Hono();
   app.use('/api/*', async (c, next) => {
-    c.set('token' as never, 'signin-1' as never);
+    c.set('token' as never, 'signin-1' as never); (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' });
     await next();
   });
   app.route('/api/triggers', createTriggerRoutes({ owner, service, runner, audit, reauthFresh: () => state.reauth, publish: () => void state.published++, now: clock.now }));

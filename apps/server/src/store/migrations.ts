@@ -4092,6 +4092,42 @@ export const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE reporter_ticket_evidence ADD COLUMN reporter_ip TEXT;`);
     },
   },
+  {
+    version: 460,
+    name: 'organizations slice 0: the founding account, and whether an account has a password of its own (P1, P6)',
+    up(db) {
+      // docs/prd/organizations.md §13 P1 (block 460-479). Every request now carries the signed-in account's OWN user id; until now every
+      // account acted as `u_owner` (migration 400's note). `founder` marks the ONE account that is the founding user, so the person who has
+      // always been `u_owner` stays `u_owner` (their sessions, buckets, notifications) when they sign in with an email account instead of the
+      // server code. It is the earliest account made in the portal by an admin (`created_by = 'ui'`: the first one could only be made by the
+      // server code's holder) that is an admin now. No account at all leaves nobody marked: the server code stays `u_owner`.
+      // `password_set` (P6, §9.4 linking rule): an SSO sign-in never links by email to an account that has a password of its own. An account
+      // an SSO provider made has a random hash nobody knows (users.createExternal: password_changed_at = created_at) until an admin sets one.
+      db.exec(`
+        ALTER TABLE users ADD COLUMN founder INTEGER NOT NULL DEFAULT 0 CHECK (founder IN (0, 1));
+        CREATE UNIQUE INDEX users_one_founder ON users (founder) WHERE founder = 1;
+        UPDATE users SET founder = 1 WHERE id = (
+          SELECT id FROM users WHERE created_by = 'ui' AND role = 'admin' ORDER BY created_at, rowid LIMIT 1
+        );
+        ALTER TABLE users ADD COLUMN password_set INTEGER NOT NULL DEFAULT 1 CHECK (password_set IN (0, 1));
+        UPDATE users SET password_set = 0 WHERE created_by LIKE 'sso:%' AND password_changed_at = created_at;
+      `);
+    },
+  },
+  {
+    version: 461,
+    name: 'organizations slice 0: every token is bound to the user who minted it (P2)',
+    up(db) {
+      // docs/prd/organizations.md §13 P2. A Portal MCP token (cpat_, the VS Code device flow's too) acts as its owner, capped by its scope;
+      // every token from before was minted by the one owner, so the backfill is `u_owner` and nothing changes for today's single owner.
+      // A reporter token already names its approver (actor_user); a value that is not a user id (none expected) becomes the founding user,
+      // which is what the service did with it until now, and from here on such a token acts for nobody. reporter_tokens is made by 900,
+      // which a new database runs after this one: then there is nothing to backfill.
+      db.exec(`ALTER TABLE pmcp_tokens ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';`);
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'reporter_tokens'").get())
+        db.exec(`UPDATE reporter_tokens SET actor_user = 'u_owner' WHERE actor_user NOT GLOB 'u_?*';`);
+    },
+  },
 ];
 
 /**

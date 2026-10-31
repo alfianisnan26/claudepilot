@@ -42,7 +42,7 @@ function app(lab: Lab, actor?: Actor) {
   const a = new Hono<{ Variables: { token: string; actor: Actor } }>();
   a.use(async (c, next) => {
     if (actor) c.set('actor', actor);
-    else c.set('token', 'signed-in');
+    else (c.set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
     await next();
   });
   a.onError((e, c) =>

@@ -25,7 +25,7 @@ function app(x: Harness, actor?: Actor) {
   const a = new Hono<{ Variables: { token: string; actor: Actor } }>();
   a.use(async (c, next) => {
     if (actor) c.set('actor', actor);
-    else c.set('token', 'signed-in');
+    else (c.set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
     await next();
   });
   a.onError((e, c) => (isAppError(e) ? c.json({ error: { code: e.code, message: e.message, details: e.details } }, e.status as 400) : c.json({ error: { code: 'INTERNAL', message: String(e) } }, 500)));
@@ -195,7 +195,7 @@ test('the Portal MCP tools: reads of the platform area; versions per workspace, 
   const registry = new ToolRegistry();
   registerClaudeVersionTools(h.svc, registry);
   assert.deepEqual(registry.list().map((t) => [t.name, t.scope, t.hints?.readOnly]), [['claude_versions', 'read', true], ['claude_minimums', 'read', true]]);
-  const principal = { kind: 'user', tokenId: 't1', label: 'x', scope: 'read', workspaceId: null, sessionId: null, expiresAt: '', client: null, vaults: null } as never;
+  const principal = { kind: 'user', userId: 'u_owner', tokenId: 't1', label: 'x', scope: 'read', workspaceId: null, sessionId: null, expiresAt: '', client: null, vaults: null } as never;
   const ctx = { principal, assertWorkspace: () => undefined } as never;
   const versions = (await registry.get('claude_versions')!.handler(ctx, {} as never)) as any;
   assert.match(versions.summary, /2 workspace\(s\); default pin 2\.1\.296; candidate 2\.1\.296/);

@@ -18,13 +18,15 @@ import type { MultiPoolType } from './pools.js';
 /* ---------- Users, owners, levels ---------- */
 
 /**
- * A user's id. `u_owner` is the FOUNDING account (the first user ever created: the id the single-owner install has always used, so the data that
- * already says `u_owner` needs no rewriting); every other id is `u_` plus 24 random hex characters. An id is public, unguessable and never
- * relied on: access never follows from knowing one.
+ * A user's id. `u_owner` is the FOUNDING user (the id the single-owner install has always used, so the data that already says `u_owner` needs
+ * no rewriting): the server code's sign-in, and the one email account marked as the founder (`users.founder`, migration 460). Every other id is
+ * an email account's own: `u_` plus 12 base64url characters (identity/users.ts), so the pattern takes letters of both cases, digits, `-` and
+ * `_` (organizations slice 0: the narrower hex-only pattern refused every real account id). An id is public, unguessable and never relied on:
+ * access never follows from knowing one.
  */
 export type UserId = string;
 export const FOUNDING_USER_ID: UserId = 'u_owner';
-export const USER_ID_PATTERN = /^u_[a-z0-9]{1,40}$/;
+export const USER_ID_PATTERN = /^u_[A-Za-z0-9_-]{1,40}$/;
 export const isUserId = (v: unknown): v is UserId => typeof v === 'string' && USER_ID_PATTERN.test(v);
 
 export type TeamId = string;

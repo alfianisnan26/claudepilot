@@ -337,7 +337,7 @@ test('routes: zip and folder uploads, reviews by session, a workspace’s skills
   try {
     const app = new Hono<{ Variables: { token: string } }>();
     app.use(async (c, next) => {
-      c.set('token', 'session-token');
+      (c.set('token', 'session-token'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
       await next();
     });
     app.onError((e, c) => (isAppError(e) ? c.json(e.toJSON(), e.status as ContentfulStatusCode) : c.json({ error: String(e) }, 500)));

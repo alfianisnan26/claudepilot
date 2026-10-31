@@ -215,10 +215,10 @@ test('authz: only manage on the person’s tokens mints or revokes; read, operat
   const { h, call } = await routes();
   try {
     const id = (await call(OWNER, 'POST', '/api/portal-mcp/tokens', { label: 'kept', scope: 'read' })).data.token.id;
-    const admin = actorOfPrincipal({ kind: 'user', tokenId: 'ptk_admin', scope: 'admin', workspaceId: null, sessionId: null });
+    const admin = actorOfPrincipal({ kind: 'user', userId: 'u_owner', tokenId: 'ptk_admin', scope: 'admin', workspaceId: null, sessionId: null });
     const refused: [string, Actor][] = [
-      ['read token', actorOfPrincipal({ kind: 'user', tokenId: 'ptk_r', scope: 'read', workspaceId: null, sessionId: null })],
-      ['operate token', actorOfPrincipal({ kind: 'user', tokenId: 'ptk_o', scope: 'operate', workspaceId: null, sessionId: null })],
+      ['read token', actorOfPrincipal({ kind: 'user', userId: 'u_owner', tokenId: 'ptk_r', scope: 'read', workspaceId: null, sessionId: null })],
+      ['operate token', actorOfPrincipal({ kind: 'user', userId: 'u_owner', tokenId: 'ptk_o', scope: 'operate', workspaceId: null, sessionId: null })],
       ['agent token', actorOfPrincipal({ kind: 'agent', tokenId: 'pst_a', scope: 'agent', workspaceId: 'docker/api', sessionId: 'sa' })],
       ['nobody', { kind: 'anonymous' } as Actor],
     ];

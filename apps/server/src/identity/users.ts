@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { AppError } from '@isnanme/core';
-import { EMAIL, IDENTITY_ERROR_CODES, normalizeEmail, type CreatePortalUserRequest, type PortalUser, type UpdatePortalUserRequest } from '@portal/contracts';
+import { EMAIL, FOUNDING_USER_ID, IDENTITY_ERROR_CODES, normalizeEmail, type CreatePortalUserRequest, type PortalUser, type UpdatePortalUserRequest } from '@portal/contracts';
 import './errors.js';
 import { acceptNewPassword, normalizePassword, PasswordHasher, UNMATCHABLE_HASH } from './passwords.js';
 import { fingerprint, Throttle } from './throttle.js';
@@ -22,6 +22,10 @@ interface Row {
   created_at: string;
   created_by: string;
   last_login_at: string | null;
+  /** Migration 460: 1 on the one account that is the founding user (`u_owner`). */
+  founder?: number;
+  /** Migration 460: 0 while the account has no password of its own (an SSO-made one), 1 once it has. */
+  password_set?: number;
 }
 
 const view = (r: Row): PortalUser => ({
@@ -114,7 +118,7 @@ export class PortalUsers {
       if (req.role === 'admin' || req.role === 'member') db.prepare('UPDATE users SET role = ? WHERE id = ?').run(req.role, id);
       if (typeof req.displayName === 'string' && req.displayName.trim()) db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(req.displayName.trim().slice(0, 60), id);
       if (req.state === 'active' || req.state === 'disabled') db.prepare('UPDATE users SET state = ?, disabled_at = ? WHERE id = ?').run(req.state, req.state === 'disabled' ? at : null, id);
-      if (hash) db.prepare('UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?').run(hash, at, id);
+      if (hash) db.prepare('UPDATE users SET password_hash = ?, password_changed_at = ?, password_set = 1 WHERE id = ?').run(hash, at, id);
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');
@@ -143,7 +147,9 @@ export class PortalUsers {
     const at = this.now().toISOString();
     const name = (displayName.replace(/[\u0000-\u001f\u007f]/g, '').trim() || email.split('@')[0]!).slice(0, 60);
     this.#w()
-      .prepare('INSERT INTO users (id, email, email_key, display_name, role, state, password_hash, password_changed_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare(
+        'INSERT INTO users (id, email, email_key, display_name, role, state, password_hash, password_changed_at, created_at, created_by, password_set) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
+      )
       .run(id, email, email, name, role === 'admin' ? 'admin' : 'member', 'active', hash, at, at, by);
     return view(this.#row(id));
   }
@@ -158,6 +164,25 @@ export class PortalUsers {
     const r = this.db()?.prepare('SELECT role, state FROM users WHERE id = ?').get(id) as { role: 'admin' | 'member'; state: string } | undefined;
     if (!r) return null;
     return r.state === 'active' ? r.role : 'disabled';
+  }
+
+  /**
+   * Organizations slice 0 (P1): the user id an account acts as. Its own id, always, except the ONE account marked founder (migration 460)
+   * while it is an active admin: that is the founding user `u_owner`, whose data it has always been. Never set by a sign-in or a provider.
+   */
+  principalOf(id: string): string {
+    const r = this.db()?.prepare('SELECT founder, role, state FROM users WHERE id = ?').get(id) as { founder: number; role: string; state: string } | undefined;
+    return r && r.founder === 1 && r.role === 'admin' && r.state === 'active' ? FOUNDING_USER_ID : id;
+  }
+
+  /**
+   * Organizations slice 0 (P6, §9.4): whether an SSO sign-in may link this account by its email alone. Never one with a password of its own,
+   * an admin, the founder, or one another SSO identity already holds (any provider): those are taken over by an email match otherwise.
+   */
+  linkableByEmail(id: string): boolean {
+    const r = this.#db().prepare('SELECT role, founder, password_set FROM users WHERE id = ?').get(id) as { role: string; founder: number; password_set: number } | undefined;
+    if (!r || r.role === 'admin' || r.founder === 1 || r.password_set !== 0) return false;
+    return !this.#db().prepare('SELECT 1 FROM sso_identities WHERE user_id = ? LIMIT 1').get(id);
   }
 
   /** One account as its own holder sees it. */

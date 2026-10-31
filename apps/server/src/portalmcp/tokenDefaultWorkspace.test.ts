@@ -122,7 +122,7 @@ test('an agent’s token ignores any default: its ticket is in its own workspace
 
     // The resolver itself: an agent's context (or the manager's) never takes a default, even one on its principal.
     const ctx = (kind: 'user' | 'agent' | 'manager', isAgent: boolean) =>
-      ({ isAgent, principal: { kind, tokenId: 'ptk_x', label: 'x', scope: isAgent ? 'agent' : 'admin', workspaceId: isAgent ? 'docker/api' : null, sessionId: isAgent ? 'sa' : null, expiresAt: '', client: null, vaults: null, defaultWorkspaceId: 'kubernetes/konfersi' } }) as unknown as PortalToolContext;
+      ({ isAgent, principal: { kind, userId: 'u_owner', tokenId: 'ptk_x', label: 'x', scope: isAgent ? 'agent' : 'admin', workspaceId: isAgent ? 'docker/api' : null, sessionId: isAgent ? 'sa' : null, expiresAt: '', client: null, vaults: null, defaultWorkspaceId: 'kubernetes/konfersi' } }) as unknown as PortalToolContext;
     assert.equal(ticketWorkspaceOf(ctx('agent', true), undefined), undefined);
     assert.equal(ticketWorkspaceOf(ctx('manager', false), undefined), undefined);
     assert.equal(ticketWorkspaceOf(ctx('user', false), undefined), 'kubernetes/konfersi');

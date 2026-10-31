@@ -342,7 +342,7 @@ test('PATCH /api/chat/sessions/:id/limits: manage on the session (another user: 
         return c.json(err.toJSON(), err.status as 404);
       });
       a.use(async (c, next) => {
-        if (actor === 'owner') (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+        if (actor === 'owner') ((c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
         else if (actor) (c as unknown as { set(k: string, v: unknown): void }).set('actor', actor);
         await next();
       });

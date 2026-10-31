@@ -122,3 +122,15 @@ test('glance: a tab that subscribed is told to load the snapshot again, once for
   await until(() => hub.clients === 0);
   assert.equal(hub.watching('glance'), false, 'and nobody once the tab is gone');
 });
+
+test('organizations slice 0: each tab keeps the person its cookie names, read once at the handshake', async () => {
+  const { useSocketActor } = await import('./authz/seam.js');
+  const was = useSocketActor((req) => (req.headers.cookie === 'portal_session=ok' ? { kind: 'user', userId: 'u_Second-admin', loginSessionId: 'legacy', via: 'ui' } : null));
+  try {
+    const t = await tab();
+    await until(() => hub.actors().some((a) => a.kind === 'user' && a.userId === 'u_Second-admin'));
+    t.socket.close();
+  } finally {
+    useSocketActor(was);
+  }
+});

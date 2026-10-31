@@ -21,7 +21,7 @@ test('GET /api/tickets/:id/merge: the latest record per repo; declared view on t
     const a = new Hono();
     a.onError((e, c) => (isAppError(e) ? c.json(e.toJSON(), e.status as 400) : c.json({ error: String(e) }, 500)));
     a.use(async (c, next) => {
-      (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+      ((c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
       await next();
     });
     a.route('/api/tickets', createTicketRoutes(h.tickets));

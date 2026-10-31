@@ -185,7 +185,7 @@ test('GET returns the snapshot in the usual envelope', async () => {
   const h = harness();
   h.glance.snapshot();
   const app = new Hono<Vars>();
-  app.use('*', async (c, next) => (c.set('token', 't'), next())); // what requireSession does
+  app.use('*', async (c, next) => ((c.set('token', 't'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' })), next())); // what requireSession does
   app.onError((e, c) => (isAppError(e) ? c.json(e.toJSON(), e.status as ContentfulStatusCode) : c.json({ error: String(e) }, 500)));
   app.route('/api/glance', createGlanceRoutes(h.glance));
   const res = await app.request('/api/glance');
@@ -241,7 +241,7 @@ test('GET asks on behalf of the signed-in actor the seam names, and the owner fo
   const glance = new Glance(src, { notify: () => undefined, now: () => NOW });
   // What `requireSession` does today: it sets the sign-in's token on the context; the seam reads the owner from it.
   const signedIn = new Hono<Vars>();
-  signedIn.use('*', async (c, next) => (c.set('token', 't'), next()));
+  signedIn.use('*', async (c, next) => ((c.set('token', 't'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' })), next()));
   signedIn.route('/api/glance', createGlanceRoutes(glance));
   // What the real layer does later: it sets the actor itself.
   const asUserApp = new Hono<Vars>();
