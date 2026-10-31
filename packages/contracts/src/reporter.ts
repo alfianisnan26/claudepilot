@@ -287,6 +287,8 @@ export type ReporterPanelMessage =
   | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
   | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }
   | { type: 'pilot-reporter:highlight'; key: string }
+  /** Captures waiting in the draft tray: the widget button shows the count as a badge (0 hides it). */
+  | { type: 'pilot-reporter:tray'; count: number }
   | { type: 'pilot-reporter:close' };
 
 export type ReporterBridgeMessage = ReporterHostMessage | ReporterPanelMessage;
