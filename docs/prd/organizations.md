@@ -38,12 +38,13 @@ The PRDs still say "SSO: later" ([Identity](identity-onboarding.md) §4, [Author
 | O-G2 | Share a workspace or a project to a whole organization or a team in it, at view or operate, with the consent screen (credentials off by default) and instant revocation. |
 | O-G3 | One `can()`: organizations are an owner kind and a grant subject, decided by the seam with the same 404 for what you may not see. |
 | O-G4 | An organization brings its own OIDC provider, limited to the email domains it has proved it holds; JIT into the organization, groups to roles and teams, SSO required if it wants. |
-| O-G5 | Upgrading changes nothing for the owner: every existing object stays theirs, the server code still gets the instance admin in. |
+| O-G5 | Upgrading loses nothing: the migration creates three organizations (isnan, konfersi, kohilabs), assigns today's resources to them by project (§11), and the owner stays owner of all three; the server code still gets the instance admin in. |
+| O-G7 | A global **Admin console** on its own host (`admin.pilot.ai.isnan.me`, §6.11) lets instance admins manage users, abilities (create organizations), suspensions, sessions, SSO providers and audit; the main portal serves no admin page. |
 | O-G6 | Leaving, removal, deletion and SSO de-provisioning have a defined, tested effect on every right and every running thing (sockets, sessions, terminals, tokens). |
 
 ## 4. Non-goals
 
-SAML in v1 (§9.9); SCIM in v1 (§9.6); billing, quotas and plans per organization; cross-portal federation; an organization-level policy language; nested organizations or organizations owning organizations; making the portal public or commercial (D-53: internal only, Konfersi and Kohilabs); an org admin reading a member's private chat transcript (§6.5, decision OD-3).
+SAML in v1 (§9.9); SCIM in v1 (§9.6); billing, quotas and plans per organization; cross-portal federation; an organization-level policy language; nested organizations or organizations owning organizations; making the portal public or commercial (D-53: internal only, Konfersi and Kohilabs); an org admin reading a transcript without an audit row, or an instance owner entering an org without a break-glass entry (§6.5, §6.7, decisions OD-3 and OD-4).
 
 ## 5. Users and stories
 
@@ -64,7 +65,7 @@ SAML in v1 (§9.9); SCIM in v1 (§9.6); billing, quotas and plans per organizati
 
 | Entity | What it is | Key rules |
 | --- | --- | --- |
-| Organization `org_…` | A name, a slug (unique, used in URLs and the switcher), a state (`active` / `suspended` / `deleting`), policies (§6.6) | Always has at least one active owner (service + trigger, like teams). Created by any active account unless the instance policy restricts it (decision OD-2). |
+| Organization `org_…` | A name, a slug (unique, used in URLs and the switcher), a state (`active` / `suspended` / `deleting`), policies (§6.6) | Always has at least one active owner (service + trigger, like teams). Created by an account holding the ability `orgs.create` (granted by an instance admin in the Admin console, off by default; OD-2), or by an instance admin. |
 | Membership | `(org, user, role, state, joined_at, via)`; `via` = `invite` / `sso_jit` / `domain_join` / `migration` / `created` | Roles: `owner` > `admin` > `member` > `guest`. One row per person per org. |
 | Team `tm_…` | Belongs to exactly one organization (`teams.org_id`). Team roles stay `owner` / `member` ([Teams](teams.md) D18). | Only members of the org may be in its teams; leaving the org leaves its teams (trigger). Team names are unique per org, not per portal. |
 | Personal space | What a person owns as `owner_kind = 'user'` (today's model, unchanged) | Never reachable through an org role (§6.5). |
@@ -90,7 +91,7 @@ Guests are for contractors and for a domain-unverified email in an SSO-required 
 | vault | user, team, **org** | `kg_vaults` has no owner column today (§14.3). |
 | pool (any set type), account, endpoint, account_pool, template | user, team, **org** | Secrets sets owned by an org are the org's credentials: assigning one still needs `manage` on the target workspace and the consent rules of Sharing. |
 | ci_repo, ci_run, repo, browser, terminal | inherit from the workspace | No own owner. A CI remote's credentials come from the sets assigned to its workspace. |
-| session | **user only, private** | D14 holds: a session belongs to its creator even in an org workspace. OD-3 decides what org admins may do on it. |
+| session | **user only, private** | A session belongs to its creator (D14) and no org role gives `send` or `operate`. Exception (OD-3): in an **org-owned workspace** org owners and admins may read the transcript, see the metadata and stop the session; every transcript view is audited and visible to the member (§6.5). |
 | claude (a workspace Claude login) | **user only** | D-33, D-53, D-56: a login is the person's; an org can only receive it by the person's consented contribution, never own it. |
 | trigger, personal (tokens, devices, notification destinations) | user only | A trigger in an org workspace still runs as its owner with `can` at run time. |
 | target | platform, **org** (later slice) | An org admin may enrol a Connect host for the org only (`platform(targets)` stays for instance-wide ones); host-level targets stay instance-admin only (D15). |
@@ -126,7 +127,7 @@ suspended org     → every level that comes from it (ownership, org grants, its
 Invariants (each one a test in §13):
 
 1. **An org role never reaches a member's personal objects.** Org owners and admins hold nothing on what a member owns as a user (the parallel of D12 for admins).
-2. **Sessions stay private** (D14). Org roles give no `view` on a session, also in an org workspace (unless OD-3 says otherwise).
+2. **Sessions belong to their creator** (D14). In a personal workspace, or any workspace the org does not own, org roles give nothing on a session. In an org-owned workspace org owners and admins get **read-only** access to members' sessions (OD-3): transcript, title, creator, cost, and `stop`; never `send` or a terminal. Each transcript view writes an audit row `org.transcript_viewed` (viewer, session, member, time; no content), readable by the member under Settings > Access log and by org owners. The workspace shows a notice that org admins can read sessions there. Not applicable to a session in a team or user workspace shared to the org.
 3. **Context is not authority.** The org the UI is "in" is sent as a list filter (`?org=`), may only NARROW results, and is never an input to `can()`. A header or body that names an org is never trusted to widen.
 4. **The same 404.** An org you are not in, its teams, its members and its objects answer exactly like a missing one, in every route, tool, socket and search. Lists count after the filter. The SSO discovery answer names a provider only for a verified domain, and its display name is the org's chosen sign-in label (§9.7).
 5. **Tokens and agents never exceed their user**, read at use time. A Portal MCP token may additionally carry `org_id` (narrow only: it then reaches only that org's objects and the user's personal ones are refused). An agent stays boxed to its session and workspace; its user is the session's creator.
@@ -149,7 +150,14 @@ The level query of Authorization §10 grows two `UNION ALL` arms (org-owned by r
 
 ### 6.7 The instance owner (super-admin)
 
-The founding user stays the **platform admin** (`role = admin`, `platform(*)` areas). With organizations the platform admin: creates, suspends and deletes organizations; sees the list of organizations with names, member counts and owners (not their content); approves a domain for an org when DNS is not practical (audited, noisy); **recovers ownership** of an org that has no active owner (makes a named member owner, or themselves, with a fresh re-auth, a reason, an audit row of severity `medium` and a notification to every org admin). The platform admin holds **no right on org content** by role, as D12 and MO4 already say; if the owner wants a break-glass, that is OD-4.
+The founding user stays the **platform admin** (`role = admin`, `platform(*)` areas). With organizations the platform admin: creates, suspends and deletes organizations; sees the list of organizations with names, member counts and owners; approves a domain for an org when DNS is not practical (audited, noisy); **recovers ownership** of an org that has no active owner (a fresh re-auth, a reason, an audit row of severity `medium`, a notification to every org admin); grants and revokes the ability `orgs.create` to users. These actions are done in the Admin console (§6.11).
+
+**Break-glass (OD-4).** The instance owner has full access to any org's content, but only through a recorded entry:
+
+- `POST /admin-api/orgs/:id/break-glass {reason}` on the Admin console, fresh re-auth, `reason` required (min 10 characters). It creates `org_break_glass(id, org_id, admin_user_id, reason, started_at, expires_at, ended_at)`, **time-boxed to 1 hour** (renewable only by a new entry with a new reason; the owner may end it early).
+- While the entry is open, `can()` gives that admin `manage` on the org's content (workspaces, buckets, vaults, sets, sessions and transcripts) in the normal portal UI, with a persistent banner. It never reaches **personal** spaces (D12, MO4 stand there) and never `send` into a member's running session without it being audited as such.
+- Audit: `org.break_glass_started|ended|expired` rows, plus one `org.break_glass_access` row per transcript view and per mutation made under the entry. Org owners are notified at start and can read the rows (reason, who, when).
+- Superseded by this decision: D12 and MO4 for **org content** only.
 
 Today the platform admin is also every other admin account (§14.1, G1). Separating "instance admin" from "an account whose role is admin" is prerequisite P1.
 
@@ -172,6 +180,18 @@ Today the platform admin is also every other admin account (§14.1, G1). Separat
 ### 6.10 Audit
 
 `platform_audit` (D22) gains a nullable `org_id`; org admins read their org's rows (`/api/orgs/:id/audit`), the platform admin reads all. Kinds: `org.created|updated|suspended|resumed|deleted|ownership_recovered`, `org.member_invited|joined|role_changed|removed|left`, `org.team_*`, `org.share_created|ended`, `object.transferred`, `org.domain_added|verified|lost|removed`, `org.sso_created|updated|enforced|removed`, `org.sso_signin|signin_failed|jit_created|groups_synced`. Every row carries `actorString(actor)`; no secret, no token, no claim value other than the email and the matched group names.
+
+### 6.11 Admin console (OD-2)
+
+A separate global console for **instance admins only**, on its own host `admin.pilot.ai.isnan.me` (covered by the cluster's `*.pilot.ai.isnan.me` certificate; a Traefik IngressRoute to the same portal service plus a private DNS record). It is not a menu of the main portal.
+
+- **Host split.** The server reads `settings.adminHost`; unset means the console is off (fail closed). A first middleware compares the `Host` header with it: on the admin host only `/admin-api/*`, the admin UI bundle and `/healthz` answer; on every other host `/admin-api/*` and the admin UI answer the same 404 as an unknown route. The main portal never serves an admin page and the main UI has no Admin menu. `X-Forwarded-Host` is ignored unless the proxy is the configured trusted one.
+- **Own session.** Sign-in on the admin host accepts only an active account with `role = admin`. Cookie `__Host-pilot_admin` (host-only, no `Domain`, `Secure`, `HttpOnly`, `SameSite=Strict`), its own table `admin_sessions`, idle timeout 15 minutes, absolute 2 hours; a main-portal cookie is not accepted there and the admin cookie is never sent to the main host. No bearer tokens, no Portal MCP, no reporter or VS Code token on this host. Writes check `Origin` (the admin host only).
+- **Step-up.** Re-auth (the existing fresh-auth check) within 5 minutes for: granting or revoking an ability, suspending or deleting a user, ending sessions or tokens, changing an SSO provider, recovering org ownership, break-glass, deleting an org.
+- **Screens.** Users (list, role, state, last sign-in, abilities, suspend/resume, end all sessions, revoke tokens), Organizations (list, owners, member counts, state, suspend/resume, recover owner, break-glass), Abilities (`orgs.create` per user; off by default), Sessions and tokens per user, SSO providers (instance-wide and org), Audit (platform audit, break-glass rows, filters).
+- **Routes** (all declared, policy `platform(users)` unless noted; enumeration test covers the admin table too): `GET /admin-api/users`, `GET /admin-api/users/:id`, `POST /admin-api/users/:id/suspend|resume`, `POST /admin-api/users/:id/sessions/end`, `DELETE /admin-api/users/:id/tokens/:tid`, `PUT|DELETE /admin-api/users/:id/abilities/:ability` (step-up), `GET /admin-api/orgs`, `POST /admin-api/orgs/:id/suspend|resume|recover-owner` (step-up), `POST /admin-api/orgs/:id/domains/:d/verify`, `POST /admin-api/orgs/:id/break-glass` (step-up), `GET /admin-api/sso`, `GET /admin-api/audit`. Every write writes a `platform_audit` row with the actor, the target and the reason when given.
+- **Abilities** are rows `user_abilities(user_id, ability, granted_by, granted_at)`; the ability `orgs.create` is checked by `POST /api/orgs` on the main portal (creation itself is a main-portal action; granting it is not). The creator becomes the first owner.
+- **Authz.** One more module `apps/server/src/admin/authz.ts`; actor from the admin session's user (P1), never `u_owner` by default; a denial is a 404.
 
 ## 7. Personal and organization context in the UI
 
@@ -304,7 +324,7 @@ SSO is for people. Connect nodes (node keys, enrollment tokens), the reporter's 
 
 | Route | Policy |
 | --- | --- |
-| `GET /api/orgs` (mine), `POST /api/orgs` | signed-in (list filtered); create: signed-in + instance policy |
+| `GET /api/orgs` (mine), `POST /api/orgs` | signed-in (list filtered); create: ability `orgs.create` or instance admin |
 | `GET/PATCH/DELETE /api/orgs/:id` | `org` view / manage / owner-only (a declared `handler` check for owner) |
 | `GET/POST /api/orgs/:id/members`, `PATCH/DELETE /api/orgs/:id/members/:uid`, `POST /api/orgs/:id/leave` | view (members+, guests refused) / manage |
 | `GET/POST/DELETE /api/orgs/:id/invitations…`, `POST /api/org-invitations/accept` | manage / signed-in + code + email match |
@@ -313,20 +333,29 @@ SSO is for people. Connect nodes (node keys, enrollment tokens), the reporter's 
 | `GET/PUT/DELETE /api/orgs/:id/sso`, `POST …/sso/test` | manage; enforcement owner-only |
 | `GET /api/orgs/:id/audit` | manage |
 | `POST /api/objects/:type/:id/transfer` | `manage` on the object + membership in the target org |
-| Platform: `GET /api/admin/orgs`, `POST /api/admin/orgs/:id/suspend|resume|recover-owner`, `POST /api/admin/orgs/:id/domains/:d/verify` | `platform(users)` + re-auth for recover |
+| Platform (admin host only, §6.11): `GET /admin-api/orgs`, `POST /admin-api/orgs/:id/suspend|resume|recover-owner|break-glass`, `POST /admin-api/orgs/:id/domains/:d/verify` | `platform(users)` + admin session + step-up |
 
 Portal MCP: `org_list` (signed-in, own orgs) and `org_members` (org view) for the General Manager; **no** tool creates orgs, changes roles, SSO or domains (people only, like bucket admin today). Every route and tool is declared; the module's enumeration test fails on an undeclared one.
 
-## 11. Migration of existing data
+## 11. Migration of existing data (OD-1)
 
-Nothing is rewritten. Every existing object keeps `owner_kind = 'user', owner_id = 'u_owner'` (personal). Then, by default (decision OD-1):
+Decision: no "personal" holdover and no single default org. One instance, **three organizations by project**, all on k3s pods for now (Docker and Connect targets come later):
 
-1. The migration creates **one organization** owned by `u_owner` (name and slug from an instance setting, default "Pilot" / `pilot`), adds every existing account (admin → org `admin`, member → `member`, `via = 'migration'`), moves every existing team into it (`teams.org_id`), and records it in `portal_meta.default_org`.
-2. Existing instance SSO providers stay instance-wide (`org_id = NULL`); their `default_team_id` keeps working; their JIT accounts also join the default org with `member`.
-3. Session shares stay as they are (they are user or team grants on one session).
-4. The owner then moves what should be shared work into the org with **Move to organization** (bulk for workspaces, buckets, vaults), or creates more orgs (Konfersi, Kohilabs) and moves into them.
+| Org (slug) | Holds | From today's data (by name; the dry run confirms) |
+| --- | --- | --- |
+| **isnan** | ClaudePilot itself, tradingbot and the other personal and lab projects | buckets `PILOT`, `TB` and the other personal ones; their workspaces, vaults and CI remotes; the teams; the instance's own sets |
+| **konfersi** | the Konfersi universe | bucket `KONF`; the Konfersi repos and leads in workspace `kubernetes/kohi-event`; their vaults; CI remotes `konfersi-universe` |
+| **kohilabs** | memor.id | bucket `MEMOR`; workspace `kubernetes/memorid-project`; its vault and CI remote |
 
-The alternative (OD-1 b) is "everything becomes the default org's"; it would make every existing object visible to every admin of that org and blurs what is personal, so it is not recommended.
+Steps:
+
+1. A **dry run** (`POST /admin-api/migration/orgs/plan`, platform admin) reads a mapping setting `orgs.migrationMap` (bucket key, workspace id, vault id, CI remote, set -> org slug), lists every object and its target, and fails on any object with no target. The owner edits the map and confirms; only then the migration runs (once, recorded in `portal_meta.orgs_migrated`).
+2. It creates the three orgs, owned by `u_owner` (`via = 'migration'`). Every existing account joins **isnan** as before (admin -> `admin`, member -> `member`); `konfersi` and `kohilabs` start with `u_owner` only and get people by invitation or SSO. Existing teams move into isnan.
+3. It sets `owner_kind = 'org'` on every mapped object and writes an `object.transferred` audit row for each. What the map does not cover is not moved and is listed in the plan as a blocker, not silently left personal. Sessions and workspace Claude logins stay user-owned by nature (§6.3); sessions in org workspaces become readable by that org's admins under OD-3, with the notice of §6.5.
+4. Existing instance SSO providers stay instance-wide (`org_id = NULL`); their JIT accounts join isnan with `member`. Session shares stay as they are.
+5. Rollback: the migration is one transaction per org plus the audit rows; a reverse map (`owner_kind` back to `'user', 'u_owner'`) is a tested script, because nothing is rewritten besides the owner columns.
+
+**Shared pod `kohi-event`** hosts several programs today. Recommendation (open follow-up, OD-6): v1 keeps the workspace **owned by isnan** (it is the infrastructure the owner runs) and **shares it to konfersi at `operate`** through an org grant, credentials off by default; the Konfersi repos, leads, vaults and CI remotes inside it are konfersi's. Split the programs into per-org pods later when a Konfersi member should not hold terminal access to the shared pod (operate on a pod is terminal-equivalent, §12). The migration map supports either: a workspace has exactly one owner org, so a split is a new pod plus a transfer.
 
 ## 12. Risks and open questions
 
@@ -342,7 +371,7 @@ The alternative (OD-1 b) is "everything becomes the default org's"; it would mak
 | ID | Question | Who |
 | --- | --- | --- |
 | Q1 | Should a workspace Claude login contributed to an org crew (D-53) be listed on the org's page (who contributed what, limits), visible to org admins? Default: yes, names and limits, never the token. | Product |
-| Q2 | Org-scoped Connect targets: in v1 or later? Default later (slice 9). | Product |
+| Q2 | Org-scoped Connect targets: in v1 or later? Default later (slice 11). | Product |
 | Q3 | An org-private library (MCP entries, skills approved by org admins)? Default no: the platform library stays one. | Owner, later |
 | Q4 | Public Suffix List as a dependency for domain checks? Default: a built-in short list now. | Product |
 | Q5 | `private_key_jwt` client auth for org providers to avoid shared secrets? Default later. | Product |
@@ -367,15 +396,19 @@ The alternative (OD-1 b) is "everything becomes the default org's"; it would mak
 | 0 | P1 + P2 (actor and tokens) | two admin accounts get different `actorString`; a token minted by `u_b` cannot reach `u_a`'s bucket; reporter token with a non-user id refused; cookie-less socket anonymous |
 | 1 | P3 + P4 (owners, resolvers, enumeration, middleware) | whole-app enumeration: no undeclared route or tool; generated probes per declared policy with `u_a`/`u_b`; unowned → 404 |
 | 2 | P5 + P6 | cross-user live/search/aggregator leaks (X-cases); SSO linking matrix of §9.4; DNS-rebinding guard with a fake resolver |
-| 3 | Orgs core: tables, `org` object type, memberships, roles, invariants, the default-org migration, the platform admin list and recovery | last owner cannot leave (service and trigger, two connections); org 404 for non-members; migration on a copy of the real schema keeps every owner |
-| 4 | Org-owned objects + Move to organization (workspace, bucket, vault first) | org admin manages, member none without grant; creator grant; personal objects unreachable by org admin; transfer re-consents credentials |
-| 5 | Org-level and team sharing (grants with `subject_kind = 'org'`), teams scoped to orgs | guest excluded from org grants; leaving ends grants made; team of org A never counts for a user who left A; revoke closes sockets and stops sessions |
-| 6 | Invitations, leaving/removal effects, suspension, deletion, audit | single use, expiry, email match, throttle; every §6.9 row as a test |
-| 7 | Web: switcher, context filter, share dialog subjects, Org settings (Members, Teams, Invitations, Policies, Audit) | `tools/qa` at 390 and 1280, light and dark, 44 px, no horizontal scroll; context never widens (API test with a forged `?org=`) |
-| 8 | Org SSO: domains (TXT), org providers, JIT, groups, `requireSso`, step-up, token freshness | DNS fake; domain unique across orgs and instance providers; owner never mapped; enforcement lock-out guard; fake IdP (`identity/fakeIdp.ts` ✅ exists) for every §9.4 row |
-| 9 | Later: org-scoped Connect targets, SCIM, org library | — |
+| 3 | Orgs core: tables, `org` object type, memberships, roles, invariants, abilities (`user_abilities`, `orgs.create`), the org list for the platform admin | last owner cannot leave (service and trigger, two connections); org 404 for non-members; `POST /api/orgs` refused without the ability |
+| 4 | **Admin console host** (§6.11): host split middleware, `admin_sessions`, `__Host-` cookie, step-up, `/admin-api/*`, admin UI bundle, Traefik IngressRoute and private DNS in `deploy/k3s`, abilities, org recovery, SSO list, audit | admin routes 404 on the main host (and the main UI has no admin page); a main-portal cookie and every token refused on the admin host; non-admin account refused; idle 15 min and absolute 2 h expiry; step-up required (time-faked); `adminHost` unset disables the console; undeclared admin route fails enumeration |
+| 5 | Org-owned objects + Move to organization (workspace, bucket, vault first), break-glass (§6.7) | org admin manages, member none without grant; creator grant; transfer re-consents credentials; break-glass needs reason and fresh re-auth, expires at 1 h, notifies org owners, writes access rows, never reaches personal objects |
+| 6 | **Three-org migration** (§11): plan/dry run, `orgs.migrationMap`, create isnan, konfersi, kohilabs, transfer by map, reverse script | migration on a copy of the real schema keeps every owner and loses no object; an unmapped object blocks the plan; `kohi-event` owned by isnan + operate grant to konfersi; run twice is a no-op; rollback restores owners |
+| 7 | Org-level and team sharing (grants with `subject_kind = 'org'`), teams scoped to orgs, org-admin read of transcripts (OD-3) with audit and the member's access log | guest excluded from org grants; leaving ends grants made; revoke closes sockets and stops sessions; a transcript view writes the audit row the member can read; no `send` for an org admin; nothing in a non-org workspace |
+| 8 | Invitations, leaving/removal effects, suspension, deletion, audit | single use, expiry, email match, throttle; every §6.9 row as a test |
+| 9 | Web: switcher, context filter, share dialog subjects, Org settings (Members, Teams, Invitations, Policies, Audit), break-glass banner, access log | `tools/qa` at 390 and 1280, light and dark, 44 px, no horizontal scroll; context never widens (API test with a forged `?org=`) |
+| 10 | Org SSO (OIDC only): domains (TXT), org providers, JIT, groups at sign-in, `requireSso` (outside members become guests), step-up, token freshness | DNS fake; domain unique across orgs and instance providers; owner never mapped; enforcement lock-out guard; fake IdP (`identity/fakeIdp.ts` exists) for every §9.4 row |
+| 11 | Later: org-scoped Connect and Docker targets, split of the shared pod, SAML, SCIM, org library | - |
 
-Abuse matrix: Authorization §12 gains O1-O15 (org object across tenants, org grant to guest, team cross-org, forged context, token narrowed by `org_id`, suspended org, removed member's agent token, JIT into another org's domain, IdP minting an admin's email, requireSso bypass with a password session, discovery for an unverified domain, invitation replay, invitation to another org's domain, transfer without membership, platform admin reading org content).
+Slices 0-2 stay the prerequisites: nothing from slice 3 on starts before them. Slice 4 needs only slices 0-3 and can ship before the migration, so the admin console exists when the orgs appear.
+
+Abuse matrix: Authorization §12 gains O1-O15 (org object across tenants, org grant to guest, team cross-org, forged context, token narrowed by `org_id`, suspended org, removed member's agent token, JIT into another org's domain, IdP minting an admin's email, requireSso bypass with a password session, discovery for an unverified domain, invitation replay, invitation to another org's domain, transfer without membership, platform admin reading org content without a break-glass entry; admin route on the main host; main-portal cookie on the admin host; transcript read without an audit row).
 
 ## 14. Double check: the multi-user approach and its state today
 
@@ -419,12 +452,13 @@ The seam's signatures and the contracts (`ObjectType`, `Owner`, `Actor`, `RouteP
 
 Do not start organizations on top of the current layer. Finish D-82's S0 and S1b in the shape of P1-P6 first (they were planned; P1 and P2 are small and remove the worst problems), then add orgs as an owner kind and a grant subject. Doing orgs first would mean every org boundary is enforced by handlers that already treat every admin and every token as the founder.
 
-## 15. Decisions that need the owner
+## 15. Owner decisions (decided 2026-10-31)
 
-| ID | Decision | Recommended default |
+| ID | Decision | Status |
 | --- | --- | --- |
-| OD-1 | Upgrade: existing data stays **personal** (yours) and one default org is created holding today's accounts and teams; you move what you want into orgs. Or: everything becomes the default org's. | Personal + one default org (§11). |
-| OD-2 | Who may create an organization: any account, or only the instance admin (you) for now. | Instance admin only in v1 (internal portal, D-53); a policy switch opens it later. |
-| OD-3 | Org admins and private sessions in org workspaces: no right at all (D14 as is), or may **stop** a session and see its title, creator and cost (never the transcript). | Stop + metadata, never the transcript. |
-| OD-4 | Your access as instance owner to org content: none (D12, MO4) with ownership recovery only, or a loud break-glass (re-auth, reason, 1 h, org admins notified). | None; ownership recovery only (§6.7). |
-| OD-5 | Org SSO protocols and enforcement: OIDC only, `requireSso` makes non-domain members guests, groups mapped at sign-in (no SCIM in v1). | Yes to all three; SAML and SCIM only on a concrete need. |
+| OD-1 | Upgrade: **not** personal plus one default org. "Single instance needed per project": three orgs, isnan (pilot, tradingbot and the other personal and lab projects), konfersi (the Konfersi universe), kohilabs (memor.id); all on k3s pods for now. Today's resources are assigned by project (§11). | Decided (owner words: "need to rewrite some, single instance needed per project: isnan (pilot, tradingbot, etc), konfersi (konfersi universe), kohilabs (memor.id); all based on k3s pods for now"). Supersedes the earlier recommendation "personal + one default org". |
+| OD-2 | Who creates orgs: the **instance admin grants a per-user ability** "can create organizations" (off by default). A new global **Admin console** on its own host `admin.pilot.ai.isnan.me` controls users globally (§6.11); the main portal serves no admin page. | Decided ("User-enabled access", "a new Admin menu ... even better as a new admin.pilot.ai.isnan.me"). Supersedes "instance admin only". |
+| OD-3 | Org admins **can read members' session transcripts** in org workspaces, audited; every transcript view is an audit row visible to the member (§6.5). | Decided. Supersedes "never the transcript" (D14 amended for org workspaces only). |
+| OD-4 | The instance owner has **full access (break-glass)** to any org's content, audited: reason required, an audit row, visible to the org's owners, time-boxed (§6.7). | Decided. Supersedes "none; ownership recovery only" (D12 and MO4 for org content only). |
+| OD-5 | OIDC only in v1; `requireSso` turns members outside verified domains into guests; groups mapped at sign-in; no SCIM in v1. | Default taken, not asked; the owner may overrule. |
+| OD-6 | The shared pod `kohi-event` (several programs): recommended owned by isnan and shared to konfersi at `operate`; split into per-org pods later. | **Open** follow-up decision (§11). |
