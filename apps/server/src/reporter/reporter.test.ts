@@ -351,7 +351,7 @@ test('review: a private draft, comments across pages, submitted per page in one 
     // Pending callouts on /pricing for the author.
     const callouts = (await body(await h.call('/reporter/v1/tickets?as=callouts&path=/pricing', { token: t }))).data.callouts;
     assert.equal(callouts.filter((c: any) => c.pending).length, 2);
-    assert.equal(h.tickets.list(UI, {}).items?.length ?? h.tickets.list(UI, {}).tickets?.length ?? 0, 0, 'a draft is not a ticket');
+    assert.equal(h.tickets.list(UI, { bucket: 'KONF' }).items.length, 0, 'a draft is not a ticket');
 
     // A failure in the middle of the submit creates nothing.
     const create = h.tickets.create.bind(h.tickets);

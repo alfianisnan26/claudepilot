@@ -90,7 +90,7 @@ export async function reporterHarness(opts: { now?: () => Date } = {}) {
     }) as never,
   );
   const mint = (origin = STG, bucket = 'KONF') => service.mint(bucket, origin, ownerActor() as Actor & { userId: string }, 'Owner');
-  const call = (path: string, init: RequestInit & { token?: string; headers?: Record<string, string> } = {}) => {
+  const call = (path: string, init: Omit<RequestInit, 'headers'> & { token?: string; headers?: Record<string, string> } = {}) => {
     const headers: Record<string, string> = { host: 'portal.test', ...(init.headers ?? {}) };
     if (init.token) headers.authorization = `Bearer ${init.token}`;
     return app.request(`${PORTAL}${path}`, { ...init, headers });

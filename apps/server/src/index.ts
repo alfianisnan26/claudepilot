@@ -758,7 +758,7 @@ const reporter = new ReporterService({
   tickets,
   chat: chatController,
   knowledge: {
-    search: (vault, q) => knowledge.search(vault, q, { limit: 20 }).hits.map((h) => ({ path: h.path, title: h.title, snippet: h.snippet })),
+    search: (vault, q) => knowledge.search(vault, q, { limit: 20 }).hits.map((h) => ({ path: h.path, title: h.title, snippet: h.snippet?.text ?? '' })),
     note: (vault, path) => {
       const n = knowledge.getNote(vault, path);
       return { path: n.path, title: n.title, content: n.content };
