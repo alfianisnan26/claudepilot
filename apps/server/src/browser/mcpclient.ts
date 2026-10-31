@@ -1,6 +1,7 @@
 // A minimal MCP client over stdio for tests: spawns a server (here, the gate or a fake), speaks newline-delimited
 // JSON-RPC, and keeps what the server sent. Not used by the portal.
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { childEnv } from '../childEnv.js';
 
 export interface RpcMessage {
   jsonrpc: '2.0';
@@ -35,7 +36,7 @@ export class McpClient {
 
   constructor(command: string | McpTransport, args: string[] = [], opts: { env?: Record<string, string>; cwd?: string } = {}) {
     if (typeof command === 'string') {
-      const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...opts.env }, cwd: opts.cwd });
+      const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...childEnv(), ...opts.env }, cwd: opts.cwd });
       this.child = child;
       this.#transport = {
         write: (line) => void child.stdin.write(line),

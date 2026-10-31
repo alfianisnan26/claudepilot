@@ -199,19 +199,20 @@ export class Lab {
   }
 
   /** The summary per period and per role and model since `sinceMs` (default: the last 14 days). */
-  summary(opts: { period?: LabPeriod; sinceMs?: number; sessionId?: string } = {}): LabSummary {
+  summary(opts: { period?: LabPeriod; sinceMs?: number; sessionId?: string; ticketVisible?: (ticketId: string) => boolean } = {}): LabSummary {
     const nowMs = this.#now();
     const period = opts.period ?? 'day';
     const sinceMs = opts.sinceMs ?? nowMs - 14 * DAY_MS;
     const slices = this.views({ fromMs: sinceMs, ...(opts.sessionId ? { sessionId: opts.sessionId } : {}) });
-    return { period, sinceMs, rows: summarize(slices, period), tickets: this.ticketCosts(sinceMs, nowMs, opts.sessionId), basis: SUMMARY_BASIS, nowMs };
+    return { period, sinceMs, rows: summarize(slices, period), tickets: this.ticketCosts(sinceMs, nowMs, opts.sessionId, 25, opts.ticketVisible), basis: SUMMARY_BASIS, nowMs };
   }
 
   /**
    * What tickets cost in [fromMs, toMs): the figures of Usage -> Attribution by ticket, from the same function (usagespend/ticketReport.ts, T-449),
-   * not a copy. With a session: only its own tree.
+   * not a copy. With a session: only its own tree. T-3070: with `ticketVisible` (the caller's view), a ticket it may not see has no type, status
+   * or done time, exactly like a ticket that does not exist (its dollars stay, as a missing ticket's do).
    */
-  ticketCosts(fromMs: number, toMs: number, sessionId?: string, limit = 25): LabTicketCost[] {
+  ticketCosts(fromMs: number, toMs: number, sessionId?: string, limit = 25, ticketVisible?: (ticketId: string) => boolean): LabTicketCost[] {
     const spend = new SpendStore(this.opts.store);
     const tree = sessionId ? new Set([sessionId, ...spend.descendants(sessionId)]) : undefined;
     const rows = spend.usageRows(fromMs, toMs + 1, tree ? { sessionIds: tree } : {});
@@ -222,7 +223,7 @@ export class Lab {
         else if (s.continuedFrom && !tree.has(s.continuedFrom)) sessions.set(id, { ...s, continuedFrom: null });
       }
     }
-    const a = ticketReport(spend, { rows, sessions, fromMs, toMs: toMs + 1, limit });
+    const a = ticketReport(spend, { rows, sessions, fromMs, toMs: toMs + 1, limit, ...(ticketVisible ? { ticketVisible } : {}) });
     return a.rows
       .filter((r) => r.state === 'known')
       .map((r) => ({ ticket: r.key, type: r.ticket?.type ?? null, status: r.ticket?.status ?? null, doneAt: r.ticket?.doneAt ?? null, ownUsd: r.own.costUsd, viaLeadUsd: r.ticket?.viaLeadUsd ?? 0, totalUsd: r.total.costUsd }));

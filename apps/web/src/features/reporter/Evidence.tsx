@@ -1,5 +1,5 @@
 import { Badge, chipClass } from '@isnanme/ui';
-import { TICKET_API, type ReporterEvidence, type TicketReporterEvidence } from '@portal/contracts';
+import { TICKET_API, reporterIpText, type ReporterEvidence, type TicketReporterEvidence } from '@portal/contracts';
 import { AlertTriangle } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Card } from '@/components/Card';
@@ -61,10 +61,14 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
   const [bundle, setBundle] = useState<ReporterEvidence | null | 'failed'>(null);
   const [tab, setTab] = useState<TabId>('console');
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  // The annotated image is shown first when there is one; "Original" switches to the screenshot as captured (PILOT-1111 annotate).
+  const [original, setOriginal] = useState(false);
+  const shownId = (c: { screenshotAttachmentId: string | null; annotatedAttachmentId?: string | null }, orig = false) => (!orig && c.annotatedAttachmentId) || c.screenshotAttachmentId;
 
   useEffect(() => {
     setBundle(null);
     setSize(null);
+    setOriginal(false);
     if (!capture?.evidenceAttachmentId) return;
     let live = true;
     reporterApi.bundle(ticketId, Number(capture.evidenceAttachmentId)).then(
@@ -124,7 +128,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
           </Row>
         )}
         <Row label="IP">
-          {evidence.reporterIp ? <span className="break-all tabular-nums">{evidence.reporterIp}</span> : <span className="text-muted">Unknown</span>}
+          {evidence.reporterIp ? <span className="break-all tabular-nums">{reporterIpText(evidence.reporterIp)}</span> : <span className="text-muted">Unknown</span>}
         </Row>
         <Row label="Fix">
           {evidence.fixCommits.length ? <span className="break-all tabular-nums">{evidence.fixCommits.map((c) => shortCommit(c)).join(', ')}</span> : <span className="text-muted">No fix commit yet</span>}
@@ -168,7 +172,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
                 aria-current={i === at}
                 className={`flex min-h-11 w-24 flex-col gap-1 rounded-xl border p-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${i === at ? 'border-accent' : 'border-line'}`}
               >
-                {c.screenshotAttachmentId ? <img src={TICKET_API.attachment(ticketId, Number(c.screenshotAttachmentId))} alt="" loading="lazy" className="h-14 w-full rounded-lg object-cover" /> : <span className="h-14 w-full rounded-lg bg-surface-2" />}
+                {shownId(c) ? <img src={TICKET_API.attachment(ticketId, Number(shownId(c)))} alt="" loading="lazy" className="h-14 w-full rounded-lg object-cover" /> : <span className="h-14 w-full rounded-lg bg-surface-2" />}
                 <span className="truncate text-[11.5px] text-muted">
                   {c.index} · {c.anchor.path}
                 </span>
@@ -183,15 +187,28 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
           <p className="text-[12.5px] text-muted tabular-nums">
             {capture.index} of {evidence.captures.length} · {capture.anchor.mode === 'crop' ? 'crop' : capture.anchor.mode === 'viewport' ? 'screen' : 'full'} · {capture.anchor.viewport.w}×{capture.anchor.viewport.h}
           </p>
-          {capture.screenshotAttachmentId ? (
-            <a href={TICKET_API.attachment(ticketId, Number(capture.screenshotAttachmentId))} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden rounded-xl border border-line bg-surface-2">
+          {capture.annotatedAttachmentId && capture.screenshotAttachmentId && (
+            <div role="radiogroup" aria-label="Image" className="flex gap-1.5">
+              {[
+                { orig: false, label: `Marked (${capture.annotations?.length ?? 0})` },
+                { orig: true, label: 'Original' },
+              ].map((o) => (
+                <button key={o.label} type="button" role="radio" aria-checked={original === o.orig} onClick={() => setOriginal(o.orig)} className={`${chipClass(original === o.orig)} min-h-11`}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {!capture.annotatedAttachmentId && hasBlurMark(capture.annotations) && <p className="text-[12.5px] text-muted">Blurred by the reporter; no original was uploaded.</p>}
+          {shownId(capture, original) ? (
+            <a href={TICKET_API.attachment(ticketId, Number(shownId(capture, original)))} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden rounded-xl border border-line bg-surface-2">
               <img
-                src={TICKET_API.attachment(ticketId, Number(capture.screenshotAttachmentId))}
+                src={TICKET_API.attachment(ticketId, Number(shownId(capture, original)))}
                 alt={`Screenshot ${capture.index}`}
                 onLoad={(e) => setSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
                 className="max-h-[28rem] w-full object-contain object-top"
               />
-              {box && <span aria-hidden="true" className="absolute rounded-sm border-2 border-danger" style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%` }} />}
+              {box && !(capture.annotatedAttachmentId && !original) && <span aria-hidden="true" className="absolute rounded-sm border-2 border-danger" style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%` }} />}
             </a>
           ) : (
             <p className="text-[13px] text-muted">No screenshot.</p>
@@ -401,3 +418,5 @@ function EvidenceTab({ tab, e }: { tab: TabId; e: ReporterEvidence }) {
       );
   }
 }
+
+const hasBlurMark = (marks: { type: string }[] | undefined) => !!marks?.some((m) => m.type === 'blur');

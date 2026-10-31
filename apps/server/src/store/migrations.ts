@@ -4128,6 +4128,22 @@ export const MIGRATIONS: Migration[] = [
         db.exec(`UPDATE reporter_tokens SET actor_user = 'u_owner' WHERE actor_user NOT GLOB 'u_?*';`);
     },
   },
+  {
+    version: 903,
+    name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
+    up(db) {
+      // docs/prd/ui-reporter-server.md "Annotations": a capture keeps its marks (JSON, validated and capped by the server) and the flattened
+      // image as a second attachment. Additive only (D-92): nullable columns, older rows stay null (no marks).
+      db.exec(`
+        ALTER TABLE reporter_ticket_captures ADD COLUMN annotated_attachment INTEGER;
+        ALTER TABLE reporter_ticket_captures ADD COLUMN annotations TEXT;
+        ALTER TABLE reporter_review_comments ADD COLUMN annotated_sha TEXT;
+        ALTER TABLE reporter_review_comments ADD COLUMN annotated_type TEXT;
+        ALTER TABLE reporter_review_comments ADD COLUMN annotated_size INTEGER;
+        ALTER TABLE reporter_review_comments ADD COLUMN annotations TEXT;
+      `);
+    },
+  },
 ];
 
 /**

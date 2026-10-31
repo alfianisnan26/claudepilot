@@ -20,7 +20,7 @@ import {
 import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { chatApi } from './api';
 import { foldBtw, refusedBtw, type BtwState } from './btw/state';
-import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, seed, seedAll, type History } from './history';
+import { appendLive, EMPTY_HISTORY, expand, olderDone, olderFailed, olderStart, reseed, seed, seedAll, type History } from './history';
 import { createDeltaBatcher, foldLive, NO_LIVE, settleLive, type AgentLive, type LiveState } from './motion/deltas';
 import { ListPager } from './listPaging';
 import { sharedRead } from './sharedRead';
@@ -202,11 +202,25 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     // Bumped by every live `tasks` message, so a list fetched before it never overwrites it.
     let tasksVersion = 0;
 
-    const applyEvents = (items: ChatEvent[]) => {
+    // T-2591: a backlog that says `gap` left events out before its first item (the tab was more than the portal's cap behind). Its items
+    // are not appended after the hole; the newest page re-seeds the transcript and older events come back through the paged `before`
+    // read. Reads of the old history still in flight (an older page, a whole event) are dropped. A page that cannot be read seeds from
+    // the backlog itself, with the paged read starting before its first item.
+    const reseedAfterGap = (items: ChatEvent[]) => {
+      const gen = ++generation.current;
+      const fallback = { events: items, more: true, before: items[0]!.seq };
+      newestPage(sessionId).then(
+        (page) => !closed && gen === generation.current && startTransition(() => setHist((h) => reseed(h, page))),
+        () => !closed && gen === generation.current && setHist((h) => reseed(h, fallback)),
+      );
+    };
+
+    const applyEvents = (items: ChatEvent[], gap = false) => {
       if (items.length === 0) return;
       deltas.flush(); // the deltas first, then whatever supersedes them
       for (const e of items) if (e.seq > seqRef.current) seqRef.current = e.seq;
-      setHist((h) => appendLive(h, items));
+      if (gap) reseedAfterGap(items);
+      else setHist((h) => appendLive(h, items));
       // A finished block or a turn result supersedes what was live, each agent's its own (settleLive).
       setLive((l) => settleLive(l, items));
       // Stored now: the transcript shows the real event instead of the optimistic copy.
@@ -304,7 +318,7 @@ export function useChatSession(sessionId: string): ChatSessionApi {
     const handle = (msg: ChatServerMessage) => {
       switch (msg.type) {
         case 'events':
-          if (msg.session === sessionId) applyEvents(msg.items);
+          if (msg.session === sessionId) applyEvents(msg.items, msg.gap === true);
           break;
         case 'delta':
           // Pieces of the open block, appended (see foldDelta); a thinking start shows as "Thinking…" until the block is stored.

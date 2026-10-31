@@ -134,7 +134,7 @@ import { ManagerService } from './manager/service.js';
 import { SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
-import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes } from './reporter/routes.js';
+import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes, releaseOf } from './reporter/routes.js';
 import type { ReporterService } from './reporter/service.js';
 import { clientAddress } from './clientAddress.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
@@ -343,7 +343,12 @@ export function createApp(
   // UI reporter (docs/prd/ui-reporter-server.md): /reporter/v1 is loaded by OTHER sites (the SDK script, the panel framed by an allowed origin,
   // the connect popup that hands a token to its opener), so its routes set their own CSP, framing and resource policy; the rest stays.
   const reporterHeaders = secureHeaders({ strictTransportSecurity: false, xFrameOptions: false, crossOriginResourcePolicy: false, crossOriginOpenerPolicy: false });
-  app.use((c, next) => (reporter && c.req.path.startsWith('/reporter/v1/') ? reporterHeaders(c, next) : appHeaders(c, next)));
+  // The built files under /assets are public and hashed: a cross-origin resource policy lets the panel's frame load them on a site that
+  // requires one of every resource (COEP require-corp, the Konfersi Lab); everything else keeps same-origin.
+  const assetHeaders = secureHeaders({ strictTransportSecurity: false, crossOriginResourcePolicy: 'cross-origin' });
+  app.use((c, next) =>
+    reporter && c.req.path.startsWith('/reporter/v1/') ? reporterHeaders(c, next) : serveWeb && c.req.path.startsWith('/assets/') ? assetHeaders(c, next) : appHeaders(c, next),
+  );
   // What the API says is for this session only: never kept by a shared cache or replayed from the back/forward cache.
   // (Blobs and downloads set their own Cache-Control.)
   app.use('/api/*', async (c, next) => {
@@ -1284,6 +1289,8 @@ export function createApp(
     // A helper's heartbeat (T-965, schedules/heartbeat.ts): an admin's Portal MCP token is its door, never a cookie, so it is mounted here,
     // before the schedules module's cookie-guarded routes under the same prefix. A beat is a few bytes: 4 KiB at most.
     app.use(SCHEDULES_API.heartbeat, loginLimit);
+    // The id rule of every /api route (QA-032): a hostile workspace id in the body is refused (422) before the token is looked up.
+    app.use(SCHEDULES_API.heartbeat, refuseHostileIds);
     app.route(
       SCHEDULES_API.heartbeat,
       createHeartbeatRoutes({
@@ -1478,6 +1485,7 @@ export function createApp(
         userLabel: () => 'Owner',
         clientKey: (c) => clientKey(c as Context<Env>),
         audit: reporterAudit,
+        release: releaseOf(process.env.PORTAL_RELEASE),
       }) as never,
     );
   }

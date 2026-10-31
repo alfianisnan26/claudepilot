@@ -20,7 +20,10 @@ RUN npm run build \
     && mkdir -p apps/server/node_modules
 
 FROM node:22-bookworm-slim
-ENV NODE_ENV=production \
+# The release this image is (scripts/k3s-build.sh passes its tag): the reporter panel's Context view shows it. Empty: "unknown".
+ARG PORTAL_RELEASE=
+ENV PORTAL_RELEASE=$PORTAL_RELEASE \
+    NODE_ENV=production \
     PORTAL_HOST=0.0.0.0 \
     PORTAL_PORT=3000 \
     PORTAL_DATA_DIR=/data \

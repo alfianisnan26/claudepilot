@@ -149,7 +149,7 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
    dir and delete it to re-run. Anything that adds a column holding sealed values must be listed in ENCRYPTED_COLUMNS.
    The tickets block (A3b, 40-49) is full since T-1974 took 49 (2026-10-21); tickets migrations overflow to 785+ (785-787 and 794-797 used; 788 is
    T-975's on its branch): take the next free number there after checking integration and the open branches.
-   The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-902 used, 2026-10-31: 902 is reporter_ip).
+   The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-903 used, 2026-10-31: 902 is reporter_ip, 903 the annotations).
    Organizations (docs/prd/organizations.md §8) have their own block, 460-479 (2026-10-31: 460 founder account and password_set, 461 token
    owners, slice 0); identity and the multi-user retrofit keep 400-459, usage per user 480-499.
 6. Dependencies: run `npm install` only under `flock COORD/npm.lock npm install ...`, then re-run the typecheck. Prefer no new dependencies; say in your

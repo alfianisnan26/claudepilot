@@ -48,6 +48,17 @@ export function seed(h: History, page: ChatEventPage): History {
   return { events: mergeEvents(h.events, page.events), more: page.more, before: page.more ? page.before : null, seeded: true, older: 'idle' };
 }
 
+/**
+ * T-2591: the socket's backlog left events out (`gap`: the tab was more than the portal's cap behind), so what is held has a hole before
+ * the newest events. The newest page replaces it: what is held older than that page goes (the paged `before` read brings it back in
+ * order), what came live after the page stays, and paging starts again from the page.
+ */
+export function reseed(h: History, page: ChatEventPage): History {
+  const newest = lastSeq(page.events);
+  const live = h.events.filter((e) => e.seq > newest);
+  return { events: mergeEvents(page.events.slice(), live), more: page.more, before: page.more ? page.before : null, seeded: true, older: 'idle' };
+}
+
 /** The socket could not wait for a page (it failed): the subscribe asks for everything, as before T-376, so nothing is older. */
 export function seedAll(h: History): History {
   return { ...h, more: false, before: null, seeded: true, older: 'idle' };

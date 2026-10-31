@@ -23,6 +23,12 @@ export function ticketKeyOf(ticketId: string | null | undefined, actor: Actor): 
   }
 }
 
+/**
+ * T-2945, T-3070: whether `actor` may see a ticket's fields (type, status, priority, times) in another module's tool row. The same rule as the
+ * key: fails closed (no lookup, no such ticket, a hidden bucket, the database away), so a hidden ticket reads like one that does not exist.
+ */
+export const ticketVisibleTo = (ticketId: string | null | undefined, actor: Actor): boolean => ticketKeyOf(ticketId, actor) !== null;
+
 /** `{ ticket_key }` for a tool row beside its `ticket_id`, or nothing when there is no key (or `actor` may not view its bucket). */
 export const ticketKeyField = (ticketId: string | null | undefined, actor: Actor): { ticket_key?: string } => {
   const key = ticketKeyOf(ticketId, actor);

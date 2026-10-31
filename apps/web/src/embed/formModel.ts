@@ -1,13 +1,14 @@
-import type {
-  ReporterBuildInfo,
-  ReporterContextCounts,
-  ReporterDeviceInfo,
-  ReporterEvidence,
-  ReporterMe,
-  ReporterPageInfo,
-  ReporterReportTarget,
-  ReporterSessionTargetStatus,
-  ReporterStatus,
+import {
+  reporterIpText,
+  type ReporterBuildInfo,
+  type ReporterContextCounts,
+  type ReporterDeviceInfo,
+  type ReporterEvidence,
+  type ReporterMe,
+  type ReporterPageInfo,
+  type ReporterReportTarget,
+  type ReporterSessionTargetStatus,
+  type ReporterStatus,
 } from '@portal/contracts';
 
 /* The panel's pure rules for the screenshot viewer, the report form and the Context view (owner, 2026-10-31). Tested directly. */
@@ -233,7 +234,7 @@ export function contextGroups(c: ContextInput): CtxGroup[] {
     {
       title: 'Network',
       rows: [
-        { label: 'IP', value: or(c.me?.clientIp) },
+        { label: 'IP', value: c.me?.clientIp ? reporterIpText(c.me.clientIp) : UNKNOWN, ...(c.me?.clientIp ? { copy: c.me.clientIp } : {}) },
         { label: 'Family', value: c.me?.clientIpFamily ? `IPv${c.me.clientIpFamily}` : UNKNOWN },
       ],
     },

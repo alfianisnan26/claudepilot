@@ -630,6 +630,8 @@ export interface ChatTaskTranscript {
 export const EVENT_PAGE_LIMIT = 200;
 /** The most `?limit=` may ask for; a larger number is read as this. */
 export const EVENT_PAGE_LIMIT_MAX = 1000;
+/** T-2591: set (to `1`) on an `?after=` answer of `CHAT_API.events` that left events out before its first (the reader was more than the cap behind). */
+export const CHAT_HISTORY_GAP_HEADER = 'X-Chat-History-Gap';
 /** A page stops before its events (as JSON, after the cut below) pass this many bytes; it always holds at least one event. */
 export const EVENT_PAGE_BYTES = 512 * 1024;
 /** A `tool_result` in a page keeps at most this many characters of `text`; `textLength` then says how long the whole is. */
@@ -1155,7 +1157,16 @@ export type ChatClientMessage = ChatSubscribe | ChatUnsubscribe | ChatSend | Cha
 
 export type ChatServerMessage =
   /** Stored events, in order, for a subscribed session (also the backlog on subscribe). */
-  | { type: 'events'; session: string; items: ChatEvent[] }
+  | {
+      type: 'events';
+      session: string;
+      items: ChatEvent[];
+      /**
+       * T-2591: a subscribe backlog that left events out between the tab's `afterSeq` and the first item (it was more than
+       * HISTORY_MAX_EVENTS behind; the items are the newest). The tab re-seeds from the newest page and pages back with `before`.
+       */
+      gap?: true;
+    }
   /** Live assistant tokens for the open block; never stored, not replayed on resume. */
   | {
       type: 'delta';

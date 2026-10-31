@@ -1,4 +1,8 @@
-import type { ReporterChatMessage, ReporterChatState, ReporterTicket, ReporterTicketComment } from '@portal/contracts';
+import type { ChatEvent, ReporterChatMessage, ReporterChatRuntime, ReporterChatState, ReporterTicket, ReporterTicketComment, ReporterUsageWindow } from '@portal/contracts';
+import { MODE_LABELS } from '@/features/chat/modeLabels';
+import { modelShortName } from '@/features/chat/modelName';
+import { formatTokens, formatUsd } from '@/features/chat/tokens';
+import { buildRows, formatSeconds, shortTarget, toolLabel, type ToolPair, type TranscriptRow } from '@/features/chat/toolModel';
 
 /* The panel's pure rules for chat, the composer, the comment thread and the ticket list (PILOT-1111). No React, no DOM: tested directly. */
 
@@ -181,4 +185,155 @@ export function filterChips<P extends { status: string; priority: string[]; type
   for (const v of p.tags) out.push({ id: `g:${v}`, label: `#${v}`, without: { ...p, tags: p.tags.filter((x) => x !== v) } });
   if (p.mine) out.push({ id: 'mine', label: 'Mine', without: { ...p, mine: false } });
   return out;
+}
+
+/* ---------- Tool activity (the portal chat's grouping) ---------- */
+
+/**
+ * What the chat list renders: a line as it is, or a run of tool calls folded into one activity row, as the portal's transcript does
+ * (features/chat: `buildRows` joins each result to its call and folds runs of read-only calls, Activity.tsx shows a turn's work as one row).
+ * The panel keeps every text line in the open (it has no turn ends to tell a note from a reply), so a run is the calls between two of them;
+ * approval lines are left out (the banner shows a pending one).
+ */
+export type ChatItem =
+  | { type: 'line'; key: string; m: ReporterChatMessage }
+  | {
+      type: 'activity';
+      key: string;
+      /** The portal's rows: a call with its result, or a run of read-only calls. */
+      rows: TranscriptRow[];
+      /** Every call in order, the runs opened up. */
+      steps: ToolPair[];
+      /** The session still works on this run (the newest run, no text after it): calls without a result are running. */
+      live: boolean;
+      /** Changes whenever what the row shows changes: memoised rows compare it, not the arrays. */
+      sig: string;
+    };
+
+/** A panel line as the portal's transcript event (only what its row model reads), so both fold the same way. */
+function asEvent(m: ReporterChatMessage): ChatEvent {
+  if (m.kind === 'tool') return { seq: m.seq, at: m.at, kind: 'tool_use', toolName: m.tool ?? undefined, text: m.text, toolUseId: m.toolId ?? undefined };
+  if (m.kind === 'tool_result') return { seq: m.seq, at: m.at, kind: 'tool_result', text: m.text, toolUseId: m.toolId ?? undefined, isError: m.ok === false };
+  // Every other line stands as it is: an event kind the row model keeps as its own row.
+  return { seq: m.seq, at: m.at, kind: 'assistant' };
+}
+
+/**
+ * The chat's items from its lines. `busy`: the session is working, so the newest run is live. Pure; the chat computes it once per batch of
+ * lines (a memo on the lines array, which a batch that adds nothing keeps the same).
+ */
+export function chatItems(lines: readonly ReporterChatMessage[], busy: boolean): ChatItem[] {
+  const bySeq = new Map(lines.map((m) => [m.seq, m]));
+  // Approvals are not rows, as in the portal's transcript (its approvals dock has them): a pending one is the chat's banner with "Answer in
+  // pilot", and an answered one would split its tool's run in two.
+  const rows = buildRows(lines.filter((m) => m.kind !== 'approval').map(asEvent), true);
+  const out: ChatItem[] = [];
+  let run: TranscriptRow[] = [];
+  const flush = () => {
+    if (!run.length) return;
+    const steps = run.flatMap((r) => (r.type === 'tool' ? [{ call: r.call, result: r.result }] : r.type === 'group' ? r.tools : []));
+    out.push({ type: 'activity', key: `a${steps[0]!.call.seq}`, rows: run, steps, live: false, sig: '' });
+    run = [];
+  };
+  for (const r of rows) {
+    if (r.type === 'tool' || r.type === 'group') {
+      run.push(r);
+      continue;
+    }
+    flush();
+    const m = r.type === 'event' ? bySeq.get(r.event.seq) : undefined;
+    if (m) out.push({ type: 'line', key: `l${m.seq}`, m });
+  }
+  flush();
+  // The newest run is live while the session works and no text came after it.
+  if (busy)
+    for (let i = out.length - 1; i >= 0; i--) {
+      const it = out[i]!;
+      if (it.type === 'activity') {
+        it.live = true;
+        break;
+      }
+      if (it.m.kind === 'user' || it.m.kind === 'assistant') break;
+    }
+  for (const it of out)
+    if (it.type === 'activity') it.sig = `${it.live ? 1 : 0}|${it.steps.map((s) => `${s.call.seq}:${s.result ? (s.result.isError ? 'x' : 'o') : '-'}`).join(',')}`;
+  return out;
+}
+
+/** The tools that start a sub-agent (the portal's AGENT_TOOLS): their line reads "Agent: <what it does>". */
+const AGENT_TOOL = new Set(['Task', 'Agent']);
+export const isAgentStep = (s: ToolPair) => AGENT_TOOL.has(s.call.toolName ?? '');
+
+/** One step's words, as the portal's activity row names its latest step: "Read hero.tsx", "Bash npm test", "Agent: Find the hero". */
+export function stepText(s: ToolPair): string {
+  const { name, target } = stepParts(s);
+  return target ? `${name}${isAgentStep(s) ? ':' : ''} ${target}` : name;
+}
+/** A step's name ("Bash", "playwright · browser_click", "Agent") and what it was given, shortened as the portal's rows do. */
+export function stepParts(s: ToolPair): { name: string; target: string } {
+  if (isAgentStep(s)) return { name: 'Agent', target: (s.call.text ?? '').trim() };
+  return { name: s.call.toolName ? toolLabel(s.call.toolName) : 'Tool', target: shortTarget(s.call.text) };
+}
+
+export const stepFailed = (s: ToolPair) => !!s.result?.isError;
+
+/** How long a finished run took, from its first call to its last result ("12 s"); null while one runs or when a time is missing. */
+export function runTook(steps: readonly ToolPair[]): string | null {
+  if (!steps.length || steps.some((s) => !s.result)) return null;
+  const from = Date.parse(steps[0]!.call.at);
+  const to = Math.max(...steps.map((s) => Date.parse(s.result!.at)));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+  return formatSeconds(to - from);
+}
+
+/** Rows an opened activity shows before "Show N more". */
+export const ACTIVITY_FIRST = 8;
+
+/* ---------- Session runtime (the chat header's info line and sheet) ---------- */
+
+const UNAVAILABLE = 'unavailable';
+
+/** Percent of the context window used, as the portal's context ring rounds it; null when the window is not known. */
+export const contextPct = (c: ReporterChatRuntime['context']): number | null => (c && c.windowTokens ? Math.min(100, Math.round((c.usedTokens / c.windowTokens) * 100)) : null);
+
+/** The info line under the chat title: "Opus 5.5 · Work · 42%" (model · Claude · context), only what is known. */
+export function runtimeLine(r: ReporterChatRuntime | undefined): string {
+  if (!r) return '';
+  const pct = contextPct(r.context);
+  return [modelShortName(r.model), r.claude, pct !== null ? `${pct}%` : null].filter(Boolean).join(' · ');
+}
+
+/** "in 3h 05m", "in 12m", "now": until a reset time; null when there is none or it is not a time. */
+export function resetsIn(iso: string | null, now = Date.now()): string | null {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(t)) return null;
+  const m = Math.max(0, Math.floor((t - now) / 60_000));
+  if (m < 1) return 'now';
+  if (m < 60) return `in ${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `in ${h}h ${String(m % 60).padStart(2, '0')}m`;
+  return `in ${Math.floor(h / 24)}d`;
+}
+
+const windowText = (w: ReporterUsageWindow | null, now: number) => {
+  if (!w || w.usedPct === null) return UNAVAILABLE;
+  const reset = resetsIn(w.resetsAt, now);
+  return `${Math.round(w.usedPct)}%${reset ? ` · resets ${reset}` : ''}`;
+};
+
+/** The sheet's rows: every value the portal has, "unavailable" where it has none (never a guess). */
+export function runtimeRows(r: ReporterChatRuntime | undefined, status: string, now = Date.now()): { label: string; value: string; tone?: 'danger' }[] {
+  const ctx = r?.context ?? null;
+  const pct = contextPct(ctx);
+  const mode = r?.mode ? MODE_LABELS[r.mode] : null;
+  return [
+    { label: 'Status', value: status },
+    { label: 'Model', value: r?.model ? `${modelShortName(r.model)}${r.effort ? ` · ${r.effort}` : ''}` : UNAVAILABLE },
+    { label: 'Mode', value: mode?.label ?? UNAVAILABLE, ...(mode?.danger ? { tone: 'danger' as const } : {}) },
+    { label: 'Claude', value: r?.claude ?? UNAVAILABLE },
+    { label: 'Context', value: ctx ? (pct !== null && ctx.windowTokens ? `${pct}% · ${formatTokens(ctx.usedTokens)} of ${formatTokens(ctx.windowTokens)}` : `${formatTokens(ctx.usedTokens)} tokens`) : UNAVAILABLE },
+    { label: 'Cost', value: r?.costUsd !== null && r?.costUsd !== undefined ? formatUsd(r.costUsd) : UNAVAILABLE },
+    { label: 'Plan session', value: windowText(r?.plan?.session ?? null, now) },
+    { label: 'Plan week', value: windowText(r?.plan?.week ?? null, now) },
+  ];
 }

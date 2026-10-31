@@ -8,7 +8,7 @@ import { REPORTER_EVIDENCE_SCHEMA, type Actor, type ChatEvent, type ReporterEvid
 import { ownerActor } from '../authz/seam.js';
 import { ticketsHarness, UI } from '../tickets/testkit.js';
 import { createReporterOwnerRoutes, createReporterWidgetRoutes } from './routes.js';
-import { ReporterService, type ReporterChat, type ReporterChatSession, type ReporterGit } from './service.js';
+import { ReporterService, type ReporterChat, type ReporterChatSession, type ReporterDeps, type ReporterGit } from './service.js';
 
 export const PORTAL = 'http://portal.test';
 export const STG = 'https://stg.konfersi.com';
@@ -75,13 +75,13 @@ export class FakeGit implements ReporterGit {
   }
 }
 
-export async function reporterHarness(opts: { now?: () => Date } = {}) {
+export async function reporterHarness(opts: { now?: () => Date; release?: string; claudePlan?: ReporterDeps['claudePlan'] } = {}) {
   const h = await ticketsHarness({ now: opts.now });
   // KONF may be seeded already; OTHER is ours.
   for (const [key, name] of [['KONF', 'Konfersi'], ['OTHER', 'Other']] as const) if (!h.tickets.bucketOwner(key)) h.tickets.createBucket(UI, { key, name });
   const chat = new FakeChat();
   const git = new FakeGit();
-  const service = new ReporterService({ store: h.store, tickets: h.tickets, chat, git, now: opts.now, sdkVersion: () => '1.0.0' });
+  const service = new ReporterService({ store: h.store, tickets: h.tickets, chat, git, now: opts.now, sdkVersion: () => '1.0.0', ...(opts.claudePlan ? { claudePlan: opts.claudePlan } : {}) });
   service.updateConfig(
     'KONF',
     {
@@ -105,6 +105,7 @@ export async function reporterHarness(opts: { now?: () => Date } = {}) {
       signedIn: () => (signedIn ? (ownerActor() as Actor & { userId: string }) : null),
       userLabel: () => 'Owner',
       clientKey: () => '127.0.0.1',
+      release: opts.release ?? null,
       ...(opts.now ? { now: () => opts.now!().getTime() } : {}),
     }) as never,
   );

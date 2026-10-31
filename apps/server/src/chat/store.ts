@@ -1102,6 +1102,21 @@ export class ChatStore {
   }
 
   /**
+   * T-2591: {@link history} after `after`, and whether events between `after` and the first one returned were left out (`gap`): a
+   * reader more than HISTORY_MAX_EVENTS behind gets the newest of them and must page back with `before` for the rest. One indexed
+   * lookup more, only when the read was full.
+   */
+  historyAfter(sessionId: string, after = 0): { items: ChatEvent[]; gap: boolean } {
+    const items = this.history(sessionId, after);
+    const first = items[0]?.seq;
+    if (first === undefined || items.length < HISTORY_MAX_EVENTS || first <= after + 1) return { items, gap: false };
+    const older = this.#db()
+      .prepare('SELECT 1 FROM chat_events WHERE session_id = ? AND seq > ? AND seq < ? LIMIT 1')
+      .get(sessionId, after, first);
+    return { items, gap: older !== undefined };
+  }
+
+  /**
    * T-2589: the OLDEST events after `after`, at most `limit` (capped as {@link history}), oldest first: a reader that walks forward from a
    * known seq a page at a time (a turn awaited after the message that started it) and must not skip any.
    */

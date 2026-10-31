@@ -25,6 +25,7 @@ import {
   ticketIdOf,
   type Actor,
   type ReporterAnchor,
+  type ReporterAnnotation,
   type ReporterBuildInfo,
   type ReporterCallout,
   type ReporterCapture,
@@ -64,6 +65,7 @@ import {
   type ReporterChatMessage,
   type ReporterChatPage,
   type ReporterChatSendRequest,
+  type ReporterChatRuntime,
   type ReporterChatState,
 } from '@portal/contracts';
 import { can } from '../authz/seam.js';
@@ -75,6 +77,7 @@ import type { Caller, Tickets } from '../tickets/service.js';
 import { buildRepro, deploymentFooter, describeTicket, inline, withFooter, type DescribedCapture } from './describe.js';
 import {
   CAPTURE_ID,
+  checkAnnotated,
   checkScreenshot,
   cleanBuild,
   cleanCapture,
@@ -82,6 +85,7 @@ import {
   cleanSessionTargets,
   cleanSites,
   evidenceFacts,
+  hasBlur,
   invalid,
   parseEvidence,
   pathOnly,
@@ -105,6 +109,14 @@ export interface ReporterChatSession {
   /** Open approvals and what the oldest asks. */
   waiting?: number;
   waitingFor?: string | null;
+  /** What it runs with (the portal's ChatSession fields; absent in older fakes). */
+  model?: string | null;
+  effort?: string | null;
+  mode?: string;
+  context?: { usedTokens: number; windowTokens: number | null } | null;
+  costUsd?: number;
+  claudeId?: string;
+  claudeName?: string | null;
 }
 
 export interface ReporterChat {
@@ -147,6 +159,11 @@ export interface ReporterDeps {
   sdkVersion?: () => string;
   /** A person's display name, for the token's label. */
   userLabel?: (userId: string) => string;
+  /**
+   * A Claude's plan windows from the portal's usage snapshot (never probes; cached by the caller), or null when it has no reading. Read
+   * every second by the live chat stream, so it must be cheap.
+   */
+  claudePlan?: (claudeId: string) => ReporterChatRuntime['plan'];
 }
 
 /** Who a panel call is: the token's scope, resolved now. */
@@ -232,6 +249,9 @@ interface CaptureRow {
   evidence_attachment: number | null;
   facts: string | null;
   created_at: string;
+  /** Migration 903: the flattened image with the marks, and the marks (JSON ReporterAnnotation[]). */
+  annotated_attachment?: number | null;
+  annotations?: string | null;
 }
 
 interface CaptureFacts {
@@ -273,7 +293,23 @@ interface CommentRow {
   evidence_size: number | null;
   created_at: string;
   updated_at: string;
+  annotated_sha?: string | null;
+  annotated_type?: string | null;
+  annotated_size?: number | null;
+  annotations?: string | null;
 }
+
+/** The marks stored with a capture or comment (validated when they came in); [] when there are none. */
+const marksOf = (raw: string | null | undefined): ReporterAnnotation[] => {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return Array.isArray(v) ? (v as ReporterAnnotation[]) : [];
+  } catch {
+    return [];
+  }
+};
+const marksJson = (m: readonly ReporterAnnotation[] | undefined): string | null => (m?.length ? JSON.stringify(m) : null);
 
 const keyOf = (r: Pick<TicketRow, 'bucket_key' | 'bucket_number' | 'number'>) => (r.bucket_number === null ? ticketIdOf(r.number) : `${r.bucket_key}-${r.bucket_number}`);
 const json = <T>(s: string | null | undefined, fallback: T): T => {
@@ -654,7 +690,8 @@ export class ReporterService {
     return { unread: others.filter((c) => c.id > read).length, awaitingReporter: others.some((c) => c.id > lastMine && c.id > read) };
   }
 
-  #captureView(key: string, c: CaptureRow, base: string): ReporterCapture & { screenshotUrl: string | null } {
+  #captureView(key: string, c: CaptureRow, base: string): ReporterCapture & { screenshotUrl: string | null; annotatedUrl: string | null; marks: number } {
+    const at = `${base}/reporter/v1/tickets/${encodeURIComponent(key)}/captures/${encodeURIComponent(c.capture_id)}`;
     return {
       captureId: c.capture_id,
       index: c.idx,
@@ -662,7 +699,9 @@ export class ReporterService {
       anchor: json<ReporterAnchor>(c.anchor, { path: c.path, selector: null, relative: null, rect: { x: 0, y: 0, w: 0, h: 0 }, viewport: { w: 0, h: 0, dpr: 1 }, mode: 'full' }),
       note: c.note,
       createdAt: c.created_at,
-      screenshotUrl: c.screenshot_attachment !== null ? `${base}/reporter/v1/tickets/${encodeURIComponent(key)}/captures/${encodeURIComponent(c.capture_id)}/screenshot` : null,
+      screenshotUrl: c.screenshot_attachment !== null ? `${at}/screenshot` : null,
+      annotatedUrl: c.annotated_attachment != null ? `${at}/annotated` : null,
+      marks: marksOf(c.annotations).length,
     };
   }
 
@@ -904,12 +943,12 @@ export class ReporterService {
 
   #insertCaptures(n: number, captures: (ReporterCaptureInput & { body?: string | null })[], startIdx: number): void {
     const ins = this.#wdb.prepare(
-      'INSERT INTO reporter_ticket_captures (ticket_number, capture_id, idx, page_url, path, anchor, rect_y, selector, note, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO reporter_ticket_captures (ticket_number, capture_id, idx, page_url, path, anchor, rect_y, selector, note, body, annotations, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     const at = this.#iso();
     captures.forEach((c, i) => {
       if (this.#db.prepare('SELECT 1 FROM reporter_ticket_captures WHERE capture_id = ?').get(c.captureId)) throw invalid('captureId', 'That capture is already on a ticket.');
-      ins.run(n, c.captureId, startIdx + i, c.pageUrl, pathOnly(c.anchor.path), JSON.stringify(c.anchor), c.anchor.rect.y, c.anchor.selector, c.note, c.body ?? null, at);
+      ins.run(n, c.captureId, startIdx + i, c.pageUrl, pathOnly(c.anchor.path), JSON.stringify(c.anchor), c.anchor.rect.y, c.anchor.selector, c.note, c.body ?? null, marksJson(c.annotations), at);
     });
   }
 
@@ -1039,7 +1078,15 @@ export class ReporterService {
       this.#afterAttach(t.number);
       return { attachmentId: a.id };
     }
-    if (kind !== 'evidence') throw invalid('x-reporter-kind', 'screenshot or evidence.');
+    if (kind === 'annotated') {
+      const type = this.#checkAnnotatedFor(marksOf(cap.annotations), cap.annotated_attachment != null, bytes, declaredType);
+      const a = this.deps.tickets.attach(caller, ticketIdOf(t.number), { name: `${captureId}.annotated.${type.split('/')[1]}`, mediaType: type, bytes });
+      this.#wdb.prepare('UPDATE reporter_ticket_captures SET annotated_attachment = ? WHERE ticket_number = ? AND capture_id = ?').run(a.id, t.number, captureId);
+      this.#rewrite(t.number);
+      this.#afterAttach(t.number);
+      return { attachmentId: a.id };
+    }
+    if (kind !== 'evidence') throw invalid('x-reporter-kind', 'screenshot, annotated or evidence.');
     if (cap.evidence_attachment !== null) throw new AppError('CONFLICT', 'That capture already has its evidence.');
     const evidence = pinEvidence(parseEvidence(bytes), ctx.origin);
     const clean = Buffer.from(JSON.stringify(evidence));
@@ -1059,6 +1106,27 @@ export class ReporterService {
     if (!cap || cap.screenshot_attachment === null) throw notFound();
     const f = this.deps.tickets.attachmentFile({ kind: 'system' }, ticketIdOf(t.number), cap.screenshot_attachment);
     return { bytes: f.bytes, type: f.attachment.mediaType };
+  }
+
+  /** A capture's annotated image for the panel (the token's bucket only). */
+  annotated(ctx: ReporterTokenCtx, ref: string, captureId: string): { bytes: Buffer; type: string } {
+    const t = this.#ticketRow(ctx, ref);
+    const cap = this.#db.prepare('SELECT annotated_attachment FROM reporter_ticket_captures WHERE ticket_number = ? AND capture_id = ?').get(t.number, captureId) as { annotated_attachment: number | null } | undefined;
+    if (!cap || cap.annotated_attachment === null) throw notFound();
+    const f = this.deps.tickets.attachmentFile({ kind: 'system' }, ticketIdOf(t.number), cap.annotated_attachment);
+    return { bytes: f.bytes, type: f.attachment.mediaType };
+  }
+
+  /**
+   * The rules for an `annotated` upload: the capture says it has marks, at most one, and NEVER when a mark blurs something. With a blur the
+   * panel uploads the flattened image as the screenshot and discards the original on the device; accepting a second image here would let
+   * the un-blurred original (or anything else) sit beside it, so it is refused.
+   */
+  #checkAnnotatedFor(marks: ReporterAnnotation[], already: boolean, bytes: Buffer, declared: string | undefined): 'image/png' | 'image/webp' {
+    if (!marks.length) throw invalid('x-reporter-kind', 'This capture has no marks; send its screenshot only.');
+    if (hasBlur(marks)) throw invalid('x-reporter-kind', 'A capture with blurred areas uploads the blurred image as its screenshot only.');
+    if (already) throw new AppError('CONFLICT', 'That capture already has its annotated image.');
+    return checkAnnotated(bytes, declared);
   }
 
   #evidenceOf(n: number, attachmentId: number | null): ReporterEvidence | null {
@@ -1082,6 +1150,9 @@ export class ReporterService {
       evidence: this.#evidenceOf(n, c.evidence_attachment),
       screenshotAttachmentId: c.screenshot_attachment,
       evidenceAttachmentId: c.evidence_attachment,
+      annotatedAttachmentId: c.annotated_attachment ?? null,
+      marks: marksOf(c.annotations).length,
+      blurred: hasBlur(marksOf(c.annotations)),
     }));
   }
 
@@ -1167,9 +1238,11 @@ export class ReporterService {
     const images: { name: string; mediaType: string; dataBase64: string }[] = [];
     let skipped = 0;
     for (const c of caps) {
-      if (c.screenshotAttachmentId === null) continue;
+      // The marks are what the reporter points at: the annotated image goes in the chat when there is one (the original stays on the ticket).
+      const shown = c.annotatedAttachmentId ?? c.screenshotAttachmentId;
+      if (shown === null) continue;
       try {
-        const f = this.deps.tickets.attachmentFile({ kind: 'system' }, ticketIdOf(n), c.screenshotAttachmentId);
+        const f = this.deps.tickets.attachmentFile({ kind: 'system' }, ticketIdOf(n), shown);
         if (images.length < 4 && f.bytes.length <= 3_750_000) images.push({ name: f.attachment.name, mediaType: f.attachment.mediaType, dataBase64: f.bytes.toString('base64') });
         else skipped++;
       } catch {
@@ -1274,7 +1347,12 @@ export class ReporterService {
         reasons,
         score: Math.round(score * 100) / 100,
         url: `${base}/admin/tickets/${encodeURIComponent(key)}`,
-        thumbnailUrl: r.screenshot_attachment !== null ? `${base}/reporter/v1/tickets/${encodeURIComponent(key)}/captures/${encodeURIComponent(r.capture_id)}/screenshot` : null,
+        thumbnailUrl:
+          r.annotated_attachment != null
+            ? `${base}/reporter/v1/tickets/${encodeURIComponent(key)}/captures/${encodeURIComponent(r.capture_id)}/annotated`
+            : r.screenshot_attachment !== null
+              ? `${base}/reporter/v1/tickets/${encodeURIComponent(key)}/captures/${encodeURIComponent(r.capture_id)}/screenshot`
+              : null,
       });
     }
     return [...best.values()].sort((x, y) => y.score - x.score).slice(0, REPORTER_LIMITS.duplicateCandidates);
@@ -1318,6 +1396,8 @@ export class ReporterService {
       body: c.body,
       updatedAt: c.updated_at,
       screenshotUrl: c.screenshot_sha ? `${base}/reporter/v1/reviews/${encodeURIComponent(id)}/comments/${encodeURIComponent(c.capture_id)}/screenshot` : null,
+      annotatedUrl: c.annotated_sha ? `${base}/reporter/v1/reviews/${encodeURIComponent(id)}/comments/${encodeURIComponent(c.capture_id)}/annotated` : null,
+      marks: marksOf(c.annotations).length,
     };
   }
 
@@ -1357,8 +1437,8 @@ export class ReporterService {
     if (rows.some((c) => c.capture_id === capture.captureId)) throw invalid('capture.captureId', 'That capture is already in this review.');
     const at = this.#iso();
     this.#wdb
-      .prepare('INSERT INTO reporter_review_comments (review_id, capture_id, idx, page_url, path, anchor, note, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(r.id, capture.captureId, rows.length + 1, capture.pageUrl, pathOnly(capture.anchor.path), JSON.stringify(capture.anchor), capture.note, text, at, at);
+      .prepare('INSERT INTO reporter_review_comments (review_id, capture_id, idx, page_url, path, anchor, note, body, annotations, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(r.id, capture.captureId, rows.length + 1, capture.pageUrl, pathOnly(capture.anchor.path), JSON.stringify(capture.anchor), capture.note, text, marksJson(capture.annotations), at, at);
     this.#touchReview(r.id);
     return this.review(ctx, id, base);
   }
@@ -1403,7 +1483,7 @@ export class ReporterService {
       this.#renumber(r.id, this.#commentRows(r.id).map((c) => c.capture_id));
       this.#touchReview(r.id);
     });
-    this.#dropFiles([row.screenshot_sha, row.evidence_sha]);
+    this.#dropFiles([row.screenshot_sha, row.evidence_sha, row.annotated_sha ?? null]);
     return this.review(ctx, id, base);
   }
 
@@ -1423,7 +1503,11 @@ export class ReporterService {
       const clean = Buffer.from(JSON.stringify(pinEvidence(parseEvidence(bytes), ctx.origin)));
       const s = putTicketFile(dir, clean);
       this.#wdb.prepare('UPDATE reporter_review_comments SET evidence_sha = ?, evidence_size = ? WHERE review_id = ? AND capture_id = ?').run(s, clean.length, r.id, captureId);
-    } else throw invalid('x-reporter-kind', 'screenshot or evidence.');
+    } else if (kind === 'annotated') {
+      const type = this.#checkAnnotatedFor(marksOf(row.annotations), !!row.annotated_sha, bytes, declaredType);
+      const s = putTicketFile(dir, bytes);
+      this.#wdb.prepare('UPDATE reporter_review_comments SET annotated_sha = ?, annotated_type = ?, annotated_size = ? WHERE review_id = ? AND capture_id = ?').run(s, type, bytes.length, r.id, captureId);
+    } else throw invalid('x-reporter-kind', 'screenshot, annotated or evidence.');
     this.#touchReview(r.id);
     return { ok: true };
   }
@@ -1436,13 +1520,21 @@ export class ReporterService {
     return { bytes, type: row.screenshot_type ?? 'application/octet-stream' };
   }
 
+  reviewAnnotated(ctx: ReporterTokenCtx, id: string, captureId: string): { bytes: Buffer; type: string } {
+    const r = this.#reviewRow(ctx, id);
+    const row = this.#commentRows(r.id).find((c) => c.capture_id === captureId);
+    const bytes = row?.annotated_sha ? readTicketFile(this.deps.store.dataDir, row.annotated_sha) : null;
+    if (!row || !bytes) throw notFound();
+    return { bytes, type: row.annotated_type ?? 'application/octet-stream' };
+  }
+
   /** Removes stored files no ticket attachment and no review comment still names. */
   #dropFiles(shas: (string | null)[]): void {
     for (const s of shas) {
       if (!s) continue;
       const used =
         this.#db.prepare('SELECT 1 FROM ticket_attachments WHERE sha256 = ? LIMIT 1').get(s) ??
-        this.#db.prepare('SELECT 1 FROM reporter_review_comments WHERE screenshot_sha = ? OR evidence_sha = ? LIMIT 1').get(s, s);
+        this.#db.prepare('SELECT 1 FROM reporter_review_comments WHERE screenshot_sha = ? OR evidence_sha = ? OR annotated_sha = ? LIMIT 1').get(s, s, s);
       if (!used) removeTicketFile(this.deps.store.dataDir, s);
     }
   }
@@ -1458,7 +1550,7 @@ export class ReporterService {
       this.#wdb.prepare('DELETE FROM reporter_review_comments WHERE review_id = ?').run(id);
       this.#wdb.prepare("UPDATE reporter_reviews SET status = 'discarded', updated_at = ? WHERE id = ?").run(this.#iso(), id);
     });
-    this.#dropFiles(rows.flatMap((c) => [c.screenshot_sha, c.evidence_sha]));
+    this.#dropFiles(rows.flatMap((c) => [c.screenshot_sha, c.evidence_sha, c.annotated_sha ?? null]));
   }
 
   /** Discards drafts untouched for `draftDays`, with their files. Returns how many. */
@@ -1481,7 +1573,10 @@ export class ReporterService {
     const target = this.#target(ctx, body.target);
     const mode = body.mode === 'per-page' || body.mode === 'per-capture' || body.mode === 'single' ? body.mode : null;
     if (!mode && !body.targetTicketKey) throw invalid('mode', 'single, per-page or per-capture.');
-    const asCapture = (c: CommentRow): ReporterCaptureInput & { body: string } => ({ captureId: c.capture_id, pageUrl: c.page_url, anchor: json<ReporterAnchor>(c.anchor, null as never), note: c.note, body: c.body });
+    const asCapture = (c: CommentRow): ReporterCaptureInput & { body: string } => {
+      const marks = marksOf(c.annotations);
+      return { captureId: c.capture_id, pageUrl: c.page_url, anchor: json<ReporterAnchor>(c.anchor, null as never), note: c.note, body: c.body, ...(marks.length ? { annotations: marks } : {}) };
+    };
     const text = this.#cleanText(body.description, 'description', 12_000);
     const summary = redactText(String(body.summary ?? r.title ?? ''));
     const build = json<ReporterBuildInfo>(r.build, cleanBuild(null));
@@ -1522,6 +1617,10 @@ export class ReporterService {
           if (c.screenshot_sha) {
             const bytes = readTicketFile(this.deps.store.dataDir, c.screenshot_sha);
             if (bytes) this.attach(ctx, ticketIdOf(m.number), c.capture_id, 'screenshot', bytes, c.screenshot_type ?? undefined);
+          }
+          if (c.annotated_sha) {
+            const bytes = readTicketFile(this.deps.store.dataDir, c.annotated_sha);
+            if (bytes) this.attach(ctx, ticketIdOf(m.number), c.capture_id, 'annotated', bytes, c.annotated_type ?? undefined);
           }
           if (c.evidence_sha) {
             const bytes = readTicketFile(this.deps.store.dataDir, c.evidence_sha);
@@ -1805,6 +1904,32 @@ export class ReporterService {
       lastSeq: s.lastSeq ?? 0,
       ticketKey,
       url: `${base}/admin/sessions/${encodeURIComponent(s.id)}`,
+      runtime: this.#runtime(s),
+    };
+  }
+
+  /** The chat header's runtime from the session record and the usage snapshot: copied, never recomputed; a name that holds an email loses it. */
+  #runtime(s: ReporterChatSession): ReporterChatRuntime {
+    const modes = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'] as const;
+    const short = (v: string | null | undefined, max: number) => (v ? redactText(v).replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '…').slice(0, max) : null);
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const ctx = s.context && num(s.context.usedTokens) !== null ? { usedTokens: s.context.usedTokens, windowTokens: num(s.context.windowTokens) } : null;
+    let plan: ReporterChatRuntime['plan'] = null;
+    if (s.claudeId !== undefined && this.deps.claudePlan) {
+      try {
+        plan = this.deps.claudePlan(s.claudeId);
+      } catch {
+        plan = null;
+      }
+    }
+    return {
+      model: short(s.model, 80),
+      effort: short(s.effort, 20),
+      mode: (modes as readonly string[]).includes(s.mode ?? '') ? (s.mode as ReporterChatRuntime['mode']) : null,
+      claude: short(s.claudeName, 60),
+      context: ctx,
+      costUsd: num(s.costUsd),
+      plan,
     };
   }
 
@@ -1934,6 +2059,8 @@ export class ReporterService {
         createdAt: c.created_at,
         screenshotAttachmentId: c.screenshot_attachment === null ? null : String(c.screenshot_attachment),
         evidenceAttachmentId: c.evidence_attachment === null ? null : String(c.evidence_attachment),
+        annotatedAttachmentId: c.annotated_attachment == null ? null : String(c.annotated_attachment),
+        annotations: marksOf(c.annotations),
       })),
     };
   }
@@ -1965,9 +2092,12 @@ export class ReporterService {
         check_counts: facts[i]?.checkCounts ?? null,
         screenshot_attachment_id: c.screenshotAttachmentId === null ? null : Number(c.screenshotAttachmentId),
         evidence_attachment_id: c.evidenceAttachmentId === null ? null : Number(c.evidenceAttachmentId),
+        annotated_attachment_id: c.annotatedAttachmentId ? Number(c.annotatedAttachmentId) : null,
+        marks: c.annotations?.length ?? 0,
+        blurred: hasBlur(c.annotations),
       })),
       repro_steps: facts.find((f) => f?.repro)?.repro?.steps ?? null,
-      read_files: `ticket_attachment_get ${ticketId} with an attachment id: the screenshot (image) and the evidence JSON (console, network, components, performance, page, device, state, checks).`,
+      read_files: `ticket_attachment_get ${ticketId} with an attachment id: the screenshot (image), the annotated image (the reporter's marks drawn in, when there is one) and the evidence JSON (console, network, components, performance, page, device, state, checks).`,
     };
   }
 }

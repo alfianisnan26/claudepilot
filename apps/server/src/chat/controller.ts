@@ -25,6 +25,7 @@ import { AppError, isAppError } from '@isnanme/core';
 import {
   autoModeAllowed,
   downgradeChain,
+  modeWithin,
   modelDisplayName,
   modelFamilyOf,
   modelInfo,
@@ -435,6 +436,8 @@ interface Restore {
   mode: string;
   /** PILOT-996: the first launch of a session no person started, put in Auto (audited `mode.auto`, how `start`). */
   start?: true;
+  /** T-2882: the first launch of Keep going's new chat, in the narrower mode of the chat it continues (this id; audited `mode.carried`). */
+  carried?: string;
   /**
    * A move (T-109): the model is applied and VERIFIED, falling down the catalogue's chain when the destination refuses it or runs another
    * one; `from` is the model the chat had before the move.
@@ -1720,6 +1723,11 @@ export class ChatController {
   /** The events after `after`, oldest first, at most `limit` and never more than HISTORY_MAX_EVENTS: past it the newest (T-2589). */
   history(id: string, after = 0, limit?: number) {
     return this.#chat.history(this.#chat.resolveId(id), after, limit);
+  }
+
+  /** T-2591: {@link history} after `after` with `gap` when events between it and the first one returned were left out (past the cap). */
+  historyAfter(id: string, after = 0) {
+    return this.#chat.historyAfter(this.#chat.resolveId(id), after);
   }
 
   /** T-2589: the newest events of some kinds after `after`, bounded in rows and characters; `cut` when older ones were left unread. */
@@ -4309,6 +4317,24 @@ export class ChatController {
   }
 
   /**
+   * The mode a top-level session no person started (not a worker, not a manager, not a persona test) takes at its first launch, or null
+   * for the start mode. PILOT-996: Auto while the policy is on. T-2882: a continuation (Keep going's new chat) keeps the mode the chat it
+   * continues ended in when that is narrower than the cap (Auto while the policy is on, else the start mode): Plan, Don't ask, or Edit
+   * under Auto. The start mode itself is not carried: every chat starts in it and a Bypass that ends is put back to it, so it says nothing
+   * of a choice. `carried` names the chat whose mode it is.
+   */
+  #firstMode(row: ChatSessionRow): { mode: ChatPermissionMode; carried?: string } | null {
+    if (row.parent_id || !row.started_by || row.started_by === CHAT_ACTOR_UI || row.origin === 'persona_test') return null;
+    if ((row as { kind?: string }).kind === 'manager') return null;
+    const auto = this.#autonomousAutoOn();
+    const prev = row.continued_from ? this.#chat.row(row.continued_from) : null;
+    const was = prev?.mode;
+    if (prev && was && was !== START_MODE && MODES.has(was) && modeWithin(was as ChatPermissionMode, auto ? 'auto' : START_MODE))
+      return { mode: was as ChatPermissionMode, carried: prev.id };
+    return auto ? { mode: 'auto' } : null;
+  }
+
+  /**
    * T-2997 (PILOT-1025): the mode a worker gets when the Bypass it was to inherit was not kept (the parent left it, or a gate said no,
    * between the spawn's check and the entry): Auto where this worker may run in it ({@link autoModeAllowed}), else dontAsk (never waits on
    * a person, D-62).
@@ -4345,13 +4371,6 @@ export class ChatController {
     if (!track || track.expected !== 'bypassPermissions' || track.bypassPending) return false;
     const last = this.#chat.audit({ kind: 'bypass', sessionId: id, limit: 50 }).find((a) => a.kind === 'bypass.entered' || a.kind === 'bypass.left');
     return last?.kind === 'bypass.entered';
-  }
-
-  /** PILOT-996: a top-level session no person started (not a worker, not a manager, not a persona test) starts in Auto while the policy is on. */
-  #startsInAuto(row: ChatSessionRow): boolean {
-    if (row.parent_id || !row.started_by || row.started_by === CHAT_ACTOR_UI || row.origin === 'persona_test') return false;
-    if ((row as { kind?: string }).kind === 'manager') return false;
-    return this.#autonomousAutoOn();
   }
 
   /** T-417: the newest Bypass record of this chat is its sleep that kept it (a lead's), so its wake puts it back through `#keepBypass`. */
@@ -5697,12 +5716,19 @@ export class ChatController {
     // only a lead's wake after a sleep that kept it gets it back, after this, through `#keepBypass` (`#live`, T-417).
     const wasBypass = row.mode === 'bypassPermissions';
     // PILOT-996 (D-103): the first launch of a session no person started (a trigger's, a ticket's, Portal MCP's) goes to Auto while the policy
-    // allows it; a worker gets its mode from its spawn instead (its parent's, capped).
-    const firstAuto = !opts.resume && row.process_started_at === null && this.#startsInAuto(row);
+    // allows it; a worker gets its mode from its spawn instead (its parent's, capped). T-2882: Keep going's new chat keeps the ended chat's
+    // narrower mode instead (`#firstMode`).
+    const first = !opts.resume && row.process_started_at === null ? this.#firstMode(row) : null;
     const restore: Restore | null = opts.resume
       ? { model: row.model, effort: row.effort, ultracode: row.ultracode === 1, mode: wasBypass ? START_MODE : row.mode }
-      : firstAuto
-        ? { model: null, effort: null, ultracode: false, mode: 'auto', start: true }
+      : first
+        ? {
+            model: null,
+            effort: null,
+            ultracode: false,
+            mode: first.mode,
+            ...(first.carried ? { carried: first.carried } : { start: true as const }),
+          }
         : null;
     // The folder it's scanned in is the folder it runs in (and the one the session reports).
     const cwd = sessionCwd(row.cwd);
@@ -6096,6 +6122,17 @@ export class ChatController {
             workspaceId: session?.workspaceId,
             actor: 'portal',
             detail: { from: START_MODE, how: 'start' },
+          });
+        }
+        if (r.carried && applied === r.mode) {
+          this.#note(sessionId, `Mode: ${MODE_LABELS[applied] ?? applied} (as the chat it continues)`);
+          this.#chat.addAudit({
+            severity: 'info',
+            kind: 'mode.carried',
+            sessionId,
+            workspaceId: session?.workspaceId,
+            actor: 'portal',
+            detail: { mode: applied, from: r.carried },
           });
         }
       } catch {

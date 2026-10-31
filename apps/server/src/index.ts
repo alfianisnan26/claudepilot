@@ -81,6 +81,7 @@ import { registerArtifactTools } from './chat/artifacts/portalTools.js';
 import { registerTicketTools } from './tickets/portalTools.js';
 import { workspaceGit } from './reporter/git.js';
 import { sdkVersion, vendorDirs } from './reporter/pages.js';
+import { planOf } from './reporter/chat.js';
 import { registerReporterTools } from './reporter/portalTools.js';
 import { ReporterService } from './reporter/service.js';
 import { PoolService } from './pools/service.js';
@@ -757,6 +758,25 @@ registerRepoTools(repos);
 // UI reporter (docs/prd/ui-reporter-server.md): a web page's widget files tickets with screenshots and evidence; deployments per environment
 // are recorded by the widget and by pipelines, and a fix is "deployed" only when git in a workspace checkout of the repo proves it.
 const reporterVendor = vendorDirs(config.paths.root);
+// The panel's chat header shows the session's Claude's plan windows, read every second by its live stream: from the usage snapshot the
+// Usage page shows, refreshed at most every 30 s in the background (it never probes), so a stream tick costs a lookup.
+let reporterUsage: { at: number; claudes: Awaited<ReturnType<typeof claudeUsage.report>>['claudes'] } | null = null;
+let reporterUsageLoading = false;
+const reporterPlan = (claudeId: string) => {
+  if (!reporterUsageLoading && (!reporterUsage || Date.now() - reporterUsage.at > 30_000)) {
+    reporterUsageLoading = true;
+    claudeUsage
+      .report()
+      .then((r) => {
+        reporterUsage = { at: Date.now(), claudes: r.claudes };
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        reporterUsageLoading = false;
+      });
+  }
+  return planOf(reporterUsage?.claudes.find((c) => c.claudeId === claudeId) ?? null);
+};
 const reporter = new ReporterService({
   store,
   tickets,
@@ -776,6 +796,7 @@ const reporter = new ReporterService({
     },
   }),
   sdkVersion: () => sdkVersion(reporterVendor),
+  claudePlan: (claudeId) => reporterPlan(claudeId),
 });
 reporterService = reporter;
 registerReporterTools(reporter, tickets);

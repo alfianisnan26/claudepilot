@@ -4,8 +4,11 @@
 import { AppError, success } from '@isnanme/core';
 import { createHash } from 'node:crypto';
 import {
+  CHAT_HISTORY_GAP_HEADER,
   sessionRef,
+  type Actor,
   type ChatAuditEntry,
+  type ChatSession,
   type ChatWorktreeRemoval,
   type CreateChatSessionRequest,
   type CreateWorkspaceClaudeRequest,
@@ -21,6 +24,7 @@ import {
 import { Hono, type Context } from 'hono';
 import { actorOf, actorString, requireCan, visible } from '../authz/seam.js';
 import { RateLimiter } from '../rateLimit.js';
+import { ticketKeyOf } from '../tickets/keys.js';
 import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
 import { eventsQuery } from './eventPage.js';
@@ -43,6 +47,16 @@ async function body<T>(c: Context): Promise<Partial<T>> {
     throw new AppError('BAD_REQUEST', 'Expected a JSON body.');
   }
 }
+
+/**
+ * T-2945: a session's `ticketKey` as THIS caller may see it. The controller decorates every session for the portal (sockets, tools); a key names
+ * a bucket and its number, so a route asks again with the caller's actor: a ticket of a bucket it may not view has no key (null), exactly like a
+ * ticket that is gone.
+ */
+const keyedFor =
+  (actor: Actor) =>
+  (s: ChatSession): ChatSession =>
+    s.ticketId ? { ...s, ticketKey: ticketKeyOf(s.ticketId, actor) } : s;
 
 /** `?worktree=` of a delete or an archive: keep the chat's worktree (the default), remove it when nothing is lost, or remove it and discard what is there. */
 function worktreeMode(raw: string | undefined): ChatWorktreeRemoval {
@@ -67,14 +81,11 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.get('/', (c) => {
     const actor = actorOf(c);
     const keep = (s: { id: string }) => visible(actor, 'session', [s], (x) => x.id).length > 0;
-    return c.json(
-      success(
-        controller.listPage(
-          { ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) },
-          { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep },
-        ),
-      ),
+    const page = controller.listPage(
+      { ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) },
+      { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep },
     );
+    return c.json(success({ ...page, items: page.items.map(keyedFor(actor)) }));
   });
 
   // POST /api/chat/sessions — create one (starts the host in the background); 409 FOLDER_UNTRUSTED with the scan first when the folder needs trusting.
@@ -90,7 +101,7 @@ export function createChatRoutes(controller: ChatController): Hono {
   chat.get('/:id', (c) => {
     const session = controller.get(c.req.param('id'));
     if (!session) throw new AppError('NOT_FOUND', 'No such session.');
-    return c.json(success(session));
+    return c.json(success(keyedFor(actorOf(c))(session)));
   });
 
   // POST /api/chat/sessions/:id/switch — confirmed move of the chat to another Claude on the same workspace (the chat stays this session).
@@ -243,14 +254,15 @@ export function createChatRoutes(controller: ChatController): Hono {
   // GET /api/chat/sessions/:id/events?after=<seq> — stored transcript events (history and resume), as before T-376, at most HISTORY_MAX_EVENTS
   // (T-2589): a reader further behind gets the newest of them, and pages back with `before` for the older ones.
   // GET …/events?before=<seq>&limit=<n> — a page counted back from the newest (T-376, eventPage.ts): oldest first, `more`, tool_result previews.
+  // T-2591: an `after` answer that left events out before its first (the reader was more than the cap behind) says so in the
+  // `X-Chat-History-Gap: 1` header; the body stays the plain list it always was.
   chat.get('/:id/events', (c) => {
     requireCan(actorOf(c), 'view', sessionRef(c.req.param('id')));
     const q = eventsQuery({ after: c.req.query('after'), before: c.req.query('before'), limit: c.req.query('limit') });
-    return c.json(
-      success(
-        q.kind === 'after' ? controller.history(c.req.param('id'), q.after) : controller.historyPage(c.req.param('id'), q.before, q.limit),
-      ),
-    );
+    if (q.kind !== 'after') return c.json(success(controller.historyPage(c.req.param('id'), q.before, q.limit)));
+    const { items, gap } = controller.historyAfter(c.req.param('id'), q.after);
+    if (gap) c.header(CHAT_HISTORY_GAP_HEADER, '1');
+    return c.json(success(items));
   });
   // GET /api/chat/sessions/:id/events/:seq — one stored event whole (a tool_result a page cut to its preview).
   chat.get('/:id/events/:seq', (c) => {

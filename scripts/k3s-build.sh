@@ -23,7 +23,7 @@ if [ "$what" = portal ]; then
   kubectl -n "$ns" create secret generic claudepilot-build --from-literal=node-auth-token="$(gh auth token)" >/dev/null
   trap 'kubectl -n "$ns" delete secret claudepilot-build --ignore-not-found >/dev/null' EXIT
 fi
-sed -e "s#refs/heads/main\#COMMIT#refs/heads/$branch\#$commit#" -e "s/:TAG/:$tag/" -e "s/^  namespace: isnan-claudepilot$/  namespace: $ns/" "$file" | kubectl apply -f - >/dev/null
+sed -e "s#refs/heads/main\#COMMIT#refs/heads/$branch\#$commit#" -e "s/:TAG/:$tag/" -e "s/=RELEASE_TAG$/=$tag/" -e "s/^  namespace: isnan-claudepilot$/  namespace: $ns/" "$file" | kubectl apply -f - >/dev/null
 echo "building $what:$tag from $commit ..."
 for _ in $(seq 1 180); do
   s=$(kubectl -n "$ns" get job "$job" -o jsonpath='{.status.succeeded}/{.status.failed}' 2>/dev/null || true)

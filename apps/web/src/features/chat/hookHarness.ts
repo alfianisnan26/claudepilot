@@ -1,6 +1,6 @@
 // A tiny hook runtime for tests (T-382 S5): the web package has no DOM and no hook test library, so this mounts a hook by installing a dispatcher
 // into React's own internals (the slot `useState` and friends read). It supports what the paging hooks use: useState, useRef, useCallback,
-// useMemo and useEffect / useLayoutEffect with their cleanups. A state change re-renders at once, then the effects of that render run. Tests only.
+// useMemo, useContext (a context with no provider answers `opts.context`) and useEffect / useLayoutEffect with their cleanups. A state change re-renders at once, then the effects of that render run. Tests only.
 import * as ReactNs from 'react';
 
 type Internals = { H: unknown };
@@ -25,7 +25,8 @@ export interface Mounted<T> {
   unmount(): void;
 }
 
-export function mountHook<T>(hook: () => T): Mounted<T> {
+/** `context`: what `useContext` answers for a context with no value (no provider in a test), e.g. the toast function. */
+export function mountHook<T>(hook: () => T, opts: { context?: unknown } = {}): Mounted<T> {
   const slots: Slot[] = [];
   let index = 0;
   let current!: T;
@@ -81,6 +82,9 @@ export function mountHook<T>(hook: () => T): Mounted<T> {
     },
     useEffect: effect,
     useLayoutEffect: effect,
+    useContext(ctx: { _currentValue?: unknown }) {
+      return ctx._currentValue ?? opts.context;
+    },
     useDebugValue() {},
   };
 
