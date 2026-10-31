@@ -36,8 +36,14 @@ export const REPORTER_LIMITS = {
   ticketsPerHour: 30,
   /** Captures (screenshot + evidence + anchor) on one ticket. */
   capturesPerTicket: 20,
-  /** Captures waiting in the panel's draft tray. */
-  draftCaptures: 30,
+  /** Comments (captures) on one draft review. */
+  reviewComments: 50,
+  /** Characters of one review comment. */
+  commentChars: 4000,
+  /** Draft reviews one person keeps open per bucket. */
+  draftReviews: 10,
+  /** A draft review untouched this long is discarded (its files too). */
+  draftDays: 30,
 } as const;
 
 /** Per-bucket switch and allowlist, set by the owner in the bucket's settings. Off until turned on. */
@@ -157,8 +163,9 @@ export interface ReporterEvidence {
 
 /**
  * One shot of a report: a screenshot, its evidence bundle and where on the page it points. A ticket holds one or more
- * (owner, 2026-10-31: one ticket per screenshot, or many screenshots in one ticket, e.g. per page). The panel collects captures
- * in a draft tray first, then files them as: one ticket per capture, one ticket for all, or one ticket per page path.
+ * (owner, 2026-10-31: one ticket per screenshot, or many screenshots in one ticket, e.g. per page). Two ways in: the quick path
+ * files a ticket from one capture at once; a REVIEW (below) collects anchored comments as a server-side draft and submits them
+ * as one ticket, one per page, or one per comment.
  */
 export interface ReporterCaptureInput {
   /** Made by the panel (a UUID); names the capture's attachments and its callout. */
@@ -169,8 +176,8 @@ export interface ReporterCaptureInput {
   note: string | null;
 }
 
-/** How the panel turns the draft tray into tickets; the panel splits, the server only sees each resulting create. */
-export type ReporterFileMode = 'per-capture' | 'single' | 'per-page';
+/** How a submitted review becomes tickets. The server splits, in one transaction. */
+export type ReporterFileMode = 'single' | 'per-page' | 'per-capture';
 
 /**
  * POST /reporter/v1/tickets: the ticket with its captures (1..capturesPerTicket); each capture's screenshot and evidence follow as
@@ -202,6 +209,73 @@ export interface ReporterCapture {
   anchor: ReporterAnchor;
   note: string | null;
   createdAt: string;
+}
+
+/**
+ * A review, after GitHub's pull request review (owner, 2026-10-31): start one, add comments that each anchor an area of the page
+ * with a screenshot and a Markdown body, across pages and over time, then submit it. Until submitted it is a DRAFT, kept on the
+ * server (table reporter_reviews, reporter_review_comments), visible only to its author (the token's actor) in this bucket, from any
+ * device; it is not a ticket, so no queue, agent or notification sees it. Submit turns it into tickets per `mode`, moving the
+ * files, or adds its comments to an open ticket (targetTicketKey). Discard deletes it and its files.
+ */
+export type ReporterReviewStatus = 'draft' | 'submitted' | 'discarded';
+
+export interface ReporterReviewComment extends ReporterCapture {
+  /** The comment, Markdown, untrusted. */
+  body: string;
+  updatedAt: string;
+  screenshotUrl: string | null;
+}
+
+export interface ReporterReview {
+  id: string;
+  bucketKey: string;
+  status: ReporterReviewStatus;
+  /** A working title; the submit form proposes it as the summary. */
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  comments: ReporterReviewComment[];
+  /** The tickets it became, once submitted. */
+  ticketKeys: string[];
+}
+
+/** POST /reporter/v1/reviews */
+export interface ReporterStartReviewRequest {
+  title?: string;
+  appVersion: string | null;
+  repo: string | null;
+  sdkVersion: string;
+}
+
+/** POST /reporter/v1/reviews/:id/comments (the capture's screenshot and evidence follow as review attachments by captureId). */
+export interface ReporterAddCommentRequest {
+  capture: ReporterCaptureInput;
+  body: string;
+}
+
+/** PATCH /reporter/v1/reviews/:id/comments/:captureId */
+export interface ReporterUpdateCommentRequest {
+  body?: string;
+  /** Move it to this 1-based position. */
+  index?: number;
+}
+
+/** POST /reporter/v1/reviews/:id/submit */
+export interface ReporterSubmitReviewRequest {
+  summary: string;
+  /** The review's overall comment, Markdown; goes above the per-comment sections. */
+  description: string;
+  type?: TicketType;
+  priority?: TicketPriority;
+  tags?: string[];
+  mode: ReporterFileMode;
+  /** Add the comments to this open ticket of the bucket instead of creating tickets (mode is then ignored). */
+  targetTicketKey?: string;
+}
+
+export interface ReporterSubmitReviewResponse {
+  ticketKeys: string[];
 }
 
 /** A ticket as the widget sees it (the list, the callouts and the detail card). */
@@ -262,6 +336,11 @@ export interface ReporterCallout {
   url: string;
   /** One callout per capture on this path; a ticket with several shows "index of total". */
   captureId: string;
+  /**
+   * A comment of the viewer's own draft review (key is then the review id, url the panel's review view): drawn as pending (dashed,
+   * muted) so the reviewer sees what they already marked while still reviewing.
+   */
+  pending?: boolean;
   index: number;
   total: number;
   anchor: ReporterAnchor;
@@ -287,7 +366,7 @@ export type ReporterPanelMessage =
   | { type: 'pilot-reporter:callouts'; path: string; callouts: ReporterCallout[] }
   | { type: 'pilot-reporter:settings'; calloutsVisible: boolean; hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string> }
   | { type: 'pilot-reporter:highlight'; key: string }
-  /** Captures waiting in the draft tray: the widget button shows the count as a badge (0 hides it). */
+  /** Comments in the open draft review: the widget button shows the count as a badge (0 hides it). */
   | { type: 'pilot-reporter:tray'; count: number }
   | { type: 'pilot-reporter:close' };
 
@@ -312,6 +391,13 @@ export const REPORTER_ROUTES = {
   captures: '/reporter/v1/tickets/:key/captures', // POST ReporterAddCapturesRequest
   attach: '/reporter/v1/tickets/:key/attachments', // POST raw body; x-reporter-capture: <captureId>; x-reporter-kind: screenshot | evidence
   file: '/reporter/v1/tickets/:key/captures/:captureId/screenshot', // GET
+  reviews: '/reporter/v1/reviews', // GET ?status=draft (the author's own), POST start
+  review: '/reporter/v1/reviews/:id', // GET, PATCH {title}, DELETE (discard)
+  reviewComments: '/reporter/v1/reviews/:id/comments', // POST
+  reviewComment: '/reporter/v1/reviews/:id/comments/:captureId', // PATCH, DELETE
+  reviewAttach: '/reporter/v1/reviews/:id/attachments', // POST raw body; x-reporter-capture; x-reporter-kind
+  reviewFile: '/reporter/v1/reviews/:id/comments/:captureId/screenshot', // GET
+  reviewSubmit: '/reporter/v1/reviews/:id/submit', // POST
   sessions: '/reporter/v1/sessions', // GET
   knowledge: '/reporter/v1/knowledge', // GET ?q=
   note: '/reporter/v1/knowledge/note', // GET ?path=
