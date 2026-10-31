@@ -67,7 +67,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
     setSize(null);
     if (!capture?.evidenceAttachmentId) return;
     let live = true;
-    reporterApi.bundle(ticketId, capture.evidenceAttachmentId).then(
+    reporterApi.bundle(ticketId, Number(capture.evidenceAttachmentId)).then(
       (b) => live && setBundle(b),
       () => live && setBundle('failed'),
     );
@@ -165,7 +165,7 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
                 aria-current={i === at}
                 className={`flex min-h-11 w-24 flex-col gap-1 rounded-xl border p-1 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${i === at ? 'border-accent' : 'border-line'}`}
               >
-                {c.screenshotAttachmentId ? <img src={TICKET_API.attachment(ticketId, c.screenshotAttachmentId)} alt="" loading="lazy" className="h-14 w-full rounded-lg object-cover" /> : <span className="h-14 w-full rounded-lg bg-surface-2" />}
+                {c.screenshotAttachmentId ? <img src={TICKET_API.attachment(ticketId, Number(c.screenshotAttachmentId))} alt="" loading="lazy" className="h-14 w-full rounded-lg object-cover" /> : <span className="h-14 w-full rounded-lg bg-surface-2" />}
                 <span className="truncate text-[11.5px] text-muted">
                   {c.index} · {c.anchor.path}
                 </span>
@@ -181,9 +181,9 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
             {capture.index} of {evidence.captures.length} · {capture.anchor.mode === 'crop' ? 'crop' : 'full'} · {capture.anchor.viewport.w}×{capture.anchor.viewport.h}
           </p>
           {capture.screenshotAttachmentId ? (
-            <a href={TICKET_API.attachment(ticketId, capture.screenshotAttachmentId)} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden rounded-xl border border-line bg-surface-2">
+            <a href={TICKET_API.attachment(ticketId, Number(capture.screenshotAttachmentId))} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden rounded-xl border border-line bg-surface-2">
               <img
-                src={TICKET_API.attachment(ticketId, capture.screenshotAttachmentId)}
+                src={TICKET_API.attachment(ticketId, Number(capture.screenshotAttachmentId))}
                 alt={`Screenshot ${capture.index}`}
                 onLoad={(e) => setSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
                 className="max-h-[28rem] w-full object-contain object-top"
