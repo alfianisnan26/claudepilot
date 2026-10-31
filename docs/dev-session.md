@@ -308,6 +308,24 @@ scripts/job-run.sh --repo konfersi:<org>/<repo> --ref <branch> --image registry.
   (409 `MEMORY_BUDGET`, audited `memory.refused`; chat PRD FR39b). Past 85% a Needs you item and a push name the largest processes. If an
   agent's spawn or wake is refused for memory: end or sleep a session there, or move the heavy job into the cluster; never raise the limit.
 
+## Reading Gitea Actions runs (the Actions door)
+
+`scripts/actions-door.mjs` (T-3192) lets a lead or a lane cite a Konfersi CI step as evidence. A narrow door: GET only, the host pinned to
+`https://git.konfersi.com`, repositories `platform/konfersi-*` only, the token read from the file named by `GITEA_ACTIONS_READ_TOKEN_FILE`
+(a Gitea token with read on the repository's actions and nothing more, delivered by the Secrets pool) and never printed. It is light (two
+or three API calls), so it runs in the pod:
+
+```sh
+node /home/node/work/claudepilot/scripts/actions-door.mjs runs konfersi-compute stg            # recent runs (--limit N, at most 20): run id, head sha, each job's steps and results
+node /home/node/work/claudepilot/scripts/actions-door.mjs log konfersi-compute 9001 'Run pytest' # the step's last 40 lines (--lines N, at most 200; --job <name> when two jobs share it)
+```
+
+Printed log lines are cleaned of control characters and of credential shapes (the token, `Authorization:` and `token=` values, known key
+prefixes, hex runs of 32 or more, long base64): a commit sha inside a log line shows as `[redacted]`; the run's head sha is printed whole.
+Exit codes: 1 bad arguments, 2 no token, 3 the token lacks actions read (401/403), 4 not found, 5 another HTTP answer, a network error or the
+20 s timeout. The step's section is found by act_runner's `⭐ Run <stage> <step>` marker; without one the door says so and prints the whole
+job's tail. Tests: `apps/server/src/qa/actionsDoor.test.ts` (a mocked API).
+
 ## Building an image in the cluster
 
 There is no Docker daemon in the workspace pod and there will not be one (D-5: one pod, no daemon, no privileged containers). `scripts/image-build.sh`
