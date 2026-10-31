@@ -1,6 +1,6 @@
 import { REPORTER_LIMITS, type ReporterChatMessage, type ReporterChatState } from '@portal/contracts';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { chatStatus, mergeLines, newUuid } from './chatModel';
+import { chatStatus, mergeLines, newUuid, sessionTitle } from './chatModel';
 import { Composer } from './Composer';
 import { usePanel, type ChatOpen } from './context';
 import { useBottomList } from './hooks';
@@ -183,7 +183,9 @@ export function ChatView({ open, onBack }: { open: ChatOpen; onBack: () => void 
       <header className="flex shrink-0 items-center gap-1 border-b border-line px-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={onBack} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-semibold">{session?.title ?? 'Session'}</p>
+          <p className="truncate text-[14px] font-semibold" title={session?.title}>
+            {session ? sessionTitle(session.title) : 'Session'}
+          </p>
           <p className="flex items-center gap-1.5 text-[12px] text-muted">
             <span aria-hidden="true" className={`size-2 rounded-full ${st.tone === 'busy' ? 'bg-flame' : st.tone === 'wait' ? 'bg-gold' : st.tone === 'off' ? 'bg-line-strong' : 'bg-accent'}`} />
             {st.word}

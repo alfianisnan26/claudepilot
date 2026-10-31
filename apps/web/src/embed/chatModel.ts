@@ -159,3 +159,26 @@ export function windowRange(count: number, scrollTop: number, viewport: number, 
   const end = Math.min(count, Math.max(start, first) + visible + overscan);
   return { start, end };
 }
+
+/** "[Landing] Hero is cut off" as a small tag and the rest: a bracketed prefix the list shows as a tag, not as title text. */
+export function splitPrefix(summary: string): { tag: string | null; text: string } {
+  const m = /^\s*\[([^\]\n]{1,24})\]\s*(.+)$/s.exec(summary);
+  return m ? { tag: m[1]!.trim(), text: m[2]! } : { tag: null, text: summary };
+}
+
+/** A session title without the internal prefix a crew gives it ("mo-T-2430 Fix the hero" reads "Fix the hero"). */
+export const sessionTitle = (title: string) => title.replace(/^\s*[a-z]{1,6}-(?:T|[A-Z]{2,6})-\d+\s*[:·—–-]?\s*/, '') || title;
+
+/** The filters that differ from the default as removable chips (one row under the search), each with what removing it leaves. */
+export function filterChips<P extends { status: string; priority: string[]; type: string[]; tags: string[]; mine: boolean }>(
+  p: P,
+  label: { status: (s: string) => string; priority: (v: string) => string; type: (v: string) => string },
+): { id: string; label: string; without: P }[] {
+  const out: { id: string; label: string; without: P }[] = [];
+  if (p.status !== 'open') out.push({ id: 'status', label: label.status(p.status), without: { ...p, status: 'open' } });
+  for (const v of p.priority) out.push({ id: `p:${v}`, label: label.priority(v), without: { ...p, priority: p.priority.filter((x) => x !== v) } });
+  for (const v of p.type) out.push({ id: `t:${v}`, label: label.type(v), without: { ...p, type: p.type.filter((x) => x !== v) } });
+  for (const v of p.tags) out.push({ id: `g:${v}`, label: `#${v}`, without: { ...p, tags: p.tags.filter((x) => x !== v) } });
+  if (p.mine) out.push({ id: 'mine', label: 'Mine', without: { ...p, mine: false } });
+  return out;
+}

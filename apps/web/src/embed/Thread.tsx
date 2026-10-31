@@ -91,7 +91,7 @@ const Body = memo(function Body({ body }: { body: string }) {
         <Md text={body} />
       </div>
       {long && (
-        <button type="button" onClick={() => setOpen(!open)} className="min-h-11 text-[12.5px] font-semibold text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
+        <button type="button" onClick={() => setOpen(!open)} className="min-h-11 min-w-11 text-left text-[12.5px] font-semibold text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
           {open ? 'Less' : 'More'}
         </button>
       )}

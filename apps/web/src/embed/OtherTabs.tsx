@@ -2,6 +2,7 @@ import type { ReporterNote, ReporterNoteHit, ReporterSession } from '@portal/con
 import { useEffect, useState } from 'react';
 import { usePanel } from './context';
 import { Icon } from './icons';
+import { sessionTitle } from './chatModel';
 import { Md } from './markdown';
 import { DEFAULT_HOTKEYS, hotkeyOf, type Hotkeys } from './model';
 import { Btn, IconBtn, Notice, inputClass } from './ui';
@@ -38,7 +39,7 @@ export function SessionsTab() {
     <div className="flex flex-col gap-3 p-3">
       {targets.length > 0 && (
         <section>
-          <h2 className="mb-1 px-1 text-[12.5px] font-semibold text-muted">Direct report</h2>
+          <h2 className="mb-1 px-1 text-[13px] font-semibold text-muted">Lead</h2>
           <ul className="flex flex-col gap-1">
             {targets.map((t) => (
               <li key={t.sessionId}>
@@ -70,7 +71,9 @@ export function SessionsTab() {
               <button type="button" onClick={() => openChat({ sessionId: s.id, ticketKey: s.ticketKey })} className="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
                 <span className={`size-2 shrink-0 rounded-full ${dot(s.status)}`} aria-hidden="true" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-semibold">{s.title}</span>
+                  <span className="block truncate text-[14px] font-semibold" title={s.title}>
+                    {sessionTitle(s.title)}
+                  </span>
                   <span className="block truncate text-[12px] text-muted">
                     {s.status}
                     {s.ticketKey && ` · ${s.ticketKey}`}
@@ -175,8 +178,11 @@ export function SettingsTab() {
   const [recording, setRecording] = useState<keyof Hotkeys | null>(null);
   return (
     <div className="flex flex-col gap-4 p-3">
-      <label className="flex min-h-11 items-center justify-between gap-3 rounded-xl bg-surface-2 px-3">
-        <span className="text-[14px] font-semibold">Callouts</span>
+      <label className="flex min-h-11 items-center justify-between gap-3 rounded-xl bg-surface-2 px-3" title="Pins on the page where tickets were reported">
+        <span className="text-[14px] font-semibold">
+          Callouts
+          <span className="sr-only">: pins on the page where tickets were reported</span>
+        </span>
         <input type="checkbox" role="switch" checked={calloutsVisible} onChange={(e) => setCalloutsVisible(e.target.checked)} className="size-6 accent-[var(--color-accent)]" />
       </label>
       {!coarse && (
@@ -214,7 +220,9 @@ export function SettingsTab() {
           </Btn>
         </section>
       )}
-      <section className="flex flex-col gap-1 px-1 text-[12.5px] text-muted">
+      <details className="rounded-xl px-1 text-[13px] text-muted">
+        <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-ink-soft">About</summary>
+        <div className="flex flex-col gap-1 pb-2">
         {actorLabel && <p>Signed in as {actorLabel}</p>}
         {status.site && (
           <p className="break-all">
@@ -224,7 +232,8 @@ export function SettingsTab() {
         <p>
           SDK {sdkVersion || 'unknown'} · served {status.sdkVersion}
         </p>
-      </section>
+        </div>
+      </details>
       <Btn icon="logOut" onClick={signOut}>
         Sign out
       </Btn>

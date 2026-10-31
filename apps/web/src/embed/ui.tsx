@@ -70,7 +70,7 @@ export function Seg<T extends string>({ value, options, onChange, label }: { val
           disabled={o.disabled}
           title={o.hint}
           onClick={() => onChange(o.value)}
-          className={`min-h-11 flex-1 rounded-[10px] px-2 text-[13px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-40 ${value === o.value ? 'bg-surface text-ink shadow-sm' : 'text-muted'}`}
+          className={`min-h-11 flex-1 rounded-[10px] px-2 text-[13px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-40 ${value === o.value ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'}`}
         >
           {o.label}
         </button>
@@ -89,8 +89,8 @@ export function Notice({ tone = 'info', children }: { tone?: 'info' | 'error' | 
 }
 
 export function PhaseChip({ phase, pending }: { phase: ReporterWorkPhase; pending?: boolean }) {
-  if (pending) return <span className="rounded-full border border-dashed border-line-strong px-2 py-0.5 text-[12px] font-semibold text-muted">Pending</span>;
-  return <span className={`rounded-full px-2 py-0.5 text-[12px] font-semibold whitespace-nowrap ${PHASE_TONE[phase]}`}>{PHASE_LABEL[phase]}</span>;
+  if (pending) return <span className="rounded-full border border-dashed border-line-strong px-2 py-0.5 text-[12.5px] font-semibold text-muted">Pending</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-[12.5px] leading-4 font-semibold whitespace-nowrap ${PHASE_TONE[phase]}`}>{PHASE_LABEL[phase]}</span>;
 }
 
 /** "stg ✓ · uat – · prod ?", each environment with its reason as a tooltip and for screen readers. */

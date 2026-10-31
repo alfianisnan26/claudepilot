@@ -12,7 +12,7 @@ import {
   type TicketType,
 } from '@portal/contracts';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { appendPage, refreshLimit, reuseRows, rowThumb, windowRange } from './chatModel';
+import { appendPage, filterChips, refreshLimit, reuseRows, rowThumb, splitPrefix, windowRange } from './chatModel';
 import { SEVERITIES, deployLine, pathnameOf, shortCommit, shotCaption } from '@/features/reporter/shared';
 import { usePanel } from './context';
 import { Icon } from './icons';
@@ -33,7 +33,7 @@ import {
   type ListPrefs,
   type Sort,
 } from './model';
-import { AuthImg, Btn, Chip, EnvStrip, IconBtn, Notice, PhaseChip, Seg, inputClass } from './ui';
+import { AuthImg, Btn, Chip, IconBtn, Notice, PhaseChip, Seg, inputClass } from './ui';
 
 const prefsKey = (bucket: string) => `pilot-reporter:prefs:${bucket}`;
 
@@ -45,7 +45,7 @@ export function TicketsTab() {
 /** The list as last shown per bucket and query (rows, cursor, scroll): back from a ticket it is there at once, where it was. */
 const listCache = new Map<string, { list: ReporterTicketList; scrollTop: number }>();
 const WINDOW_FROM = 60;
-const ROW_PX = 84;
+const ROW_PX = 72;
 const scroller = () => document.getElementById('panel-main');
 
 function TicketList() {
@@ -180,19 +180,25 @@ function TicketList() {
     [cacheKey, path, focus, select],
   );
 
+  const chips = filterChips(prefs, {
+    status: (v) => (v === 'closed' ? 'Closed' : v === 'all' ? 'Any status' : (TICKET_STATUS_LABEL[v as keyof typeof TICKET_STATUS_LABEL] ?? v)),
+    priority: (v) => TICKET_PRIORITY_LABEL[v as TicketPriority],
+    type: (v) => TICKET_TYPE_LABEL[v as TicketType],
+  });
+  const closedCount = list?.counts.status.closed ?? 0;
+
   return (
-    <div className="flex flex-col gap-3 p-3">
+    <div className="flex flex-col gap-2 px-3 pt-2 pb-3">
       <Seg
         label="Scope"
-        value={prefs.scope}
-        onChange={(scope) => setPrefs({ ...prefs, scope })}
+        value={prefs.scope === 'page' ? 'page' : 'all'}
+        onChange={(v) => setPrefs({ ...prefs, scope: v === 'page' ? 'page' : prefs.scope === 'grouped' ? 'grouped' : 'all' })}
         options={[
-          { value: 'page', label: `This page${list && prefs.scope === 'page' ? ` ${list.counts.onPath || items.length}` : ''}` },
+          { value: 'page', label: `This page${list && prefs.scope === 'page' ? ` · ${list.counts.onPath || items.length}` : ''}` },
           { value: 'all', label: 'All' },
-          { value: 'grouped', label: 'By page' },
         ]}
       />
-      <div className="flex items-center gap-2">
+      <div className="relative flex items-center gap-2">
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">Search</span>
           <Icon name="search" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" />
@@ -207,7 +213,7 @@ function TicketList() {
           className="relative inline-flex size-11 items-center justify-center rounded-xl bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
         >
           <Icon name="slidersHorizontal" />
-          {filters > 0 && <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-accent px-1 text-center text-[10.5px] leading-4 font-bold text-primary-ink">{filters}</span>}
+          {filters > 0 && <span className="absolute -top-1 -right-1 min-w-4 rounded-full bg-accent px-1 text-center text-[11px] leading-4 font-bold text-primary-ink">{filters}</span>}
         </button>
         <button
           type="button"
@@ -219,18 +225,35 @@ function TicketList() {
         >
           <Icon name="arrowUpDown" />
         </button>
+        {sheet === 'sort' && <SortPopover prefs={prefs} onChange={setPrefs} onClose={() => setSheet(null)} />}
       </div>
+      {chips.length > 0 && (
+        <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3">
+          {chips.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setPrefs(c.without)}
+              aria-label={`Remove filter ${c.label}`}
+              className="inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full bg-accent-soft px-3 text-[13px] font-semibold text-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            >
+              {c.label}
+              <Icon name="x" className="size-3.5" />
+            </button>
+          ))}
+        </div>
+      )}
 
-      {sheet === 'filter' && <FilterSheet prefs={prefs} counts={list?.counts ?? null} onChange={setPrefs} onClose={() => setSheet(null)} />}
-      {sheet === 'sort' && <SortSheet prefs={prefs} onChange={setPrefs} onClose={() => setSheet(null)} />}
+      {sheet === 'filter' && <FilterSheet prefs={prefs} counts={list?.counts ?? null} items={items} onApply={setPrefs} onClose={() => setSheet(null)} />}
 
       {prefs.scope === 'page' && path && items.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-0.5">
           {play ? (
             <>
+              <span className="mr-auto text-[13px] text-muted">Showing on the page</span>
               <IconBtn icon="chevronLeft" label="Previous" disabled={play.at === 0} onClick={() => setPlay({ ...play, at: play.at - 1 })} />
-              <span className="flex-1 text-center text-[13px] text-muted tabular-nums">
-                {play.at + 1} of {play.items.length}
+              <span className="min-w-11 text-center text-[13px] font-semibold tabular-nums">
+                {play.at + 1}/{play.items.length}
               </span>
               <IconBtn icon="chevronRight" label="Next" disabled={play.at >= play.items.length - 1} onClick={() => setPlay({ ...play, at: play.at + 1 })} />
               <IconBtn
@@ -243,7 +266,7 @@ function TicketList() {
               />
             </>
           ) : (
-            <Btn icon="play" onClick={() => setPlay({ items: playlist(items, path), at: 0 })} className="w-full">
+            <Btn tone="ghost" icon="play" onClick={() => setPlay({ items: playlist(items, path), at: 0 })}>
               Play all
             </Btn>
           )}
@@ -252,13 +275,22 @@ function TicketList() {
 
       {failed && <Notice tone="error">{failed}</Notice>}
       {!list && !failed && <div className="skeleton h-32 rounded-2xl" aria-busy="true" />}
-      {list && items.length === 0 && <p className="py-6 text-center text-[13.5px] text-muted">{prefs.scope === 'page' ? 'Nothing reported on this page.' : 'No tickets.'}</p>}
+      {list && items.length === 0 && (
+        <div className="flex flex-col items-center gap-2 py-6 text-center">
+          <p className="text-[14px] text-muted">{prefs.status === 'open' ? (prefs.scope === 'page' ? 'No open tickets here' : 'No open tickets') : 'No tickets'}</p>
+          {prefs.status === 'open' && closedCount > 0 && (
+            <Btn tone="secondary" onClick={() => setPrefs({ ...prefs, status: 'closed' })}>
+              Show {closedCount} closed
+            </Btn>
+          )}
+        </div>
+      )}
 
       {grouped
         ? grouped.map((g) => (
-            <section key={g.path} className="flex flex-col gap-1">
+            <section key={g.path} className="flex flex-col gap-0.5">
               <h2 className="px-1 text-[12.5px] font-semibold break-all text-muted">{g.path || 'No page'}</h2>
-              <ul className="flex flex-col gap-1">
+              <ul className="flex flex-col">
                 {g.items.map((t) => (
                   <Row key={t.key} t={t} path={path} env={env} onOpen={open} />
                 ))}
@@ -268,7 +300,7 @@ function TicketList() {
         : list && <Rows items={items} path={path} env={env} onOpen={open} />}
       {list?.nextCursor && (
         <div ref={end} className="flex min-h-11 items-center justify-center">
-          {more ? <span className="text-[12.5px] text-muted">Loading…</span> : <Btn tone="ghost" onClick={loadMore}>More</Btn>}
+          {more ? <span className="text-[13px] text-muted">Loading…</span> : <Btn tone="ghost" onClick={loadMore}>More</Btn>}
         </div>
       )}
     </div>
@@ -307,13 +339,18 @@ function Rows({ items, path, env, onOpen }: { items: ReporterTicket[]; path: str
   );
 }
 
+const PRIORITY_TONE: Partial<Record<TicketPriority, string>> = { urgent: 'text-danger', high: 'text-flame' };
+
 /**
- * One ticket: key · priority, the summary on two lines, the status chip, the unread dot. A small thumbnail on the left ONLY when the ticket
- * has a screenshot (fixed 48 px box, lazy): a ticket filed elsewhere is a compact text row with no placeholder. Memoised.
+ * One ticket (UX review 2026-10-31): a meta line (key, priority only when Urgent or High, the status chip, a "Reply" badge when someone
+ * waits on the reporter, else an unread dot) and the title on two lines, a bracketed prefix as a small tag. A small thumbnail on the left
+ * ONLY when the ticket has a screenshot (fixed 48 px, lazy): a ticket filed elsewhere is a text row with no placeholder. Memoised.
  */
-export const Row = memo(function Row({ t, path, env, onOpen }: { t: ReporterTicket; path: string | null; env: string | null; onOpen: (key: string) => void }) {
+export const Row = memo(function Row({ t, path, onOpen }: { t: ReporterTicket; path: string | null; env?: string | null; onOpen: (key: string) => void }) {
   const { client } = usePanel();
   const thumb = rowThumb(t, path ? capturesHere(t, path) : []);
+  const title = splitPrefix(t.summary);
+  const tone = PRIORITY_TONE[t.priority];
   return (
     <li>
       <button
@@ -324,19 +361,26 @@ export const Row = memo(function Row({ t, path, env, onOpen }: { t: ReporterTick
       >
         {thumb && <AuthImg client={client} src={thumb} alt="" className="size-12 shrink-0 rounded-lg" />}
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex items-center gap-1.5 text-[12px] text-muted">
+          <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted">
             <span className="font-semibold whitespace-nowrap tabular-nums">{t.key}</span>
-            <span aria-hidden="true">·</span>
-            <span>{TICKET_PRIORITY_LABEL[t.priority]}</span>
-            {t.captures.length > 1 && <span className="rounded-full bg-surface-2 px-1.5 tabular-nums">{t.captures.length} shots</span>}
-            {t.target.kind === 'session' && <span className="font-semibold text-danger">Urgent</span>}
-            {t.awaitingReporter && <span className="ml-auto size-2 shrink-0 rounded-full bg-danger" aria-label="Waiting for your reply" />}
-            {!t.awaitingReporter && t.unread > 0 && <span className="ml-auto size-2 shrink-0 rounded-full bg-accent" aria-label={`${t.unread} unread`} />}
-          </span>
-          <span className="line-clamp-2 text-[14px] font-semibold break-words">{t.summary}</span>
-          <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            {tone && (
+              <span className={`inline-flex items-center gap-0.5 font-semibold whitespace-nowrap ${tone}`}>
+                <Icon name="flag" className="size-3" />
+                {TICKET_PRIORITY_LABEL[t.priority]}
+              </span>
+            )}
             <PhaseChip phase={t.phase} />
-            <EnvStrip deployments={t.deployments} current={env} />
+            {t.awaitingReporter ? (
+              <span title="Someone asked you something on this ticket" className="ml-auto shrink-0 rounded-full bg-accent px-2 text-[12px] leading-5 font-bold text-primary-ink">
+                Reply
+              </span>
+            ) : (
+              t.unread > 0 && <span className="ml-auto size-2 shrink-0 rounded-full bg-accent" aria-label={`${t.unread} unread`} />
+            )}
+          </span>
+          <span className="line-clamp-2 text-[14px] leading-5 font-semibold break-words">
+            {title.tag && <span className="mr-1 rounded bg-surface-2 px-1.5 py-px align-[1px] text-[12px] font-semibold text-ink-soft">{title.tag}</span>}
+            {title.text}
           </span>
         </span>
       </button>
@@ -344,22 +388,12 @@ export const Row = memo(function Row({ t, path, env, onOpen }: { t: ReporterTick
   );
 });
 
-function SheetFrame({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-line bg-surface p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-[14px] font-bold">{title}</h2>
-        <IconBtn icon="x" label="Done" onClick={onClose} />
-      </div>
-      {children}
-    </div>
-  );
-}
-
 const toggle = <T,>(list: T[], v: T) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
-function FilterSheet({ prefs, counts, onChange, onClose }: { prefs: ListPrefs; counts: ReporterTicketList['counts'] | null; onChange: (p: ListPrefs) => void; onClose: () => void }) {
-  const [tag, setTag] = useState('');
+/** Filters as a bottom sheet over the list (nothing pushes the list down): Status, Priority, Type; Tags and Who when there is data. Apply. */
+function FilterSheet({ prefs, counts, items, onApply, onClose }: { prefs: ListPrefs; counts: ReporterTicketList['counts'] | null; items: ReporterTicket[]; onApply: (p: ListPrefs) => void; onClose: () => void }) {
+  const [draft, setDraft] = useState(prefs);
+  const tags = [...new Set([...items.flatMap((t) => (t as { tags?: string[] }).tags ?? []), ...prefs.tags])].slice(0, 20);
   const statusOptions: { value: ListPrefs['status']; label: string }[] = [
     { value: 'open', label: 'Open' },
     { value: 'closed', label: 'Closed' },
@@ -367,87 +401,131 @@ function FilterSheet({ prefs, counts, onChange, onClose }: { prefs: ListPrefs; c
     // 'open' as a query means every open status (the contract's group), so the status itself is not offered twice.
     ...TICKET_STATUSES.filter((s) => s !== 'open').map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] })),
   ];
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
   return (
-    <SheetFrame title="Filter" onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <Group label="Status">
-          {statusOptions.map((o) => (
-            <Chip key={o.value} on={prefs.status === o.value} onClick={() => onChange({ ...prefs, status: o.value })} count={counts?.status[o.value]}>
-              {o.label}
-            </Chip>
-          ))}
-        </Group>
-        <Group label="Priority">
-          {TICKET_PRIORITIES.map((v) => (
-            <Chip key={v} on={prefs.priority.includes(v)} onClick={() => onChange({ ...prefs, priority: toggle<TicketPriority>(prefs.priority, v) })} count={counts?.priority[v]}>
-              {TICKET_PRIORITY_LABEL[v]}
-            </Chip>
-          ))}
-        </Group>
-        <Group label="Type">
-          {TICKET_TYPES.map((v) => (
-            <Chip key={v} on={prefs.type.includes(v)} onClick={() => onChange({ ...prefs, type: toggle<TicketType>(prefs.type, v) })} count={counts?.type[v]}>
-              {TICKET_TYPE_LABEL[v]}
-            </Chip>
-          ))}
-        </Group>
-        <Group label="Tags">
-          {prefs.tags.map((t) => (
-            <Chip key={t} on onClick={() => onChange({ ...prefs, tags: prefs.tags.filter((x) => x !== t) })}>
-              {t} ×
-            </Chip>
-          ))}
-          <form
-            className="flex min-w-0 flex-1 gap-1"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const v = tag.trim().toLowerCase();
-              if (v && !prefs.tags.includes(v)) onChange({ ...prefs, tags: [...prefs.tags, v] });
-              setTag('');
+    <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Filter">
+      <button type="button" aria-label="Close filters" tabIndex={-1} onClick={onClose} className="absolute inset-0 bg-black/30" />
+      <div className="relative flex max-h-[85%] flex-col rounded-t-2xl bg-bg shadow-lg">
+        <div className="flex shrink-0 items-center gap-1 px-3 pt-1">
+          <h2 className="flex-1 text-[15px] font-bold">Filter</h2>
+          <IconBtn icon="x" label="Close filters" onClick={onClose} />
+        </div>
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-3 pb-3">
+          <Group label="Status">
+            {statusOptions.map((o) => (
+              <Chip key={o.value} on={draft.status === o.value} onClick={() => setDraft({ ...draft, status: o.value })} count={counts?.status[o.value]}>
+                {o.label}
+              </Chip>
+            ))}
+          </Group>
+          <Group label="Priority">
+            {TICKET_PRIORITIES.map((v) => (
+              <Chip key={v} on={draft.priority.includes(v)} onClick={() => setDraft({ ...draft, priority: toggle<TicketPriority>(draft.priority, v) })} count={counts?.priority[v]}>
+                {TICKET_PRIORITY_LABEL[v]}
+              </Chip>
+            ))}
+          </Group>
+          <Group label="Type">
+            {TICKET_TYPES.map((v) => (
+              <Chip key={v} on={draft.type.includes(v)} onClick={() => setDraft({ ...draft, type: toggle<TicketType>(draft.type, v) })} count={counts?.type[v]}>
+                {TICKET_TYPE_LABEL[v]}
+              </Chip>
+            ))}
+          </Group>
+          {tags.length > 0 && (
+            <Group label="Tags">
+              {tags.map((t) => (
+                <Chip key={t} on={draft.tags.includes(t)} onClick={() => setDraft({ ...draft, tags: toggle(draft.tags, t) })}>
+                  #{t}
+                </Chip>
+              ))}
+            </Group>
+          )}
+          {items.length > 0 && (
+            <Group label="Who">
+              <Chip on={draft.mine} onClick={() => setDraft({ ...draft, mine: !draft.mine })}>
+                Mine
+              </Chip>
+            </Group>
+          )}
+        </div>
+        <div className="flex shrink-0 gap-2 border-t border-line px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <Btn tone="ghost" onClick={() => setDraft({ ...draft, status: 'open', priority: [], type: [], tags: [], mine: false })}>
+            Clear
+          </Btn>
+          <Btn
+            tone="primary"
+            className="flex-1"
+            onClick={() => {
+              onApply(draft);
+              onClose();
             }}
           >
-            <input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Add tag" aria-label="Add tag" className={`${inputClass} min-w-24 flex-1`} autoCapitalize="none" />
-          </form>
-        </Group>
-        <Group label="Who">
-          <Chip on={prefs.mine} onClick={() => onChange({ ...prefs, mine: !prefs.mine })}>
-            Mine
-          </Chip>
-        </Group>
-        {activeFilterCount(prefs) > 0 && (
-          <Btn tone="ghost" onClick={() => onChange({ ...prefs, status: 'open', priority: [], type: [], tags: [], mine: false })}>
-            Clear filters
+            Apply
           </Btn>
-        )}
+        </div>
       </div>
-    </SheetFrame>
+    </div>
   );
 }
 
-function SortSheet({ prefs, onChange, onClose }: { prefs: ListPrefs; onChange: (p: ListPrefs) => void; onClose: () => void }) {
+/** Sort as a small popover: the sorts (Position only on This page), the order, and Group by page. */
+function SortPopover({ prefs, onChange, onClose }: { prefs: ListPrefs; onChange: (p: ListPrefs) => void; onClose: () => void }) {
   const sorts = (Object.keys(SORT_LABEL) as Sort[]).filter((s) => s !== 'position' || prefs.scope === 'page');
   const current = effectiveSort(prefs);
+  const order = effectiveOrder(prefs);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node) && !(e.target as Element).closest?.('[aria-label^="Sort"]')) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('pointerdown', away);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [onClose]);
+  const row = 'flex min-h-11 w-full items-center gap-2 px-3 text-left text-[14px] focus-visible:bg-surface-2 focus-visible:outline-hidden';
   return (
-    <SheetFrame title="Sort" onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap gap-1.5">
-          {sorts.map((s) => (
-            <Chip key={s} on={current === s} onClick={() => onChange({ ...prefs, sort: s, order: null })}>
-              {SORT_LABEL[s]}
-            </Chip>
-          ))}
-        </div>
-        <Seg
-          label="Order"
-          value={effectiveOrder(prefs)}
-          onChange={(order) => onChange({ ...prefs, sort: current, order })}
-          options={[
-            { value: 'asc', label: current === 'position' ? 'Top first' : 'Oldest first' },
-            { value: 'desc', label: current === 'position' ? 'Bottom first' : 'Newest first' },
-          ]}
-        />
-      </div>
-    </SheetFrame>
+    <div ref={ref} role="menu" aria-label="Sort" className="absolute top-12 right-0 z-30 w-60 overflow-hidden rounded-2xl border border-line bg-surface py-1 shadow-lg">
+      {sorts.map((s) => (
+        <button key={s} type="button" role="menuitemradio" aria-checked={current === s} onClick={() => onChange({ ...prefs, sort: s, order: null })} className={row}>
+          <span className="w-4">{current === s && <Icon name="check" className="size-4 text-accent" />}</span>
+          {SORT_LABEL[s]}
+        </button>
+      ))}
+      <div className="my-1 border-t border-line" />
+      <button type="button" role="menuitem" onClick={() => onChange({ ...prefs, sort: current, order: order === 'asc' ? 'desc' : 'asc' })} className={row}>
+        <Icon name="arrowUpDown" className="size-4 text-muted" />
+        {current === 'position' ? (order === 'asc' ? 'Top first' : 'Bottom first') : order === 'asc' ? 'Oldest first' : 'Newest first'}
+      </button>
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        aria-checked={prefs.scope === 'grouped'}
+        onClick={() => onChange({ ...prefs, scope: prefs.scope === 'grouped' ? 'all' : 'grouped' })}
+        className={row}
+      >
+        <span className="w-4">{prefs.scope === 'grouped' && <Icon name="check" className="size-4 text-accent" />}</span>
+        Group by page
+      </button>
+    </div>
   );
 }
 
@@ -514,15 +592,18 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
   const otherHref = otherPage ? samePageHref(origin, otherPage.anchor.path) : null;
 
   const info = t && (
-    <div className="flex flex-col gap-3 pb-3">
+    <div className="flex flex-col gap-2.5 pb-3">
       <div>
-        <h2 className="text-[16px] font-bold break-words">{t.summary}</h2>
-        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+        <h2 className="text-[16px] leading-snug font-bold break-words">{t.summary}</h2>
+        {/* One meta line (UX review 2026-10-31): key · priority · status, nothing twice. */}
+        <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[13px] text-muted">
+          <span className="font-semibold whitespace-nowrap tabular-nums">{t.key}</span>
+          <span aria-hidden="true">·</span>
+          <span className={PRIORITY_TONE[t.priority] ?? ''}>{TICKET_PRIORITY_LABEL[t.priority]}</span>
+          <span aria-hidden="true">·</span>
           <PhaseChip phase={t.phase} />
-          <span>{TICKET_STATUS_LABEL[t.status]}</span>
-          <span>{TICKET_PRIORITY_LABEL[t.priority]}</span>
-          {t.site && <span>reported on {t.site.environment}</span>}
-        </div>
+          {t.site && <span className="whitespace-nowrap">· on {t.site.environment}</span>}
+        </p>
       </div>
 
       {t.target.kind === 'session' && (
@@ -556,11 +637,11 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
         </Notice>
       )}
 
-      <section className="rounded-2xl border border-line p-3">
-        <h3 className="mb-1.5 text-[12.5px] font-semibold text-muted">Deployments</h3>
-        {t.deployments.length === 0 ? (
-          <p className="text-[13px] text-muted">No environment of this repo is known yet.</p>
-        ) : (
+      {t.deployments.length === 0 && !t.fixCommits.length ? (
+        <p className="text-[13px] text-muted">No deployment known yet.</p>
+      ) : (
+      <section className="rounded-2xl border border-line px-3 py-2">
+        {t.deployments.length > 0 && (
           <ul className="flex flex-col gap-1 text-[13px]">
             {t.deployments.map((d) => (
               <li
@@ -572,8 +653,9 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
             ))}
           </ul>
         )}
-        {t.fixCommits.length > 0 && <p className="mt-1.5 text-[12px] break-all text-muted">Fix {t.fixCommits.map((c) => shortCommit(c)).join(', ')}</p>}
+        {t.fixCommits.length > 0 && <p className="mt-1 text-[12.5px] break-all text-muted">Fix {t.fixCommits.map((c) => shortCommit(c)).join(', ')}</p>}
       </section>
+      )}
 
       {SEVERITIES.some((s) => t.checkCounts[s] > 0) && (
         <p className="flex flex-wrap gap-1.5 text-[12px]">
@@ -631,7 +713,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
           </ol>
         </details>
       )}
-      <h3 className="text-[12.5px] font-semibold text-muted">Thread</h3>
+      <h3 className="text-[13px] font-semibold text-muted">Thread</h3>
     </div>
   );
 
@@ -639,7 +721,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 px-1">
         <IconBtn icon="chevronLeft" label="Back" onClick={back} />
-        <span className="flex-1 text-[13px] font-semibold text-muted tabular-nums">{ticketKey}</span>
+        <span className="flex-1 text-[14px] font-semibold tabular-nums">{ticketKey}</span>
         {t && (
           <a href={t.url} target="_blank" rel="noopener noreferrer" aria-label="Open in pilot" title="Open in pilot" className="inline-flex size-11 items-center justify-center rounded-xl focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
             <Icon name="externalLink" />

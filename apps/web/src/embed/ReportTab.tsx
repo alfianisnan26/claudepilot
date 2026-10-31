@@ -254,7 +254,8 @@ function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (
 
 function ChecksChip({ capture }: { capture: Capture }) {
   const c = capture.evidence.checks;
-  if (!c.ran) return <p className="text-[12.5px] text-muted">UI checks did not run{c.error ? `: ${c.error}` : ''}.</p>;
+  // Only findings earn a line (UX review): "did not run" and "nothing found" say nothing here.
+  if (!c.ran) return null;
   const n = countBySeverity(c.findings);
   if (!c.findings.length) return null;
   return (
@@ -374,13 +375,19 @@ function TypePriority({ type, setType, priority, setPriority, urgent }: { type: 
       {!urgent && (
         <>
           <span aria-hidden="true" className="mx-0.5 h-6 w-px shrink-0 bg-line" />
-          <div role="group" aria-label="Priority" className="flex shrink-0 gap-1.5">
-            {PRIORITIES.map((v) => (
-              <Chip key={v} on={priority === v} onClick={() => setPriority(v)}>
-                {TICKET_PRIORITY_LABEL[v]}
-              </Chip>
-            ))}
-          </div>
+          {/* Priority as one compact control (UX review): Normal unless changed. */}
+          <label className={`relative inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full border px-3 text-[13px] font-medium ${priority === 'normal' ? 'border-line-strong text-ink' : 'border-primary bg-primary text-primary-ink'}`}>
+            <Icon name="flag" className="size-3.5" />
+            {TICKET_PRIORITY_LABEL[priority]}
+            <Icon name="chevronDown" className="size-3.5 opacity-70" />
+            <select aria-label="Priority" value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)} className="absolute inset-0 cursor-pointer opacity-0">
+              {PRIORITIES.map((v) => (
+                <option key={v} value={v}>
+                  {TICKET_PRIORITY_LABEL[v]}
+                </option>
+              ))}
+            </select>
+          </label>
         </>
       )}
     </div>
@@ -470,11 +477,10 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
         void submit();
       }}
     >
-      <div className="-mt-1 flex items-center gap-1">
+      <div className="-mt-1 flex items-center justify-between gap-1">
         <IconBtn icon="x" label="Discard" onClick={() => setCapture(null)} />
-        <h2 className="flex-1 text-[15px] font-bold">Report</h2>
-        <Btn tone="ghost" icon="messageSquare" disabled={busy} onClick={() => void toReview()}>
-          Review
+        <Btn tone="ghost" icon="messageSquare" disabled={busy} onClick={() => void toReview()} className="text-[13px] text-ink-soft" title="Collect several shots as one review">
+          Start review
         </Btn>
       </div>
       <ShotStrip shots={shots} onRemove={shots.length > 1 ? removeShot : undefined} canAdd={shots.length < 6} />

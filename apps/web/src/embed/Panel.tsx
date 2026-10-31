@@ -169,7 +169,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const notify = useCallback((text: string, tone: 'info' | 'error' | 'ok' = 'info') => setToast({ text, tone, id: Date.now() }), []);
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), toast.tone === 'error' ? 7000 : 4000);
+    const t = setTimeout(() => setToast(null), toast.tone === 'error' ? 7000 : toast.tone === 'ok' ? 2000 : 4000);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -332,7 +332,8 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const focus = useCallback(
     (key: string, captureId: string | null) => {
       setMissing(null);
-      post({ type: 'pilot-reporter:focus', key, captureId, spotlight: true });
+      // With the sheet open the page shows only the pin highlight (UX review 2026-10-31); Play all asks for the spotlight itself.
+      post({ type: 'pilot-reporter:focus', key, captureId, spotlight: false });
     },
     [post],
   );
@@ -485,10 +486,11 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   if (!status.enabled) return <Quiet text="The reporter is off for this site." />;
 
   const draftCount = review?.status === 'draft' ? review.comments.length : 0;
+  const detail = connected && ((tab === 'tickets' && !!selected) || (tab === 'sessions' && !!chat));
   const tabs: { id: Tab; label: string; icon: IconName; badge?: number }[] = [
-    { id: 'tickets', label: 'Tickets', icon: 'ticket' },
+    { id: 'tickets', label: 'Tickets', icon: 'inbox' },
     { id: 'report', label: 'Report', icon: 'camera', badge: draftCount },
-    { id: 'sessions', label: 'Sessions', icon: 'bot' },
+    { id: 'sessions', label: 'Sessions', icon: 'messagesSquare' },
     { id: 'knowledge', label: 'Knowledge', icon: 'bookOpen' },
     { id: 'settings', label: 'Settings', icon: 'settings' },
   ];
@@ -497,31 +499,34 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     <PanelContext.Provider value={state}>
       <div className="flex h-dvh flex-col overflow-hidden bg-bg text-ink">
         {/* No close button here: the SDK's frame draws the one close (it works even when this page fails to load); Esc closes too. */}
-        <header className="flex min-h-11 shrink-0 items-center gap-2 border-b border-line px-3">
-          <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold" title={status.bucketName}>
-            {status.bucketName || bucket}
-          </h1>
-          {status.site && (
-            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[12px] font-semibold text-ink-soft" title={`${status.site.repo} · ${status.site.origin}`}>
-              {status.site.environment}
-            </span>
-          )}
-          {connected && (
-            <button
-              type="button"
-              aria-label="Context"
-              title="Context"
-              onClick={() => setContextOpen('context')}
-              className="-mr-2 inline-flex size-11 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
-            >
-              <Icon name="info" className="size-[18px]" />
-            </button>
-          )}
-        </header>
+        {/* One row (UX review 2026-10-31): the environment and Context, nothing repeated; the right end stays clear for the SDK's close X.
+            Detail views (a ticket, a chat) hide it and the tabs: their own back · title · open row is the only header. */}
+        {!detail && (
+          <header className="flex min-h-11 shrink-0 items-center gap-1 pr-14 pl-3">
+            <h1 className="sr-only">{status.bucketName || bucket}</h1>
+            {status.site && (
+              <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[12.5px] font-semibold text-ink-soft" title={`${status.bucketName || bucket} · ${status.site.repo} · ${status.site.origin}`}>
+                {status.site.environment}
+              </span>
+            )}
+            {connected && (
+              <button
+                type="button"
+                aria-label="Context"
+                title="Context"
+                onClick={() => setContextOpen('context')}
+                className="inline-flex size-11 items-center justify-center rounded-xl text-muted focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+              >
+                <Icon name="info" className="size-[18px]" />
+              </button>
+            )}
+          </header>
+        )}
         {!connected ? (
           <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} />
         ) : (
           <>
+            {!detail && (
             <nav role="tablist" aria-label="Sections" className="flex shrink-0 border-b border-line">
               {tabs.map((t) => (
                 <button
@@ -532,9 +537,11 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
                   aria-label={t.label}
                   title={t.label}
                   onClick={() => setTab(t.id)}
-                  className={`relative flex min-h-11 flex-1 items-center justify-center focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${tab === t.id ? 'text-ink' : 'text-muted'}`}
+                  className={`relative flex min-h-11 min-w-0 items-center justify-center ${tab === t.id ? 'flex-[2.2]' : 'flex-1'} md:flex-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${tab === t.id ? 'text-ink' : 'text-muted'}`}
                 >
                   <Icon name={t.icon} />
+                  {/* The word beside the active icon; every word from 768 px. */}
+                  <span className={`ml-1.5 text-[13px] font-semibold ${tab === t.id ? 'inline' : 'hidden md:inline'}`}>{t.label}</span>
                   {!!t.badge && (
                     <span className="absolute top-1.5 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-accent px-1 text-center text-[10.5px] leading-4 font-bold text-primary-ink tabular-nums">{t.badge}</span>
                   )}
@@ -542,6 +549,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
                 </button>
               ))}
             </nav>
+            )}
             <main id="panel-main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {tab === 'tickets' && <TicketsTab />}
               {tab === 'report' && <ReportTab />}
