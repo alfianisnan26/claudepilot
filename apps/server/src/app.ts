@@ -133,6 +133,7 @@ import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes } from './reporter/routes.js';
 import type { ReporterService } from './reporter/service.js';
+import { clientAddress } from './clientAddress.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
 
 type Env = { Bindings: HttpBindings; Variables: { token: string } };
@@ -154,10 +155,7 @@ export function sameHostOrigin(origin: string, host: string | undefined): boolea
   }
 }
 
-const clientKey = (c: Context<Env>) => {
-  const forwarded = config.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
-  return forwarded || (c.env.incoming?.socket.remoteAddress ?? 'unknown');
-};
+const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
 
 async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   try {

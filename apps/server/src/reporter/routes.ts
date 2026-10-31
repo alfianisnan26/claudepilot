@@ -29,6 +29,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { stream } from 'hono/streaming';
 import { actorOf, actorString, requireCan } from '../authz/seam.js';
+import { ipFamily, plainIp } from '../clientAddress.js';
 import { RateLimiter } from '../rateLimit.js';
 import { declareReporterPolicies } from './authz.js';
 import { BLANK_PAGE, REFUSED_CSP, connectCsp, connectPage, embedCsp, embedHtml, scriptNonce, vendorFile } from './pages.js';
@@ -360,7 +361,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     if (!ctx) throw notFound();
     if (perToken.blocked(ctx.id)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
     perToken.fail(ctx.id);
-    c.set('reporter', ctx);
+    c.set('reporter', { ...ctx, clientIp: plainIp(deps.clientKey(c)) });
     await next();
   });
   const ctxOf = (c: Context<Vars>) => c.get('reporter');
@@ -370,7 +371,10 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
 
   api.get('/me', (c) => {
     const x = ctxOf(c);
-    return c.json(success({ bucketKey: x.bucketKey, origin: x.origin, site: x.site, actorLabel: x.actorLabel, expiresAt: x.expiresAt, status: service.status(x.bucketKey, x.origin) }));
+    const ip = x.clientIp && x.clientIp !== 'unknown' ? x.clientIp : null;
+    return c.json(
+      success({ bucketKey: x.bucketKey, origin: x.origin, site: x.site, actorLabel: x.actorLabel, expiresAt: x.expiresAt, status: service.status(x.bucketKey, x.origin), clientIp: ip, clientIpFamily: ip ? ipFamily(ip) : null }),
+    );
   });
   // Sign out: the panel's own token revokes itself.
   api.delete('/me', (c) => {

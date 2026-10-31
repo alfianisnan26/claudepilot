@@ -585,6 +585,12 @@ export interface ReporterMe {
   origin: string;
   actorLabel: string;
   expiresAt: string;
+  /**
+   * The request's client address as the portal sees it (the socket, or the trusted proxy's X-Forwarded-For entry; a header a client sets is
+   * never believed), and its family. Shown in the panel's Context view; the same address is stored with each report. Additive.
+   */
+  clientIp?: string | null;
+  clientIpFamily?: 4 | 6 | null;
 }
 
 /** POST /reporter/v1/observed-build body: the build the page declared; the server records it for the SITE's repo and environment. */
@@ -785,6 +791,8 @@ export interface TicketReporterEvidence {
   deployments: ReporterDeploymentState[];
   createdAt: string;
   captures: (ReporterCapture & { screenshotAttachmentId: string | null; evidenceAttachmentId: string | null })[];
+  /** The reporter's address as the portal saw it when the ticket was filed (added by the server); null for older tickets. Additive. */
+  reporterIp?: string | null;
 }
 
 /** Bumped when a bridge message changes shape; both sides send it in hello/ready and refuse another major. */

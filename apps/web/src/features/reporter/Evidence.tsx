@@ -123,6 +123,9 @@ export function EvidenceCard({ ticketId, evidence }: { ticketId: string; evidenc
             <span className="break-all">Session {evidence.target.sessionId.slice(0, 8)} (urgent)</span>
           </Row>
         )}
+        <Row label="IP">
+          {evidence.reporterIp ? <span className="break-all tabular-nums">{evidence.reporterIp}</span> : <span className="text-muted">Unknown</span>}
+        </Row>
         <Row label="Fix">
           {evidence.fixCommits.length ? <span className="break-all tabular-nums">{evidence.fixCommits.map((c) => shortCommit(c)).join(', ')}</span> : <span className="text-muted">No fix commit yet</span>}
         </Row>

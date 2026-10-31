@@ -4053,6 +4053,15 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 902,
+    name: 'UI reporter: the client address a widget report came from, as the portal saw it (PILOT-1111 context)',
+    up(db) {
+      // docs/prd/ui-reporter-server.md "Context": the server adds the reporter's address (the socket, or the trusted proxy's X-Forwarded-For
+      // entry) to the evidence record; the page never sends it. Additive only (D-92): one nullable column, older rows stay null ("unknown").
+      db.exec(`ALTER TABLE reporter_ticket_evidence ADD COLUMN reporter_ip TEXT;`);
+    },
+  },
 ];
 
 /**

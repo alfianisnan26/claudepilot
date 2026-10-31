@@ -159,6 +159,8 @@ export interface ReporterTokenCtx {
   actorUser: string;
   actorLabel: string;
   expiresAt: string;
+  /** The request's client address as the portal sees it (set by the routes per call; the page never sends it). */
+  clientIp?: string;
 }
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -213,6 +215,7 @@ interface EvidenceRow {
   token_id: string | null;
   actor_user: string;
   created_at: string;
+  reporter_ip?: string | null;
 }
 
 interface CaptureRow {
@@ -926,8 +929,8 @@ export class ReporterService {
     const mismatch = this.#mismatch(ctx, req.build);
     this.#wdb
       .prepare(
-        `INSERT INTO reporter_ticket_evidence (ticket_number, bucket_key, origin, environment, repo, declared_repo, declared_environment, mismatch, build, sdk_version, target, delivery, text, token_id, actor_user, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO reporter_ticket_evidence (ticket_number, bucket_key, origin, environment, repo, declared_repo, declared_environment, mismatch, build, sdk_version, target, delivery, text, token_id, actor_user, created_at, reporter_ip)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         n,
@@ -946,6 +949,7 @@ export class ReporterService {
         ctx.id,
         ctx.actorUser,
         this.#iso(),
+        ctx.clientIp && ctx.clientIp !== 'unknown' ? ctx.clientIp.slice(0, 64) : null,
       );
     this.#insertCaptures(n, captures, 1);
     this.#rewrite(n);
@@ -1087,6 +1091,7 @@ export class ReporterService {
       ticketId: ticketIdOf(n),
       deployments: this.deploymentStates(n, ev.bucket_key, ev.repo),
       fixCommits: this.#fixCommits(n),
+      reporterIp: ev.reporter_ip ?? null,
     });
     const cur = this.#row(n);
     if (cur.description === description) return;
@@ -1910,6 +1915,7 @@ export class ReporterService {
       fixCommits: this.#fixCommits(n),
       deployments: this.deploymentStates(n, ev.bucket_key, ev.repo),
       createdAt: ev.created_at,
+      reporterIp: ev.reporter_ip ?? null,
       captures: this.#captureRows(n).map((c) => ({
         captureId: c.capture_id,
         index: c.idx,

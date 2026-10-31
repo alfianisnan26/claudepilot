@@ -51,6 +51,8 @@ export interface DescribeInput {
   ticketId: string;
   deployments: ReporterDeploymentState[];
   fixCommits: string[];
+  /** The reporter's address as the portal saw it (added by the server, never sent by the page); null or absent: unknown. */
+  reporterIp?: string | null;
 }
 
 const deviceLine = (e: ReporterEvidence) => {
@@ -131,6 +133,7 @@ export function describeTicket(d: DescribeInput): string {
   if (first) out.push(`- Domain: ${code(first.page.host, 200)}, path ${code(first.page.path, 300)}${first.page.route ? `, route ${code(first.page.route, 200)}` : ''}`);
   out.push(`- Build: ${buildLine(d.build)}${d.build.environment ? `, declared environment ${code(d.build.environment, 20)}` : ''}`);
   if (first) out.push(`- Device: ${deviceLine(first)}`);
+  out.push(`- Reporter IP: ${d.reporterIp ? code(d.reporterIp, 64) : 'unknown'} (as the portal saw it)`);
   out.push(`- Reported with the UI reporter (SDK ${code(d.sdkVersion || 'unknown', 40)})${d.target.kind === 'session' ? `, sent straight to the session ${inline(d.target.label, 60)} (urgent)` : ''}.`);
   out.push('');
   for (const c of d.captures) out.push(captureSection(c, d.captures.length, d.ticketId), '');
