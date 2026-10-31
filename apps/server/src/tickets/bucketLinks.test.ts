@@ -15,8 +15,8 @@ test('a session created or linked with KONF-1 stores T-n and shows in that ticke
   const s = await liveSession();
   const tickets = new Tickets(s.store, new ChatTicketSessions(s.controller));
   s.controller.ticketExists = (id) => tickets.exists(id);
-  s.controller.ticketResolve = (id) => tickets.resolve(id);
-  s.controller.ticketKeyOf = (id) => tickets.keyOf(id);
+  s.controller.ticketResolve = (id) => tickets.resolve(UI, id);
+  s.controller.ticketKeyOf = (id) => tickets.keyOf(UI, id);
   try {
     tickets.create(UI, { summary: 'filler', bucket: 'CP' });
     const t = tickets.create(UI, { summary: 'konf work', bucket: 'KONF', workspaceId: 'docker/ws1' });
@@ -45,8 +45,8 @@ test('a session created or linked with KONF-1 stores T-n and shows in that ticke
     assert.equal(s.controller.get(made.id)!.ticketKey, 'KONF-1');
     assert.deepEqual(s.controller.list({ ticketId: 'T-2' }).map((x) => x.ticketKey), ['KONF-1', 'KONF-1']);
     assert.equal(new SpendStore(s.store).sessions([made.id]).get(made.id)!.ticketKey, 'KONF-1');
-    assert.equal(tickets.keyOf('T-2'), 'KONF-1');
-    assert.equal(tickets.keyOf('T-99'), null);
+    assert.equal(tickets.keyOf(UI, 'T-2'), 'KONF-1');
+    assert.equal(tickets.keyOf(UI, 'T-99'), null);
     // CI's port and the lab resolve the same way.
     assert.equal(new TicketsAdapter(tickets).resolve('KONF-1'), 'T-2');
     assert.equal(canonTicket(s.store.db!, 'konf-1'), 'T-2');

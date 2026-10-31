@@ -552,7 +552,8 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/settings/audit` | platform(settings,view) | admins |
 | `GET /api/settings/lockdown/:target/:name` | obj(workspace view path target+name) |  |
 | `PUT /api/settings/:key` | platform(settings,manage) | actor in setting_changes is the user |
-| `GET /api/schedules` | platform(system,view) | admins: every loop and every user's cron triggers (T-968 S2b) |
+| `GET /api/schedules` | platform(system,view) | admins: every loop, every user's triggers of every source and the helpers (T-968 S2b, T-965) |
+| `POST /api/schedules/heartbeat` | bearer (its own door) | an admin's Portal MCP token, never a cookie; then `operate` on platform(system) through the seam, else 404 (T-965; see the doors table) |
 | `GET /api/personas/workspaces/:target/:name` | obj(workspace view path target+name) |  |
 | `GET /api/personas/identities` | in:list(pool, poolType persona\|context) |  |
 | `GET /api/personas/pools` | in:list(pool, poolType persona\|context) |  |
@@ -822,7 +823,7 @@ The table above is the target. What is true today: 26 tools carry a declaration 
 | `crew_limits_get` (T-968) | session view `session_id` | yes ("No such session.") | nothing beyond scope read |
 | `settings_get` (T-968) | platform(settings, view) | yes | a credential-shaped value reads `[set]` (`settings/portalTools.ts`) |
 | `deploy_status` (T-968) | signed-in, filter ci_run | nothing | each run `can(view)` before it is opened (`ci/portalTools.ts`) |
-| `schedules_list` (T-968 S2b) | platform(system, view) | yes | a trigger's name is untrusted text, credentials cleaned (`schedules/portalTools.ts`) |
+| `schedules_list` (T-968 S2b, T-965) | platform(system, view) | yes | a trigger's name, and a helper's name, kind, owner and description, are untrusted text, credentials cleaned (`schedules/portalTools.ts`) |
 | `session_keepgoing_set` | session operate `session_id`, confirm, audit | yes ("No such session.") | agents refused, `owner.can(view, operate)` (`keepgoing/portalTools.ts:44`) |
 | `ticket_bump` | ticket operate `id`; session operate `session_id`? (was required: corrected, the tool lists targets without it) | both | `requireCan` both (`tickets/portalTools.ts:425`, `:433`) |
 | `ci_run_get`, `ci_run_logs`, `ci_run_cancel` | ci_run view/view/operate `id` | yes (`NO_RUN`): the only ownership check for a person's token | an agent: its branch, ticket or session (`ci/portalTools.ts:24-36`) |
@@ -883,5 +884,6 @@ Declared in the same table under `ALL <path>` (the chat socket already is: `chat
 | Browser live view and preview (`.../browser/view`, `.../browser/preview`) | `ALL .../browser/view`, `ALL .../browser/preview` | `operate` on the workspace | the lease binds (user, device); viewers cannot take control |
 | Portal MCP (`/mcp`) | `ALL /mcp` | `bearer` (`cpat_`, `cpst_`; `cpoa_` if the portal becomes an authorization server) | each tool declares its access (Appendix B) |
 | Connect (`/connect/*`) | declared by `connect/authz.ts` | the node's signed challenge or an enrollment token: not a user | no user route is reachable through it |
+| Helpers' heartbeat (`/api/schedules/heartbeat`, T-965) | `POST /api/schedules/heartbeat` `{kind:'bearer'}` | `bearer` `cpat_` only (an agent's `cpst_`, the manager's `cpmt_` and a first-party client's token: 401); a cookie: 400; Access, MCP off: 404 | `can(token, 'operate', platform system)`, else 404; the token's scope caps it (read: 404) |
 | Trigger receivers (`/hooks/<token>`) | `handler` | token and signature of the Git host | the trigger's owner is the actor; `can(owner, 'operate', workspace)` at run time |
 | Static app and `/healthz` | `public` | none | none |

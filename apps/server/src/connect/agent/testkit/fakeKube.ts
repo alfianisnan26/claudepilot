@@ -7,6 +7,10 @@
 // NetworkPolicy lists (selectors, watch), nodes and every namespace's pods (T-98's fit check; or 403 with `clusterReads` off),
 // create, replace, scale and delete (a deployment brings a pod up and down), secrets by name, pod metrics, SelfSubjectAccessReview, and
 // `pods/exec` over a WebSocket with the channel subprotocol (stdin 0, stdout 1, stderr 2, status 3, resize 4).
+// A deployment made here has one ReplicaSet (`<name>-7d9f6c`) whose template its pods are made from, as the controller does: a template
+// change rolls the pods unless the deployment is paused or its ReplicaSet already has that template (ignoring `pod-template-hash`). The
+// `pods/resize` subresource (in-place resize, T-3081) takes a JSON Patch of container resources and refuses a change of QoS class, as the
+// API server does; `resizeVerdict` scripts what the kubelet says next.
 import { randomBytes } from 'node:crypto';
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -20,7 +24,37 @@ export interface KubeRequest {
   body: Buffer;
 }
 
-type Obj = Record<string, unknown> & { metadata: { name: string; namespace?: string; labels?: Record<string, string>; resourceVersion?: string; uid?: string; creationTimestamp?: string } };
+type Obj = Record<string, unknown> & {
+  metadata: { name: string; namespace?: string; labels?: Record<string, string>; resourceVersion?: string; uid?: string; creationTimestamp?: string; ownerReferences?: { kind: string; name: string; uid?: string; apiVersion?: string; controller?: boolean }[] };
+};
+type Resources = { limits?: Record<string, string>; requests?: Record<string, string> };
+
+const HASH = 'pod-template-hash';
+const rsName = (deployment: string) => `${deployment}-7d9f6c`;
+
+/** JSON with sorted keys: two templates compare equal whatever order their keys were written in. */
+const canon = (v: unknown): string =>
+  Array.isArray(v) ? `[${v.map(canon).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`).join(',')}}` : JSON.stringify(v);
+
+/** A template without the ReplicaSet's hash label, for the controller's "same template" test (EqualIgnoreHash). */
+const ignoreHash = (template: unknown): string => {
+  const t = JSON.parse(JSON.stringify(template ?? {})) as { metadata?: { labels?: Record<string, string> } };
+  if (t.metadata?.labels) delete t.metadata.labels[HASH];
+  return canon(t);
+};
+
+/** The pod's QoS class from its containers (a request left out is its limit): Guaranteed, Burstable or BestEffort. */
+function qosOf(containers: { resources?: Resources }[]): string {
+  let any = false;
+  let guaranteed = true;
+  for (const c of containers) {
+    const limits = c.resources?.limits ?? {};
+    const requests = { ...limits, ...(c.resources?.requests ?? {}) };
+    if (Object.keys(limits).length || Object.keys(requests).length) any = true;
+    for (const r of ['cpu', 'memory']) if (!limits[r] || requests[r] !== limits[r]) guaranteed = false;
+  }
+  return !any ? 'BestEffort' : guaranteed ? 'Guaranteed' : 'Burstable';
+}
 
 export interface ExecIo {
   pod: string;
@@ -51,6 +85,15 @@ export class FakeKube {
   readonly pods = new Map<string, Obj>();
   readonly configMaps = new Map<string, Obj>();
   readonly networkPolicies = new Map<string, Obj>();
+  /** Each deployment's ReplicaSet (made with it), by name. */
+  readonly replicaSets = new Map<string, Obj>();
+  /**
+   * What the kubelet says after an accepted `pods/resize` (T-3081): null (default) applies it at once (the container status's resources
+   * follow), `Infeasible` or `Deferred` leaves a `PodResizePending` condition with that reason and the old resources.
+   */
+  resizeVerdict: (pod: Obj) => 'Infeasible' | 'Deferred' | null = () => null;
+  /** Answers `pods/resize` with this status instead (403 for a Role without `pods/resize`, say); null: handled. */
+  resizeRefusal: { code: number; reason: string; message: string } | null = null;
   /**
    * Nodes (T-98's fit check): `GET /api/v1/nodes` and `/api/v1/nodes/<name>`. While there is one, a deployment's new pod is scheduled on
    * `scheduleOn` (default: the first node) and carries the template's containers, so its requests count.
@@ -118,15 +161,61 @@ export class FakeKube {
 
   /** What a pod of a deployment looks like once it is running. */
   podFor(d: Obj): Obj {
-    const labels = ((d.spec as { template?: { metadata?: { labels?: Record<string, string> } } })?.template?.metadata?.labels ?? {}) as Record<string, string>;
+    // Made from its ReplicaSet's template when there is one (as the controller does), else the deployment's own.
+    const rs = this.replicaSets.get(rsName(d.metadata.name));
+    const template = ((rs ?? d).spec as { template?: { metadata?: { labels?: Record<string, string> }; spec?: { containers?: { name: string; resources?: unknown }[] } } })?.template;
+    const labels = { ...(template?.metadata?.labels ?? {}) };
     const name = `${d.metadata.name}-7d9f6c-${randomBytes(2).toString('hex')}`;
     const node = this.nodes.size ? (this.scheduleOn ?? [...this.nodes.keys()][0]!) : undefined;
-    const containers = (d.spec as { template?: { spec?: { containers?: unknown[] } } })?.template?.spec?.containers;
+    const containers = JSON.parse(JSON.stringify(template?.spec?.containers ?? [])) as { name: string; resources?: unknown }[];
+    const resources = containers.find((c) => c.name === 'workspace')?.resources;
     return {
       apiVersion: 'v1', kind: 'Pod',
-      metadata: { name, namespace: this.namespace, labels, uid: randomBytes(8).toString('hex'), creationTimestamp: new Date().toISOString(), resourceVersion: String(++this.#rv) },
-      spec: node ? { nodeName: node, containers: JSON.parse(JSON.stringify(containers ?? [])) } : {}, status: { phase: 'Running', containerStatuses: [{ name: 'workspace', ready: true, state: { running: {} } }] },
+      metadata: {
+        name, namespace: this.namespace, labels, uid: randomBytes(8).toString('hex'), creationTimestamp: new Date().toISOString(), resourceVersion: String(++this.#rv),
+        ...(rs ? { ownerReferences: [{ apiVersion: 'apps/v1', kind: 'ReplicaSet', name: rs.metadata.name, uid: rs.metadata.uid, controller: true }] } : {}),
+      },
+      spec: node ? { nodeName: node, containers } : { containers }, status: { phase: 'Running', containerStatuses: [{ name: 'workspace', ready: true, state: { running: {} }, ...(resources ? { resources: JSON.parse(JSON.stringify(resources)) } : {}) }] },
     };
+  }
+
+  /** The ReplicaSet the controller would make for a new deployment: its template with the hash label, owned by the deployment. */
+  #replicaSetFor(d: Obj): Obj {
+    const template = JSON.parse(JSON.stringify((d.spec as { template?: unknown }).template ?? {})) as { metadata?: { labels?: Record<string, string> } };
+    template.metadata = { ...template.metadata, labels: { ...template.metadata?.labels, [HASH]: '7d9f6c' } };
+    return {
+      apiVersion: 'apps/v1', kind: 'ReplicaSet',
+      metadata: { name: rsName(d.metadata.name), namespace: this.namespace, labels: { ...(template.metadata.labels ?? {}) }, uid: randomBytes(8).toString('hex'), resourceVersion: String(++this.#rv), ownerReferences: [{ apiVersion: 'apps/v1', kind: 'Deployment', name: d.metadata.name, uid: d.metadata.uid, controller: true }] },
+      spec: { replicas: (d.spec as { replicas?: number }).replicas ?? 1, template },
+    };
+  }
+
+  /** `pods/resize` (T-3081): a JSON Patch of `/spec/containers/<i>/resources`; a QoS class change is refused, as the API server does. */
+  #resize(pod: Obj, body: Buffer): { code: number; value: unknown } {
+    const fail = (code: number, reason: string, message: string) => ({ code, value: { kind: 'Status', apiVersion: 'v1', metadata: {}, status: 'Failure', message, reason, code } });
+    if (this.resizeRefusal) return fail(this.resizeRefusal.code, this.resizeRefusal.reason, this.resizeRefusal.message);
+    const ops = JSON.parse(body.toString('utf8')) as { op: string; path: string; value: unknown }[];
+    if (!Array.isArray(ops)) return fail(415, 'UnsupportedMediaType', 'the fake takes a JSON Patch here');
+    const spec = JSON.parse(JSON.stringify(pod.spec)) as { containers: { name: string; resources?: Resources }[] };
+    for (const op of ops) {
+      const m = /^\/spec\/containers\/(\d+)\/resources$/.exec(op.path);
+      if (!m || (op.op !== 'add' && op.op !== 'replace') || !spec.containers[Number(m[1])]) return fail(422, 'Invalid', `only container resources can be resized (${op.op} ${op.path})`);
+      spec.containers[Number(m[1])]!.resources = op.value as Resources;
+    }
+    const before = qosOf((pod.spec as typeof spec).containers);
+    const after = qosOf(spec.containers);
+    if (before !== after) return fail(422, 'Invalid', `Pod "${pod.metadata.name}" is invalid: spec: Invalid value: "${after}": Pod QOS Class may not change as a result of resizing`);
+    pod.spec = spec;
+    pod.metadata.resourceVersion = String(++this.#rv);
+    const verdict = this.resizeVerdict(pod);
+    const status = pod.status as { conditions?: unknown[]; containerStatuses?: { name: string; resources?: unknown }[] };
+    status.conditions = (status.conditions ?? []).filter((c) => (c as { type?: string }).type !== 'PodResizePending');
+    if (verdict) status.conditions.push({ type: 'PodResizePending', status: 'True', reason: verdict, message: verdict === 'Infeasible' ? 'Node did not have enough resources' : 'not enough room now' });
+    else for (const s of status.containerStatuses ?? []) {
+      const c = spec.containers.find((x) => x.name === s.name);
+      if (c?.resources) s.resources = JSON.parse(JSON.stringify(c.resources));
+    }
+    return { code: 200, value: pod };
   }
 
   /* ------------------------------------------------------------------------------------------------------------------------ */
@@ -204,6 +293,7 @@ export class FakeKube {
     const collections: [RegExp, Map<string, Obj>, string, string, string][] = [
       [new RegExp(`^/api/v1/namespaces/${ns}/pods$`), this.pods, 'pod', 'PodList', 'v1'],
       [new RegExp(`^/apis/apps/v1/namespaces/${ns}/deployments$`), this.deployments, 'deployment', 'DeploymentList', 'apps/v1'],
+      [new RegExp(`^/apis/apps/v1/namespaces/${ns}/replicasets$`), this.replicaSets, 'replicaset', 'ReplicaSetList', 'apps/v1'],
       [new RegExp(`^/api/v1/namespaces/${ns}/persistentvolumeclaims$`), this.claims, 'claim', 'PersistentVolumeClaimList', 'v1'],
       [new RegExp(`^/api/v1/namespaces/${ns}/secrets$`), this.secrets, 'secret', 'SecretList', 'v1'],
       [new RegExp(`^/api/v1/namespaces/${ns}/configmaps$`), this.configMaps, 'configmap', 'ConfigMapList', 'v1'],
@@ -234,13 +324,18 @@ export class FakeKube {
         obj.metadata.uid = randomBytes(8).toString('hex');
         obj.metadata.creationTimestamp = new Date().toISOString();
         store.set(obj.metadata.name, obj);
-        if (kind === 'deployment') this.#reconcile(obj);
+        if (kind === 'deployment') {
+          const rs = this.#replicaSetFor(obj);
+          this.replicaSets.set(rs.metadata.name, rs);
+          this.#reconcile(obj);
+        }
         return send(201, obj);
       }
     }
 
     const named: [RegExp, Map<string, Obj>, string][] = [
       [new RegExp(`^/apis/apps/v1/namespaces/${ns}/deployments/([^/]+)$`), this.deployments, 'deployment'],
+      [new RegExp(`^/apis/apps/v1/namespaces/${ns}/replicasets/([^/]+)$`), this.replicaSets, 'replicaset'],
       [new RegExp(`^/api/v1/namespaces/${ns}/persistentvolumeclaims/([^/]+)$`), this.claims, 'claim'],
       [new RegExp(`^/api/v1/namespaces/${ns}/secrets/([^/]+)$`), this.secrets, 'secret'],
       [new RegExp(`^/api/v1/namespaces/${ns}/pods/([^/]+)$`), this.pods, 'pod'],
@@ -255,6 +350,7 @@ export class FakeKube {
       if (method === 'DELETE') {
         if (!obj) return status(404, 'NotFound', `${kind} "${name}" not found`);
         store.delete(name);
+        if (kind === 'deployment') this.replicaSets.delete(rsName(name));
         if (kind === 'deployment') for (const p of [...this.pods.values()].filter((p) => p.metadata.name.startsWith(`${name}-`))) (this.pods.delete(p.metadata.name), this.#notify('pod', 'DELETED', p));
         return send(200, { kind: 'Status', apiVersion: 'v1', status: 'Success', code: 200 });
       }
@@ -268,13 +364,28 @@ export class FakeKube {
         merged.metadata.uid = obj.metadata.uid;
         merged.metadata.resourceVersion = String(++this.#rv);
         store.set(name, merged);
-        // A deployment's pod template changed: its pods are replaced (every workspace Deployment is Recreate: the old pod goes first).
-        if (kind === 'deployment' && JSON.stringify((obj.spec as { template?: unknown })?.template) !== JSON.stringify((merged.spec as { template?: unknown })?.template)) {
-          for (const p of [...this.pods.values()].filter((p) => p.metadata.name.startsWith(`${name}-`))) (this.pods.delete(p.metadata.name), this.#notify('pod', 'DELETED', p));
-          this.#reconcile(merged);
+        // A deployment's pod template is not its ReplicaSet's (or, without one, its old template): its pods are replaced (every workspace
+        // Deployment is Recreate: the old pod goes first) from a ReplicaSet with the new template. Not while it is paused.
+        if (kind === 'deployment' && !(merged.spec as { paused?: boolean })?.paused) {
+          const rs = this.replicaSets.get(rsName(name));
+          const was = rs ? (rs.spec as { template?: unknown }).template : (obj.spec as { template?: unknown })?.template;
+          if (ignoreHash(was) !== ignoreHash((merged.spec as { template?: unknown })?.template)) {
+            for (const p of [...this.pods.values()].filter((p) => p.metadata.name.startsWith(`${name}-`))) (this.pods.delete(p.metadata.name), this.#notify('pod', 'DELETED', p));
+            if (rs) this.replicaSets.set(rs.metadata.name, { ...this.#replicaSetFor(merged), metadata: { ...rs.metadata, resourceVersion: String(++this.#rv) } });
+            this.#reconcile(merged);
+          }
         }
         return send(200, merged);
       }
+    }
+
+    if ((m = new RegExp(`^/api/v1/namespaces/${ns}/pods/([^/]+)/resize$`).exec(path))) {
+      const pod = this.pods.get(m[1]!);
+      if (!pod) return status(404, 'NotFound', `pod "${m[1]}" not found`);
+      if (method === 'GET') return send(200, pod);
+      if (method !== 'PATCH') return status(405, 'MethodNotAllowed', 'resize takes a PATCH here');
+      const r = this.#resize(pod, body);
+      return send(r.code, r.value);
     }
 
     if ((m = new RegExp(`^/apis/apps/v1/namespaces/${ns}/deployments/([^/]+)/scale$`).exec(path))) {

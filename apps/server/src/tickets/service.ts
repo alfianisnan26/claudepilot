@@ -91,6 +91,7 @@ import {
   canPeerLeadAct, canPeerWorkerComment, canWorkerComment, parseLeadPeerGroups,
   D62_ASSIGN_REFUSAL,
   D62_CHECKLIST_REFUSAL,
+  registerTicketBucketAuthz,
   type EndedGrantReason,
   type WorkerCommentReason,
 } from './authz.js';
@@ -259,6 +260,8 @@ const OPEN_SQL = TICKET_OPEN_STATUSES.map((s) => `'${s}'`).join(', ');
 const MANAGER_NO_CLOSE = 'The General Manager does not close tickets: QA closes a ticket on its pass.';
 const CLOSED_SQL =TICKET_CLOSED_STATUSES.map((s) => `'${s}'`).join(', ');
 
+/** A merge status repo: owner/name (up to four path parts). */
+const MERGE_REPO = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){0,3}$/;
 const invalid = (field: string, message: string) => new AppError('VALIDATION_FAILED', message, { details: { [field]: message } });
 const notFound = () => new AppError('NOT_FOUND', 'No such ticket.');
 const noBucket = () => new AppError('NOT_FOUND', 'No such bucket.');
@@ -410,6 +413,9 @@ export class Tickets {
     this.#leadPeerGroups = opts.leadPeerGroups ?? (() => '');
     this.#mergeGates = opts.mergeGates ?? (() => []);
     this.#bucketRoutes = opts.bucketRoutes ?? (() => '');
+    // T-1993: the bucket rule needs its resolver (the seam refuses a ticket_bucket without one: fail closed), so the service that holds the
+    // buckets registers it itself; the routes and tools register the same one again.
+    registerTicketBucketAuthz(this);
   }
 
   /* ---------- The workspace column (T-42 slice 3): written as the stable id, read as the key, matched in either form ---------- */
@@ -861,22 +867,30 @@ export class Tickets {
     return row;
   }
 
+  /** CI's question (does this ticket exist?) is the portal's own: it is asked as `system`. */
   exists(id: string): boolean {
-    return this.resolve(id) !== null;
+    return this.resolve({ kind: 'system' }, id) !== null;
   }
 
-  /** T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it. */
-  resolve(ref: string): string | null {
+  /**
+   * T-1098: the stable id (`T-12`) of a ticket named either way, or null when there is no such ticket. Callers outside this module use it.
+   * T-1993: or one the caller may not see (`#visible`, its bucket's `view`): the same null. The portal's own bookkeeping passes `system`.
+   */
+  resolve(caller: Caller, ref: string): string | null {
     const n = this.#numberOf(ref);
-    return n !== null && this.#row(n) ? ticketIdOf(n) : null;
+    const row = n === null ? undefined : this.#row(n);
+    return row && this.#visible(caller, row) ? ticketIdOf(row.number) : null;
   }
 
-  /** T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none. */
-  keyOf(ref: string): string | null {
+  /**
+   * T-1098: the bucket key (`KONF-12`) of a ticket named either way, for the screens that show a ticket's id; null when there is none.
+   * T-1993: null too when the caller may not see it, so a row of another module (a CI run, a lab or usage row) never names a hidden bucket.
+   */
+  keyOf(caller: Caller, ref: string): string | null {
     const n = this.#numberOf(ref);
-    if (n === null) return null;
-    const r = this.#db.prepare('SELECT bucket_key, bucket_number FROM tickets WHERE number = ?').get(n) as { bucket_key: string; bucket_number: number | null } | undefined;
-    return r ? (r.bucket_number === null ? ticketIdOf(n) : ticketKeyOf(r.bucket_key, r.bucket_number)) : null;
+    const row = n === null ? undefined : this.#row(n);
+    if (!row || !this.#visible(caller, row)) return null;
+    return row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
   }
 
   /** T-1098: the bucket of a ticket named either way (for the routes' bucket check), or null when there is no such ticket. */
@@ -1511,11 +1525,11 @@ export class Tickets {
     }));
   }
 
-  /** A ticket's id and summary, for a link to it. */
-  brief(id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
+  /** A ticket's id and summary, for a link to it. T-1993: null for one the caller may not see, the same as a missing one. */
+  brief(caller: Caller, id: string): { id: string; key: string; summary: string; status: TicketStatus; type: TicketType } | null {
     const n = this.#numberOf(id);
     const row = n === null ? undefined : this.#row(n);
-    if (!row) return null;
+    if (!row || !this.#visible(caller, row)) return null;
     const key = row.bucket_number === null ? ticketIdOf(row.number) : ticketKeyOf(row.bucket_key, row.bucket_number);
     return { id: ticketIdOf(row.number), key, summary: row.summary, status: row.status, type: row.type };
   }
@@ -2177,23 +2191,33 @@ export class Tickets {
   }
 
   /**
+   * T-1993 (FR39): whether the caller may file a new ticket in `b`: the agents' workspace rule (`#bucketOpenTo`) and, for a caller with a seam
+   * actor (an agent, a token, a person whose route passes it), `operate` on the bucket. The portal itself (system, a trigger) files anywhere.
+   */
+  #mayFileIn(caller: Caller, b: BucketRow): boolean {
+    if (!this.#bucketOpenTo(caller, b)) return false;
+    const actor = this.#actorOf(caller);
+    return !actor || can(actor, 'operate', ticketBucketRef(b.key)).allow;
+  }
+
+  /**
    * The bucket a new ticket goes in, and why (T-2881): the one named (refused as not found when it does not exist or is not the agent's); else
    * the one bucket a `tickets.bucketRoutes` rule gives the ticket's own tags; else the parent ticket's bucket (one the caller can see); else the
    * one bucket whose default workspace is the ticket's workspace; else the bucket of the ticket the calling session, then its lead, works on;
-   * else PILOT. The tag, parent and session/lead ticket guesses skip a bucket the caller may not file in (`#bucketOpenTo`); the workspace guess
-   * finds only a bucket whose default workspace is the ticket's own, and PILOT is not checked.
+   * else PILOT. Every step skips a bucket the caller may not file in (`#mayFileIn`, T-1993); when PILOT is one too, the create is refused as
+   * "No such bucket." (fail closed: never a bucket the caller may not see).
    */
   #bucketFor(caller: Caller, w: Writer, raw: unknown, workspaceId: string | null, tags: string[], parent: unknown): { row: BucketRow; choice: TicketBucketChoice } {
     const pick = (row: BucketRow, reason: TicketBucketChoice['reason'], why: string) => ({ row, choice: { bucket: row.key, reason, why } });
     if (raw !== undefined && raw !== null && raw !== '') {
       if (typeof raw !== 'string') throw invalid('bucket', 'A bucket is its key, like KONF.');
       const b = this.#bucketRow(raw.trim().toUpperCase());
-      if (!b || !this.#bucketOpenTo(caller, b)) throw noBucket();
+      if (!b || !this.#mayFileIn(caller, b)) throw noBucket();
       return pick(b, 'named', `${b.key}: named in the request.`);
     }
     const usable = (key: string) => {
       const b = this.#bucketRow(key);
-      return b && this.#bucketOpenTo(caller, b) ? b : undefined;
+      return b && this.#mayFileIn(caller, b) ? b : undefined;
     };
     let routes: ReturnType<typeof parseBucketRoutes> = [];
     try {
@@ -2212,7 +2236,7 @@ export class Tickets {
     if (workspaceId) {
       const one = this.#inWorkspace('default_workspace_id', workspaceId);
       const rows = this.#db.prepare(`SELECT * FROM ticket_buckets WHERE ${one.sql} ORDER BY key LIMIT 2`).all(...one.args) as unknown as BucketRow[];
-      if (rows.length === 1) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
+      if (rows.length === 1 && this.#mayFileIn(caller, rows[0]!)) return pick(rows[0]!, 'workspace', `${rows[0]!.key}: the bucket of the workspace ${workspaceId}.`);
     }
     const s = w.session;
     const lead = s?.parentId ? this.sessions.get(s.parentId) : null;
@@ -2223,11 +2247,11 @@ export class Tickets {
       const n = x?.ticketId ? this.#numberOf(x.ticketId) : null;
       const row = n === null ? undefined : this.#row(n);
       const b = row ? this.#bucketRow(row.bucket_key) : undefined;
-      if (b && row && this.#bucketOpenTo(caller, b))
+      if (b && row && this.#mayFileIn(caller, b))
         return pick(b, reason, `${b.key}: the bucket of ${ticketIdOf(row.number)}, the ticket ${reason === 'session_ticket' ? 'this session' : 'its lead'} works on.`);
     }
     const fallback = this.#bucketRow(TICKET_DEFAULT_BUCKET);
-    if (!fallback) throw noBucket();
+    if (!fallback || !this.#mayFileIn(caller, fallback)) throw noBucket();
     return pick(fallback, 'default', `${fallback.key}: nothing else decided (no bucket, tag rule, parent, workspace or session ticket).`);
   }
 
@@ -2463,6 +2487,21 @@ export class Tickets {
     return { bucket: this.bucket(caller, into.key), moved };
   }
 
+  /**
+   * T-3189: what a session holds, for Keep going (the portal itself asks, no caller): the tickets assigned to it (`total`, any status), the
+   * ones it must work on (`active`: open or in progress) and the newest `updated_at` among them (a comment, a verdict, a check, a status or
+   * an assignment moves it). One indexed row; nothing about the tickets' text.
+   */
+  heldBy(sessionId: string): { total: number; active: number; lastChangeAt: string | null } {
+    const r = this.#db
+      .prepare(
+        `SELECT count(*) AS total, coalesce(sum(CASE WHEN status IN ('open', 'in_progress') THEN 1 ELSE 0 END), 0) AS active, max(updated_at) AS last
+         FROM tickets WHERE assignee_kind = 'session' AND assignee_ref = ?`,
+      )
+      .get(sessionId) as { total: number; active: number; last: string | null } | undefined;
+    return { total: Number(r?.total ?? 0), active: Number(r?.active ?? 0), lastChangeAt: r?.last ?? null };
+  }
+
   /* ---------- CI (interface I10) ---------- */
 
   /**
@@ -2474,7 +2513,7 @@ export class Tickets {
       (x): x is string => !!x,
     );
     // T-1098: a bucket key (`ticket/KONF-12-…`, `Ticket: KONF-12`) resolves to the stable id, so CI keeps speaking T-<n>.
-    return [...new Set(ids.map((id) => this.resolve(id)).filter((id): id is string => !!id))];
+    return [...new Set(ids.map((id) => this.resolve({ kind: 'system' }, id)).filter((id): id is string => !!id))];
   }
 
   /** The checks CI attached to a ticket. */
@@ -2798,16 +2837,19 @@ export class Tickets {
   /**
    * Why the agent session `s` may record a merge status on `row`, or null: `gate` when it is the merge-gate lead of a flow program whose tag
    * the ticket carries (the configured id, a session it continues or one that continues it, top-level), `gate_worker` when it is a live
-   * worker that lead started directly. Anything else (another lead, a peer, a worker's worker, a person's token) is refused.
+   * worker that lead started directly. T-3198: `holder_lead` when it is the crew root of the session holding the ticket (the holder itself
+   * when that is a top-level lead; a session it continues or one that continues it), `holder_lead_worker` when it is a worker that root
+   * started directly: the lead whose crew holds a ticket records its own merges even when no lead of the ticket's program is its own.
+   * Anything else (another lead, a peer, a worker's worker, a person's token) is refused.
    */
-  #mergeGateWhy(s: TicketSessionInfo, row: Row): 'gate' | 'gate_worker' | null {
+  #mergeGateWhy(s: TicketSessionInfo, row: Row): 'gate' | 'gate_worker' | 'holder_lead' | 'holder_lead_worker' | null {
     if (s.state === 'ended' || s.archivedAt) return null;
     const tags = this.#tagsOf([row.number]).get(row.number) ?? [];
     let programs: { tag: string; gates: string[] }[];
     try {
       programs = this.#mergeGates();
     } catch {
-      return null; // unreadable: nobody (fail closed)
+      programs = []; // unreadable: no program gate (fail closed); the holder's own lead below reads no setting
     }
     const lineOf = (id: string): string[] => {
       const g = this.sessions.get(id);
@@ -2821,12 +2863,20 @@ export class Tickets {
         if (s.parentId && line.includes(s.parentId)) return 'gate_worker';
       }
     }
+    const holder = row.assignee_kind === 'session' && row.assignee_ref ? this.sessions.get(row.assignee_ref) : null;
+    const root = holder ? this.#crewRoot(holder) : null;
+    if (root) {
+      const line = this.#rootLineage(root);
+      if (!s.parentId && line.includes(s.id)) return 'holder_lead';
+      if (s.parentId && line.includes(s.parentId)) return 'holder_lead_worker';
+    }
     return null;
   }
 
   /**
    * FR36e (T-2014): the merge gate records what it knows of a ticket's pull request in one repo (`ticket_merge_status`). Only an agent's
-   * own token, and only the merge-gate lead of a flow program the ticket belongs to or a worker it started ({@link #mergeGateWhy}); a ticket
+   * own token, and only a lead of a flow program the ticket belongs to, the lead whose crew holds it (T-3198), or a worker either started
+   * ({@link #mergeGateWhy}); a ticket
    * the caller cannot see is the same not found. A row is added, never edited; audited `ticket.merge_status` (or `_refused`).
    */
   recordMergeStatus(
@@ -2837,29 +2887,44 @@ export class Tickets {
   ): TicketMergeStatus {
     this.#assertWrites(caller);
     const row = this.#need(caller, id);
-    const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
-    const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
-    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+){0,3}$/.test(repo)) throw invalid('repo', 'A repo is owner/name.');
-    const pr = req.pr === undefined || req.pr === null ? null : req.pr;
-    if (pr !== null && !(typeof pr === 'number' && Number.isInteger(pr) && pr > 0 && pr < TICKET_MERGE_LIMITS.pr)) throw invalid('pr', 'A pull request number.');
-    const prHead = req.prHead === undefined || req.prHead === null ? null : normalizeSha(req.prHead);
-    if (req.prHead !== undefined && req.prHead !== null && !prHead) throw invalid('pr_head', VERDICT_REFUSAL_TEXT.bad_commit);
-    if (state !== 'no_pr' && (pr === null || prHead === null)) throw invalid(pr === null ? 'pr' : 'pr_head', 'Every state but no_pr names the pull request and its head.');
-    const reason = req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
+    // T-2016: who may record is checked before what is recorded, so a caller that is not the gate gets FORBIDDEN (audited), never a
+    // validation error. The refusal's audit row names only the fields that are well formed.
     const w = this.#writer(caller, opts.sessionId);
     const ticketId = ticketIdOf(row.number);
     const why = caller.kind === 'agent' && w.session ? this.#mergeGateWhy(w.session, row) : null;
     if (!why) {
+      const okRepo = typeof req.repo === 'string' && req.repo.length <= TICKET_MERGE_LIMITS.repo && MERGE_REPO.test(req.repo) ? req.repo : null;
+      const okState = typeof req.state === 'string' && (TICKET_MERGE_STATES as readonly string[]).includes(req.state) ? req.state : null;
       this.onAudit?.({
         kind: 'ticket.merge_status_refused',
         actor: w.actor,
         actorLabel: null,
         userId: FOUNDING_USER_ID,
         subject: `ticket:${ticketId}`,
-        detail: { ticketId, repo, state, sessionId: w.session?.id ?? null },
+        detail: { ticketId, repo: okRepo, state: okState, sessionId: w.session?.id ?? null },
       });
-      throw new AppError('FORBIDDEN', 'Only a lead of a flow program this ticket belongs to, or a worker it started, records a merge status.');
+      throw new AppError(
+        'FORBIDDEN',
+        'Only a lead of a flow program this ticket belongs to, the lead whose crew holds it, or a worker either started, records a merge status.',
+      );
     }
+    const state = oneOf(req.state, TICKET_MERGE_STATES, 'state');
+    const repo = cleanLine(req.repo, 'repo', TICKET_MERGE_LIMITS.repo, { required: true });
+    if (!MERGE_REPO.test(repo)) throw invalid('repo', 'A repo is owner/name.');
+    const pr = req.pr === undefined || req.pr === null ? null : req.pr;
+    if (pr !== null && !(typeof pr === 'number' && Number.isInteger(pr) && pr > 0 && pr < TICKET_MERGE_LIMITS.pr)) throw invalid('pr', 'A pull request number.');
+    const prHead = req.prHead === undefined || req.prHead === null ? null : normalizeSha(req.prHead);
+    if (req.prHead !== undefined && req.prHead !== null && !prHead) throw invalid('pr_head', VERDICT_REFUSAL_TEXT.bad_commit);
+    // T-3198: merged may name the head alone (a fast-forward merge to the integration branch has no pull request); every other state but
+    // no_pr names the pull request and its head, as before.
+    const prNeeded = state !== 'no_pr' && state !== 'merged';
+    if ((prNeeded && pr === null) || (state !== 'no_pr' && prHead === null))
+      throw invalid(
+        prNeeded && pr === null ? 'pr' : 'pr_head',
+        'Every state but no_pr names the pull request and its head; merged may name the head alone (a merge with no PR).',
+      );
+    const reason =
+      req.reason === undefined || req.reason === null ? null : cleanLine(req.reason, 'reason', TICKET_MERGE_LIMITS.reason) || null;
     const at = this.#now().toISOString();
     const stored = this.#tx(() => {
       this.#db
@@ -3193,6 +3258,30 @@ export class Tickets {
   }
 
   /**
+   * T-3220 (PILOT-1115): the unfinished tickets the orphan sweep moved BY TITLE (`#successorOf` reason `title`) off one of `from` to a
+   * live session that still holds them, the fallback being their latest `assigned` entry (a deliberate hand-off since is kept). The title
+   * match is a guess made while nobody continued the ended chat; its continuation, once it exists, is the heir. Oldest first.
+   */
+  #titleMovedFrom(from: readonly string[]): { row: Row; from: string; holder: string }[] {
+    if (!from.length) return [];
+    const rows = this.#db
+      .prepare(
+        `SELECT t.*, json_extract(e.data, '$.from.sessionId') AS moved_from FROM tickets t
+           JOIN ticket_events e ON e.id = (SELECT MAX(x.id) FROM ticket_events x WHERE x.ticket_number = t.number AND x.kind = 'assigned')
+          WHERE t.assignee_kind = 'session' AND t.status IN (${OPEN_SQL})
+            AND json_extract(e.data, '$.fallback') = 1 AND json_extract(e.data, '$.reason') = 'title'
+            AND json_extract(e.data, '$.from.sessionId') IN (${from.map(() => '?').join(', ')})
+            AND t.assignee_ref = json_extract(e.data, '$.to.sessionId')
+          ORDER BY t.number`,
+      )
+      .all(...from) as unknown as (Row & { moved_from: string })[];
+    return rows.map(({ moved_from, ...r }) => {
+      const row = this.#keyed(r as unknown as Row);
+      return { row, from: moved_from, holder: row.assignee_ref! };
+    });
+  }
+
+  /**
    * A continuation was created (chat controller `continueTickets`, inside its transaction): every unfinished ticket held by the ENDED
    * sessions of `from` (the predecessor and its ended predecessors) is assigned to `to`, an `assigned` entry each (actor system,
    * `continued: true`, as migration 772 wrote them), status kept. A `from` that is not ended, or in another workspace, is skipped.
@@ -3217,6 +3306,19 @@ export class Tickets {
           });
           out.push(ticketIdOf(r.number));
         }
+      }
+      // T-3220: what the sweep moved by title off the ended chain before this continuation existed comes back to it (the heir).
+      const chain = from.filter((f) => f !== to && this.sessions.get(f)?.state === 'ended' && this.sessions.get(f)?.workspaceId === head.workspaceId);
+      for (const m of this.#titleMovedFrom(chain)) {
+        if (m.holder === to || !(m.row.workspace_id === null || this.#isIn(m.row, head.workspaceId))) continue;
+        this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(to, at, m.row.number);
+        this.#addEvent(m.row.number, 'assigned', w, null, {
+          from: { kind: 'session', sessionId: m.holder },
+          to: { kind: 'session', sessionId: to },
+          continued: true,
+          heirOf: m.from,
+        });
+        out.push(ticketIdOf(m.row.number));
       }
       return out;
     });
@@ -3246,14 +3348,31 @@ export class Tickets {
     // Another workspace's session doesn't exist for it, as its tickets don't.
     if (!from || from.workspaceId !== me.workspaceId) throw new AppError('NOT_FOUND', 'No such session in your workspace.');
     if (from.id === me.id) throw invalid('from_session', 'That is your own session.');
-    if (from.state !== 'ended')
-      throw new AppError('CONFLICT', 'That session is still live: it keeps its tickets. Ask it, or wait until it has ended.');
+    if (from.state !== 'ended') {
+      // T-3220: a live session that got your predecessor's tickets by the title fallback: say where to take them from.
+      const pred = this.#titleMovedFrom(this.#ancestors(me)).find((m) => m.holder === from.id)?.from;
+      throw new AppError(
+        'CONFLICT',
+        pred
+          ? `That session is still live, but the tickets it got by title from your predecessor ${pred} are yours: ticket_adopt from_session ${pred}.`
+          : 'That session is still live: it keeps its tickets. Ask it, or wait until it has ended.',
+      );
+    }
     const grant = this.#forEnded(me, from.id);
     if (!grant) throw new AppError('FORBIDDEN', 'A live session continues that one: its tickets are that session’s to take.');
-    const tickets = this.#heldBy(from.id)
-      .filter((r) => (r.workspace_id === null || this.#isIn(r, me.workspaceId)) && this.#visible(caller, r))
-      .map((r) => ticketIdOf(r.number));
+    const tickets = this.#adoptRows(caller, me, from.id, grant.why).map((m) => ticketIdOf(m.row.number));
     return { me, from: from.id, why: grant.why, tickets };
+  }
+
+  /**
+   * What `ticket_adopt` from `from` moves: the unfinished tickets it holds, and (T-3220) when the caller continues it, those the orphan sweep
+   * moved off it by title to another live session (the title match is a guess; the continuation is the heir). `holder` is who holds each now.
+   */
+  #adoptRows(caller: Caller, me: TicketSessionInfo, from: string, why: EndedGrantReason): { row: Row; holder: string }[] {
+    const ok = (r: Row) => (r.workspace_id === null || this.#isIn(r, me.workspaceId)) && this.#visible(caller, r);
+    const own = this.#heldBy(from).map((row) => ({ row, holder: from }));
+    const byTitle = why === 'lineage' ? this.#titleMovedFrom([from]).filter((m) => m.holder !== me.id) : [];
+    return [...own, ...byTitle].filter((m) => ok(m.row)).sort((a, b) => a.row.number - b.row.number);
   }
 
   /**
@@ -3270,14 +3389,14 @@ export class Tickets {
     const moved = this.#tx(() => {
       const out: string[] = [];
       const at = this.#now().toISOString();
-      for (const r of this.#heldBy(plan.from)) {
-        if (!(r.workspace_id === null || this.#isIn(r, plan.me.workspaceId)) || !this.#visible(caller, r)) continue;
+      for (const { row: r, holder } of this.#adoptRows(caller, plan.me, plan.from, plan.why)) {
         this.#db.prepare('UPDATE tickets SET assignee_ref = ?, updated_at = ? WHERE number = ?').run(plan.me.id, at, r.number);
         this.#addEvent(r.number, 'assigned', w, null, {
-          from: { kind: 'session', sessionId: plan.from },
+          from: { kind: 'session', sessionId: holder },
           to: { kind: 'session', sessionId: plan.me.id },
           adopted: true,
           why: plan.why,
+          ...(holder !== plan.from ? { heirOf: plan.from } : {}),
         });
         out.push(ticketIdOf(r.number));
       }

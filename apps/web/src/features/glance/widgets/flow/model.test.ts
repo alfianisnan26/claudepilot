@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { FlowProgramView, FlowSnapshot } from '@portal/contracts';
+import type { FlowAction, FlowProgramView, FlowSnapshot } from '@portal/contracts';
 import { actionLine, flowCompact, flowView, quietLine } from './model';
 
 const prog = (over: Partial<FlowProgramView> = {}): FlowProgramView => ({
@@ -43,6 +43,13 @@ test('actionLine: a few words, at most three tickets', () => {
     'Told · merge · T-1, T-2, T-3 +1',
   );
   assert.equal(actionLine({ at: '', program: 'k', condition: 'stall', kind: 'notified', sessionId: null, tickets: [], note: '' }), 'Notified you · stall');
+});
+
+test('actionLine (T-2016): bucket keys when the action has them, the ids of an older action without them', () => {
+  const a: FlowAction = { at: '', program: 'k', condition: 'conflict', kind: 'told', sessionId: null, tickets: ['T-12', 'T-13'], note: '' };
+  assert.equal(actionLine({ ...a, keys: ['KONF-12', 'T-13'] }), 'Told · conflict · KONF-12, T-13');
+  assert.equal(actionLine(a), 'Told · conflict · T-12, T-13');
+  assert.equal(actionLine({ ...a, keys: ['KONF-12'] }), 'Told · conflict · T-12, T-13', 'a keys list that does not match is not used');
 });
 
 test('flowView lists the programs a pause holds', () => {

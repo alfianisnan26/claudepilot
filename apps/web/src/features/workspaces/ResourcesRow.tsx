@@ -15,8 +15,8 @@ const FIELDS: { key: ResourceKey; label: string; unit: string }[] = [
 
 /**
  * The Resources row of a Kubernetes workspace's sheet (T-98): its limits and what it reserves, as the Deployment has them, and a change
- * waiting for the next start. Edit opens the four numbers with when to apply them: now (a confirm first: the pod restarts and every
- * session in it ends) or at the next restart. The server decides (bounds, a CI run, the fit on the node) and its refusal is shown as it is.
+ * waiting for the next start. Edit opens the four numbers with when to apply them: now (a confirm first: resized in place, T-3081, or,
+ * when the cluster refuses that, the pod restarts and every session in it ends) or at the next restart. The server decides (bounds, a CI run, the fit on the node) and its refusal is shown as it is.
  */
 export function ResourcesRow({ w, open }: { w: Workspace; open: boolean }) {
   const toast = useToast();
@@ -57,7 +57,19 @@ export function ResourcesRow({ w, open }: { w: Workspace; open: boolean }) {
       const done = await api.workspaces.setResources(w.id, { apply: when, ...parsed.values });
       setState(done);
       setDraft(null);
-      toast(done.outcome === 'applied' ? (done.running ? 'Applied. Restarting' : 'Applied') : done.outcome === 'pending' ? 'Saved for the next restart' : 'No change');
+      toast(
+        done.outcome === 'applied'
+          ? done.how === 'resized'
+            ? 'Applied, no restart'
+            : done.how === 'restarted'
+              ? done.resizeRefused
+                ? 'Resize refused. Restarting'
+                : 'Applied. Restarting'
+              : 'Applied'
+          : done.outcome === 'pending'
+            ? 'Saved for the next restart'
+            : 'No change',
+      );
     } catch (e) {
       const details = (e as { details?: Record<string, string> }).details ?? {};
       const fields = Object.fromEntries(FIELDS.filter((f) => details[f.key]).map((f) => [f.key, details[f.key]!]));
@@ -83,7 +95,7 @@ export function ResourcesRow({ w, open }: { w: Workspace; open: boolean }) {
         <dt className="inline-flex shrink-0 items-center gap-1 text-muted">
           Resources
           <InfoTip label="About resources">
-            CPU and memory of this workspace: the limits it may use, and what its pod reserves on the node. A change applies now (the pod restarts and every agent in it ends) or at its next restart. It must fit on the node, and it waits for a running CI run.
+            CPU and memory of this workspace: the limits it may use, and what its pod reserves on the node. A change applies now (in place, without a restart, when the cluster allows it; otherwise the pod restarts and every agent in it ends) or at its next restart. It must fit on the node, and it waits for a running CI run.
           </InfoTip>
         </dt>
         <dd className="flex min-w-0 items-center justify-end gap-1 text-right">
@@ -145,13 +157,13 @@ export function ResourcesRow({ w, open }: { w: Workspace; open: boolean }) {
             onChange={setWhen}
           />
         </div>
-        {when === 'now' && state?.running && <p className="mt-3 rounded-2xl bg-danger-soft p-3 text-sm text-ink-soft">The pod restarts: every agent in this workspace ends.</p>}
+        {when === 'now' && state?.running && <p className="mt-3 rounded-2xl bg-danger-soft p-3 text-sm text-ink-soft">Resized in place when the cluster allows it. If not, the pod restarts and every agent in it ends.</p>}
       </FormDialog>
 
       <ConfirmDialog
         open={confirming}
-        title="Restart now?"
-        description="Every agent in this workspace ends. The pod restarts with the new CPU and memory."
+        title="Apply now?"
+        description="The pod is resized in place, no agent ends. If the cluster refuses that, the pod restarts and every agent in this workspace ends."
         confirmLabel="Apply now"
         loading={saving}
         onConfirm={() => void send()}

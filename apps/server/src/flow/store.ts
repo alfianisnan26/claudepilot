@@ -20,12 +20,14 @@ export interface FlowState {
   /** The QA-ASK round robin, per program. */
   rr: Record<string, number>;
   stall: Record<string, FlowStall>;
+  /** T-2023: each conflict or no_pr alert told (`<condition>:<ticket>:<repo>#<pr>@<head>`) to when it was told (ms); kept a day. */
+  items: Record<string, number>;
   /** Newest first, at most FLOW_LIMITS.kept. */
   actions: FlowAction[];
   view: FlowProgramView[];
 }
 
-export const emptyFlowState = (): FlowState => ({ lastRunAt: null, sent: {}, rr: {}, stall: {}, actions: [], view: [] });
+export const emptyFlowState = (): FlowState => ({ lastRunAt: null, sent: {}, rr: {}, stall: {}, items: {}, actions: [], view: [] });
 
 export interface FlowStatePort {
   readonly writable: boolean;
@@ -36,11 +38,14 @@ export interface FlowStatePort {
 const META_KEY = 'flow:state';
 const DAY = 86_400_000;
 
-/** Drops what is too old to matter (rate entries over a day) and caps the trail. */
+/** Drops what is too old to matter (rate entries and told alerts over a day) and caps the trail. */
 export function trimState(s: FlowState, now: number): FlowState {
-  const sent: Record<string, number> = {};
-  for (const [k, v] of Object.entries(s.sent)) if (typeof v === 'number' && now - v < DAY) sent[k] = v;
-  return { ...s, sent, actions: s.actions.slice(0, FLOW_LIMITS.kept) };
+  const fresh = (rec: Record<string, number> | undefined) => {
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(rec ?? {})) if (typeof v === 'number' && now - v < DAY) out[k] = v;
+    return out;
+  };
+  return { ...s, sent: fresh(s.sent), items: fresh(s.items), actions: s.actions.slice(0, FLOW_LIMITS.kept) };
 }
 
 function parse(raw: string | undefined): FlowState {
@@ -50,6 +55,7 @@ function parse(raw: string | undefined): FlowState {
     const p = JSON.parse(raw) as Partial<FlowState>;
     if (typeof p.lastRunAt === 'string') st.lastRunAt = p.lastRunAt;
     if (p.sent && typeof p.sent === 'object') for (const [k, v] of Object.entries(p.sent)) if (typeof v === 'number') st.sent[k] = v;
+    if (p.items && typeof p.items === 'object') for (const [k, v] of Object.entries(p.items)) if (typeof v === 'number') st.items[k] = v;
     if (p.rr && typeof p.rr === 'object') for (const [k, v] of Object.entries(p.rr)) if (typeof v === 'number') st.rr[k] = v;
     if (p.stall && typeof p.stall === 'object')
       for (const [k, v] of Object.entries(p.stall))

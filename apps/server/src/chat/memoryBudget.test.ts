@@ -185,30 +185,22 @@ test('T-416: a refused create leaves no reservation behind', async () => {
   }
 });
 
-test('T-416: a wake counts the sleeping session’s sub-agents: refused with two running, it stays asleep; with none it wakes', async () => {
+test('T-416, T-3017: a wake counts no sub-agents for an asleep session: its process is gone, so rows left running do not hold the wake', async () => {
   const s = await liveSession({ idleSleepMs: 200 }, true);
   try {
     await until(() => s.controller.get(s.id)!.process === 'asleep', 4000);
     const db = s.store.db!;
     const at = new Date().toISOString();
     for (const t of ['t-1', 't-2']) db.prepare(`INSERT INTO chat_tasks (session_id, task_id, label, status, started_at) VALUES (?, ?, 'Look around', 'running', ?)`).run(s.id, t, at);
-    assert.equal(s.controller.get(s.id)!.agentsRunning, 2);
-    // Room for two estimates: the session alone fits, the session with its two sub-agents (three) does not.
-    const b = budget(ONE_FITS - SESSION_MEMORY_ESTIMATE_BYTES);
-    s.controller.memory = b.memory;
+    // T-3017: a chat with no live process runs nothing, whatever rows its old process left behind.
+    assert.equal(s.controller.get(s.id)!.agentsRunning, 0);
+    // Room for exactly one estimate: the session alone. Counting the two stale rows (three estimates) would refuse it.
+    s.controller.memory = budget(ONE_FITS).memory;
     const starts = s.ws.starts;
-
-    await assert.rejects(s.controller.send(s.id, 'wake-1', 'go on'), isBudget);
-    assert.equal(s.controller.get(s.id)!.process, 'asleep', 'still asleep');
-    assert.equal(s.ws.starts, starts, 'no process');
-    const refused = s.controller.audit({ kind: 'memory.refused', sessionId: s.id })[0]!;
-    assert.deepEqual([refused.detail.at, refused.detail.agents, refused.detail.needBytes], ['wake', 2, 3 * SESSION_MEMORY_ESTIMATE_BYTES]);
-
-    db.prepare(`UPDATE chat_tasks SET status = 'completed' WHERE session_id = ?`).run(s.id);
-    b.set(ONE_FITS - SESSION_MEMORY_ESTIMATE_BYTES);
-    void s.controller.send(s.id, 'wake-2', 'go on').catch(() => undefined);
+    void s.controller.send(s.id, 'wake-1', 'go on').catch(() => undefined);
     await until(() => s.controller.get(s.id)!.process === 'live', 4000);
     assert.equal(s.ws.starts, starts + 1);
+    assert.equal(s.controller.audit({ kind: 'memory.refused', sessionId: s.id }).length, 0);
   } finally {
     await s.done();
   }

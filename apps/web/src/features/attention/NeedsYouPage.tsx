@@ -1,6 +1,6 @@
 import { Badge, buttonClass, chipClass, cn, EmptyState, LoadError, RowsSkeleton, Segmented } from '@isnanme/ui';
 import { ATTENTION_KIND_LABEL, ATTENTION_WHY_LABEL, type AttentionItem, type AttentionKind } from '@portal/contracts';
-import { ArrowRight, CheckCheck, Clock } from 'lucide-react';
+import { ArrowRight, CheckCheck, ChevronRight, Clock } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
@@ -10,7 +10,7 @@ import { useNow } from '@/features/glance/widgets/shared/useNow';
 import { SwipeDeck } from './SwipeDeck';
 import { isLater, untilText } from './deck';
 import { KIND_ICON, WHY_ABOUT, WHY_TONE } from './look';
-import { groupByWhy, kindChoices, waited } from './model';
+import { groupByWhy, kindChoices, refusalsOf, refusedTitle, waited } from './model';
 import { useAttention } from './store';
 
 type View = 'deck' | 'list';
@@ -48,6 +48,7 @@ export function NeedsYouPage() {
   const rows = useSteadyRows(chosen, itemKey, engaged);
   const gone = useMemo(() => new Set(rows.filter((r) => r.gone).map((r) => itemKey(r.row))), [rows]);
   const groups = useMemo(() => groupByWhy(rows.map((r) => r.row)), [rows]);
+  const refused = useMemo(() => refusalsOf(rows.map((r) => r.row)), [rows]);
   const choices = kindChoices(list, ATTENTION_KIND_LABEL);
 
   return (
@@ -85,7 +86,7 @@ export function NeedsYouPage() {
               Unavailable: {list.unavailable.map((k) => ATTENTION_KIND_LABEL[k]).join(', ')}
             </p>
           )}
-          {groups.length === 0 ? (
+          {groups.length === 0 && refused.items.length === 0 ? (
             <EmptyState icon={<CheckCheck className="size-6" />} title="Nothing needs you" />
           ) : (
             <div {...bind} className="flex flex-col gap-6">
@@ -103,6 +104,25 @@ export function NeedsYouPage() {
                   </ul>
                 </section>
               ))}
+              {refused.items.length > 0 && (
+                // T-3114: refused calls are the guard working, not asks: one collapsed group below the real ones.
+                <details data-attention-refusals="" className="group/refused">
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-[13px] font-semibold text-ink-soft [&::-webkit-details-marker]:hidden">
+                    <ChevronRight className="size-4 shrink-0 transition-transform group-open/refused:rotate-90" aria-hidden="true" />
+                    {refusedTitle(refused.calls)}
+                    <span className="tabular-nums text-muted">{refused.items.length}</span>
+                    <InfoTip label="About refused calls">
+                      The rule guard refused these tool calls. Most need nothing: the agent goes on. Allow one only if that exact call
+                      should run once. A card leaves after 30 minutes, or when its session ends; the same call again adds to its count.
+                    </InfoTip>
+                  </summary>
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {refused.items.map((i) => (
+                      <Row key={itemKey(i)} item={i} now={now} gone={gone.has(itemKey(i))} />
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           )}
           {list.total > list.items.length && (

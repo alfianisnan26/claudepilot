@@ -39,6 +39,13 @@ export type ApprovalTier = (typeof APPROVAL_TIERS)[number];
 /** How long a request waits for a person by default, and at most. */
 export const APPROVAL_TTL_DEFAULT_MIN = 24 * 60;
 export const APPROVAL_TTL_MAX_MIN = 7 * 24 * 60;
+/**
+ * T-3114: a refused call (`guard.refusal`) waits at most this long. A refusal is the guard working and the agent usually goes on, so a
+ * day-long card only buried the real asks (Needs you held 111 of them). A repeat of the same call refreshes it; its session ending ends it.
+ */
+export const APPROVAL_TTL_REFUSAL_MIN = 30;
+/** The kinds that are a refused call (T-3114): short-lived, deduplicated per workspace, and grouped apart in Needs you. */
+export const isRefusalKind = (kind: ApprovalKind): boolean => kind === 'guard.refusal';
 /** The reason an agent gives, and a person's reason for a Deny, at most this long. */
 export const APPROVAL_REASON_MAX = 500;
 /** A payload's JSON, at most this many bytes. */
@@ -74,6 +81,11 @@ export interface Approval {
   decidedAt: string | null;
   /** Allow: what the run did. Deny: `{ ok: false, message: <the person's reason> }`. */
   result: ApprovalResult | null;
+  /**
+   * T-3114: how many times this exact request was filed in its workspace (a refused call the agent tried again, or another session's same
+   * call): one card, this count. 1 when filed once; absent from an older server.
+   */
+  count?: number;
 }
 
 /**
