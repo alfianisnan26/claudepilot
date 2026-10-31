@@ -1,14 +1,12 @@
-# orchestrator status (2026-10-31 11:32 UTC, session cce0f6be; older entries: git history)
+# orchestrator status (2026-10-31 11:45 UTC, session cce0f6be; older entries: git history)
 ## DONE
 - T-2997 (PILOT-1025) and T-3225 (PILOT-1117) released: deploy #613 (rmvw1zfv0e2e698) passed on fc7b77eb, portal 2026.10.31-3 (not started by this chat).
+- 11:42 merged to integration on blind PASS (relay 11:41): T-3215 6d4dfe85 (merge-up 1f5cddb6), T-3206+T-3233 dfa82cb9+0d1bbd66 (a9d88eaa), T-3220 180cc150 (b052a836); c50941. Not deployed yet.
 - T-3114 released in #606 (a8c7384e), live-checked; ready to close (blocked by T-3220).
 
-## IN FLIGHT (blind reviews routed by the operator: Metocean T-3215, T-3222; General T-3206, T-3233, T-3220)
-- T-3206 (PILOT-1109) refusal fold follow-ups: dfa82cb9, self-test claudepilot-job-f1e83470 pass 40; REVIEW-ASK c50404.
-- T-3233 (PILOT-1119) pass ignores a Bash description: 0d1bbd66 (on T-3206), self-test claudepilot-job-d9b2054d pass 111; REVIEW-ASK c50432; operator: not a wall, merge on the blind review (General).
-- T-3215 (PILOT-1112, owner top item) on ticket/T-3215-spawn-stuck-starting 6d4dfe85 (main, Opus): 60 s wait + mode order Bypass > Auto > end (no dontAsk fallback, operator owner-rule check). Red claudepilot-job-19529830 on c418e6f4; Self-test: claudepilot-job-70d4d6c9 on 6d4dfe85 pass 44 + typecheck; REVIEW-ASK c50783 on T-3222 (operator routes).
-- T-3222 + T-3207 (PILOT-1116/1110) queued worker shows planned mode, stale-row test, PRD: b95ea140 (on T-3215), self-test claudepilot-job-ce549d7b + claudepilot-job-605a1c00; REVIEW-ASK c50520; review PASS on b95ea140 (c50848), merge held: conflicts with T-3215 6d4dfe85 in portalTools.ts, merge-up after T-3215 + delta re-review (c50904).
-- T-3220 (PILOT-1115) keep-going heir for tickets: 180cc150; REVIEW-ASK c50398.
+## IN FLIGHT
+- Survey (sonnet sub-agent): PASS heads of T-965, T-294, T-2950, T-2882, T-3070, T-2945, T-2167, T-2421, T-3004, T-1261, T-2989, T-3173, T-3192, T-3198 (short-sha check for T-3004); T-3115 FAIL (job-run.sh hash hunk missing) back to its builder.
+- T-3222 + T-3207 (PILOT-1116/1110) queued worker shows planned mode, stale-row test, PRD: b95ea140 (on T-3215), self-test claudepilot-job-ce549d7b + claudepilot-job-605a1c00; REVIEW-ASK c50520; review PASS on b95ea140 (c50848), merge held: conflicts with T-3215 6d4dfe85 in portalTools.ts, builder CP-B3222m (Opus, sub-agent) resolving the merge-up now; then self-test + delta re-review (c50904).
 
 ## DECISIONS
 - 06:05 the predecessor 4ee04b70's tickets fell back by title to b3fead22; adopt refused (live). Filed T-3220; progress goes on T-3220.
