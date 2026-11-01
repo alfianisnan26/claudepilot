@@ -272,7 +272,10 @@ export interface SsoProviderRequest {
 }
 
 /** `POST SSO_API.discover { email }`: how this email signs in. */
-export type SignInMethod = { method: 'password' } | { method: 'sso'; provider: string; name: string; start: string };
+export type SignInMethod =
+  | { method: 'password' }
+  /** `passwordToo` (organizations slice 10): an organization's domain whose org does not require SSO; an account with a password may use it. */
+  | { method: 'sso'; provider: string; name: string; start: string; passwordToo?: boolean };
 
 export const SSO_API = {
   /** No session needed. POST `{ email }` -> `SignInMethod`. */

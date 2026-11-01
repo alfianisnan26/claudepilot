@@ -4383,6 +4383,86 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 471,
+    name: 'organizations slice 10: org email domains, verified by a DNS TXT record',
+    up(db) {
+      // docs/prd/organizations.md §8, §9.2. One row per (org, domain); the challenge is random and shown to org admins (not a secret). A
+      // verified domain belongs to one org only (the partial unique index); 7 failed daily checks in a row make it `lost`.
+      db.exec(`
+        CREATE TABLE org_domains (
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          domain TEXT NOT NULL CHECK (length(domain) BETWEEN 3 AND 253),
+          state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'verified', 'lost')),
+          challenge TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          verified_at TEXT,
+          last_checked_at TEXT,
+          failures INTEGER NOT NULL DEFAULT 0,
+          verified_by TEXT,
+          PRIMARY KEY (org_id, domain)
+        ) STRICT;
+        CREATE UNIQUE INDEX org_domains_verified ON org_domains (domain) WHERE state = 'verified';
+        CREATE INDEX org_domains_domain ON org_domains (domain);
+      `);
+    },
+  },
+  {
+    version: 472,
+    name: 'organizations slice 10: an organization’s own OIDC provider (org_id, groups claim, group rules)',
+    up(db) {
+      // §8, §9.1, §9.6. NULL org_id: an instance-wide provider (every row so far). One provider per org. group_rules is the ordered JSON list
+      // [{ group, role?, team? }] the service validates.
+      db.exec(`
+        ALTER TABLE sso_providers ADD COLUMN org_id TEXT REFERENCES orgs (id) ON DELETE CASCADE;
+        ALTER TABLE sso_providers ADD COLUMN groups_claim TEXT;
+        ALTER TABLE sso_providers ADD COLUMN group_rules TEXT NOT NULL DEFAULT '[]';
+        CREATE UNIQUE INDEX sso_providers_org ON sso_providers (org_id) WHERE org_id IS NOT NULL;
+      `);
+    },
+  },
+  {
+    version: 473,
+    name: 'organizations slice 10: sign-ins through an org’s provider (per web session, and the last one per person)',
+    up(db) {
+      // §9.5. `org_sso_sessions`: a web session (by the hash of its token, as web_sessions keys it) that was authenticated through the org's
+      // provider, at sign-in or by a step-up; `org_sso_signins`: each person's last sign-in through it (token freshness, the lock-out guard).
+      db.exec(`
+        CREATE TABLE org_sso_sessions (
+          session_hash TEXT NOT NULL,
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          provider_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          at TEXT NOT NULL,
+          PRIMARY KEY (session_hash, org_id)
+        ) STRICT;
+        CREATE TABLE org_sso_signins (
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          last_at TEXT NOT NULL,
+          PRIMARY KEY (org_id, user_id)
+        ) STRICT;
+      `);
+    },
+  },
+  {
+    version: 474,
+    name: 'organizations slice 10: members outside the verified domains an owner keeps above guest under requireSso',
+    up(db) {
+      // §9.5 "unless an owner lists them as exceptions".
+      db.exec(`
+        CREATE TABLE org_sso_exceptions (
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL,
+          added_by TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          PRIMARY KEY (org_id, user_id)
+        ) STRICT;
+      `);
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {

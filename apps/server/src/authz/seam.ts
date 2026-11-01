@@ -148,6 +148,11 @@ export interface OrgAuthority {
   onBreakGlassUse?(entryId: string, userId: UserId, orgId: string, verb: Verb, object: ObjectRef): void;
   /** Whether any object is owned by an org: `seesEverything`'s fast path is only sound without one (the founding user holds nothing there). */
   anyOrgOwned(): boolean;
+  /**
+   * Organizations slice 10 (§9.5): false when the org requires SSO and this actor may not reach its objects now (a web session not marked by
+   * the org's provider, a token without a fresh sign-in). The object is then not found for them: no role, no grant. Absent: no rule.
+   */
+  ssoGate?(orgId: string, actor: Actor): boolean;
 }
 let orgAuthority: OrgAuthority | null = null;
 /** The orgs module installs it at start-up; returns the one before (tests restore it). Null: org-owned objects are unowned (404 for all). */
@@ -356,9 +361,18 @@ export const singleOwner: Authz = {
         // admin account holds NOTHING by being one (no founding-user rights here). The one exception is a person who is an instance admin
         // with an open break-glass entry on that org (§6.7, OD-4): manage, and every mutation under it is recorded.
         if (!orgAuthority) return deny('unowned');
-        const role = orgAuthority.roleIn(found.owner.id, userId);
+        // Slice 10: requireSso. A person it binds, acting from a session or a token it does not accept, holds nothing here (fail closed).
+        let ssoOk = true;
+        if (orgAuthority.ssoGate) {
+          try {
+            ssoOk = orgAuthority.ssoGate(found.owner.id, actor) === true;
+          } catch {
+            ssoOk = false;
+          }
+        }
+        const role = ssoOk ? orgAuthority.roleIn(found.owner.id, userId) : null;
         const fromRole: Level = role === 'owner' || role === 'admin' ? 'manage' : 'none';
-        held = maxLevel(fromRole, grantsOf(userId, found), found.publicLevel ?? 'none');
+        held = ssoOk ? maxLevel(fromRole, grantsOf(userId, found), found.publicLevel ?? 'none') : 'none';
         if (held !== 'manage' && actor.kind === 'user' && holdsFounderRights(userId)) {
           const entry = orgAuthority.breakGlass(found.owner.id, userId);
           if (entry) {

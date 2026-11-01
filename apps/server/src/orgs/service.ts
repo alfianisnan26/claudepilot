@@ -82,7 +82,17 @@ export class OrgsService {
     this.#audit = deps.audit;
     this.#now = deps.now ?? (() => new Date());
     // The seam decides every right on an org through this resolver (membership, read on every call); without it every org is not found.
-    registerOrgResolver(this);
+    // Slice 10: the role that counts is the effective one (requireSso caps members outside the verified domains to guest).
+    registerOrgResolver({ stateOf: (id) => this.stateOf(id), roleOf: (id, userId) => this.effectiveRoleOf(id, userId) });
+  }
+
+  /** Slice 10 (orgs/sso.ts): the cap requireSso puts on a role; null: none. Installed by `createOrgs`. */
+  roleCap: ((orgId: string, userId: UserId, role: OrgRole | null) => OrgRole | null) | null = null;
+
+  /** The role that counts for rights: `roleOf` after the requireSso cap (§9.5). */
+  effectiveRoleOf(id: string, userId: UserId): OrgRole | null {
+    const role = this.roleOf(id, userId);
+    return this.roleCap ? this.roleCap(id, userId, role) : role;
   }
 
   #read(): DatabaseSync {
@@ -187,7 +197,7 @@ export class OrgsService {
   get(actor: Actor, id: OrgId): Org {
     requireCan(actor, 'view', orgRef(id));
     const r = this.#row(id);
-    const role = actorUserId(actor) ? this.roleOf(id, actorUserId(actor) as UserId) : null;
+    const role = actorUserId(actor) ? this.effectiveRoleOf(id, actorUserId(actor) as UserId) : null;
     if (!r || !role) throw notFound();
     return this.#view(r, role);
   }
