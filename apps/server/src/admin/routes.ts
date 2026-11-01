@@ -11,6 +11,9 @@
 // - Sign-in through the console's OIDC provider (owner, 2026-11-01; ./oidc.ts): only an identity on the allow list that maps to an active admin
 //   account gets the same admin session as the password path, fresh for step-up for 5 minutes; every refusal is an `admin.signin_refused`
 //   row and the same neutral page. The step-up dialog can re-authenticate through it too (an SSO-only admin has no password to enter).
+// - Owner, 2026-11-01 ("the console controls everything", docs/prd/organizations.md §13.7): accounts, orgs, workspaces and targets, sign-in,
+//   settings and the audit's filters, each through the service the main portal uses, with the admin as the actor (a workspace start is the
+//   seam's `operate`: D12 holds). A service the deps leave out answers 404.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
