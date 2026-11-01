@@ -73,7 +73,7 @@ export interface MultiPoolUi<C = unknown> {
 
 /** One tab of the Pools hub (Skillset PRD §18 A8). */
 export interface PoolTab {
-  /** Kept in `?tab=`: accounts, skills, personas, mcp, secrets, browser. */
+  /** Its path under /admin/pools (Accounts, the first, is /admin/pools itself): accounts, skills, personas, contexts, mcp, secrets, browser. */
   id: string;
   label: string;
   /** What the tab shows. */

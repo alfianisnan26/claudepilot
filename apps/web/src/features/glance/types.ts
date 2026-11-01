@@ -90,7 +90,7 @@ export interface GlanceWidget {
   icon: LucideIcon;
   /** What it shows, in a sentence: the Settings list's ⓘ. Never drawn in the frame itself. */
   about: string;
-  /** The page behind it, shown as an Open link in the full form's header ("/admin/usage?tab=claudes"). */
+  /** The page behind it, shown as an Open link in the full form's header ("/admin/usage/claudes"). */
   href?: string;
   /** Where it can be drawn; every place when left out. */
   placements?: readonly GlancePlacement[];

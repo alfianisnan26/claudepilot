@@ -239,7 +239,7 @@ export function RepoSheet({
                       {r.url}
                     </span>
                     {r.local && (
-                      <Link to="/admin/ci?tab=remotes" title={`The workspace’s own remote “${r.local}”`} className="-my-2 inline-flex min-h-11 shrink-0 items-center px-1 text-[12.5px] font-semibold text-ink-soft underline underline-offset-2 hover:text-ink">
+                      <Link to="/admin/ci/remotes" title={`The workspace’s own remote “${r.local}”`} className="-my-2 inline-flex min-h-11 shrink-0 items-center px-1 text-[12.5px] font-semibold text-ink-soft underline underline-offset-2 hover:text-ink">
                         Local
                       </Link>
                     )}

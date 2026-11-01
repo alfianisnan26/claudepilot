@@ -11,7 +11,7 @@ export function PersonaAddOn({ pools, value, onChange }: { pools: PoolSummary[];
     return (
       <p className="rounded-xl bg-surface-2 px-3.5 py-3 text-[13px] text-muted">
         No personas yet.{' '}
-        <Link className="font-semibold text-accent" to="/admin/pools?tab=personas">
+        <Link className="font-semibold text-accent" to="/admin/pools/personas">
           Create one
         </Link>
       </p>

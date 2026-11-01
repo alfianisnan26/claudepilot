@@ -6,6 +6,7 @@ import { Avatar } from '@/components/Avatar';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
+import { RoutedTabs } from '@/components/RoutedTabs';
 import { RoleChip, SERVER_CODE_NOTE } from '@/components/AccountMenu';
 import { ChangePasswordDialog } from '@/features/auth/ChangePasswordDialog';
 import { useOrgs } from '@/features/orgs/OrgsProvider';
@@ -15,7 +16,7 @@ import { useAuth } from '@/lib/auth';
 import { reloadMe, setMe, useMe } from '@/lib/me';
 import { PERSONAL, serializeContext } from '@/lib/orgContext';
 import { profileApi } from './api';
-import { accountView, deviceLine, initialsOf, ORG_ROLE_LABEL, profileSections } from './model';
+import { accountView, deviceLine, initialsOf, ORG_ROLE_LABEL, profileTabs, type ProfileSection } from './model';
 
 const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent disabled:bg-surface-2 disabled:text-muted';
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'never');
@@ -53,28 +54,43 @@ function Row({ icon, title, sub, action }: { icon: ReactNode; title: ReactNode; 
 
 /**
  * The person's own Profile (owner request 2026-11-01): name, username, picture, email and how they signed in, password, linked sign-ins,
- * the browsers they are signed in on, their organizations, their Portal MCP tokens, and preferences. A server-code session gets a short
- * page pointing to accounts.
+ * the browsers they are signed in on, their organizations, their Portal MCP tokens, and preferences, in tabs (`profileTabs`: Account at
+ * /admin/profile, then /admin/profile/sign-in, /orgs, /tokens, /preferences). A server-code session gets Account (a pointer to accounts) and
+ * Preferences.
  */
 export function ProfilePage() {
   const me = useMe();
   const { currentOrg } = useOrgs();
-  const sections = profileSections(me);
+  const tabs = profileTabs(me);
   const v = accountView(me, currentOrg);
   const profile = me?.kind === 'account' ? me.profile : undefined;
+
+  const section = (s: ProfileSection): ReactNode => {
+    switch (s) {
+      case 'serverCode':
+        return <ServerCodeCard key={s} title={v.title} founder={me?.kind === 'code' ? (me.founder?.displayName ?? null) : null} />;
+      case 'identity':
+        return me?.kind === 'account' ? <IdentityCard key={s} profile={profile} fallback={me.user} signIn={v.signIn} /> : null;
+      case 'password':
+        return <PasswordCard key={s} />;
+      case 'signIns':
+        return profile ? <SignInsCard key={s} profile={profile} /> : null;
+      case 'devices':
+        return <DevicesCard key={s} />;
+      case 'orgs':
+        return <OrgsCard key={s} />;
+      case 'tokens':
+        return <TokensCard key={s} ownerId={profile?.founder && profile.role === 'admin' ? FOUNDING_USER_ID : (profile?.id ?? (me?.kind === 'account' ? me.user.id : ''))} />;
+      case 'preferences':
+        return <PreferencesCard key={s} />;
+    }
+  };
 
   return (
     <div data-profile-page={me?.kind ?? 'loading'}>
       <PageHeader title="Profile" description="Your account: how you appear, how you sign in, and where you are signed in." />
       {!me && <div className="skeleton h-40 rounded-[24px]" aria-busy="true" />}
-      {sections.includes('serverCode') && <ServerCodeCard title={v.title} founder={me?.kind === 'code' ? (me.founder?.displayName ?? null) : null} />}
-      {sections.includes('identity') && me?.kind === 'account' && <IdentityCard profile={profile} fallback={me.user} signIn={v.signIn} />}
-      {sections.includes('password') && <PasswordCard />}
-      {sections.includes('signIns') && profile && <SignInsCard profile={profile} />}
-      {sections.includes('devices') && <DevicesCard />}
-      {sections.includes('orgs') && <OrgsCard />}
-      {sections.includes('tokens') && <TokensCard ownerId={profile?.founder && profile.role === 'admin' ? FOUNDING_USER_ID : (profile?.id ?? (me?.kind === 'account' ? me.user.id : ''))} />}
-      {sections.includes('preferences') && <PreferencesCard />}
+      {me && <RoutedTabs base="/admin/profile" label="Profile" tabs={tabs.map((t) => ({ id: t.id, label: t.label, content: <>{t.sections.map(section)}</> }))} />}
     </div>
   );
 }

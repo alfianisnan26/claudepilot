@@ -1,12 +1,12 @@
-import { Button, ConfirmDialog, CopyButton, LoadError, PageTabs, Switch, useToast } from '@isnanme/ui';
+import { Button, ConfirmDialog, CopyButton, LoadError, Switch, useToast } from '@isnanme/ui';
 import { formatCode, type AdminState, type CodeSource } from '@portal/contracts';
 import { Eye, EyeOff, LogOut, PenLine, Power, RefreshCw, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router';
 import { McpAccess } from '@/features/portalmcp/McpAccess';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
+import { RoutedTabs } from '@/components/RoutedTabs';
 import { SettingRow } from '@/components/SettingRow';
 import { api, errorText } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -25,7 +25,6 @@ const SOURCE: Record<CodeSource, string> = {
  * explanations sit behind ⓘ notes so the page fits one phone screen.
  */
 export function AccessPage() {
-  const [tabs, setTabs] = useSearchParams();
   const toast = useToast();
   const { logout } = useAuth();
   const [state, setState] = useState<AdminState | null>(null);
@@ -80,12 +79,10 @@ export function AccessPage() {
     <>
       <PageHeader title="Access" />
 
-      {/* Two tabs (Portal MCP PRD §15): today's sign-in sections, and the MCP endpoint's tokens and activity. */}
-      <PageTabs
+      {/* Two tabs (Portal MCP PRD §15), each its own path: today's sign-in sections (/admin/access), and the MCP endpoint's tokens and activity (/admin/access/mcp). */}
+      <RoutedTabs
+        base="/admin/access"
         label="Access"
-        stack="never"
-        value={tabs.get('tab')}
-        onChange={(id) => setTabs(id ? { tab: id } : {}, { replace: true })}
         tabs={[
           { id: 'signin', label: 'Sign-in', content: (<>
       {loadFailed && <LoadError onRetry={load} />}

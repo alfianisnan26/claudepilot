@@ -15,7 +15,7 @@ export function PaceCard() {
       ) : (
         <p className="py-2 text-center text-xs text-muted">unavailable: this portal does not report it yet.</p>
       )}
-      <CardFoot to="/admin/usage?tab=crew">Crew</CardFoot>
+      <CardFoot to="/admin/usage/crew">Crew</CardFoot>
     </>
   );
 }

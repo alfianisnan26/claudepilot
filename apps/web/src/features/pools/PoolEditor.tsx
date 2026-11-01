@@ -155,7 +155,7 @@ export function PoolEditorPage<C>({ tabId, ui }: { tabId: string; ui: MultiPoolU
   const [failed, setFailed] = useState(false);
   const [asking, setAsking] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const back = `/admin/pools?tab=${tabId}`;
+  const back = `/admin/pools/${tabId}`;
 
   const load = useCallback(async () => {
     if (!poolId) return setPool(null);

@@ -85,3 +85,41 @@ export function profileSections(me: SignedInAs | null): ('identity' | 'password'
   out.push('devices', 'orgs', 'tokens', 'preferences');
   return out;
 }
+
+export type ProfileSection = ReturnType<typeof profileSections>[number];
+export type ProfileTabId = 'account' | 'sign-in' | 'orgs' | 'tokens' | 'preferences';
+
+export const PROFILE_TAB_LABEL: Record<ProfileTabId, string> = {
+  account: 'Account',
+  'sign-in': 'Sign-in',
+  orgs: 'Orgs',
+  tokens: 'Tokens',
+  preferences: 'Preferences',
+};
+
+/** Which tab holds a section: how you appear first, then how and where you sign in (linked sign-ins go here too), orgs, tokens, preferences. */
+const SECTION_TAB: Record<ProfileSection, ProfileTabId> = {
+  serverCode: 'account',
+  identity: 'account',
+  password: 'sign-in',
+  signIns: 'sign-in',
+  devices: 'sign-in',
+  orgs: 'orgs',
+  tokens: 'tokens',
+  preferences: 'preferences',
+};
+
+/**
+ * The Profile's tabs for this session (owner request 2026-11-01: tabs, each its own path under /admin/profile), each with its sections in
+ * order; a tab with no section for this session is left out (a server-code session: Account and Preferences).
+ */
+export function profileTabs(me: SignedInAs | null): { id: ProfileTabId; label: string; sections: ProfileSection[] }[] {
+  const out: { id: ProfileTabId; label: string; sections: ProfileSection[] }[] = [];
+  for (const s of profileSections(me)) {
+    const id = SECTION_TAB[s];
+    const tab = out.find((t) => t.id === id);
+    if (tab) tab.sections.push(s);
+    else out.push({ id, label: PROFILE_TAB_LABEL[id], sections: [s] });
+  }
+  return out;
+}

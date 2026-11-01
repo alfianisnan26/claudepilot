@@ -35,7 +35,7 @@ export function QuotaCard() {
         </ul>
       )}
       <AutoMove nowMs={nowMs} />
-      <CardFoot to="/admin/usage?tab=claudes">Usage</CardFoot>
+      <CardFoot to="/admin/usage/claudes">Usage</CardFoot>
     </>
   );
 }

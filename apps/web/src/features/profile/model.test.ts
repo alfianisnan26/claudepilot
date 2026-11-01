@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { MyProfile, PortalUser, SignedInAs } from '@portal/contracts';
-import { accountView, deviceLine, initialsOf, profileSections, signInLine } from './model';
+import { accountView, deviceLine, initialsOf, profileSections, profileTabs, signInLine } from './model';
 
 const user: PortalUser = {
   id: 'u_a',
@@ -82,4 +82,17 @@ test('sign-in and device lines', () => {
   assert.equal(signInLine(undefined), null);
   assert.deepEqual(deviceLine({ device: 'Safari on iPhone', method: 'sso', provider: 'git.isnan.me' }), { name: 'Safari on iPhone', how: 'git.isnan.me' });
   assert.deepEqual(deviceLine({ device: null, method: 'unknown', provider: null }), { name: 'Unknown browser', how: null });
+});
+
+test('the Profile’s tabs: Account, Sign-in, Orgs, Tokens, Preferences for an account; Account and Preferences for the server code', () => {
+  const tabs = (me: SignedInAs | null) => profileTabs(me).map((t) => [t.id, ...t.sections].join(':'));
+  const linked = profile({ signIns: [{ providerId: 'p1', provider: 'Konfersi Team', email: user.email, linkedAt: user.createdAt, lastUsedAt: null }] });
+  assert.deepEqual(tabs({ kind: 'account', user, profile: linked }), ['account:identity', 'sign-in:password:signIns:devices', 'orgs:orgs', 'tokens:tokens', 'preferences:preferences']);
+  assert.deepEqual(tabs({ kind: 'account', user }), ['account:identity', 'sign-in:password:devices', 'orgs:orgs', 'tokens:tokens', 'preferences:preferences'], 'no linked sign-ins: the tab stays for the devices');
+  assert.deepEqual(tabs({ kind: 'code' }), ['account:serverCode', 'preferences:preferences']);
+  assert.deepEqual(tabs(null), [], 'loading: no tabs yet');
+  assert.deepEqual(
+    profileTabs({ kind: 'code' }).map((t) => t.label),
+    ['Account', 'Preferences'],
+  );
 });

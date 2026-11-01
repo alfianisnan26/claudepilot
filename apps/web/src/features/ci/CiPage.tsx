@@ -1,22 +1,26 @@
-import { Button, PageTabs } from '@isnanme/ui';
+import { Button } from '@isnanme/ui';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { useNavigate } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
+import { RoutedTabs, useTabId } from '@/components/RoutedTabs';
 import { RemotesTab } from './RemotesTab';
 import { RunnersTab } from './RunnersTab';
 import { RunsTab } from './RunsTab';
 
+const BASE = '/admin/ci';
+const TABS = ['runs', 'remotes', 'runners'] as const;
+
 /**
- * CI (local-git-ci PRD §15): the runs of every remote, the remotes workspaces host, and the runners (§23) that take runs by label. A push to a
- * remote runs the pipelines in the repository's `.pilot` folder inside that workspace.
+ * CI (local-git-ci PRD §15): the runs of every remote (`/admin/ci`), the remotes workspaces host (`/admin/ci/remotes`), and the runners (§23)
+ * that take runs by label (`/admin/ci/runners`). A push to a remote runs the pipelines in the repository's `.pilot` folder inside that workspace.
  */
 export function CiPage() {
-  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [addingRunner, setAddingRunner] = useState(false);
-  const tab = params.get('tab') === 'remotes' ? 'remotes' : params.get('tab') === 'runners' ? 'runners' : 'runs';
-  const go = (id: string) => setParams(id !== 'runs' ? { tab: id } : {}, { replace: true });
+  const tab = useTabId(BASE, TABS);
+  const toRemotes = () => navigate(`${BASE}/remotes`);
   const add =
     tab === 'runners' ? (
       <Button icon={<Plus className="size-4" />} onClick={() => setAddingRunner(true)}>
@@ -24,7 +28,7 @@ export function CiPage() {
         <span className="sm:hidden">Add</span>
       </Button>
     ) : (
-      <Button icon={<Plus className="size-4" />} onClick={() => (setCreating(true), tab === 'runs' && go('remotes'))}>
+      <Button icon={<Plus className="size-4" />} onClick={() => (setCreating(true), tab === 'runs' && toRemotes())}>
         <span className="hidden sm:inline">New remote</span>
         <span className="sm:hidden">New</span>
       </Button>
@@ -32,13 +36,11 @@ export function CiPage() {
   return (
     <>
       <PageHeader title="CI" description="A push to a workspace's remote runs the pipelines in the repository's .pilot folder, inside that workspace." action={add} />
-      <PageTabs
+      <RoutedTabs
+        base={BASE}
         label="CI"
-        stack="never"
-        value={tab}
-        onChange={(id) => id && go(id)}
         tabs={[
-          { id: 'runs', label: 'Runs', content: <RunsTab onNewRemote={() => (setCreating(true), go('remotes'))} /> },
+          { id: 'runs', label: 'Runs', content: <RunsTab onNewRemote={() => (setCreating(true), toRemotes())} /> },
           { id: 'remotes', label: 'Remotes', content: <RemotesTab creating={creating} onCloseCreate={() => setCreating(false)} onNew={() => setCreating(true)} /> },
           { id: 'runners', label: 'Runners', content: <RunnersTab adding={addingRunner} onCloseAdd={() => setAddingRunner(false)} onAdd={() => setAddingRunner(true)} /> },
         ]}

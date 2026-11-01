@@ -13,7 +13,7 @@ export const quotaWidget: GlanceWidget = {
   label: 'Quota',
   icon: Gauge,
   about: 'How much of the active Claude’s plan is left, per window, with when it resets, how fast it is being used and where that ends.',
-  href: '/admin/usage?tab=claudes',
+  href: '/admin/usage/claudes',
   useCompact: useQuotaCompact,
   Card: lazy(() => import('./Card').then((m) => ({ default: m.QuotaCard }))),
   Full: QuotaFull,

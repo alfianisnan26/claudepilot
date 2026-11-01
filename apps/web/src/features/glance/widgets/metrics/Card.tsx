@@ -24,7 +24,7 @@ export function MetricsCard() {
           the last 24 hours. Median: created to done. A dash is a number the portal does not have, not a zero.
         </InfoTip>
       </p>
-      <CardFoot to="/admin/usage?tab=metrics">Metrics</CardFoot>
+      <CardFoot to="/admin/usage/metrics">Metrics</CardFoot>
     </div>
   );
 }

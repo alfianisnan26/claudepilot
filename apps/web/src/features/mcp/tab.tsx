@@ -19,7 +19,7 @@ const builtinLink = (
 );
 
 /**
- * MCP sets' tab in the Pools hub (MCP set PRD §15, `/admin/pools?tab=mcp`): the sets, with the Catalog
+ * MCP sets' tab in the Pools hub (MCP set PRD §15, `/admin/pools/mcp`): the sets, with the Catalog
  * and its entries as routes of their own (`/admin/pools/mcp/catalog…`), the set editor page, the
  * workspace Configuration row and Add-ons.
  */

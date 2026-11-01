@@ -117,11 +117,11 @@ function Pages() {
         <Route path="sessions" element={<SessionsPage />} />
         {/* One page for the queue and an open ticket (a Workbench, T-158): beside the board on a desktop, in its place on a phone. */}
         <Route path="tickets/:id?" element={<TicketsPage />} />
-        <Route path="ci" element={<CiPage />} />
+        <Route path="ci/:tab?" element={<CiPage />} />
         <Route path="ci/runs/:id" element={<RunPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
         <Route
-          path="usage"
+          path="usage/:tab?"
           element={
             <Suspense fallback={<div className="skeleton h-28 rounded-[24px]" />}>
               <UsagePage />
@@ -136,18 +136,18 @@ function Pages() {
             </Suspense>
           }
         />
-        <Route path="pools" element={<PoolsHub />} />
+        <Route path="pools/:tab?" element={<PoolsHub />} />
         {/* Each pool type's own pages (library, catalog, review, page editors) are routes, not nested tabs. */}
         {POOL_TABS.flatMap((t) => (t.routes ?? []).map((r) => <Route key={`${t.id}/${r.path}`} path={`pools/${t.id}/${r.path}`} element={r.element} />))}
-        <Route path="accounts" element={<Navigate to="/admin/pools?tab=accounts" replace />} />
+        <Route path="accounts" element={<Navigate to="/admin/pools" replace />} />
         <Route path="targets" element={<TargetsPage />} />
-        <Route path="access" element={<AccessPage />} />
-        <Route path="notifications" element={<NotificationsPage />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route path="access/:tab?" element={<AccessPage />} />
+        <Route path="notifications/:tab?" element={<NotificationsPage />} />
+        <Route path="settings/:tab?" element={<SettingsPage />} />
         {/* The person's own account (owner request 2026-11-01), from the account menu; members and admins alike. */}
-        <Route path="profile" element={<ProfilePage />} />
+        <Route path="profile/:tab?" element={<ProfilePage />} />
         {/* Org settings (organizations §7): its own page per org, reached from the context switcher. */}
-        <Route path="orgs/:id" element={<OrgSettingsPage />} />
+        <Route path="orgs/:id/:tab?" element={<OrgSettingsPage />} />
         {/* Accepting an organization invitation (slice 8): the code is in the link's fragment. */}
         <Route path="org-invite" element={<OrgInvitePage />} />
         {/* The VS Code extension's sign-in: a person approves the code their editor shows (T-1974). */}

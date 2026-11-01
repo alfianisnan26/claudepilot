@@ -35,7 +35,7 @@ export interface BuiltinTarget {
 }
 
 const NO_ERRORS: FieldErrors = { params: {}, secretNames: {}, other: [] };
-const SECRETS_HREF = '/admin/pools?tab=secrets';
+const SECRETS_HREF = '/admin/pools/secrets';
 
 /**
  * The Add dialog of a built-in template (built-in catalogue PRD FR3-FR5, FR16): the sign-in method, the few non-secret

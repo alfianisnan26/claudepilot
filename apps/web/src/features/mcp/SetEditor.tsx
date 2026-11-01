@@ -310,7 +310,7 @@ function SecretSlotField({
     <>
       {slot.description ?? 'The Secrets entry each workspace gets it from. The set never holds the value.'}{' '}
       {/* A tab of its own: leaving here would drop the unsaved set. */}
-      <Link className="font-semibold text-accent" to="/admin/pools?tab=secrets" target="_blank" rel="noreferrer">
+      <Link className="font-semibold text-accent" to="/admin/pools/secrets" target="_blank" rel="noreferrer">
         Create secret
       </Link>
     </>

@@ -13,6 +13,7 @@ import { GlanceStrip } from '@/features/glance/Strip';
 import { api } from '@/lib/api';
 import { serializeContext } from '@/lib/orgContext';
 import { workbenchPage } from '@/lib/panels';
+import { pageKey } from '@/lib/routedTabs';
 import { isAdminState, useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
 import { InfoTip } from './InfoTip';
@@ -74,7 +75,7 @@ function Shell() {
       <main id="main" tabIndex={-1} data-focus-container className={cn('mx-auto px-4 pt-6 outline-none sm:px-6 sm:pt-10', !workbench && 'max-w-4xl')}>
         {/* Enter-only page transition: navigation never waits for an exit animation. */}
         <motion.div
-          key={`${serializeContext(context)} ${workbench ?? pathname}`}
+          key={`${serializeContext(context)} ${workbench ?? pageKey(pathname)}`}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease }}

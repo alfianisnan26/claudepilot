@@ -67,7 +67,7 @@ export function LibraryPage() {
   );
   return (
     <>
-      <Link to="/admin/pools?tab=skills" className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-muted hover:text-ink">
+      <Link to="/admin/pools/skills" className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-muted hover:text-ink">
         <ChevronLeft className="size-4" />
         Skills
       </Link>
