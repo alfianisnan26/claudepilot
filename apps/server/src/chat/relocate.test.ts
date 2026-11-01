@@ -257,7 +257,7 @@ test('a relocated session lists under the new workspace, keeps its id and messag
     assert.ok(!s.controller.listPage({ workspaceId: FROM }, {}).items.some((x) => x.id === s.id), 'gone from the old one');
 
     // The rows that point at where it lives.
-    assert.deepEqual(raw(s).prepare('SELECT workspace_id AS w FROM chat_worktrees WHERE session_id = ?').all(s.id), [{ w: TO }]);
+    assert.deepEqual((raw(s).prepare('SELECT workspace_id AS w FROM chat_worktrees WHERE session_id = ?').all(s.id) as { w: string }[]).map((r) => r.w), [TO]);
     assert.equal(count(s, 'SELECT count(*) AS n FROM pmcp_agent_tokens WHERE session_id = ? AND revoked_at IS NULL', s.id), 0, 'its old token is revoked');
     assert.equal((raw(s).prepare('SELECT last_claude_id AS c FROM autotransfer_sessions WHERE session_id = ?').get(s.id) as { c: string }).c, dest);
     assert.equal((raw(s).prepare('SELECT state FROM autotransfer_suggestions WHERE session_id = ?').get(s.id) as { state: string }).state, 'superseded');
