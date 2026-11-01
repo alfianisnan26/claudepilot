@@ -10,6 +10,7 @@ export { ADMIN_ROUTE_POLICIES, assertDeclared, declareAdminPolicies } from './au
 export { AdminHostGate, isAdminPath, normalizeAdminHost, routeAdminHostUpgrades } from './host.js';
 export { createAdminApp, type AdminConsoleDeps, type AdminEnv } from './routes.js';
 export { AdminSessions } from './sessions.js';
+export { ADMIN_OIDC_COOKIE, AdminOidc, adminOidcConfig, type AdminOidcConfig } from './oidc.js';
 
 /** The console's app as the middleware calls it (a Hono app). */
 export interface ConsoleApp {

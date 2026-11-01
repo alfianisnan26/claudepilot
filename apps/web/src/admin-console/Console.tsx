@@ -1,13 +1,14 @@
-import type { AdminAuditEntry, AdminMe, AdminOrg, AdminSsoProvider, AdminUserDetail, AdminUserRow } from '@portal/contracts';
-import { Building2, KeyRound, LogOut, RefreshCw, ScrollText, Users, X } from 'lucide-react';
+import { ADMIN_API, type AdminAuditEntry, type AdminMe, type AdminOrg, type AdminSignInMethods, type AdminSsoProvider, type AdminUserDetail, type AdminUserRow } from '@portal/contracts';
+import { Building2, KeyRound, LogIn, LogOut, RefreshCw, ScrollText, Users, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { AdminApiError, api } from './api';
-import { TABS, ago, tabFromHash, type Tab } from './model';
+import { AUDIT_KINDS, TABS, ago, auditWho, oidcOutcome, oidcStartHref, tabFromHash, type Tab } from './model';
 
 /*
  * The Admin console (docs/prd/organizations.md §6.11): Sign in, Users, Organizations, SSO, Audit. Phone first (390 px: icon-only bottom bar),
  * 44 px targets, light and dark from the system, titles of one word. Actions marked step-up ask for the password again when the server says
- * REAUTH_REQUIRED, then run once more.
+ * REAUTH_REQUIRED, then run once more. With the console's OIDC provider configured (owner, 2026-11-01: git.isnan.me), Sign in leads with
+ * its button and the step-up dialog offers it too; both are full navigations that come back to the console (`?oidc=refused` on a refusal).
  */
 
 const btn = 'inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium disabled:opacity-50';
@@ -27,13 +28,22 @@ export function Console() {
   const [tab, setTab] = useState<Tab>(() => tabFromHash(window.location.hash));
   const [stepUp, setStepUp] = useState<{ retry: () => void; cancel: () => void } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [methods, setMethods] = useState<AdminSignInMethods | null>(null);
+  // Read once: what an OIDC sign-in or step-up came back with; the query is dropped from the address so a reload does not repeat it.
+  const [outcome] = useState(() => oidcOutcome(window.location.search));
 
   useEffect(() => {
+    if (outcome) window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
     api.me().then(setMe, () => setMe(null));
+    api.methods().then(setMethods, () => setMethods(null));
     const onHash = () => setTab(tabFromHash(window.location.hash));
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, []);
+  }, [outcome]);
+
+  useEffect(() => {
+    if (me && me !== 'loading' && outcome) setError(outcome === 'refused' ? 'Re-auth refused.' : 'Sign-in provider unavailable.');
+  }, [me, outcome]);
 
   /** Runs an action; a step-up refusal asks for the password and runs it again; an ended session goes back to sign-in. */
   const run: Run = useCallback(async function attempt<T>(action: () => Promise<T>): Promise<T | undefined> {
@@ -61,7 +71,7 @@ export function Console() {
   }, []);
 
   if (me === 'loading') return <div className="p-4 text-muted" aria-busy="true" />;
-  if (!me) return <SignIn onIn={setMe} />;
+  if (!me) return <SignIn onIn={setMe} oidc={methods?.oidc ?? null} outcome={outcome} />;
 
   const go = (t: Tab) => {
     window.location.hash = t;
@@ -111,7 +121,7 @@ export function Console() {
           <TabButton key={t} tab={t} active={tab === t} onClick={() => go(t)} />
         ))}
       </nav>
-      {stepUp && <StepUp onDone={stepUp.retry} onCancel={stepUp.cancel} />}
+      {stepUp && <StepUp onDone={stepUp.retry} onCancel={stepUp.cancel} oidc={methods?.oidc ?? null} tab={tab} />}
     </div>
   );
 }
@@ -132,10 +142,10 @@ function TabButton({ tab, active, onClick, wide }: { tab: Tab; active: boolean; 
   );
 }
 
-function SignIn({ onIn }: { onIn: (me: AdminMe) => void }) {
+function SignIn({ onIn, oidc, outcome }: { onIn: (me: AdminMe) => void; oidc: AdminSignInMethods['oidc']; outcome: 'refused' | 'unavailable' | null }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(outcome === 'refused' ? 'Sign-in refused.' : outcome === 'unavailable' ? 'Sign-in provider unavailable.' : null);
   const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -152,6 +162,17 @@ function SignIn({ onIn }: { onIn: (me: AdminMe) => void }) {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4">
       <h1 className="text-xl font-semibold">Admin</h1>
+      {oidc && (
+        <>
+          <a className={`${btnPrimary} break-any text-center`} href={oidcStartHref(ADMIN_API.oidcStart)}>
+            <LogIn size={18} aria-hidden />
+            Sign in with {oidc.name}
+          </a>
+          <p className="text-center text-xs text-muted" aria-hidden>
+            or
+          </p>
+        </>
+      )}
       <form className="flex flex-col gap-3" onSubmit={(e) => void submit(e)}>
         <label className="flex flex-col gap-1 text-sm">
           Email
@@ -166,7 +187,7 @@ function SignIn({ onIn }: { onIn: (me: AdminMe) => void }) {
             {error}
           </p>
         )}
-        <button type="submit" className={btnPrimary} disabled={busy}>
+        <button type="submit" className={oidc ? btnPlain : btnPrimary} disabled={busy}>
           Sign in
         </button>
       </form>
@@ -209,7 +230,7 @@ function Sheet({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function StepUp({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+function StepUp({ onDone, onCancel, oidc, tab }: { onDone: () => void; onCancel: () => void; oidc: AdminSignInMethods['oidc']; tab: Tab }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -228,6 +249,13 @@ function StepUp({ onDone, onCancel }: { onDone: () => void; onCancel: () => void
   };
   return (
     <Sheet title="Confirm" onClose={onCancel}>
+      {oidc && (
+        // Leaves the page: the provider sends the browser back here, fresh for 5 minutes; the action is then done once more by hand.
+        <a className={`${btnPrimary} break-any text-center`} href={oidcStartHref(ADMIN_API.oidcStart, { stepUp: true, next: tab })}>
+          <LogIn size={18} aria-hidden />
+          Re-auth with {oidc.name}
+        </a>
+      )}
       <form className="flex flex-col gap-3" onSubmit={(e) => void submit(e)}>
         <label className="flex flex-col gap-1 text-sm">
           Password
@@ -238,7 +266,7 @@ function StepUp({ onDone, onCancel }: { onDone: () => void; onCancel: () => void
             {error}
           </p>
         )}
-        <button type="submit" className={btnPrimary} disabled={busy}>
+        <button type="submit" className={oidc ? btnPlain : btnPrimary} disabled={busy}>
           Confirm
         </button>
       </form>
@@ -505,7 +533,12 @@ function AuditView({ run }: { run: Run }) {
   return (
     <Section title="Audit" onReload={() => load()}>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <input className={field} placeholder="Kind" aria-label="Kind" value={kind} onChange={(e) => setKind(e.target.value)} />
+        <input className={field} placeholder="Kind" aria-label="Kind" list="audit-kinds" value={kind} onChange={(e) => setKind(e.target.value)} />
+        <datalist id="audit-kinds">
+          {AUDIT_KINDS.map((k) => (
+            <option key={k} value={k} />
+          ))}
+        </datalist>
         <select className={`${field} sm:max-w-40`} aria-label="Severity" value={severity} onChange={(e) => setSeverity(e.target.value as typeof severity)}>
           <option value="">Any</option>
           <option value="info">info</option>
@@ -525,6 +558,7 @@ function AuditView({ run }: { run: Run }) {
               {ago(r.at)} · {r.actor}
               {r.subject ? ` → ${r.subject}` : ''}
             </span>
+            {auditWho(r.kind, r.detail) && <span className="break-any text-xs">{auditWho(r.kind, r.detail)}</span>}
           </li>
         ))}
       </ul>

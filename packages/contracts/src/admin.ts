@@ -27,6 +27,15 @@ export const ADMIN_API = {
   session: '/admin-api/session',
   /** POST `AdminStepUpRequest` -> `AdminMe`: the password again; the actions marked step-up work for 5 minutes after it. */
   stepUp: '/admin-api/session/step-up',
+  /** GET (no session) -> `AdminSignInMethods`: whether the sign-in page offers the OIDC button. */
+  methods: '/admin-api/session/methods',
+  /**
+   * GET (a browser navigation, owner 2026-11-01): starts sign-in through the console's OIDC provider (git.isnan.me) and redirects to it.
+   * `?for=step-up` (needs the admin session) re-authenticates instead; `next` names the console section to come back to.
+   */
+  oidcStart: '/admin-api/session/oidc/start',
+  /** GET: where the provider sends the browser back (the redirect URI registered at the provider is this on the admin host). */
+  oidcCallback: '/admin-api/session/oidc/callback',
   /** GET -> `AdminUserRow[]`. */
   users: '/admin-api/users',
   /** GET -> `AdminUserDetail`. */
@@ -62,6 +71,15 @@ export interface AdminSignInRequest {
   email: string;
   password: string;
 }
+
+/** How one can sign in to the console. `oidc` is null when it is not configured (the button is hidden). */
+export interface AdminSignInMethods {
+  password: true;
+  oidc: { name: string } | null;
+}
+
+/** The query the console's page is opened with after a refused OIDC sign-in or step-up (the same neutral answer for every reason). */
+export const ADMIN_OIDC_RESULT = { param: 'oidc', refused: 'refused', unavailable: 'unavailable' } as const;
 
 export interface AdminStepUpRequest {
   password: string;

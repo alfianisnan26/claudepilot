@@ -8,6 +8,9 @@
 // - Writes (every method but GET and HEAD) need an `Origin` whose host is the admin host.
 // - Every route is declared in ./authz.ts and enforced by `on` below; step-up routes need the password again within 5 minutes.
 // - Every write writes a platform audit row (the abilities and the org recovery write theirs in their services).
+// - Sign-in through the console's OIDC provider (owner, 2026-11-01; ./oidc.ts): only an identity on the allow list that maps to an active admin
+//   account gets the same admin session as the password path, fresh for step-up for 5 minutes; every refusal is an `admin.signin_refused`
+//   row and the same neutral page. The step-up dialog can re-authenticate through it too (an SSO-only admin has no password to enter).
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -15,13 +18,16 @@ import type { HttpBindings } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { AppError, codeForStatus, isAppError, success } from '@isnanme/core';
 import {
+  ADMIN_API,
   ADMIN_COOKIE,
+  ADMIN_OIDC_RESULT,
   ADMIN_UI_BASE,
   actorString,
   isAbility,
   type Actor,
   type AdminAuditQuery,
   type AdminMe,
+  type AdminSignInMethods,
   type AdminUserDetail,
   type AdminUserRow,
   type AdminUserToken,
@@ -39,6 +45,7 @@ import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { revokeAccountTokens } from '../identity/accountGate.js';
+import type { OidcClient } from '../identity/oidc.js';
 import type { BreakGlassService, OrgsService, UserAbilities } from '../orgs/index.js';
 import { requireInstanceAdmin } from '../orgs/index.js';
 import { PlatformAudit, type AuditInput } from '../platform/audit.js';
@@ -46,6 +53,7 @@ import type { Store } from '../store/store.js';
 import { contentSecurityPolicy } from '../csp.js';
 import { ADMIN_ROUTE_POLICIES, assertDeclared, declareAdminPolicies } from './authz.js';
 import type { AdminHostGate } from './host.js';
+import { ADMIN_OIDC_COOKIE, ADMIN_OIDC_STATE_TTL_MS, AdminOidc, AdminOidcRefused, type AdminOidcConfig } from './oidc.js';
 import { AdminSessions, type AdminSession } from './sessions.js';
 
 type AdminCtx = { session: AdminSession; account: PortalUser };
@@ -54,6 +62,10 @@ export type AdminEnv = { Bindings: HttpBindings; Variables: { admin: AdminCtx; a
 export interface AdminUsers {
   verify(email: unknown, password: unknown, address: string): Promise<PortalUser>;
   get(id: string): PortalUser;
+  /** The account with this email, or null (OIDC sign-in maps the verified email to it). */
+  byEmail(email: string): PortalUser | null;
+  /** A sign-in that did not go through `verify`: the last sign-in time. */
+  touchLogin(id: string): void;
   list(): PortalUser[];
   update(id: string, req: { state?: 'active' | 'disabled' }): Promise<PortalUser>;
   roleOf(id: string): 'admin' | 'member' | 'disabled' | null;
@@ -79,6 +91,11 @@ export interface AdminConsoleDeps {
   consoleDir?: string | null;
   now?: () => number;
   sessions?: AdminSessions;
+  /**
+   * Sign-in through one OIDC provider (./oidc.ts `adminOidcConfig`, from PORTAL_ADMIN_OIDC_*); null or missing: off (its routes are 404 and
+   * the button is hidden). Tests pass a client that talks to the fake provider.
+   */
+  oidc?: { config: AdminOidcConfig | null; client?: OidcClient } | null;
 }
 
 const WRONG = () => new AppError('UNAUTHORIZED', 'That email or password is not right.');
@@ -275,6 +292,84 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     const at = sessions.stepUp(session.id);
     audit({ kind: 'admin.step_up', actor: actorString(actor), userId: actorFor(session).userId, subject: `user:${account.id}`, detail: { session: session.id } });
     return c.json(success(me({ ...session, reauthAt: at }, account)));
+  });
+
+  // ---------- Sign-in through the console's OIDC provider (owner, 2026-11-01) ----------
+  // The redirect URI is the admin host's, never the request's (the provider has exactly this one registered).
+  const oidc = d.oidc?.config && d.gate.host ? new AdminOidc(d.oidc.config, `https://${d.gate.host}${ADMIN_API.oidcCallback}`, d.oidc.client, now) : null;
+  const needOidc = () => {
+    if (!oidc) throw new AppError('NOT_FOUND');
+    return oidc;
+  };
+  const back = (next?: string) => `${ADMIN_UI_BASE}${next ? `#${next}` : ''}`;
+  const outcome = (v: string, next?: string) => `${ADMIN_UI_BASE}?${ADMIN_OIDC_RESULT.param}=${v}${next ? `#${next}` : ''}`;
+  on('GET', '/admin-api/session/methods', (c) => c.json(success<AdminSignInMethods>({ password: true, oidc: oidc ? { name: oidc.config.name } : null })));
+  on('GET', '/admin-api/session/oidc/start', async (c) => {
+    const o = needOidc();
+    const stepUp = c.req.query('for') === 'step-up';
+    // A step-up is bound to the session that asked for it: the return only marks THAT session, and only for the same account.
+    const sessionId = stepUp ? signedIn(c).session.id : undefined;
+    const next = c.req.query('next');
+    let started: { url: string; cookie: string };
+    try {
+      started = await o.start({ sessionId, next });
+    } catch {
+      return c.redirect(outcome(ADMIN_OIDC_RESULT.unavailable, next && /^[a-z]{1,20}$/.test(next) ? next : undefined), 302);
+    }
+    // Lax, not Strict: the provider's redirect back is a top-level navigation that must carry it. Host-only, Secure, HttpOnly, 10 minutes.
+    setCookie(c, ADMIN_OIDC_COOKIE, started.cookie, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: Math.floor(ADMIN_OIDC_STATE_TTL_MS / 1000) });
+    return c.redirect(started.url, 302);
+  });
+  on('GET', '/admin-api/session/oidc/callback', async (c) => {
+    const o = needOidc();
+    const stateCookie = getCookie(c, ADMIN_OIDC_COOKIE);
+    deleteCookie(c, ADMIN_OIDC_COOKIE, { path: '/', secure: true });
+    const q = c.req.query();
+    const refuse = (e: AdminOidcRefused, purpose: 'sign-in' | 'step-up', next?: string) => {
+      // Who tried (the provider's subject and the email it gave), never a token or a code: the owner can allow them later.
+      audit({
+        kind: 'admin.signin_refused',
+        severity: 'medium',
+        actor: 'anonymous',
+        userId: null,
+        detail: { method: 'oidc', purpose, reason: e.reason, issuer: o.config.issuer, subject: e.who.subject ?? null, email: e.who.email ?? null },
+      });
+      return c.redirect(outcome(ADMIN_OIDC_RESULT.refused, next), 302);
+    };
+    let r: Awaited<ReturnType<AdminOidc['finish']>>;
+    try {
+      r = await o.finish({ code: q.code, state: q.state, error: q.error }, stateCookie);
+    } catch (e) {
+      if (e instanceof AdminOidcRefused) return refuse(e, 'sign-in');
+      throw e;
+    }
+    const purpose = r.pending.sid ? 'step-up' : 'sign-in';
+    const who = { subject: r.subject, email: r.email };
+    let account = d.users.byEmail(r.email);
+    if (account && d.users.roleOf(account.id) !== 'admin') account = null; // a member, a disabled account: the same refusal as none
+    if (!account) return refuse(new AdminOidcRefused('no_admin_account', who), purpose, r.pending.next);
+    if (r.pending.sid) {
+      const s = sessions.check(getCookie(c, ADMIN_COOKIE));
+      if (!s || s.id !== r.pending.sid || s.userId !== account.id) return refuse(new AdminOidcRefused('session', who), purpose, r.pending.next);
+      sessions.stepUp(s.id);
+      const actor = actorFor(s);
+      audit({ kind: 'admin.step_up', actor: actorString(actor), userId: actor.userId, subject: `user:${account.id}`, detail: { session: s.id, method: 'oidc', issuer: o.config.issuer } });
+      return c.redirect(back(r.pending.next), 302);
+    }
+    const { token, session } = sessions.open(account.id);
+    // A sign-in at the provider just now is a fresh authentication: step-up actions work for the next 5 minutes.
+    sessions.stepUp(session.id);
+    d.users.touchLogin(account.id);
+    setCookie(c, ADMIN_COOKIE, token, { httpOnly: true, secure: true, sameSite: 'Strict', path: '/', maxAge: Math.floor(sessions.limits.absoluteMs / 1000) });
+    const actor = actorFor(session);
+    audit({
+      kind: 'admin.signin',
+      actor: actorString(actor),
+      userId: actor.userId,
+      subject: `user:${account.id}`,
+      detail: { session: session.id, method: 'oidc', issuer: o.config.issuer, oidcSubject: r.subject },
+    });
+    return c.redirect(back(r.pending.next), 302);
   });
 
   // ---------- Users ----------

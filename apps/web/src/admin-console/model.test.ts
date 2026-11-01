@@ -6,7 +6,7 @@ import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { auditSearch } from './api';
-import { ago, tabFromHash } from './model';
+import { AUDIT_KINDS, ago, auditWho, oidcOutcome, oidcStartHref, tabFromHash } from './model';
 
 const src = fileURLToPath(new URL('..', import.meta.url));
 const web = fileURLToPath(new URL('../..', import.meta.url));
@@ -31,6 +31,21 @@ test('auditSearch drops empty filters', () => {
   assert.equal(auditSearch({}), '');
   assert.equal(auditSearch({ kind: 'account', severity: 'medium', limit: 50 }), '?kind=account&severity=medium&limit=50');
   assert.equal(auditSearch({ kind: '' }), '');
+});
+
+test('OIDC sign-in: the outcome query, the start link, and who a refused sign-in was (owner, 2026-11-01)', () => {
+  assert.equal(oidcOutcome('?oidc=refused'), 'refused');
+  assert.equal(oidcOutcome('?oidc=unavailable'), 'unavailable');
+  assert.equal(oidcOutcome('?oidc=<script>'), null);
+  assert.equal(oidcOutcome(''), null);
+  const start = '/admin-api/session/oidc/start';
+  assert.equal(oidcStartHref(start), start);
+  assert.equal(oidcStartHref(start, { stepUp: true, next: 'orgs' }), `${start}?for=step-up&next=orgs`);
+  assert.ok(AUDIT_KINDS.includes('admin.signin_refused'), 'the Audit filter offers refused sign-ins');
+  assert.equal(auditWho('admin.signin_refused', { method: 'oidc', reason: 'not_allowed', email: 'eve@example.test', subject: '77' }), 'eve@example.test · oidc · not allowed');
+  assert.equal(auditWho('admin.signin_refused', { method: 'oidc', reason: 'state', email: null, subject: null }), 'oidc · state');
+  assert.equal(auditWho('admin.signin_refused', { subject: '77' }), 'subject 77');
+  assert.equal(auditWho('admin.signin', { email: 'x@example.test' }), null);
 });
 
 function files(dir: string): string[] {

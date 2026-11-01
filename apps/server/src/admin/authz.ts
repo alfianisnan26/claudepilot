@@ -14,6 +14,16 @@ export const ADMIN_ROUTE_POLICIES: RoutePolicies = {
   'GET /admin-api/session': { kind: 'self' },
   'DELETE /admin-api/session': { kind: 'self', audit: 'admin.signout' },
   'POST /admin-api/session/step-up': { kind: 'self', audit: 'admin.step_up' },
+  // Sign-in through the console's OIDC provider (owner, 2026-11-01; ./oidc.ts). Public like the password sign-in: what the page offers, the
+  // redirect to the provider (with `for=step-up` the handler itself requires the admin session and binds the step-up to it), and the
+  // provider's return, which lets in ONLY an identity on PORTAL_ADMIN_OIDC_ALLOW that maps to an active admin account. Off: 404.
+  'GET /admin-api/session/methods': { kind: 'public', why: 'the sign-in page asks whether the OIDC button is shown; nothing about any account' },
+  'GET /admin-api/session/oidc/start': { kind: 'public', why: 'redirects to the console’s OIDC provider; a step-up start requires the admin session in the handler' },
+  'GET /admin-api/session/oidc/callback': {
+    kind: 'public',
+    why: 'the OIDC provider’s return: state cookie, code exchange, ID token checks, the allow list, an active admin account; every refusal is an admin.signin_refused row',
+    audit: 'admin.signin',
+  },
   'GET /admin-api/users': users('view'),
   'GET /admin-api/users/:id': users('view'),
   'POST /admin-api/users/:id/suspend': users('manage', { reauth: true, audit: 'account.suspended' }),

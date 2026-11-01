@@ -63,6 +63,31 @@ spec:
             # bundle; the IngressRoute claudepilot-admin below). Unset turns the console off.
             - name: PORTAL_ADMIN_HOST
               value: admin.pilot.ai.isnan.me
+            # The Admin console's sign-in through git.isnan.me (owner, 2026-11-01; apps/server/src/admin/oidc.ts): ONLY the identities on
+            # PORTAL_ADMIN_OIDC_ALLOW (the verified email, or preferred_username) that map to an active admin account; everyone else is
+            # refused and shows up as admin.signin_refused in the console's Audit. Client id and secret: the Secret claudepilot-admin-oidc
+            # (keys client-id, client-secret), made by hand, never in git; optional, so the portal starts without it and the button is
+            # hidden (any value missing: OIDC off, password sign-in unchanged). The OAuth app's redirect URI at Gitea:
+            # https://admin.pilot.ai.isnan.me/admin-api/session/oidc/callback. ALLOW_PRIVATE: git.isnan.me resolves to a cluster address
+            # inside the cluster, which the OIDC client's SSRF guard refuses unless allowed (the issuer is set here, not by a user).
+            - name: PORTAL_ADMIN_OIDC_ISSUER
+              value: https://git.isnan.me
+            - name: PORTAL_ADMIN_OIDC_ALLOW
+              value: alfian@isnan.me
+            - name: PORTAL_ADMIN_OIDC_ALLOW_PRIVATE
+              value: "true"
+            - name: PORTAL_ADMIN_OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: claudepilot-admin-oidc
+                  key: client-id
+                  optional: true
+            - name: PORTAL_ADMIN_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: claudepilot-admin-oidc
+                  key: client-secret
+                  optional: true
             # Workspaces are pods of this cluster (the portal's service account, in-cluster).
             - name: PORTAL_K8S_ENABLED
               value: "true"

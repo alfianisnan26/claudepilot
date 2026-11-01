@@ -125,7 +125,7 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import { createMoveToOrgRoute, createOrgRoutes, createOrgs } from './orgs/index.js';
-import { AdminHostGate, adminHostMiddleware, createAdminApp, type ConsoleApp } from './admin/index.js';
+import { AdminHostGate, adminHostMiddleware, adminOidcConfig, createAdminApp, type ConsoleApp } from './admin/index.js';
 import type { Platform } from './platform/index.js';
 import { declareAllPolicies } from './authz/declarations.js';
 import { enforceRoutePolicy, useWorkspaceAlias } from './authz/routeGuard.js';
@@ -1455,6 +1455,8 @@ export function createApp(
       ssoRedirectUri: ssoOrigin ? `${ssoOrigin.replace(/\/+$/, '')}${SSO_API.callback}` : '',
       clientKey: (c) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy),
       consoleDir: serveWeb ? config.paths.adminDist : null,
+      // Owner, 2026-11-01: sign-in through git.isnan.me for the allow list only (admin/oidc.ts); unset: off.
+      oidc: { config: adminOidcConfig(config.adminOidc, (m) => console.error(m)), client: oidc },
     }).app;
   }
 

@@ -22,6 +22,19 @@ export const config = {
    * host name): the console is off and its paths are 404 everywhere. Compared with the request's Host (X-Forwarded-Host only with trustProxy).
    */
   adminHost: env('PORTAL_ADMIN_HOST'),
+  /**
+   * The Admin console's sign-in through one OIDC provider (owner, 2026-11-01: git.isnan.me, the owner only; admin/oidc.ts). The client id
+   * and secret come from the OPTIONAL Secret claudepilot-admin-oidc; the allow list is comma-separated emails (matched on the verified
+   * `email` claim) or usernames (`preferred_username`). Any of issuer, client id, secret or allow list missing: off, password sign-in only.
+   * allowPrivate "true": the issuer may resolve to a private address (git.isnan.me is a cluster address from inside the cluster).
+   */
+  adminOidc: {
+    issuer: env('PORTAL_ADMIN_OIDC_ISSUER'),
+    clientId: env('PORTAL_ADMIN_OIDC_CLIENT_ID'),
+    clientSecret: env('PORTAL_ADMIN_OIDC_CLIENT_SECRET'),
+    allow: env('PORTAL_ADMIN_OIDC_ALLOW'),
+    allowPrivate: env('PORTAL_ADMIN_OIDC_ALLOW_PRIVATE'),
+  },
   /** Fixed server code; when unset one is generated at startup. */
   serverCode: env('PORTAL_SERVER_CODE'),
   /** Encrypts stored secrets: 32 random bytes in base64url, given directly or as a file. */

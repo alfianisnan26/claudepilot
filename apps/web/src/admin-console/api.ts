@@ -5,6 +5,7 @@ import {
   type AdminAuditQuery,
   type AdminMe,
   type AdminOrg,
+  type AdminSignInMethods,
   type AdminSsoProvider,
   type AdminUserDetail,
   type AdminUserRow,
@@ -52,6 +53,7 @@ export function auditSearch(q: AdminAuditQuery): string {
 
 export const api = {
   me: () => call<AdminMe>('GET', ADMIN_API.session),
+  methods: () => call<AdminSignInMethods>('GET', ADMIN_API.methods),
   signIn: (email: string, password: string) => call<AdminMe>('POST', ADMIN_API.session, { email, password }),
   signOut: () => call<{ ok: true }>('DELETE', ADMIN_API.session),
   stepUp: (password: string) => call<AdminMe>('POST', ADMIN_API.stepUp, { password }),
