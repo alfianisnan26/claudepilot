@@ -43,6 +43,13 @@ export function SignInView({ run }: { run: Run }) {
                 New code
               </button>
             </div>
+            {/* Owner request 2026-11-01: the code goes off only while an admin can sign in without it; who can, and how. */}
+            {(config.admins ?? []).map((a) => (
+              <div key={a.id} className="flex min-h-11 items-center gap-3 px-3 py-2 text-sm" data-admin-signin={a.methods.length ? 'ok' : 'none'}>
+                <span className="break-any min-w-0 flex-1">{a.email}</span>
+                <span className={`${chip} ${a.methods.length ? 'bg-accent-soft' : 'bg-danger-soft text-danger'}`}>{a.methods.length ? a.methods.join(', ') : 'no sign-in'}</span>
+              </div>
+            ))}
           </div>
         )}
       </Section>

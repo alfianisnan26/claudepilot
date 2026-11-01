@@ -57,12 +57,14 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { requireCan } from '../authz/seam.js';
 import { oneTimePassword, type AccountAdmin } from '../identity/accountAdmin.js';
 import { revokeAccountTokens } from '../identity/accountGate.js';
+import { adminSignInPaths, currentFounder, transferFounder } from '../identity/founder.js';
 import type { OidcClient } from '../identity/oidc.js';
 import type { BreakGlassService, OrgsService, UserAbilities } from '../orgs/index.js';
 import { requireInstanceAdmin } from '../orgs/index.js';
 import { PlatformOrgs } from '../orgs/platformOrgs.js';
 import { PlatformAudit, type AuditInput } from '../platform/audit.js';
 import type { Portal } from '../portal.js';
+import { RateLimiter } from '../rateLimit.js';
 import type { Settings } from '../settings/store.js';
 import type { Store } from '../store/store.js';
 import { contentSecurityPolicy } from '../csp.js';
@@ -119,8 +121,13 @@ export interface AdminConsoleDeps {
     stop(target: string, name: string): Promise<unknown>;
     resolve(ref: string): { id: string } | null;
   } | null;
-  /** Sign-in with the server code (portal.ts): its switch, its age and a new code. */
-  serverCode?: Pick<Portal, 'summary' | 'setEnabled' | 'rotate' | 'code'> | null;
+  /**
+   * Sign-in with the server code (portal.ts): its switch (`setCodeSignIn`: the code only, accounts keep signing in; `setEnabled` where a
+   * test's fake has nothing else), its age and a new code. `matches` checks a code given to transfer the founder.
+   */
+  serverCode?: (Pick<Portal, 'summary' | 'rotate' | 'code'> & Partial<Pick<Portal, 'setCodeSignIn' | 'setEnabled' | 'matches'>>) | null;
+  /** Whether an email signs in by SSO only (identity/sso.ts `passwordRefused`): such an admin's password does not count as a way in. */
+  passwordRefused?: (email: string) => boolean;
   /** The portal-wide settings (settings/store.ts). */
   settings?: Pick<Settings, 'view' | 'set'> | null;
   /** The client address (rate limits): the socket, or the trusted proxy's X-Forwarded-For entry. */
@@ -424,8 +431,16 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     state: u.state,
     createdAt: u.createdAt,
     lastLoginAt: u.lastLoginAt,
+    founder: isFounder(u.id),
     abilities,
   });
+  const isFounder = (id: string) => {
+    try {
+      return d.users.principalOf(id) !== id;
+    } catch {
+      return false;
+    }
+  };
   const account = (id: string): PortalUser => {
     try {
       return d.users.get(id);
@@ -601,6 +616,50 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success({ removed: true }));
   });
 
+  // ---------- The founder (owner request 2026-11-01: "replace current super admin user as alfian@isnan.me") ----------
+  // identity/founder.ts: the mark moves, everything `u_owner` owns follows it. Only the current founder may move it, or whoever gives the
+  // server code (always the way while no account is marked); a wrong code is throttled per admin and audited.
+  const founderLimiter = new RateLimiter(5, 60 * 60_000);
+  on('POST', '/admin-api/users/:id/founder', async (c) => {
+    const u = account(param(c, 'id'));
+    const b = await body(c);
+    const reason = typeof b.reason === 'string' ? b.reason.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) : '';
+    if (reason.length < 10) throw new AppError('VALIDATION_FAILED', 'Say why (at least 10 characters).', { details: { reason: 'At least 10 characters.' } });
+    const self = c.get('admin').account.id;
+    const w = write();
+    const was = currentFounder(w);
+    let via: 'founder' | 'server-code' = 'founder';
+    if (was?.id !== self) {
+      if (founderLimiter.blocked(self)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a while.');
+      const code = typeof b.serverCode === 'string' ? b.serverCode : '';
+      if (!code || !d.serverCode?.matches?.(code)) {
+        founderLimiter.fail(self);
+        record(c, 'identity.founder_transfer_refused', u.id, { why: code ? 'wrong server code' : 'not the founder' });
+        throw new AppError('FORBIDDEN', 'Only the founder may do this, or give the server code.', { details: { serverCode: 'The server code.' } });
+      }
+      via = 'server-code';
+    }
+    const r = transferFounder(w, u.id, iso(now()));
+    const movedRows = Object.values(r.moved).reduce((a, n) => a + n, 0);
+    record(
+      c,
+      'identity.founder_transferred',
+      u.id,
+      {
+        to: r.to.email,
+        from: r.from?.email ?? null,
+        fromId: r.from?.id ?? null,
+        via,
+        reason,
+        movedRows,
+        ...(movedRows ? { movedTables: Object.entries(r.moved).map(([t, n]) => `${t}:${n}`).join(',') } : {}),
+        ...tokensDetail(r.tokens),
+      },
+      'high',
+    );
+    return c.json(success(r));
+  });
+
   // ---------- Organizations ----------
   on('GET', '/admin-api/orgs', (c) => c.json(success(d.orgs.listAll(c.get('actor')))));
   on('POST', '/admin-api/orgs/:id/recover-owner', async (c) => {
@@ -729,7 +788,17 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     serverCode: d.serverCode ? d.serverCode.summary() : null,
     adminOidc: oidc ? { issuer: oidc.config.issuer, name: oidc.config.name, allow: [...oidc.config.allow] } : null,
     adminHost: d.gate.host,
+    admins: signInPaths(),
   });
+  const signInPaths = () => {
+    const r = db();
+    if (!r) return [];
+    try {
+      return adminSignInPaths(r, d.passwordRefused ?? (() => false));
+    } catch {
+      return [];
+    }
+  };
   const serverCode = () => {
     if (!d.serverCode) throw new AppError('NOT_FOUND');
     return d.serverCode;
@@ -740,7 +809,15 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     const { enabled } = await body(c);
     if (typeof enabled !== 'boolean') throw new AppError('VALIDATION_FAILED', '`enabled` must be true or false.');
     const was = p.summary().enabled;
-    p.setEnabled(enabled);
+    // Owner request 2026-11-01: off only while an active admin account can still sign in to the main portal (a password, or a linked
+    // identity at an enabled provider); the answer names who can.
+    if (!enabled && was) {
+      const ready = signInPaths().filter((a) => a.methods.length > 0);
+      if (!ready.length)
+        throw new AppError('CONFLICT', 'No active admin account can sign in with a password or a linked sign-in yet. Link one first.', { details: { enabled: 'No admin can sign in.' } });
+    }
+    if (p.setCodeSignIn) p.setCodeSignIn(enabled);
+    else p.setEnabled?.(enabled);
     if (was !== enabled) audit({ kind: 'portal.server_code_switched', severity: 'medium', actor: actorString(c.get('actor')), userId: null, subject: null, detail: { enabled } });
     return c.json(success(signInConfig()));
   });

@@ -44,6 +44,12 @@ export const ADMIN_API = {
   user: (id: string) => `/admin-api/users/${u(id)}`,
   /** POST (step-up) -> `AdminPasswordResult`: a new one-time password, shown ONCE; the account's sessions end. */
   password: (id: string) => `/admin-api/users/${u(id)}/password`,
+  /**
+   * POST `AdminTransferFounderRequest` (step-up) -> `AdminFounderTransferResult` (owner request 2026-11-01): makes this active admin account
+   * the founder (it acts as `u_owner`: everything the founding user owns follows the mark). Only the current founder may, or whoever gives
+   * the server code; a reason is required; the tokens minted from both accounts are revoked.
+   */
+  founder: (id: string) => `/admin-api/users/${u(id)}/founder`,
   /** POST `AdminReasonRequest` (step-up): disables the account, ends its sessions and tokens. */
   suspend: (id: string) => `/admin-api/users/${u(id)}/suspend`,
   /** POST `AdminReasonRequest` (step-up). */
@@ -144,6 +150,8 @@ export interface AdminUserRow {
   state: 'active' | 'disabled';
   createdAt: string;
   lastLoginAt: string | null;
+  /** The one account that is the founding user (`users.founder`); absent from an older server. */
+  founder?: boolean;
   /** Abilities held by a row (an admin holds every ability without one). */
   abilities: Ability[];
 }
@@ -251,6 +259,27 @@ export interface AdminSignInConfig {
   /** The console's own OIDC sign-in (env PORTAL_ADMIN_OIDC_*): who may sign in; changed in the deployment, not here. */
   adminOidc: { issuer: string; name: string; allow: string[] } | null;
   adminHost: string | null;
+  /**
+   * Owner request 2026-11-01: every active admin account and how it can sign in to the main portal (`password`, or each linked provider's
+   * name). Turning the server code off is refused while none has a method. Absent from an older server.
+   */
+  admins?: { id: string; email: string; methods: string[] }[];
+}
+
+/** `POST ADMIN_API.founder(id)`. */
+export interface AdminTransferFounderRequest {
+  /** Why (at least 10 characters), kept in the audit. */
+  reason: string;
+  /** The server code, when the caller is not the current founder (always, while no account is the founder). */
+  serverCode?: string;
+}
+
+export interface AdminFounderTransferResult {
+  from: { id: string; email: string } | null;
+  to: { id: string; email: string };
+  /** Rows the new founder owned under its own id, now the founding user's, by table. */
+  moved: Record<string, number>;
+  tokens: { pmcp: number; reporter: number; agent: number };
 }
 
 export interface AdminServerCodeRequest {

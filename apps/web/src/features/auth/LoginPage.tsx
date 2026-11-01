@@ -15,7 +15,7 @@ const SSO_ERRORS: Record<SsoErrorCode, string> = {
   token: 'The sign-in provider’s answer did not check out.',
   email: 'The sign-in provider did not vouch for your email address.',
   domain: 'Your email’s domain does not sign in through that provider.',
-  no_account: 'There is no account for your email yet. Ask an admin.',
+  no_account: 'No account can use this sign-in yet. If you have one, sign in with its password and link it in Profile; else ask an admin.',
   disabled: 'This account is disabled.',
   unavailable: 'Single sign-on is not available right now.',
 };
@@ -30,8 +30,10 @@ export function LoginPage() {
   const enabled = state.status !== 'out' || state.enabled;
   // T-118: with an email account on this portal, email and password come first; the server code stays one tap away.
   const emailFirst = state.status === 'out' && state.emailSignIn;
+  // Owner request 2026-11-01: the server code's sign-in turned off: accounts only, no way to the code form.
+  const codeOff = state.status === 'out' && !!state.codeOff;
   const [mode, setMode] = useState<'email' | 'code' | null>(null);
-  const useEmail = (mode ?? (emailFirst ? 'email' : 'code')) === 'email';
+  const useEmail = codeOff || (mode ?? (emailFirst ? 'email' : 'code')) === 'email';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
@@ -206,7 +208,7 @@ export function LoginPage() {
         <Button type="submit" size="lg" loading={loading} disabled={!enabled} className="mt-2 w-full">
           {useEmail && step === 'email' ? 'Continue' : 'Sign in'}
         </Button>
-        {(emailFirst || mode) && (
+        {(emailFirst || mode) && !codeOff && (
           <button
             type="button"
             onClick={() => (setMode(useEmail ? 'code' : 'email'), setError(undefined), setFormError(null))}

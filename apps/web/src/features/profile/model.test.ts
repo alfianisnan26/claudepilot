@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { MyProfile, PortalUser, SignedInAs } from '@portal/contracts';
-import { accountView, deviceLine, initialsOf, profileSections, signInLine } from './model';
+import { accountView, deviceLine, initialsOf, linkResult, profileSections, signInLine } from './model';
 
 const user: PortalUser = {
   id: 'u_a',
@@ -82,4 +82,16 @@ test('sign-in and device lines', () => {
   assert.equal(signInLine(undefined), null);
   assert.deepEqual(deviceLine({ device: 'Safari on iPhone', method: 'sso', provider: 'git.isnan.me' }), { name: 'Safari on iPhone', how: 'git.isnan.me' });
   assert.deepEqual(deviceLine({ device: null, method: 'unknown', provider: null }), { name: 'Unknown browser', how: null });
+});
+
+test('Profile → Link (owner request 2026-11-01): the sign-ins section shows while there is something to link; the return is read once', () => {
+  const me = (p: MyProfile): SignedInAs => ({ kind: 'account', user, profile: p });
+  assert.ok(!profileSections(me(profile())).includes('signIns'));
+  assert.ok(profileSections(me(profile({ linkable: [{ providerId: 'sso_g', provider: 'git.isnan.me', start: '/api/auth/sso/start?for=link' }] }))).includes('signIns'));
+  assert.deepEqual(linkResult('?linked=1'), { ok: true });
+  assert.equal(linkResult(''), null);
+  const bad = linkResult('?link_error=no_account');
+  assert.ok(bad && !bad.ok && /another/.test(bad.message));
+  const odd = linkResult('?link_error=<script>');
+  assert.ok(odd && !odd.ok && odd.message === 'Couldn’t link it. Try again.');
 });

@@ -34,6 +34,7 @@ import {
   SSO_API,
   type ChangeMyPasswordRequest,
   normalizeEmail,
+  type MyProfile,
   type SignedInAs,
   type CurrentSignIn,
   type MyWebSession,
@@ -452,6 +453,7 @@ export function createApp(
     const status: SessionStatus = {
       authenticated: !!portal.anySession(getCookie(c, cookie)),
       enabled: portal.enabled,
+      codeSignIn: portal.codeSignIn,
       member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
       emailSignIn: (() => {
         try {
@@ -668,9 +670,19 @@ export function createApp(
     if (m?.startsWith('sso:')) return { method: 'sso', provider: profiles.providerName(m.slice(4)) };
     return { method: 'unknown', provider: null };
   };
+  /** Owner request 2026-11-01: Profile → Link: the provider this account's email signs in through, while it has no identity linked there. */
+  const withLinkable = (p: MyProfile): MyProfile => {
+    let offer: { id: string; name: string } | null = null;
+    try {
+      offer = sso.linkOffer(p.id, p.email);
+    } catch {
+      offer = null;
+    }
+    return offer ? { ...p, linkable: [{ providerId: offer.id, provider: offer.name, start: `${SSO_API.start}?for=link` }] } : p;
+  };
   const signedInAs = (token: string | undefined, userId: string | null | undefined): SignedInAs =>
     userId
-      ? { kind: 'account', user: users.get(userId), profile: profiles.profile(userId), session: currentSignIn(token) }
+      ? { kind: 'account', user: users.get(userId), profile: withLinkable(profiles.profile(userId)), session: currentSignIn(token) }
       : { kind: 'code', founder: profiles.founder(), session: currentSignIn(token) };
   /** The signed-in ACCOUNT (any role) and its token; the server code has no profile of its own. Its own id only, never one from the request. */
   const myAccount = (c: Context<Env>) => {
@@ -1601,6 +1613,7 @@ export function createApp(
       accounts: accountAdmin,
       workspaces,
       serverCode: portal,
+      passwordRefused: (email) => sso.passwordRefused(email),
       settings: settings?.settings ?? null,
     }).app;
   }

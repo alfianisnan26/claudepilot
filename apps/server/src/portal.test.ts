@@ -54,3 +54,30 @@ test('the database keeps only token hashes, and expired sign-ins are not restore
   assert.equal((second.store.db!.prepare('SELECT count(*) AS n FROM web_sessions').get() as { n: number }).n, 0, 'expired rows are cleaned up');
   second.store.close();
 });
+
+test('server code sign-in off (owner request 2026-11-01): the code is refused and its sessions end; accounts still sign in; it stays off after a restart', async () => {
+  const dir = tempDirectory('cp-codeoff-');
+  const first = await start(dir);
+  first.portal.roleOf = () => 'admin';
+  const codeSession = first.portal.signIn(CODE);
+  const account = first.portal.openSession('u_acct', { method: 'password' });
+  first.portal.setCodeSignIn(false);
+  assert.equal(first.portal.codeSignIn, false);
+  assert.equal(first.portal.anySession(codeSession), undefined, 'the server code’s session ended');
+  assert.ok(first.portal.session(account), 'an account’s session stays');
+  assert.throws(() => first.portal.signIn(CODE), /turned off/);
+  assert.ok(first.portal.openSession('u_acct'), 'an account still signs in');
+  assert.equal(first.portal.summary().enabled, false);
+  assert.ok(first.portal.matches(CODE), 'the code still confirms a sensitive action');
+  first.store.close();
+
+  const second = await start(dir);
+  assert.equal(second.portal.codeSignIn, false, 'off after a restart');
+  assert.throws(() => second.portal.signIn(CODE), /turned off/);
+  second.portal.setCodeSignIn(true);
+  assert.ok(second.portal.signIn(CODE));
+  second.store.close();
+  const third = await start(dir);
+  assert.equal(third.portal.codeSignIn, true);
+  third.store.close();
+});
