@@ -78,18 +78,28 @@ export function Console() {
   };
 
   return (
-    <div className="flex min-h-dvh flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] lg:pb-0">
-      <header className="sticky top-0 z-10 border-b border-line bg-bg/95 pt-[env(safe-area-inset-top)] backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center gap-2 px-4">
-          <h1 className="min-w-0 flex-1 truncate py-3 text-base font-semibold">Admin</h1>
-          <nav className="hidden gap-1 lg:flex" aria-label="Sections">
-            {TABS.map((t) => (
-              <TabButton key={t} tab={t} active={tab === t} onClick={() => go(t)} wide />
-            ))}
-          </nav>
-          <span className="hidden max-w-48 truncate text-xs text-muted xl:inline" title={me.email}>
+    <div className="flex min-h-dvh flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] lg:pb-0 lg:pl-60">
+      {/* Desktop (owner, 2026-11-01: "make it as sidebar"): the sections in a side bar, the account at its foot. */}
+      <aside className="fixed inset-y-0 left-0 z-10 hidden w-60 flex-col border-r border-line bg-bg pt-[env(safe-area-inset-top)] lg:flex">
+        <h1 className="truncate px-5 py-4 text-base font-semibold">Admin</h1>
+        <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-3" aria-label="Sections">
+          {TABS.map((t) => (
+            <TabButton key={t} tab={t} active={tab === t} onClick={() => go(t)} wide />
+          ))}
+        </nav>
+        <div className="flex items-center gap-2 border-t border-line px-3 py-3">
+          <span className="min-w-0 flex-1 truncate px-2 text-xs text-muted" title={me.email}>
             {me.email}
           </span>
+          <button type="button" className={btnPlain} aria-label="Sign out" title="Sign out" onClick={() => void api.signOut().finally(() => setMe(null))}>
+            <LogOut size={18} aria-hidden />
+          </button>
+        </div>
+      </aside>
+      {/* Phone: a slim top bar (title, sign out); the sections stay in the bottom bar. */}
+      <header className="sticky top-0 z-10 border-b border-line bg-bg/95 pt-[env(safe-area-inset-top)] backdrop-blur lg:hidden">
+        <div className="mx-auto flex max-w-5xl items-center gap-2 px-4">
+          <h1 className="min-w-0 flex-1 truncate py-3 text-base font-semibold">Admin</h1>
           <button type="button" className={btnPlain} aria-label="Sign out" title="Sign out" onClick={() => void api.signOut().finally(() => setMe(null))}>
             <LogOut size={18} aria-hidden />
           </button>
@@ -100,7 +110,7 @@ export function Console() {
           <p className="break-any rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>
         </div>
       )}
-      <main className="mx-auto w-full max-w-5xl min-w-0 flex-1 px-4 py-4">
+      <main className="mx-auto w-full max-w-5xl min-w-0 flex-1 px-4 py-4 lg:px-8 lg:py-6">
         {tab === 'users' && <UsersView run={run} meId={me.userId} />}
         {tab === 'orgs' && <OrgsView run={run} meId={me.userId} />}
         {tab === 'workspaces' && <WorkspacesView run={run} />}
@@ -127,7 +137,7 @@ function TabButton({ tab, active, onClick, wide }: { tab: Tab; active: boolean; 
       aria-label={LABELS[tab]}
       title={LABELS[tab]}
       aria-current={active ? 'page' : undefined}
-      className={`${wide ? 'min-h-11 rounded-lg px-3' : 'min-h-14 min-w-11 flex-1'} inline-flex items-center justify-center gap-2 text-sm ${active ? 'text-ink font-semibold' : 'text-muted'}`}
+      className={`${wide ? `min-h-11 w-full justify-start rounded-lg px-3 ${active ? 'bg-surface' : 'hover:bg-surface'}` : 'min-h-14 min-w-11 flex-1 justify-center'} inline-flex items-center gap-3 text-sm ${active ? 'text-ink font-semibold' : 'text-muted'}`}
     >
       <Icon size={20} aria-hidden />
       {wide && <span>{LABELS[tab]}</span>}
