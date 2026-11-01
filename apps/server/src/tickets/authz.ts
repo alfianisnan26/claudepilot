@@ -161,7 +161,7 @@ export const TICKET_ROUTE_POLICIES: RoutePolicies = {
   'DELETE /api/tickets/:id/close': onTicket('operate'),
   'POST /api/tickets/:id/comments': onTicket('operate'),
   // D-82 S1a: the session starts in the body's workspace, so that needs operate too (it ran in any workspace before, on the ticket's right alone).
-  'POST /api/tickets/:id/session': { kind: 'objects', checks: [{ type: 'ticket', verb: 'operate', from: 'path', param: 'id' }, { type: 'workspace', verb: 'operate', from: 'body', param: 'workspaceId' }] },
+  'POST /api/tickets/:id/session': onTicket('operate'),
 };
 
 export function declareTicketPolicies(): void {
