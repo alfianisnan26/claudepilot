@@ -116,7 +116,7 @@ export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => 
         className="mr-auto inline-flex min-h-11 items-center gap-1.5 rounded-xl px-1.5 text-[14px] font-semibold whitespace-nowrap focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
       >
         <span>
-          Filed <span className="tabular-nums">{ticketKey}</span>
+          Filed <span className="whitespace-nowrap tabular-nums">{ticketKey}</span>
         </span>
         <Icon name="copy" className="size-3.5 text-muted" />
       </button>
