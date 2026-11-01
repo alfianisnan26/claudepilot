@@ -111,7 +111,9 @@ const AUDIT = (doc) => `(() => {
     if (r.width === 0 || r.height === 0 || s.visibility === 'hidden' || e.closest('.sr-only')) return false;
     // A select drawn invisibly over its chip (priority) is as big as the chip.
     if (s.opacity === '0') return false;
-    return e.offsetWidth < 43.5 || e.offsetHeight < 43.5;
+    // A checkbox inside its label: the label is the target.
+    const t = e.type === 'checkbox' && e.closest('label') ? e.closest('label') : e;
+    return t.offsetWidth < 43.5 || t.offsetHeight < 43.5;
   }).map((e) => (e.getAttribute('aria-label') || e.textContent || e.tagName).trim().slice(0, 40) + ' ' + e.offsetWidth + 'x' + e.offsetHeight);
   return { overflow: root.scrollWidth - root.clientWidth, small };
 })()`;

@@ -109,7 +109,7 @@ export function ConfirmBar({ text, confirm, onConfirm, onKeep, busy }: { text: s
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onKeep]);
   return (
-    <div role="alertdialog" aria-label={text} data-confirm className="anim-in flex flex-wrap items-center gap-2 rounded-2xl bg-danger-soft p-2 pl-3">
+    <div role="alertdialog" aria-label={text} data-confirm className="anim-in flex flex-wrap items-center gap-2 rounded-2xl bg-danger-soft py-0.5 pr-0.5 pl-3">
       <p className="min-w-0 flex-1 text-[13.5px] font-semibold break-words text-danger">{text}</p>
       <div className="flex gap-1.5">
         <Btn autoFocus onClick={onKeep}>

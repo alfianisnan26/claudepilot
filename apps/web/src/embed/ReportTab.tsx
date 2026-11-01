@@ -102,19 +102,24 @@ export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => 
       <span className="anim-pop inline-flex size-6 items-center justify-center rounded-full bg-accent text-primary-ink">
         <Icon name="check" className="size-4" />
       </span>
-      <span className="min-w-0 flex-1 text-[14px] font-semibold whitespace-nowrap">
-        Filed <span className="whitespace-nowrap tabular-nums">{ticketKey}</span>
-      </span>
-      <IconBtn
-        icon="copy"
-        label={`Copy ${ticketKey}`}
+      {/* "Filed KONF-15" itself copies the key (one control fewer: at 390 px the row ran out of room). */}
+      <button
+        type="button"
+        aria-label={`Copy ${ticketKey}`}
+        title="Copy"
         onClick={() =>
           void navigator.clipboard?.writeText(ticketKey).then(
             () => notify('Copied', 'ok'),
             () => notify('Copy is blocked here.', 'error'),
           )
         }
-      />
+        className="mr-auto inline-flex min-h-11 items-center gap-1.5 rounded-xl px-1.5 text-[14px] font-semibold whitespace-nowrap focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+      >
+        <span>
+          Filed <span className="tabular-nums">{ticketKey}</span>
+        </span>
+        <Icon name="copy" className="size-3.5 text-muted" />
+      </button>
       <Btn
         tone="ghost"
         onClick={() => {
@@ -586,13 +591,17 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
       }}
       onKeyDown={submitOnModEnter}
     >
-      {confirmDiscard && <ConfirmBar text="Discard this report?" confirm="Discard" onConfirm={() => setCapture(null)} onKeep={() => setConfirmDiscard(false)} />}
-      <div className="-mt-1 flex items-center justify-between gap-1">
-        <IconBtn icon="x" label="Discard" onClick={discard} />
-        <Btn tone="ghost" icon="messageSquare" disabled={busy} onClick={() => void toReview()} className="text-[13px] text-ink-soft" title="Collect several shots as one review">
-          Start review
-        </Btn>
-      </div>
+      {/* The question takes the place of the row it was asked from, so nothing below moves. */}
+      {confirmDiscard ? (
+        <ConfirmBar text="Discard this report?" confirm="Discard" onConfirm={() => setCapture(null)} onKeep={() => setConfirmDiscard(false)} />
+      ) : (
+        <div className="-mt-1 flex items-center justify-between gap-1">
+          <IconBtn icon="x" label="Discard" onClick={discard} />
+          <Btn tone="ghost" icon="messageSquare" disabled={busy} onClick={() => void toReview()} className="text-[13px] text-ink-soft" title="Collect several shots as one review">
+            Start review
+          </Btn>
+        </div>
+      )}
       <ShotStrip shots={shots} onRemove={shots.length > 1 ? removeShot : undefined} canAdd={shots.length < 6} />
       <input
         autoFocus={!coarse}
@@ -682,14 +691,17 @@ function CommentForm({ capture, onAlone }: { capture: Capture; onAlone: () => vo
       }}
       onKeyDown={submitOnModEnter}
     >
-      {confirmDiscard && <ConfirmBar text="Discard this comment?" confirm="Discard" onConfirm={() => setCapture(null)} onKeep={() => setConfirmDiscard(false)} />}
-      <div className="flex items-center gap-1">
-        <IconBtn icon="x" label="Discard shot" onClick={() => (body.trim() || capture.annotations?.length ? setConfirmDiscard(true) : setCapture(null))} />
-        <h2 className="min-w-0 flex-1 truncate text-[15px] font-bold">Comment</h2>
-        <Btn tone="ghost" onClick={onAlone}>
-          File alone
-        </Btn>
-      </div>
+      {confirmDiscard ? (
+        <ConfirmBar text="Discard this comment?" confirm="Discard" onConfirm={() => setCapture(null)} onKeep={() => setConfirmDiscard(false)} />
+      ) : (
+        <div className="flex items-center gap-1">
+          <IconBtn icon="x" label="Discard shot" onClick={() => (body.trim() || capture.annotations?.length ? setConfirmDiscard(true) : setCapture(null))} />
+          <h2 className="min-w-0 flex-1 truncate text-[15px] font-bold">Comment</h2>
+          <Btn tone="ghost" onClick={onAlone}>
+            File alone
+          </Btn>
+        </div>
+      )}
       <ShotStrip shots={[capture]} canAdd={false} />
       <textarea autoFocus value={body} onChange={(e) => setBody(e.target.value)} rows={3} maxLength={REPORTER_LIMITS.commentChars} aria-label="Comment" className={`${inputClass} resize-y`} placeholder="What should change here?" />
       <ChecksChip capture={capture} />
