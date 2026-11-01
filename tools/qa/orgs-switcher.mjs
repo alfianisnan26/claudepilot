@@ -75,6 +75,9 @@ try {
       check(`${t}: the switcher is shown`, await b.eval(`!!document.querySelector('${trigger}')`));
       if (!size.mobile) check(`${t}: closed, it reads Personal`, (await b.eval(`document.querySelector('${trigger}').innerText`)).includes('Personal'));
       if (size.mobile) {
+        // The glance strip fills in after the first paint: give the bar a moment to settle, then measure.
+        const acct = `document.querySelector('header [aria-label="Account menu"]')?.getBoundingClientRect().right ?? -1`;
+        await b.waitFor(`(${acct}) > 0 && (${acct}) <= innerWidth`, 5000, 'the top bar').catch(() => {});
         const right = await b.eval(`Math.round(document.querySelector('header [aria-label="Account menu"]')?.getBoundingClientRect().right ?? -1)`);
         check(`${t}: the top bar keeps the account button on screen`, right > 0 && right <= size.w, `right=${right}`);
       }
