@@ -5,11 +5,11 @@
 //   - Users: the shared pill tabs All / Admins / Members / Disabled, 44 px, each showing only its rows; no sideways scroll.
 // usage (in a Job, after `npm run build -w @portal/web`):
 //   (cd apps/web && npx vite preview -c vite.admin.config.ts --port 4990 --strictPort >/tmp/admin-preview.log 2>&1 &) ; sleep 4;
-//   ADMIN_URL=http://localhost:4990/admin-ui/ QA_SHOTS=job-out/admin node tools/qa/admin-console.mjs
+//   ADMIN_URL=http://localhost:4990/admin-ui/admin.html QA_SHOTS=job-out/admin node tools/qa/admin-console.mjs
 import { Browser } from './browser.mjs';
 import { sleep } from './lib.mjs';
 
-const URL_ = process.env.ADMIN_URL ?? 'http://localhost:4990/admin-ui/';
+const URL_ = process.env.ADMIN_URL ?? 'http://localhost:4990/admin-ui/admin.html';
 let failed = 0;
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${extra ? ` ${extra}` : ''}`);
