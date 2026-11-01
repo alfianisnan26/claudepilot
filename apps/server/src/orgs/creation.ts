@@ -42,7 +42,7 @@ export class OrgCreation {
     const userId = actorUserId(actor);
     if (requested === undefined || requested === null || requested === '' || requested === 'personal') return { kind: 'user', id: userId ?? FOUNDING_USER_ID };
     if (typeof requested !== 'string' || !userId) throw missingOrg();
-    const orgId = isOrgId(requested) ? requested : orgIdBySlug(requested.toLowerCase());
+    const orgId = isOrgId(requested) ? requested : orgIdBySlug(String(requested).toLowerCase());
     if (!orgId || this.#d.orgs.stateOf(orgId) !== 'active') throw missingOrg();
     const role = this.#d.orgs.effectiveRoleOf(orgId, userId as UserId);
     if (!role) throw missingOrg();

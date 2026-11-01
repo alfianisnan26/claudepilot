@@ -38,7 +38,7 @@ export class LayoutStore {
     const userId = this.#person(actor);
     if (raw === undefined || raw === '' || raw === 'personal') return 'personal';
     const value = raw.slice(0, 100);
-    const id = isOrgId(value) ? value : orgIdBySlug(value.toLowerCase());
+    const id = isOrgId(value) ? value : orgIdBySlug(String(value).toLowerCase());
     if (!id || !orgRoleIn(id, userId)) throw notFound();
     return id;
   }
