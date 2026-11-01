@@ -4,7 +4,7 @@ import { TabBar } from '../components/TabBar';
 import { WindowedList } from '../components/WindowedList';
 import { api } from './api';
 import { AUDIT_KINDS, AUDIT_TAB_LABEL, AUDIT_TABS, ago, auditDates, auditTabKind, auditWho, type AuditTab } from './model';
-import { chip, CONSOLE_STICKY, Empty, field, Section, useList, type Run } from './ui';
+import { chip, Empty, field, Section, useList, type Run } from './ui';
 
 /*
  * Audit: the platform audit, newest first, in tabs (owner, 2026-11-01: the Usage pattern): All, Refused (the sign-ins the console turned away:
@@ -103,7 +103,8 @@ export function AuditView({ run }: { run: Run }) {
         estimate={60}
         gap={0}
         header={filters}
-        stickyClassName={CONSOLE_STICKY}
+        // On a phone the tabs and filters are too tall to stick: they scroll away with the page (the list is still windowed).
+        stickyClassName=""
         hasMore={more}
         loadingMore={loading}
         onLoadMore={() => rows?.length && load(rows.at(-1)!.id)}

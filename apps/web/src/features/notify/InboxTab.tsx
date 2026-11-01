@@ -11,7 +11,7 @@ import { notifyApi } from './api';
 import { bodyText, dayLabel } from './inbox';
 import { scrollPageTo } from '@/lib/pane';
 import { MuteDialog } from './MuteDialog';
-import { WindowedList } from '@/components/WindowedList';
+import { STICKY_UNDER_TABS, WindowedList } from '@/components/WindowedList';
 import { loadNotifyOverview, patchOverview, useNotifyOverview } from './store';
 
 /** The history, newest first: an unread dot, dimmed when dealt with; a tap opens the item. */
@@ -158,6 +158,7 @@ export function InboxTab() {
         hasMore={!!next}
         loadingMore={more}
         onLoadMore={() => void loadMore()}
+        stickyClassName={STICKY_UNDER_TABS}
         header={
           <>
             <div className="mb-3 flex items-center justify-end gap-2">

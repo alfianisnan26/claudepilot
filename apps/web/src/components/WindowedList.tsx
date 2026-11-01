@@ -92,7 +92,10 @@ export function usePaneFill(ref: RefObject<HTMLElement | null>, on: boolean, min
   return height;
 }
 
-const FOCUSABLE ='a[href], button:not([disabled]), input, select, textarea, [tabindex="0"]';
+const FOCUSABLE = 'a[href], button:not([disabled]), input, select, textarea, [tabindex="0"]';
+
+/** Where a windowed list's filters stick on a page whose routed tab bar (57 px) sticks above them (CI, Notifications). */
+export const STICKY_UNDER_TABS = 'sticky top-[calc(var(--safe-top)+4rem+57px)] z-20 -mx-4 bg-bg/95 px-4 pt-1 backdrop-blur-md sm:top-[57px] sm:-mx-6 sm:px-6';
 
 /**
  * THE full-page list (docs/coord/UI-STANDARD.md §4; owner, 2026-11-01: "no unbounded page growth"): it fills the content pane and scrolls
@@ -263,7 +266,9 @@ export function WindowedList<T>({
       <div
         ref={scroller}
         data-windowed-scroll=""
-        className={cn(own && 'overflow-y-auto overscroll-contain [scrollbar-width:thin]', mode === 'parent' && 'min-h-0 flex-1', scrollClassName)}
+        // `relative`: the scroller is the containing block of what is absolutely placed in its rows (a screen-reader-only "(unread)"), so it
+        // clips it too; without it such text hangs at its place far down the list and makes the document scroll.
+        className={cn(own && 'relative overflow-y-auto overscroll-contain [scrollbar-width:thin]',mode === 'parent' && 'min-h-0 flex-1', scrollClassName)}
         style={mode === 'fill' && height !== null ? { height } : undefined}
       >
         {items.length === 0 ? (

@@ -151,4 +151,5 @@ test('the console follows the UI standard: on a desktop only the content pane sc
   for (const f of ['UsersView.tsx', 'AuditView.tsx']) assert.match(readFileSync(join(src, 'admin-console', f), 'utf8'), /<WindowedList\b/, f);
   for (const f of ['UsersView.tsx', 'OrgsView.tsx']) assert.match(readFileSync(join(src, 'admin-console', f), 'utf8'), /<MasterDetail\b/, f);
   assert.match(readFileSync(join(src, 'admin-console', 'console.css'), 'utf8'), /@source '\.\.\/components\/WindowedList\.tsx'/);
+  assert.match(readFileSync(join(src, 'admin-console', 'console.css'), 'utf8'), /@source '\.\.\/components\/Sheet\.tsx'/, 'the shared sheet is styled in the console');
 });

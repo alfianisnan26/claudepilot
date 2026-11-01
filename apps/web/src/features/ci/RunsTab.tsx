@@ -3,7 +3,7 @@ import { isCiActive, type CiRunPage, type CiRunSummary, type CiStatus } from '@p
 import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Server, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { WindowedList } from '@/components/WindowedList';
+import { STICKY_UNDER_TABS, WindowedList } from '@/components/WindowedList';
 import { ListPager } from '@/features/chat/listPaging';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
@@ -178,6 +178,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           estimate={68}
           gap={8}
           header={filters}
+          stickyClassName={STICKY_UNDER_TABS}
           hasMore={!!after}
           loadingMore={loadingMore}
           onLoadMore={() => void loadMore()}

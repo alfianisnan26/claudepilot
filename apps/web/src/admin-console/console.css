@@ -5,6 +5,7 @@
 /* The shared components the console draws (docs/coord/UI-STANDARD.md): one look for both apps. */
 @source '../components/TabBar.tsx';
 @source '../components/WindowedList.tsx';
+@source '../components/Sheet.tsx';
 
 html,
 body {
