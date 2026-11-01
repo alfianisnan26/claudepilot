@@ -32,7 +32,7 @@ const mk = async (name, slug) => {
 const abilities = await call('GET', '/api/orgs/abilities');
 check('the instance admin may create organizations', JSON.stringify(abilities.data?.abilities) === '["orgs.create"]', abilities.text);
 const acme = await mk('Acme', `qa-acme-${tag}`);
-await mk('Konfersi Indonesia Holdings and a much longer organization name that has to wrap', `qa-long-${tag}`);
+await mk('Konfersi Indonesia Holdings Internasional Sejahtera Abadi', `qa-long-${tag}`);
 const db = new DatabaseSync(process.env.ORGS_DB ?? `/tmp/scratch-portal-${PORT}/data/portal.db`, { timeout: 10_000 });
 const memberId = `u_QaMember${tag.slice(-3).padStart(3, '0')}`;
 const at = new Date().toISOString();
