@@ -281,9 +281,24 @@ export function identityRoutes(d: IdentityRouteDeps) {
       // (no account) cannot; nothing tells whether the org exists or has a provider (the same redirect).
       const org = c.req.query('org');
       const stepUp = c.req.query('for') === 'step-up';
-      let step: { account: string; sessionHash: string; returnTo: string } | undefined;
+      const link = c.req.query('for') === 'link';
+      let step: { account: string; sessionHash: string; returnTo: string; link?: boolean } | undefined;
       let providerId: string;
-      if (stepUp) {
+      if (link) {
+        // Owner request 2026-11-01: Profile → Link. The signed-in ACCOUNT (never the server code) links the provider its OWN email signs in
+        // through; the query names nothing (no provider, no account). The callback attaches the identity only to this account (sso.ts).
+        const token = getCookie(c, d.cookie);
+        const accountId = portal.anySession(token)?.userId;
+        let offer: { id: string } | null = null;
+        try {
+          offer = accountId ? sso.linkOffer(accountId, users.get(accountId).email) : null;
+        } catch {
+          offer = null;
+        }
+        if (!token || !accountId || !offer || !d.sessionHash) return c.redirect('/profile?link_error=unavailable', 302);
+        step = { account: accountId, sessionHash: d.sessionHash(token), returnTo: '/profile?linked=1', link: true };
+        providerId = offer.id;
+      } else if (stepUp) {
         const token = getCookie(c, d.cookie);
         const account = portal.anySession(token)?.userId;
         const pid = isOrgId(org) ? sso.orgProviderId(org) : null;
@@ -314,6 +329,7 @@ export function identityRoutes(d: IdentityRouteDeps) {
       if (callbackLimiter.blocked(key)) return c.redirect('/login?sso_error=unavailable', 302);
       callbackLimiter.fail(key);
       if (!binding) return c.redirect('/login?sso_error=state', 302);
+      let linking = false;
       try {
         const r = await sso.finish({ code: c.req.query('code'), state: c.req.query('state'), error: c.req.query('error') }, binding);
         const principal = (id: string) => {
@@ -323,6 +339,14 @@ export function identityRoutes(d: IdentityRouteDeps) {
             return id;
           }
         };
+        if (r.link) {
+          linking = true;
+          // Owner request 2026-11-01: a link from Profile. No new session; the identity is this account's now (or was already).
+          if (r.orgId) d.orgSignIn?.({ orgId: r.orgId, providerId: r.providerId, userId: principal(r.user.id), groups: r.groups, created: false, sessionHash: r.stepUpSession });
+          void d.profiles?.adoptClaims(r.user.id, r.profile).catch(() => undefined);
+          audit('sso.linked', r.user.id, { providerId: r.providerId, orgId: r.orgId, linked: r.linked, via: 'profile' }, 'medium', r.user.id);
+          return c.redirect(r.returnTo, 302);
+        }
         if (r.stepUp) {
           // Slice 10: no new session; the org's provider is added to the session that started it (the identity linked when it was free).
           // The callback is a cross-site navigation, so the Strict session cookie is not here: the session was recorded at the start, in
@@ -352,6 +376,10 @@ export function identityRoutes(d: IdentityRouteDeps) {
         return c.redirect('/', 302);
       } catch (e) {
         const code = e instanceof SsoError ? e.code : 'unavailable';
+        if (linking || (e instanceof SsoError && e.link)) {
+          audit('sso.link_failed', null, { code, reason: e instanceof Error ? e.message.slice(0, 200) : 'error' }, 'medium');
+          return c.redirect(`/profile?link_error=${code}`, 302);
+        }
         audit('portal.signin_failed', null, { method: 'sso', code, reason: e instanceof Error ? e.message.slice(0, 200) : 'error' }, 'medium');
         return c.redirect(`/login?sso_error=${code}`, 302);
       }

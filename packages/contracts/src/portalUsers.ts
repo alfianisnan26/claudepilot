@@ -74,6 +74,12 @@ export interface MyProfile extends PersonSummary {
   passwordSet: boolean;
   /** SSO identities linked to it. */
   signIns: LinkedSignIn[];
+  /**
+   * Owner request 2026-11-01: the provider this account's email signs in through, when no identity of it is linked yet: `start` begins the
+   * link (`SSO_API.start?for=link`), and the provider's identity is attached to THIS account when its verified email is the account's.
+   * Absent from an older server, or when there is nothing to link.
+   */
+  linkable?: { providerId: string; provider: string; start: string }[];
   createdAt: string;
   lastLoginAt: string | null;
 }
@@ -356,7 +362,10 @@ export type SignInMethod =
 export const SSO_API = {
   /** No session needed. POST `{ email }` -> `SignInMethod`. */
   discover: '/api/auth/discover',
-  /** No session needed. GET `?provider=&email=`: a redirect to the provider. */
+  /**
+   * No session needed. GET `?provider=&email=`: a redirect to the provider. With a signed-in account: `?for=link` links the provider its
+   * email signs in through to that account (back to `/profile?linked=1`, or `?link_error=<code>`); `?org=&for=step-up` (slice 10).
+   */
   start: '/api/auth/sso/start',
   /** The provider's redirect back (`?code=&state=`); signs in and goes to the app. */
   callback: '/api/auth/sso/callback',

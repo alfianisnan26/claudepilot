@@ -24,6 +24,8 @@ import {
   type SettingValue,
   type SettingView,
   type SettingsView,
+  type AdminFounderTransferResult,
+  type AdminTransferFounderRequest,
 } from '@portal/contracts';
 
 /*
@@ -78,6 +80,8 @@ export const api = {
   updateUser: (id: string, req: AdminUpdateUserRequest) => call<AdminUserRow>('PATCH', ADMIN_API.user(id), req),
   resetPassword: (id: string) => call<AdminPasswordResult>('POST', ADMIN_API.password(id), {}),
   removeUser: (id: string) => call<{ removed: true }>('DELETE', ADMIN_API.user(id)),
+  /** Owner request 2026-11-01: makes the account the founder (the current founder, or with the server code). */
+  transferFounder: (id: string, req: AdminTransferFounderRequest) => call<AdminFounderTransferResult>('POST', ADMIN_API.founder(id), req),
   suspend: (id: string, reason?: string) => call<AdminUserRow>('POST', ADMIN_API.suspend(id), { reason }),
   resume: (id: string) => call<AdminUserRow>('POST', ADMIN_API.resume(id), {}),
   endSessions: (id: string) => call<{ portal: number; admin: number }>('POST', ADMIN_API.endSessions(id), {}),
