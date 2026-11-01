@@ -47,5 +47,15 @@ export function sessionStore(store: Store): SessionStore {
     removeAllExcept(hash) {
       writable()?.prepare('DELETE FROM web_sessions WHERE token_hash IS NOT ?').run(hash);
     },
+    // Owner request 2026-11-01: the server code's sign-in switch survives a restart (portal_meta, migration 1); no row: on.
+    codeSignIn() {
+      const r = store.db?.prepare("SELECT value FROM portal_meta WHERE key = 'server_code_signin'").get() as { value: string } | undefined;
+      return r ? r.value !== 'off' : null;
+    },
+    setCodeSignIn(on) {
+      writable()
+        ?.prepare("INSERT INTO portal_meta (key, value) VALUES ('server_code_signin', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
+        .run(on ? 'on' : 'off');
+    },
   };
 }

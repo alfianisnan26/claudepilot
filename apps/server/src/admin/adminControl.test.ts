@@ -136,6 +136,7 @@ function portal(adminHost: string | null = ADMIN_HOST) {
           get code() {
             return code;
           },
+          matches: (input: string) => input === code,
         },
         settings: {
           view: (): SettingsView => ({ groups: [{ id: 'sessions', label: 'Sessions' }], settings: SETTINGS }) as unknown as SettingsView,
@@ -199,6 +200,7 @@ const NEW_ROUTES: [string, string, unknown?][] = [
   ['PATCH', '/admin-api/users/u_x', { role: 'admin' }],
   ['DELETE', '/admin-api/users/u_x'],
   ['POST', '/admin-api/users/u_x/password', {}],
+  ['POST', '/admin-api/users/u_x/founder', { reason: 'the owner signs in with SSO now' }],
   ['POST', '/admin-api/orgs', { name: 'Acme', slug: 'acme' }],
   ['GET', '/admin-api/orgs/org_x'],
   ['DELETE', '/admin-api/orgs/org_x'],
@@ -229,6 +231,7 @@ test('every new route is declared (platform, step-up on every write) and is the 
     'PATCH /admin-api/users/:id',
     'DELETE /admin-api/users/:id',
     'POST /admin-api/users/:id/password',
+    'POST /admin-api/users/:id/founder',
     'POST /admin-api/orgs',
     'DELETE /admin-api/orgs/:id',
     'POST /admin-api/workspaces/:target/:name/start',
@@ -462,4 +465,60 @@ test('audit: filters by actor (exact or a prefix), by org and by date; refused s
 test('adminHost unset: the new routes are off too', async () => {
   const p = portal(null);
   for (const [method, path, body] of NEW_ROUTES) assert.equal((await p.call(method, path, { host: ADMIN_HOST, body })).status, 404, `${method} ${path}`);
+});
+
+test('founder (owner request 2026-11-01): only the current founder, or the server code; a reason; audited high without the code; moves back', async () => {
+  const p = portal();
+  const cookie = await p.signIn();
+  await p.stepUp(cookie);
+  const reason = 'the owner signs in with git SSO from now on';
+  const path = `/admin-api/users/${otherAdminId}/founder`;
+  assert.equal((await p.call('POST', path, { cookie, body: { reason: 'short' } })).status, 422);
+  // Nobody is marked: the server code is the only way.
+  const none = await p.call('POST', path, { cookie, body: { reason } });
+  assert.equal(none.status, 403);
+  assert.equal((await p.call('POST', path, { cookie, body: { reason, serverCode: 'wrong-code' } })).status, 403);
+  assert.deepEqual(audit('identity.founder_transfer_refused').map((r) => JSON.parse(r.detail).why), ['not the founder', 'wrong server code']);
+  const ok = await p.call('POST', path, { cookie, body: { reason, serverCode: code } });
+  assert.equal(ok.status, 200);
+  assert.equal(users.principalOf(otherAdminId), 'u_owner', 'ops acts as the founding user now');
+  assert.equal(users.principalOf(adminId), adminId);
+  const row = audit('identity.founder_transferred')[0]!;
+  assert.equal(row.severity, 'high');
+  const detail = JSON.parse(row.detail);
+  assert.deepEqual([detail.to, detail.from, detail.how, detail.reason], ['ops@example.test', null, 'server-code', reason]);
+  assert.ok(!JSON.stringify(store.db!.prepare('SELECT detail FROM platform_audit').all()).includes(code), 'the code is in no audit row');
+  const list = (await p.call('GET', '/admin-api/users', { cookie })).json?.data as { id: string; founder?: boolean }[];
+  assert.deepEqual(list.filter((u) => u.founder).map((u) => u.id), [otherAdminId]);
+  // root is not the founder: without the code it may not move the mark back; the founder (ops) may, with no code.
+  assert.equal((await p.call('POST', `/admin-api/users/${adminId}/founder`, { cookie, body: { reason } })).status, 403);
+  const ops = await p.signIn('ops@example.test');
+  await p.stepUp(ops);
+  assert.equal((await p.call('POST', `/admin-api/users/${adminId}/founder`, { cookie: ops, body: { reason } })).status, 200);
+  assert.equal(users.principalOf(adminId), 'u_owner');
+  // A member never becomes the founder.
+  const root = await p.signIn();
+  await p.stepUp(root);
+  assert.equal((await p.call('POST', `/admin-api/users/${memberId}/founder`, { cookie: root, body: { reason } })).status, 409);
+});
+
+test('server code off (owner request 2026-11-01): refused while no active admin can sign in with a password or a linked sign-in; the config names who can', async () => {
+  const p = portal();
+  const cookie = await p.signIn();
+  await p.stepUp(cookie);
+  try {
+    store.db!.exec("UPDATE users SET password_set = 0 WHERE role = 'admin'");
+    const config = (await p.call('GET', '/admin-api/signin', { cookie })).json?.data as { admins: { email: string; methods: string[] }[] };
+    assert.ok(config.admins.length >= 2 && config.admins.every((a) => a.methods.length === 0));
+    const refused = await p.call('PUT', '/admin-api/signin/server-code', { cookie, body: { enabled: false } });
+    assert.equal(refused.status, 409);
+    assert.equal(codeOn, true, 'still on');
+    assert.equal(audit('portal.server_code_switched').length, 0);
+  } finally {
+    store.db!.exec('UPDATE users SET password_set = 1');
+  }
+  const ready = (await p.call('GET', '/admin-api/signin', { cookie })).json?.data as { admins: { email: string; methods: string[] }[] };
+  assert.deepEqual(ready.admins.find((a) => a.email === 'root@example.test')?.methods, ['password']);
+  assert.equal((await p.call('PUT', '/admin-api/signin/server-code', { cookie, body: { enabled: false } })).status, 200);
+  assert.equal(codeOn, false);
 });

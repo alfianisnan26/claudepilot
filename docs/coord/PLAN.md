@@ -150,6 +150,7 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
    The tickets block (A3b, 40-49) is full since T-1974 took 49 (2026-10-21); tickets migrations overflow to 785+ (785-787 and 794-797 used; 788 is
    T-975's on its branch): take the next free number there after checking integration and the open branches.
    The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-903 used, 2026-10-31: 902 is reporter_ip, 903 the annotations).
+   Glance (docs/prd/glance-widgets.md) has its own block, 910-919 (910 user_layouts: the Home and Glance layouts per person and org context, D-111 D6, 2026-11-01).
    Organizations (docs/prd/organizations.md §8) have their own block, 460-479 (2026-10-31: 460 founder account and password_set, 461 token owners, 462 token accounts and session starters,
    slice 0; 463 orgs, org_members and the keep-an-owner triggers, 464 user_abilities, slice 3; 465 ticket_buckets.owner_kind, 466 grants, 467 org_break_glass, slice 5 (org-owned objects, break-glass); 468 org_invitations, 469 orgs.suspended_by and platform_audit.org_id, slice 8 (2026-11-01); 470 admin_sessions,
    slice 4 (the Admin console); 471 org_domains, 472 sso_providers.org_id/groups_claim/group_rules, 473 org_sso_sessions and org_sso_signins, 474 org_sso_exceptions,

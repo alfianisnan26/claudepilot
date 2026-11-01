@@ -1,8 +1,8 @@
 import { useSyncExternalStore } from 'react';
-import { currentUserId } from '../glance/user';
+import { layoutCacheKey, layoutOwner, readCachedLayout, registerLayout, saveLayout } from '../glance/layouts';
 
-// The Home page's arrangement (docs/prd/glance-widgets.md §18): which cards show and in what order. A preference of one person on one
-// device, like the glance settings (§7): localStorage under the user's id, kept in step across tabs, nothing sent to the portal.
+// The Home page's arrangement (docs/prd/glance-widgets.md §18): which cards show and in what order. One person's, per org context, saved
+// on the server like the glance settings (D-111 D6, ../glance/layouts.ts); this device caches it, kept in step across tabs.
 
 export interface HomeSettings {
   /** Card ids in the person's order. Ids not listed follow in the default order, so a new card shows up without a reset. */
@@ -45,24 +45,20 @@ let state: HomeSettings | null = null;
 const listeners = new Set<() => void>();
 let watching = false;
 
-function read(): HomeSettings {
-  try {
-    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(homeKey(currentUserId()));
-    return cleanHome(raw ? JSON.parse(raw) : null);
-  } catch {
-    return cleanHome(null);
-  }
-}
+const read = (): HomeSettings => cleanHome(readCachedLayout('home'));
+
+registerLayout('home', {
+  apply(value) {
+    state = cleanHome(value);
+    listeners.forEach((fn) => fn());
+  },
+});
 
 export const getHomeSettings = (): HomeSettings => (state ??= read());
 
 export function updateHomeSettings(patch: Partial<HomeSettings>): void {
   state = cleanHome({ ...getHomeSettings(), ...patch });
-  try {
-    localStorage.setItem(homeKey(currentUserId()), JSON.stringify(state));
-  } catch {
-    // private window or storage blocked: it holds until the tab closes
-  }
+  saveLayout('home', state as unknown as Record<string, unknown>);
   listeners.forEach((fn) => fn());
 }
 
@@ -71,7 +67,8 @@ function subscribe(fn: () => void) {
   if (!watching && typeof window !== 'undefined') {
     watching = true;
     window.addEventListener('storage', (e) => {
-      if (e.key !== homeKey(currentUserId()) && e.key !== null) return;
+      const { userId, context } = layoutOwner();
+      if (e.key !== layoutCacheKey('home', userId, context) && e.key !== null) return;
       state = read();
       listeners.forEach((l) => l());
     });

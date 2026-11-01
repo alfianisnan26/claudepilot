@@ -10,6 +10,8 @@ export interface SessionStatus {
   enabled: boolean;
   /** Whether at least one email account exists (the sign-in page then offers email first). Absent from an older server. */
   emailSignIn?: boolean;
+  /** Owner request 2026-11-01: whether sign-in with the server code is on (accounts sign in either way). Absent from an older server: on. */
+  codeSignIn?: boolean;
   /** Signed in as a MEMBER account (MU2 S1a): `authenticated` is true but the admin app is closed to it; the web shows the member page. */
   member?: boolean;
 }

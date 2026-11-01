@@ -1,12 +1,11 @@
 import { USAGE_THRESHOLDS } from '@portal/contracts';
 import { useSyncExternalStore } from 'react';
 import { GLANCE_PLACEMENTS, type GlancePlacement } from './types';
-import { currentUserId, glanceKey } from './user';
+import { layoutCacheKey, layoutOwner, readCachedLayout, registerLayout, saveLayout } from './layouts';
 
 // Glance settings (PRD glance-widgets §7): which widgets show and in what order, which places draw them, Quota's mode and its
-// colour thresholds. They are preferences of one person on one device (a phone and a laptop each keep their own) and nothing is
-// sent to the portal. Stored in localStorage under the user's id (see user.ts), which can be unavailable: then they simply are
-// not remembered.
+// colour thresholds. They are one person's, per org context, saved on the server (D-111 D6, ./layouts.ts) so a phone and a laptop
+// show the same; this device keeps a cache in localStorage under the person's id (and the org), which can be unavailable.
 
 export interface GlanceSettings {
   /** Widget ids in the person's order. Ids not listed follow in registry order, so a new widget shows up without a reset. */
@@ -102,27 +101,24 @@ let state: GlanceSettings | null = null;
 const listeners = new Set<() => void>();
 let watching = false;
 
-function read(): GlanceSettings {
-  try {
-    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(glanceKey(currentUserId()));
-    return cleanSettings(raw ? JSON.parse(raw) : null);
-  } catch {
-    return cleanSettings(null);
-  }
-}
+const read = (): GlanceSettings => cleanSettings(readCachedLayout('glance'));
+
+// The person or the context changed, or the server answered (./layouts.ts).
+registerLayout('glance', {
+  apply(value) {
+    state = cleanSettings(value);
+    listeners.forEach((fn) => fn());
+  },
+});
 
 export function getGlanceSettings(): GlanceSettings {
   return (state ??= read());
 }
 
-/** Changes some settings (and remembers them on this device when the browser lets it). */
+/** Changes some settings: cached on this device, saved for the person and context on the server (./layouts.ts). */
 export function updateGlanceSettings(patch: Partial<GlanceSettings>): void {
   state = cleanSettings({ ...getGlanceSettings(), ...patch });
-  try {
-    localStorage.setItem(glanceKey(currentUserId()), JSON.stringify(state));
-  } catch {
-    // private window or storage blocked: it holds until the tab closes
-  }
+  saveLayout('glance', state as unknown as Record<string, unknown>);
   listeners.forEach((fn) => fn());
 }
 
@@ -131,7 +127,8 @@ function subscribe(fn: () => void) {
   if (!watching && typeof window !== 'undefined') {
     watching = true;
     window.addEventListener('storage', (e) => {
-      if (e.key !== glanceKey(currentUserId()) && e.key !== null) return;
+      const { userId, context } = layoutOwner();
+      if (e.key !== layoutCacheKey('glance', userId, context) && e.key !== null) return;
       state = read();
       listeners.forEach((l) => l());
     });

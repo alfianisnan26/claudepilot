@@ -12,6 +12,7 @@ type Key = OrgSettablePolicy | 'requireSso';
 const ROWS: { key: Key; label: string; about: ReactNode }[] = [
   { key: 'membersMayInvite', label: 'Members invite', about: 'Members (not only owners and admins) may invite people, up to member.' },
   { key: 'membersCreateTeams', label: 'Members create teams', about: 'Members may create teams. Owners and admins always can.' },
+  { key: 'membersCreateWorkspaces', label: 'Members create workspaces', about: 'Members may create workspaces owned by this organization. Owners and admins always can.' },
   {
     key: 'adminsMayShare',
     label: 'Admins share',

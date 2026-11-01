@@ -8,6 +8,8 @@ import {
   ORGS_ERROR_CODES,
   type Ability,
   type MoveToOrgCredential,
+  type MoveToOrgKind,
+  type MultiPoolType,
   type Org,
   type OrgDomain,
   type OrgDomainState,
@@ -82,6 +84,7 @@ export function orgErrorText(e: unknown, fallback: string): string {
   if (reason === ORGS_ERROR_CODES.ORG_NEEDS_OWNER) return 'An organization needs an owner. Make someone else an owner first.';
   if (reason === ORGS_ERROR_CODES.ORG_SLUG_TAKEN) return 'That slug is taken.';
   if (reason === ORGS_ERROR_CODES.ORG_CREATE_NOT_ALLOWED) return 'Your account can’t create organizations. An admin can allow it.';
+  if (reason === ORGS_ERROR_CODES.ORG_CREATE_WORKSPACE_NOT_ALLOWED) return 'Only this organization’s owners and admins can create workspaces here.';
   if (reason === ORGS_ERROR_CODES.SSO_LOCKOUT_GUARD) return 'Connect your own sign-in through the provider first (an owner), so nobody is locked out.';
   if (reason === ORGS_ERROR_CODES.DOMAIN_TAKEN) return 'Another organization, or the portal’s own sign-in, already has that domain.';
   if (reason === ORGS_ERROR_CODES.INVITATION_INVALID) return 'This invitation is not valid. Ask for a new one.';
@@ -196,6 +199,24 @@ export const canManageTeam = (role: OrgRole, teamRole: OrgTeamRole | undefined) 
 /** Move to organization: a member or up (and manage on the object, which the server checks). */
 export const canMoveHere = (role: OrgRole) => role !== 'guest';
 
+/** The orgs a set (or any object) may move into (D-111 D2): active ones the person is a member or up in, not the one that owns it already. */
+export function moveTargets(orgs: readonly Pick<Org, 'id' | 'state' | 'myRole'>[] | null, ownerOrgId: string | null | undefined): string[] {
+  return (orgs ?? []).filter((o) => o.state === 'active' && canMoveHere(o.myRole) && o.id !== ownerOrgId).map((o) => o.id);
+}
+
+/**
+ * The owners a new workspace may have (D-111 D1): Personal, then the orgs whose `may.createWorkspace` is on. The default is the current context
+ * when it is one of them, else Personal.
+ */
+export function workspaceOwners(
+  orgs: readonly Pick<Org, 'id' | 'name' | 'state' | 'may'>[] | null,
+  context: { kind: 'personal' } | { kind: 'org'; id: string },
+): { options: { value: string; label: string }[]; initial: string } {
+  const options = [{ value: 'personal', label: 'Personal' }, ...(orgs ?? []).filter((o) => o.state === 'active' && o.may?.createWorkspace).map((o) => ({ value: o.id, label: o.name }))];
+  const want = context.kind === 'org' ? context.id : 'personal';
+  return { options, initial: options.some((o) => o.value === want) ? want : 'personal' };
+}
+
 /** Transcript views and break-glass entries: the org's owners. */
 export const canSeeOwnerAudit = (role: OrgRole) => role === 'owner';
 
@@ -240,25 +261,32 @@ export function auditActorText(entry: Pick<PlatformAuditEntry, 'actor'>, names: 
 
 /** One object in Objects (and the names Sharing shows): a workspace, a ticket bucket or a vault, with where it opens. */
 export interface OrgObjectRow {
-  kind: OrgTransferKind;
+  kind: MoveToOrgKind;
   id: string;
   name: string;
   href: string;
+  /** A set's type (kind `pool`, D-111 D2). */
+  poolType?: MultiPoolType;
 }
 
-export const KIND_LABEL: Record<OrgTransferKind, string> = { workspace: 'Workspace', ticket_bucket: 'Bucket', vault: 'Vault' };
+export const KIND_LABEL: Record<MoveToOrgKind, string> = { workspace: 'Workspace', ticket_bucket: 'Bucket', vault: 'Vault', pool: 'Set' };
 
-/** The lists (`?org=`) as rows, workspaces first, each by name. */
+/** A set type's tab on the Pools page (its `/admin/pools/<tab>` path). */
+export const POOL_TAB_OF: Record<MultiPoolType, string> = { secrets: 'secrets', skillset: 'skills', mcpset: 'mcp', persona: 'personas', context: 'contexts', browser: 'browser' };
+
+/** The lists (`?org=`) as rows, workspaces first, each by name; sets last (D-111 D2). */
 export function objectRows(o: {
   workspaces: readonly { id: string; name: string; label?: string }[];
   buckets: readonly { key: string; name: string }[];
   vaults: readonly { id: string; name: string }[];
+  sets?: readonly { id: string; name: string; type: MultiPoolType }[];
 }): OrgObjectRow[] {
   const by = (a: OrgObjectRow, b: OrgObjectRow) => a.name.localeCompare(b.name);
   return [
     ...o.workspaces.map((w) => ({ kind: 'workspace' as const, id: w.id, name: w.label || w.name, href: '/admin/workspaces' })).sort(by),
     ...o.buckets.map((b) => ({ kind: 'ticket_bucket' as const, id: b.key, name: b.name, href: `/admin/tickets?bucket=${encodeURIComponent(b.key)}` })).sort(by),
     ...o.vaults.map((v) => ({ kind: 'vault' as const, id: v.id, name: v.name, href: `/admin/knowledge/${encodeURIComponent(v.id)}` })).sort(by),
+    ...(o.sets ?? []).map((p) => ({ kind: 'pool' as const, id: p.id, name: p.name, href: `/admin/pools/${POOL_TAB_OF[p.type]}`, poolType: p.type })).sort(by),
   ];
 }
 

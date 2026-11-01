@@ -31,6 +31,7 @@ import { VscodePage } from '@/features/vscode/VscodePage';
 import { useAppUpdate } from '@/lib/appUpdate';
 import { MemberPage } from '@/features/auth/MemberPage';
 import { ProfilePage } from '@/features/profile/ProfilePage';
+import { profileReturnPath } from '@/features/profile/model';
 import { AuthProvider, isAdminState, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
 import { HOME, isAdminOnlyPath } from './nav';
@@ -217,7 +218,8 @@ function Pages() {
           </SignedInOnly>
         }
       />
-      <Route path="/profile" element={<Navigate to="/admin/profile" replace />} />
+      {/* The server sends a link's return here (`/profile?linked=1`, `?link_error=`): it opens the Sign-in tab, where Linked sign-ins are. */}
+      <Route path="/profile" element={<ProfileRedirect />} />
       <Route path="*" element={<Navigate to={HOME} replace />} />
     </Routes>
   );
@@ -243,6 +245,12 @@ function SignedInOnly({ children }: { children: ReactNode }) {
   // D-82 S1a: a member account gets the normal app; a platform area (its nav item hidden) sends it home, the server refuses its calls anyway.
   if (!isAdminState(state) && isAdminOnlyPath(location.pathname)) return <Navigate to={HOME} replace />;
   return children;
+}
+
+/** `/profile` (the server's return address for a link) to the Profile, keeping the query; a link's outcome opens the Sign-in tab. */
+function ProfileRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`${profileReturnPath(search)}${search}`} replace />;
 }
 
 function SignedOutOnly({ children }: { children: ReactNode }) {

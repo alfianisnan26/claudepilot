@@ -53,6 +53,10 @@ export interface PoolSummary {
   content: unknown;
   createdAt: string;
   updatedAt: string;
+  /** The organization that owns it (Move to organization, D-111 D2); null or absent: a person's (or the platform's). */
+  orgId?: string | null;
+  /** In an org's list (`?org=`): the set is not the org's but shared to it (a grant to the org or one of its teams). */
+  shared?: boolean;
 }
 
 export interface PoolDetail extends PoolSummary {
@@ -182,6 +186,7 @@ export const POOL_NAME_MAX = 60;
 export const POOLS_API = {
   /** `GET`: the pool types this portal has. */
   types: '/api/pools',
+  /** `?org=` (personal | an org id) keeps that context's sets; `?for=<workspace>` the sets valid for that workspace (pools/scope.ts). */
   list: (type: MultiPoolType) => `/api/pools/${type}`,
   one: (type: MultiPoolType, id: string) => `/api/pools/${type}/${id}`,
   duplicate: (type: MultiPoolType, id: string) => `/api/pools/${type}/${id}/duplicate`,

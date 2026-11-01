@@ -45,6 +45,9 @@ export interface SessionStore {
   save(hash: string, session: Session): void;
   remove(hash: string): void;
   removeAllExcept(hash: string | null): void;
+  /** Owner request 2026-11-01: whether sign-in with the server code is on, kept across restarts; null: never set (on). */
+  codeSignIn?(): boolean | null;
+  setCodeSignIn?(on: boolean): void;
 }
 
 export function generateCode(): string {
@@ -69,6 +72,8 @@ export class Portal {
   #source: CodeSource;
   #codeUpdatedAt = Date.now();
   #enabled = true;
+  /** Owner request 2026-11-01: sign-in with the server code alone (accounts keep signing in); kept in the store when there is one. */
+  #codeSignIn = true;
   /** By token hash. */
   readonly #sessions = new Map<string, Session>();
   #store: SessionStore | null = null;
@@ -115,6 +120,8 @@ export class Portal {
     this.#store = store;
     this.#persist((st) => {
       for (const [hash, s] of st.load(Date.now())) this.#sessions.set(hash, s);
+      const on = st.codeSignIn?.();
+      if (on === false) this.#codeSignIn = false;
     });
   }
 
@@ -138,6 +145,10 @@ export class Portal {
   get enabled() {
     return this.#enabled;
   }
+  /** Whether sign-in with the server code is on (an account's sign-in is not affected). */
+  get codeSignIn() {
+    return this.#codeSignIn;
+  }
 
   matches(input: string): boolean {
     return timingSafeEqual(digest(normalizeCode(input)), digest(this.#code));
@@ -146,6 +157,7 @@ export class Portal {
   /** Signs in with the code; returns the new session token. */
   signIn(input: string, meta: SessionMeta = {}): string {
     if (!this.#enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
+    if (!this.#codeSignIn) throw new AppError('FORBIDDEN', 'Sign-in with the server code is turned off. Sign in with your account.');
     if (!this.matches(input)) throw new AppError('UNAUTHORIZED', 'That code is not right.');
     return this.openSession(null, meta);
   }
@@ -200,6 +212,13 @@ export class Portal {
       this.#sessions.delete(hash);
       this.#persist((st) => st.remove(hash));
       this.#expired([s.userId ?? FOUNDING_USER_ID]);
+      return undefined;
+    }
+    // The server code's sign-in turned off: its sessions are over (one restored from the store after a restart included).
+    if (s && !s.userId && !this.#codeSignIn) {
+      this.#sessions.delete(hash);
+      this.#persist((st) => st.remove(hash));
+      this.#signedOut([FOUNDING_USER_ID]);
       return undefined;
     }
     if (s?.userId) {
@@ -304,6 +323,28 @@ export class Portal {
     this.#enabled = enabled;
   }
 
+  /**
+   * Owner request 2026-11-01 ("shut down server code access"): sign-in with the server code on or off, kept across restarts. Off ends every
+   * server-code session now; accounts (password, SSO) keep signing in. The code still confirms a sensitive action (chat/reauth.ts) for a
+   * signed-in admin. Who may turn it off, and the check that an admin can still sign in, are the caller's (admin/routes.ts).
+   */
+  setCodeSignIn(on: boolean): void {
+    this.#codeSignIn = on;
+    this.#persist((st) => st.setCodeSignIn?.(on));
+    if (on) return;
+    let ended = false;
+    for (const [hash, s] of this.#sessions)
+      if (!s.userId) {
+        this.#sessions.delete(hash);
+        this.#persist((st) => st.remove(hash));
+        ended = true;
+      }
+    if (ended) {
+      this.onRevoked();
+      this.#signedOut([FOUNDING_USER_ID]);
+    }
+  }
+
   #prune() {
     const now = Date.now();
     const ended: string[] = [];
@@ -327,7 +368,7 @@ export class Portal {
   /** The Admin console's view of sign-in with the server code (owner, 2026-11-01): the switch and its age, never the code itself. */
   summary(): { enabled: boolean; source: CodeSource; codeUpdatedAt: string; sessions: number } {
     this.#prune();
-    return { enabled: this.#enabled, source: this.#source, codeUpdatedAt: new Date(this.#codeUpdatedAt).toISOString(), sessions: this.#sessions.size };
+    return { enabled: this.#codeSignIn, source: this.#source, codeUpdatedAt: new Date(this.#codeUpdatedAt).toISOString(), sessions: this.#sessions.size };
   }
 
   adminState(token: string): AdminState {

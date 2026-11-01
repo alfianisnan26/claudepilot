@@ -16,7 +16,7 @@ import { useAuth } from '@/lib/auth';
 import { reloadMe, setMe, useMe } from '@/lib/me';
 import { PERSONAL, serializeContext } from '@/lib/orgContext';
 import { profileApi } from './api';
-import { accountView, deviceLine, initialsOf, ORG_ROLE_LABEL, profileTabs, type ProfileSection } from './model';
+import { accountView, deviceLine, initialsOf, linkResult, ORG_ROLE_LABEL, profileTabs, type ProfileSection } from './model';
 
 const field = 'h-12 w-full min-w-0 rounded-2xl border border-line bg-surface px-4 text-[15px] outline-hidden focus-visible:ring-2 focus-visible:ring-accent disabled:bg-surface-2 disabled:text-muted';
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'never');
@@ -240,12 +240,35 @@ function PasswordCard() {
 }
 
 function SignInsCard({ profile }: { profile: MyProfile }) {
+  // Owner request 2026-11-01: a link comes back here with `?linked=1` or `?link_error=`; shown once, then dropped from the address.
+  const [result] = useState(() => linkResult(window.location.search));
+  useEffect(() => {
+    if (result) window.history.replaceState(null, '', window.location.pathname);
+  }, [result]);
   return (
-    <Section id="profile-sign-ins" title="Linked sign-ins" about="Single sign-on providers that sign you in to this account.">
+    <Section id="profile-sign-ins" title="Linked sign-ins" about="Single sign-on providers that sign you in to this account. Link one to sign in with it instead of your password.">
+      {result && (
+        <p role={result.ok ? 'status' : 'alert'} className={`mb-2 px-1 text-sm ${result.ok ? 'text-ink-soft' : 'text-danger'}`} data-link-result={result.ok ? 'ok' : 'error'}>
+          {result.ok ? 'Linked' : result.message}
+        </p>
+      )}
       <Card>
         <ul className="divide-y divide-line">
           {profile.signIns.map((s) => (
             <Row key={`${s.providerId}`} icon={<Link2 className="size-5" />} title={s.provider} sub={`${s.email} · last used ${when(s.lastUsedAt)}`} />
+          ))}
+          {(profile.linkable ?? []).map((l) => (
+            <Row
+              key={`link-${l.providerId}`}
+              icon={<Link2 className="size-5" />}
+              title={l.provider}
+              sub="Not linked"
+              action={
+                <Button variant="secondary" onClick={() => window.location.assign(l.start)} data-link-provider={l.providerId}>
+                  Link
+                </Button>
+              }
+            />
           ))}
         </ul>
       </Card>

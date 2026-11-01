@@ -34,6 +34,7 @@ import {
   SSO_API,
   type ChangeMyPasswordRequest,
   normalizeEmail,
+  type MyProfile,
   type SignedInAs,
   type CurrentSignIn,
   type MyWebSession,
@@ -129,6 +130,7 @@ import { createUsageSpendRoutes, type UsageSpend } from './usagespend/index.js';
 import type { Lab } from './lab/index.js';
 import { createLabRoutes } from './lab/routes.js';
 import { createGlanceRoutes, type Glance } from './glance/index.js';
+import { createLayoutRoutes, LayoutStore } from './glance/layouts.js';
 import { createApprovalRoutes, type Approvals } from './approvals/index.js';
 import { createAttentionRoutes, type AttentionRegistry } from './attention/index.js';
 import type { ConnectModule } from './connect/index.js';
@@ -452,6 +454,7 @@ export function createApp(
     const status: SessionStatus = {
       authenticated: !!portal.anySession(getCookie(c, cookie)),
       enabled: portal.enabled,
+      codeSignIn: portal.codeSignIn,
       member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
       emailSignIn: (() => {
         try {
@@ -668,9 +671,19 @@ export function createApp(
     if (m?.startsWith('sso:')) return { method: 'sso', provider: profiles.providerName(m.slice(4)) };
     return { method: 'unknown', provider: null };
   };
+  /** Owner request 2026-11-01: Profile → Link: the provider this account's email signs in through, while it has no identity linked there. */
+  const withLinkable = (p: MyProfile): MyProfile => {
+    let offer: { id: string; name: string } | null = null;
+    try {
+      offer = sso.linkOffer(p.id, p.email);
+    } catch {
+      offer = null;
+    }
+    return offer ? { ...p, linkable: [{ providerId: offer.id, provider: offer.name, start: `${SSO_API.start}?for=link` }] } : p;
+  };
   const signedInAs = (token: string | undefined, userId: string | null | undefined): SignedInAs =>
     userId
-      ? { kind: 'account', user: users.get(userId), profile: profiles.profile(userId), session: currentSignIn(token) }
+      ? { kind: 'account', user: users.get(userId), profile: withLinkable(profiles.profile(userId)), session: currentSignIn(token) }
       : { kind: 'code', founder: profiles.founder(), session: currentSignIn(token) };
   /** The signed-in ACCOUNT (any role) and its token; the server code has no profile of its own. Its own id only, never one from the request. */
   const myAccount = (c: Context<Env>) => {
@@ -1070,7 +1083,13 @@ export function createApp(
   useWorkspaceAlias(refOf);
   const refToView = workspaceRefGuard('view', refOf);
   const refToOperate = workspaceRefGuard('operate', refOf);
-  ws.get('/targets', async (c) => c.json(success(visible(actorOf(c), 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id))));
+  // `?org=` (D-111): an org's targets in its context; Personal the instance's (admins see them); none is wider than `visible`.
+  ws.get('/targets', async (c) => {
+    const actor = actorOf(c);
+    const seen = visible(actor, 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id);
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    return c.json(success(inScope ? seen.filter((t) => inScope({ type: 'target', id: t.id })) : seen));
+  });
   ws.get('/usage', async (c) => c.json(success(visible(actorOf(c), 'workspace', await workspaces.usage(), (u) => u.id))));
   // The labels of renamed workspaces (T-42), from the records only: the app learns them once, so every place that holds an id shows the label.
   ws.get('/labels', (c) => {
@@ -1225,7 +1244,11 @@ export function createApp(
     for (const [type, ids] of Object.entries(addOns))
       if (ids.some((id) => !can(actor, 'operate', poolRef(id, type as MultiPoolType)).allow))
         throw new AppError('VALIDATION_FAILED', 'One of the pools no longer exists.', { details: { pools: 'Pick another pool.' } });
-    const created = await workspaces.create(req, actor);
+    // D-111 D1: who owns it, decided before anything is made (the org of the creator's context when they may create there, else refused;
+    // Personal: the creator).
+    const owner = orgsModule.creation.ownerFor(actor, req.owner);
+    const created = await workspaces.create(req, actor, owner);
+    orgsModule.creation.created(actor, owner, created);
     // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
     if (poolId) pools.assign(created.id, { poolId }, { existing: false });
     for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));
@@ -1358,7 +1381,12 @@ export function createApp(
 
   const ap = new Hono<Env>();
   ap.use(requireSession);
-  ap.get('/', (c) => c.json(success(pools.list())));
+  // `?org=`: the account pools of that context by owner (none is org-owned yet, D-111 D5: an org's list is empty; Personal keeps them all).
+  ap.get('/', (c) => {
+    const inScope = orgScopeFilter(actorOf(c), orgScopeOf(c));
+    const list = pools.list();
+    return c.json(success(inScope ? list.filter((p) => inScope(objectRef('account_pool', p.id))) : list));
+  });
   ap.post('/', async (c) => c.json(success(pools.create(await body<AccountPoolRequest>(c))), 201));
   ap.patch('/:id', async (c) => c.json(success(pools.update(c.req.param('id'), await body<AccountPoolRequest>(c)))));
   ap.delete('/:id', (c) => {
@@ -1371,6 +1399,8 @@ export function createApp(
   const pl = new Hono<Env>();
   pl.use(requireSession);
   pl.route('/', createPoolRoutes({ service: poolService }));
+  // D-111 D2: Move to organization for a set (slice 5's transfer; a Secrets & env set asks for the exposure acknowledgement).
+  pl.route('/', createMoveToOrgRoute(orgsModule.transfers, 'pool', '/:type/:id/move-to-org', 'type+id'));
   app.route('/api/pools', pl);
 
   // MCP sets: the catalog, "Try in set" and each workspace's MCP status (the sets use /api/pools/mcpset).
@@ -1530,6 +1560,14 @@ export function createApp(
     app.route('/api/repos', rp);
   }
 
+  // D-111 D6: the Home and Glance layouts, per person and org context (glance/layouts.ts, migration 910).
+  {
+    const ly = new Hono<Env>();
+    ly.use(requireSession);
+    ly.route('/', createLayoutRoutes(new LayoutStore(store)));
+    app.route('/api/layouts', ly);
+  }
+
   // Glance widgets: one snapshot of what waits on a person and who is working (docs/prd/glance-widgets.md); read-only.
   if (glance) {
     const gl = new Hono<Env>();
@@ -1601,6 +1639,7 @@ export function createApp(
       accounts: accountAdmin,
       workspaces,
       serverCode: portal,
+      passwordRefused: (email) => sso.passwordRefused(email),
       settings: settings?.settings ?? null,
     }).app;
   }

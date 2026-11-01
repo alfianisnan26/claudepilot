@@ -84,6 +84,7 @@ export function UsersView({ run, meId }: { run: Run; meId: string }) {
 function UserChips({ u }: { u: AdminUserRow }) {
   return (
     <span className="flex shrink-0 flex-wrap justify-end gap-1">
+      {u.founder && <span className={`${chip} bg-accent-soft`}>founder</span>}
       <span className={`${chip} bg-surface-2`}>{u.role}</span>
       {u.state !== 'active' && <span className={`${chip} bg-danger-soft text-danger`}>{u.state}</span>}
       {u.abilities.includes('orgs.create') && <span className={`${chip} bg-accent-soft`}>orgs</span>}
@@ -127,7 +128,7 @@ function NewUser({ run, onDone, onClose }: { run: Run; onDone: (email: string, p
   );
 }
 
-type Ask = { kind: 'suspend' | 'remove' | 'reset' | 'sessions' | 'demote' };
+type Ask = { kind: 'suspend' | 'remove' | 'reset' | 'sessions' | 'demote' | 'founder' };
 
 function UserSheet({ id, self, run, onSecret, onClose }: { id: string; self: boolean; run: Run; onSecret: (s: { title: string; value: string }) => void; onClose: () => void }) {
   const [u, setU] = useState<AdminUserDetail | null>(null);
@@ -207,6 +208,11 @@ function UserSheet({ id, self, run, onSecret, onClose }: { id: string; self: boo
         <button type="button" className={btnDanger} disabled={self} onClick={() => setAsk({ kind: 'remove' })}>
           Remove
         </button>
+        {u.role === 'admin' && u.state === 'active' && !u.founder && (
+          <button type="button" className={btnPlain} onClick={() => setAsk({ kind: 'founder' })}>
+            Make founder
+          </button>
+        )}
       </div>
       <div className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold">Tokens</h3>
@@ -260,6 +266,7 @@ function UserSheet({ id, self, run, onSecret, onClose }: { id: string; self: boo
           onClose={() => setAsk(null)}
         />
       )}
+      {ask?.kind === 'founder' && <TransferFounder u={u} run={run} onDone={load} onClose={() => setAsk(null)} />}
       {ask?.kind === 'remove' && (
         <Confirm
           title="Remove"
@@ -274,6 +281,48 @@ function UserSheet({ id, self, run, onSecret, onClose }: { id: string; self: boo
           onClose={() => setAsk(null)}
         />
       )}
+    </Sheet>
+  );
+}
+
+/**
+ * Owner request 2026-11-01: the founder mark moves to this account; it then acts as the founding user and holds everything that user owns
+ * (orgs, workspaces, buckets). The current founder confirms with a reason; anyone else gives the server code too.
+ */
+function TransferFounder({ u, run, onDone, onClose }: { u: AdminUserDetail; run: Run; onDone: () => void; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const [code, setCode] = useState('');
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    const r = await run(() => api.transferFounder(u.id, { reason: reason.trim(), ...(code.trim() ? { serverCode: code.trim() } : {}) }));
+    if (r) {
+      onDone();
+      onClose();
+    }
+  };
+  return (
+    <Sheet title="Make founder" onClose={onClose}>
+      <form className="flex flex-col gap-3" onSubmit={(e) => void submit(e)}>
+        <p className="break-any text-sm">{u.email} becomes the founder and owns what the founder owns. Tokens of both accounts end.</p>
+        <Field label="Reason">
+          <textarea className={`${field} min-h-24 py-2`} required minLength={10} maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} />
+        </Field>
+        <Field label="Server code">
+          <input className={field} autoComplete="off" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} aria-describedby="founder-code-tip" />
+        </Field>
+        <p id="founder-code-tip" className="flex items-center gap-1 text-xs text-muted">
+          Not the founder?
+          <InfoTip label="About the server code">Only the current founder may hand it over. Anyone else enters the server code.</InfoTip>
+        </p>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" className={btnPlain} onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className={btnDanger} disabled={reason.trim().length < 10}>
+            Make founder
+          </button>
+        </div>
+      </form>
     </Sheet>
   );
 }

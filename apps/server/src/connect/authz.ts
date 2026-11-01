@@ -4,19 +4,54 @@
 // enrollments and events have no object type of their own: they are reached through their target (and the `platform` area `targets`).
 // The tunnel and the agents' credentials are not users: their routes are their own doors (a token, a signed challenge).
 
-import { declarePolicies, registerResolver, type ResolvedObject } from '../authz/seam.js';
-import { CONNECT_PUBLIC, type ObjectRef } from '@portal/contracts';
+import { holdsFounderRights, declarePolicies, orgIdBySlug, orgRoleIn, registerResolver, type ResolvedObject } from '../authz/seam.js';
+import { CONNECT_PUBLIC, isOrgId, type Level, type ObjectRef, type UserId } from '@portal/contracts';
 import type { Registry } from './registry.js';
 
-export function registerConnectResolvers(deps: { registry: Registry; scannedIds(): string[] }): void {
+/**
+ * D-111 (owner 2026-11-01, "target should also be per org"): a scanned target may be owned by an organization (PORTAL_K8S_TARGETS `org`,
+ * workspaces/kubeTargets.ts). Rights on one: the org's owners and admins manage it; a member operates it (creates workspaces there) while the
+ * org's `membersCreateWorkspaces` is on, else views it (a read-only row); a guest and anyone outside hold nothing; the instance's admins keep
+ * manage (targets are infrastructure: the Admin console runs them all). Every other target is the platform's, as before (admins only).
+ */
+export function targetLevel(owner: { kind: 'org'; id: string } | { kind: 'platform' }, userId: UserId, membersCreate: (orgId: string) => boolean): Level {
+  if (holdsFounderRights(userId)) return 'manage';
+  if (owner.kind !== 'org') return 'none';
+  const role = orgRoleIn(owner.id, userId);
+  if (role === 'owner' || role === 'admin') return 'manage';
+  if (role === 'member') return membersCreate(owner.id) ? 'operate' : 'view';
+  return 'none';
+}
+
+export function registerConnectResolvers(deps: {
+  registry: Registry;
+  scannedIds(): string[];
+  /** The org a scanned target names (an id or a slug), or null: the instance's. */
+  targetOrg?(id: string): string | null;
+  /** Whether an org lets its members create workspaces (its policy `membersCreateWorkspaces`). */
+  membersCreate?(orgId: string): boolean;
+}): void {
+  const orgOf = (id: string): string | null => {
+    const named = deps.targetOrg?.(id) ?? null;
+    if (!named) return null;
+    return isOrgId(named) ? named : orgIdBySlug(String(named).toLowerCase());
+  };
   registerResolver({
     type: 'target',
     resolve(id): ResolvedObject | null {
       const ref: ObjectRef = { type: 'target', id };
       const enrolled = deps.registry.target(id);
       if (enrolled) return { ref, owner: { kind: 'platform' }, attrs: { source: 'enrolled', kind: enrolled.kind } };
-      if (deps.scannedIds().includes(id)) return { ref, owner: { kind: 'platform' }, attrs: { source: 'scanned' } };
+      if (deps.scannedIds().includes(id)) {
+        // A target naming an org that does not resolve (a typo, an org deleted) stays the platform's: admins only, never wider.
+        const org = orgOf(id);
+        return { ref, owner: org ? { kind: 'org', id: org as never } : { kind: 'platform' }, attrs: { source: 'scanned' } };
+      }
       return null;
+    },
+    levelFor(found, userId) {
+      const owner = found.owner?.kind === 'org' ? { kind: 'org' as const, id: found.owner.id } : { kind: 'platform' as const };
+      return targetLevel(owner, userId, (orgId) => deps.membersCreate?.(orgId) ?? false);
     },
   });
 }

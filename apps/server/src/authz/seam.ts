@@ -580,7 +580,7 @@ export function seesEverything(actor: Actor): boolean {
 }
 
 /** The founding user, or an account that holds what the founding user holds (D-82): the single-owner fast paths' test. */
-const holdsFounderRights = (userId: UserId | null): boolean => userId === FOUNDING_USER_ID || (!!userId && actsWithFounderRights(userId));
+export const holdsFounderRights = (userId: UserId | null): boolean => userId === FOUNDING_USER_ID || (!!userId && actsWithFounderRights(userId));
 
 /* ---------- Actors ---------- */
 

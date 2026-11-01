@@ -15,7 +15,7 @@ import type {
   CreateOrgTeamRequest,
   MoveToOrgRequest,
   OrgId,
-  OrgTransferKind,
+  MoveToOrgKind,
   UpdateOrgRequest,
 } from '@portal/contracts';
 import { actorOf } from '../authz/seam.js';
@@ -151,12 +151,16 @@ export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassServic
 
 /**
  * Slice 5, Move to organization: `POST <path>/move-to-org` on the object's own router (app.ts mounts it on the workspaces router as
- * `/:ref/move-to-org`, on the tickets router as `/buckets/:key/move-to-org`, on the knowledge router as `/vaults/:id/move-to-org`).
+ * `/:ref/move-to-org`, on the tickets router as `/buckets/:key/move-to-org`, on the knowledge router as `/vaults/:id/move-to-org`, on the
+ * pools router as `/:type/:id/move-to-org`, D-111 D2).
  */
-export function createMoveToOrgRoute(transfers: OrgTransfers, kind: OrgTransferKind, path: string, param: string): Hono {
+export function createMoveToOrgRoute(transfers: OrgTransfers, kind: MoveToOrgKind, path: string, param: string): Hono {
   const r = new Hono();
   // A workspace id is `<target>/<name>`: its route takes both parts (`param` 'target+name'), since one path segment cannot hold the slash.
-  const idOf = (c: Context): string => (param === 'target+name' ? `${c.req.param('target') ?? ''}/${c.req.param('name') ?? ''}` : (c.req.param(param) ?? ''));
-  r.post(path, async (c) => c.json(success(transfers.moveToOrg(actorOf(c), kind, idOf(c), (await body(c)) as Partial<MoveToOrgRequest>))));
+  // A set (D-111 D2, `param` 'type+id') is its id, under the type its URL names (the set's own type, else not found).
+  const idOf = (c: Context): string =>
+    param === 'target+name' ? `${c.req.param('target') ?? ''}/${c.req.param('name') ?? ''}` : param === 'type+id' ? (c.req.param('id') ?? '') : (c.req.param(param) ?? '');
+  const poolTypeOf = (c: Context): string | undefined => (param === 'type+id' ? (c.req.param('type') ?? '') : undefined);
+  r.post(path, async (c) => c.json(success(transfers.moveToOrg(actorOf(c), kind, idOf(c), (await body(c)) as Partial<MoveToOrgRequest>, poolTypeOf(c)))));
   return r;
 }

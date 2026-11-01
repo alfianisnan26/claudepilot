@@ -41,7 +41,8 @@ import { outlookOf, unavailableOutlook, windowLengthMs, windowPace } from './pac
 import { Palette } from './palette.js';
 import { recommendMove } from './recommend.js';
 import { buildRequestsReport } from './requests.js';
-import { SpendReader } from './spend.js';
+import { SpendReader, type SpendRow } from './spend.js';
+import { anchorWorkspace, sessionPlaces, type InWorkspace } from '../authz/usageAnchor.js';
 import { buildSummary, summaryRowsFrom } from './summary.js';
 import { parseRateLimitInfo, sortWindows, windowLevel, type WindowReading } from './parse.js';
 import { probeClaude, type ProbeIo, type ProbeResult } from './probe.js';
@@ -844,20 +845,41 @@ export class ClaudeUsageMonitor {
 
   /* ---------- Insight (§20) ---------- */
 
+  /**
+   * The org context as a filter of request rows (owner request 2026-11-01, Usage per org): a row through its session as it is now (a relocated
+   * chat's usage follows it), a decommissioned workspace through its heir (authz/usageAnchor.ts). Undefined: no context, every row.
+   */
+  #rowsIn(inWorkspace: InWorkspace | undefined): ((r: SpendRow) => boolean) | undefined {
+    if (!inWorkspace) return undefined;
+    const place = sessionPlaces(() => this.o.store.db);
+    return (r) => inWorkspace(anchorWorkspace(r.workspaceId, place(r.sessionId)));
+  }
+
   /** The Requests report with the previous period, the cache split, palette slots and the series for stacked charts (§20.8). */
-  requestsReport(range: unknown, opts: { claudeId?: string; tzOffsetMin?: number; actorId?: string } = {}): RequestsReport {
+  requestsReport(range: unknown, opts: { claudeId?: string; tzOffsetMin?: number; actorId?: string; inWorkspace?: InWorkspace } = {}): RequestsReport {
     if (!isUsageRange(range)) throw new AppError('VALIDATION_FAILED', `Pick a range: ${CHAT_USAGE_RANGES.join(', ')}.`, { details: { range: `One of ${CHAT_USAGE_RANGES.join(', ')}.` } });
     const actor = opts.actorId;
-    return buildRequestsReport({ reader: this.#spend, palette: this.#palette, allow: (k) => this.#mayUse(actor, k.claudeId || k.key) }, range, { claudeId: opts.claudeId || undefined, tzOffsetMin: opts.tzOffsetMin, now: this.#now() });
+    return buildRequestsReport({ reader: this.#spend, palette: this.#palette, allow: (k) => this.#mayUse(actor, k.claudeId || k.key), rowAllow: this.#rowsIn(opts.inWorkspace) }, range, { claudeId: opts.claudeId || undefined, tzOffsetMin: opts.tzOffsetMin, now: this.#now() });
   }
 
   /** The summary strip (§20.7): spend today, speed, time until the limit and the next reset, overall or for one Claude. */
-  async summary(opts: { claudeId?: string; tzOffsetMin?: number; actorId?: string } = {}): Promise<UsageSummary> {
+  async summary(opts: { claudeId?: string; tzOffsetMin?: number; actorId?: string; inWorkspace?: InWorkspace } = {}): Promise<UsageSummary> {
     const actor = opts.actorId;
     const report = await this.report({ actorId: actor });
-    if (opts.claudeId && !report.claudes.some((c) => c.claudeId === opts.claudeId)) throw new AppError('NOT_FOUND', 'No such Claude.');
+    // The org context: the Claudes of its workspaces (the limit and the next reset come from them), and the requests anchored in it.
+    const claudes = opts.inWorkspace ? report.claudes.filter((c) => opts.inWorkspace!(anchorWorkspace(c.workspaceId, null))) : report.claudes;
+    if (opts.claudeId && !claudes.some((c) => c.claudeId === opts.claudeId)) throw new AppError('NOT_FOUND', 'No such Claude.');
     const nowMs = this.#now();
-    return buildSummary({ claudes: report.claudes, rows: this.#spend.rowsBetween(summaryRowsFrom(nowMs, opts.tzOffsetMin)), refs: this.#spend.claudes(), nowMs, tzOffsetMin: opts.tzOffsetMin, claudeId: opts.claudeId || undefined, allow: (k) => this.#mayUse(actor, k.claudeId || k.key) });
+    return buildSummary({
+      claudes,
+      rows: this.#spend.rowsBetween(summaryRowsFrom(nowMs, opts.tzOffsetMin)),
+      refs: this.#spend.claudes(),
+      nowMs,
+      tzOffsetMin: opts.tzOffsetMin,
+      claudeId: opts.claudeId || undefined,
+      allow: (k) => this.#mayUse(actor, k.claudeId || k.key),
+      rowAllow: this.#rowsIn(opts.inWorkspace),
+    });
   }
 
   /**
@@ -907,7 +929,7 @@ export class ClaudeUsageMonitor {
   }
 
   /** A download (§20.9): the Requests report or the plan readings, as CSV or JSON. */
-  async exportFile(q: Partial<UsageExportQuery>, actorId?: string): Promise<{ body: string; contentType: string; fileName: string }> {
+  async exportFile(q: Partial<UsageExportQuery>, actorId?: string, inWorkspace?: InWorkspace): Promise<{ body: string; contentType: string; fileName: string }> {
     const what = q.what ?? 'requests';
     const format = q.format ?? 'json';
     if (what !== 'requests' && what !== 'quota') throw new AppError('VALIDATION_FAILED', 'Pick requests or quota.', { details: { what: 'One of requests, quota.' } });
@@ -917,12 +939,13 @@ export class ClaudeUsageMonitor {
     const fileName = exportFileName(what, range, format);
     const nowMs = this.#now();
     if (what === 'requests') {
-      const report = this.requestsReport(range, { claudeId: q.claudeId, tzOffsetMin: q.tz, actorId });
+      const report = this.requestsReport(range, { claudeId: q.claudeId, tzOffsetMin: q.tz, actorId, inWorkspace });
       const allow = (k: { claudeId: string; key: string }) => this.#mayUse(actorId, k.claudeId || k.key);
-      return { body: format === 'csv' ? requestsCsv(this.#spend, report.range, { claudeId: q.claudeId || undefined, tzOffsetMin: q.tz, now: nowMs, allow }) : JSON.stringify(report, null, 2), contentType, fileName };
+      const rowAllow = this.#rowsIn(inWorkspace);
+      return { body: format === 'csv' ? requestsCsv(this.#spend, report.range, { claudeId: q.claudeId || undefined, tzOffsetMin: q.tz, now: nowMs, allow, rowAllow }) : JSON.stringify(report, null, 2), contentType, fileName };
     }
     if (!(USAGE_RANGES as readonly string[]).includes(range)) throw new AppError('VALIDATION_FAILED', 'Plan readings come in 1d, 7d or 30d.', { details: { range: 'One of 1d, 7d, 30d.' } });
-    const list = (await this.#list()).filter((c) => (!q.claudeId || c.id === q.claudeId) && this.#mayUse(actorId, c.id));
+    const list = (await this.#list()).filter((c) => (!q.claudeId || c.id === q.claudeId) && this.#mayUse(actorId, c.id) && (!inWorkspace || inWorkspace(anchorWorkspace(c.workspaceId, null))));
     if (q.claudeId && !list.length) throw new AppError('NOT_FOUND', 'No such Claude.');
     const histories = list.map((c) => ({ claudeName: c.name, workspaceName: c.workspaceName, history: this.#history(c.id, range as UsageRange, nowMs, Infinity) }));
     return { body: format === 'csv' ? quotaCsv(histories) : JSON.stringify(histories.map((h) => h.history), null, 2), contentType, fileName };

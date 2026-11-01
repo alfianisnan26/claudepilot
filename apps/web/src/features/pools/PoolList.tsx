@@ -1,9 +1,12 @@
 import { Badge, Button, ConfirmDialog, EmptyState, FormDialog, LoadError, Menu, RowsSkeleton, TextField, useToast, type MenuItem } from '@isnanme/ui';
 import { POOL_NAME_MAX, type PoolSummary } from '@portal/contracts';
-import { Copy, History, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { ArrowRightToLine, Copy, History, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
+import { MoveSetDialog } from '@/features/orgs/MoveSetDialog';
+import { useOrgs } from '@/features/orgs/OrgsProvider';
+import { moveTargets } from '@/features/orgs/rules';
 import { api, ApiError, errorText } from '@/lib/api';
 import { useLive } from '@/lib/live';
 import { AssignWorkspacesDialog } from './AssignWorkspacesDialog';
@@ -26,12 +29,14 @@ export function PoolList<C>({ tabId, label, ui }: { tabId: string; label: string
   const [removing, setRemoving] = useState<PoolSummary | null>(null);
   const [revisions, setRevisions] = useState<PoolSummary | null>(null);
   const [assigning, setAssigning] = useState<PoolSummary | null>(null);
+  const [moving, setMoving] = useState<PoolSummary | null>(null);
+  const { orgs } = useOrgs();
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setFailed(false);
     try {
-      setPools(await api.pools.list(ui.type));
+      setPools(await api.pools.listScoped(ui.type));
     } catch {
       setFailed(true);
     }
@@ -115,6 +120,7 @@ export function PoolList<C>({ tabId, label, ui }: { tabId: string; label: string
                 onAssign={() => setAssigning(p)}
                 onRevisions={() => setRevisions(p)}
                 onRemove={() => setRemoving(p)}
+                onMove={moveTargets(orgs, p.orgId).length && !p.shared ? () => setMoving(p) : undefined}
               />
             ))}
           </div>
@@ -144,6 +150,14 @@ export function PoolList<C>({ tabId, label, ui }: { tabId: string; label: string
         }}
       />
       <RevisionsDialog type={ui.type} pool={revisions} onClose={() => setRevisions(null)} />
+      <MoveSetDialog
+        pool={moving}
+        onClose={() => setMoving(null)}
+        onMoved={() => {
+          setMoving(null);
+          void load();
+        }}
+      />
       <AssignWorkspacesDialog
         type={ui.type}
         pool={assigning}
@@ -176,6 +190,7 @@ function PoolCard<C>({
   onAssign,
   onRevisions,
   onRemove,
+  onMove,
 }: {
   pool: PoolSummary;
   ui: MultiPoolUi<C>;
@@ -184,6 +199,8 @@ function PoolCard<C>({
   onAssign: () => void;
   onRevisions: () => void;
   onRemove: () => void;
+  /** Move to organization (D-111 D2); absent when there is no org to move it to. */
+  onMove?: () => void;
 }) {
   const Icon = ui.icon;
   const items: MenuItem[] = [
@@ -191,6 +208,7 @@ function PoolCard<C>({
     { label: 'Duplicate', icon: <Copy className="size-4" />, onSelect: onDuplicate },
     { label: 'Assign…', icon: <Users className="size-4" />, onSelect: onAssign },
     { label: 'Revisions…', icon: <History className="size-4" />, onSelect: onRevisions },
+    ...(onMove ? [{ label: 'Move to organization…', icon: <ArrowRightToLine className="size-4" />, onSelect: onMove }] : []),
     // In use: unassign it first (the portal refuses too), unless the type takes it out of its workspaces itself.
     { label: 'Delete', icon: <Trash2 className="size-4" />, onSelect: onRemove, danger: true, disabled: p.workspaces > 0 && !ui.deleteUnassigns },
   ];
@@ -207,6 +225,7 @@ function PoolCard<C>({
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="truncate text-sm font-semibold">{p.name}</p>
           {p.revision > 0 && <span className="font-mono text-[11.5px] text-muted">r{p.revision}</span>}
+          {p.shared && <Badge tone="neutral">Shared</Badge>}
           {revisionBadges(p).map((b) => (
             <Badge key={b.label} tone={b.tone}>
               {b.label}

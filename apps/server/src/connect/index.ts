@@ -41,6 +41,9 @@ export interface ConnectDeps {
   scanned(): Promise<WorkspaceTarget[]>;
   /** The ids of those targets, synchronously (name checks and the authorization resolver). */
   scannedIds(): string[];
+  /** D-111: the org a scanned target belongs to (PORTAL_K8S_TARGETS `org`), and whether an org lets members create workspaces. */
+  targetOrg?(id: string): string | null;
+  membersCreate?(orgId: string): boolean;
   /** One target's workspaces as the manager lists them (last-known ones included). */
   workspacesOn(targetId: string): Promise<Workspace[]>;
   /** The manager's remove (with its hooks). */
@@ -130,7 +133,7 @@ export function createConnect(deps: ConnectDeps): ConnectModule {
 
   const admin = new ConnectAdmin({ store, registry, enrollments, hub, events, settings, config: deps.config, install, bundle, scannedIds: deps.scannedIds, workspacesOn: deps.workspacesOn, removeWorkspace: deps.removeWorkspace, recheck: deps.recheck, caPem, now: deps.now, notify });
 
-  registerConnectResolvers({ registry, scannedIds: deps.scannedIds });
+  registerConnectResolvers({ registry, scannedIds: deps.scannedIds, targetOrg: deps.targetOrg, membersCreate: deps.membersCreate });
   declareConnectPolicies();
   install.declarePolicies();
 

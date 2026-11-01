@@ -81,7 +81,7 @@ export function profileSections(me: SignedInAs | null): ('identity' | 'password'
   if (me.kind === 'code') return ['serverCode', 'preferences'];
   const out: ReturnType<typeof profileSections> = ['identity'];
   if (me.profile?.passwordSet !== false) out.push('password');
-  if (me.profile?.signIns.length) out.push('signIns');
+  if (me.profile?.signIns.length || me.profile?.linkable?.length) out.push('signIns');
   out.push('devices', 'orgs', 'tokens', 'preferences');
   return out;
 }
@@ -122,4 +122,26 @@ export function profileTabs(me: SignedInAs | null): { id: ProfileTabId; label: s
     else out.push({ id, label: PROFILE_TAB_LABEL[id], sections: [s] });
   }
   return out;
+}
+
+/** Owner request 2026-11-01: what a link from Profile came back with (`?linked=1`, `?link_error=<code>`), or null. */
+export function linkResult(search: string): { ok: true } | { ok: false; message: string } | null {
+  const q = new URLSearchParams(search);
+  if (q.get('linked') === '1') return { ok: true };
+  const code = q.get('link_error');
+  if (!code) return null;
+  const why: Record<string, string> = {
+    no_account: 'That sign-in is for another email, or another account holds it.',
+    email: 'The provider did not vouch for your email address.',
+    domain: 'Your email’s domain does not sign in through that provider.',
+    state: 'That link expired or was started in another browser. Try again.',
+    disabled: 'This account is disabled.',
+  };
+  return { ok: false, message: why[code] ?? 'Couldn’t link it. Try again.' };
+}
+
+/** Where `/profile?…` (the server's return from a link) opens: the Sign-in tab, which holds Linked sign-ins, for a link's outcome; else Account. */
+export function profileReturnPath(search: string): string {
+  const q = new URLSearchParams(search);
+  return q.has('linked') || q.has('link_error') ? '/admin/profile/sign-in' : '/admin/profile';
 }

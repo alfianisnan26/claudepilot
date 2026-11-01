@@ -50,6 +50,8 @@ export const ADMIN_ROUTE_POLICIES: RoutePolicies = {
   'PATCH /admin-api/users/:id': users('manage', { reauth: true, audit: 'account.updated' }),
   'DELETE /admin-api/users/:id': users('manage', { reauth: true, audit: 'account.removed' }),
   'POST /admin-api/users/:id/password': users('manage', { reauth: true, audit: 'account.password_reset' }),
+  // Owner request 2026-11-01: the founder mark moves (identity/founder.ts); the handler also requires the current founder or the server code.
+  'POST /admin-api/users/:id/founder': users('manage', { reauth: true, audit: 'identity.founder_transferred' }),
   'POST /admin-api/orgs': users('manage', { reauth: true, audit: 'org.created' }),
   'GET /admin-api/orgs/:id': users('view'),
   'DELETE /admin-api/orgs/:id': users('manage', { reauth: true, audit: 'org.deleted' }),

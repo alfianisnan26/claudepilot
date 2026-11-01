@@ -65,6 +65,8 @@ interface Pending {
   stepUpAccount?: string;
   /** The hash of the web session that started it (the callback is a cross-site navigation: the Strict session cookie is not on it). */
   stepUpSession?: string;
+  /** Owner request 2026-11-01: a link from Profile (any provider the account's email signs in through, an instance one included). */
+  link?: boolean;
 }
 
 /** What a finished sign-in returns to the route. `orgId` and `groups` for an organization's provider (slice 10). */
@@ -78,6 +80,8 @@ export interface SsoResult {
   /** The groups claim's values (at most 200, strings only), or null when the provider reads none. Never stored. */
   groups: string[] | null;
   stepUp: boolean;
+  /** A link from Profile (`begin`'s `link`): like a step-up, it signs nobody in. */
+  link: boolean;
   /** Owner request 2026-11-01: what the ID token says about the person, for the profile (identity/profile.ts adopts what is not set). */
   profile: IdpClaims;
   /** A step-up: the web session (by its hash) to mark. */
@@ -96,6 +100,8 @@ const MAX_PENDING = 2000;
 
 /** A failed SSO sign-in, with the code the sign-in page shows. */
 export class SsoError extends Error {
+  /** It ended a link from Profile (the route sends the browser back there, not to the sign-in page). */
+  link = false;
   constructor(
     readonly code: SsoErrorCode,
     message: string,
@@ -513,10 +519,15 @@ export class SsoProviders {
    * Starts a sign-in: where to send the browser, and the value of the binding cookie. `stepUp` (organizations slice 10): the signed-in
    * account that adds an org's provider to its session; the callback then signs nobody in, it marks that session.
    */
-  async begin(providerId: string, email: string | null, redirectUri: string, stepUp?: { account: string; sessionHash: string; returnTo: string }): Promise<{ url: string; binding: string }> {
+  async begin(
+    providerId: string,
+    email: string | null,
+    redirectUri: string,
+    stepUp?: { account: string; sessionHash: string; returnTo: string; link?: boolean },
+  ): Promise<{ url: string; binding: string }> {
     const r = this.#row(providerId);
     if (r.enabled !== 1) throw new AppError('NOT_FOUND', 'No such provider.');
-    if (stepUp && !r.org_id) throw new AppError('NOT_FOUND', 'No such provider.');
+    if (stepUp && !stepUp.link && !r.org_id) throw new AppError('NOT_FOUND', 'No such provider.');
     const doc = await this.oidc.discover(r.issuer, this.#privateOk(r));
     this.#sweep();
     const state = randomToken();
@@ -529,6 +540,7 @@ export class SsoProviders {
       returnTo: stepUp?.returnTo ?? '/',
       at: this.now().getTime(),
       ...(stepUp ? { stepUpAccount: stepUp.account, stepUpSession: stepUp.sessionHash } : {}),
+      ...(stepUp?.link ? { link: true } : {}),
     };
     this.#pending.set(state, pending);
     const hint = email && EMAIL.test(normalizeEmail(email)) ? normalizeEmail(email) : undefined;
@@ -536,6 +548,19 @@ export class SsoProviders {
       url: this.oidc.authorizeUrl(doc, { clientId: r.client_id, redirectUri, scope: r.scopes, state, nonce: pending.nonce, verifier: pending.verifier, loginHint: hint }),
       binding: `${state}.${pending.binding}`,
     };
+  }
+
+  /**
+   * Owner request 2026-11-01 ("Profile → Link git.isnan.me"): the provider this account's email signs in through (an org's verified domain
+   * first, else an instance provider's), when the account has no identity linked at it yet; null otherwise. The link itself is a step-up of
+   * the signed-in account (`begin` with `link`): the identity is attached only when it is free and its verified email is the account's
+   * (`#stepUp`), so an email match alone still never takes an account over (P6).
+   */
+  linkOffer(userId: string, email: string): { id: string; name: string } | null {
+    const hit = this.forEmail(email);
+    if (!hit) return null;
+    const linked = this.db()?.prepare('SELECT 1 FROM sso_identities WHERE provider_id = ? AND user_id = ?').get(hit.id, userId);
+    return linked ? null : { id: hit.id, name: hit.name };
   }
 
   /** The org's provider id (enabled), for a step-up; null when it has none. */
@@ -556,6 +581,15 @@ export class SsoProviders {
     const [bState, bSecret] = (binding ?? '').split('.');
     if (!pending || this.now().getTime() - pending.at > STATE_TTL_MS || bState !== state || !bSecret || !timingSafeEqual(sha(bSecret), sha(pending.binding)))
       throw new SsoError('state', 'This sign-in expired or was started in another browser.');
+    try {
+      return await this.#finishPending(pending, q);
+    } catch (e) {
+      if (pending.link && e instanceof SsoError) e.link = true;
+      throw e;
+    }
+  }
+
+  async #finishPending(pending: Pending, q: { code?: string; error?: string }): Promise<SsoResult> {
     if (typeof q.code !== 'string' || !q.code || q.code.length > 4096) throw new SsoError('provider', 'The provider sent no code.');
     let r: Row;
     try {
@@ -589,7 +623,7 @@ export class SsoProviders {
     const out = pending.stepUpAccount ? this.#stepUp(r, claims, pending.stepUpAccount) : await this.#account(r, claims);
     const str = (v: unknown) => (typeof v === 'string' ? v.slice(0, 2048) : null);
     const profile: IdpClaims = { name: str(claims.name), preferredUsername: str(claims.preferred_username), picture: str(claims.picture), allowPrivate: this.#privateOk(r) };
-    return { ...out, profile, orgId: r.org_id ?? null, groups: r.org_id ? this.#groups(r, claims) : null, returnTo: pending.returnTo, stepUpSession: pending.stepUpSession ?? null };
+    return { ...out, link: !!pending.link, profile, orgId: r.org_id ?? null, groups: r.org_id ? this.#groups(r, claims) : null, returnTo: pending.returnTo, stepUpSession: pending.stepUpSession ?? null };
   }
 
   #orgActive(orgId: string): boolean {
@@ -635,7 +669,7 @@ export class SsoProviders {
    * A step-up (slice 10, §9.4 "links from Profile", §9.5): the signed-in account adds the org's provider to its session. The identity must be
    * this account's already, or free and carrying this account's own (verified) email on a verified domain: then it is linked. Nothing else.
    */
-  #stepUp(r: Row, claims: IdTokenClaims, accountId: string): Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession' | 'profile'> {
+  #stepUp(r: Row, claims: IdTokenClaims, accountId: string): Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession' | 'profile' | 'link'> {
     const { email } = this.#email(r, claims);
     const domain = this.#domainOf(r, email);
     let user: PortalUser;
@@ -663,7 +697,7 @@ export class SsoProviders {
     return { user, providerId: r.id, created: false, linked: newLink, guarded: false, stepUp: true };
   }
 
-  async #account(r: Row, claims: IdTokenClaims): Promise<Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession' | 'profile'>> {
+  async #account(r: Row, claims: IdTokenClaims): Promise<Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession' | 'profile' | 'link'>> {
     const { email, verified } = this.#email(r, claims);
     const domain = this.#domainOf(r, email);
     const db = this.#w();

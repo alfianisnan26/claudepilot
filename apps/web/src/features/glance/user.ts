@@ -1,12 +1,12 @@
-// Whose glance preferences these are. Today the portal has one shared sign-in, so there is one owner and this is a constant. With
-// accounts (docs/prd: multi-user, round 10) it becomes the signed-in user's id from the auth context; the settings keys below carry
-// it already, so two people on one browser never read each other's choices, and the settings object is plain JSON that can move to
-// the portal, per user, without changing shape.
+// Whose preferences these are: the signed-in person (D-111 D6), set by OrgsProvider through ./layouts.ts (`syncLayouts`); the founding
+// user's id until it is known. The keys carry it, so two people on one browser never read each other's choices.
 
-/** The one owner of a single-user portal. */
+import { layoutOwner } from './layouts';
+
+/** The founding user (the one owner before accounts). */
 export const OWNER_ID = 'u_owner';
 
-export const currentUserId = (): string => OWNER_ID;
+export const currentUserId = (): string => layoutOwner().userId;
 
 /** The localStorage key of one user's glance settings. */
 export const glanceKey = (userId: string): string => `claudepilot.glance.${userId}`;

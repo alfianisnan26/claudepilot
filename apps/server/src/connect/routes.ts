@@ -7,6 +7,7 @@ import { AppError, success } from '@isnanme/core';
 import { CONNECT_REMOVE_QUERY } from '@portal/contracts';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
+import { orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import { actorOf } from '../authz/seam.js';
 import type { ConnectAdmin, RequestMeta } from './admin.js';
 
@@ -59,7 +60,13 @@ export function createConnectRoutes(admin: ConnectAdmin, opts: { clientIp(req: I
   const meta = (c: Context<Env>): RequestMeta => ({ ip: opts.clientIp(c.env?.incoming), origin: originOf(c) });
 
   // ---- targets ---------------------------------------------------------------------------------------------------------------------
-  r.get('/targets', async (c) => c.json(success(await admin.list(actorOf(c)))));
+  // `?org=` (D-111): the Targets page in an org's context lists that org's targets; Personal the instance's.
+  r.get('/targets', async (c) => {
+    const actor = actorOf(c);
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    const list = await admin.list(actor);
+    return c.json(success(inScope ? list.filter((t) => inScope({ type: 'target', id: t.id })) : list));
+  });
   r.post('/targets', async (c) => c.json(success(admin.create(actorOf(c), await body(c), meta(c))), 201));
   r.get('/targets/:id', (c) => c.json(success(admin.view(actorOf(c), idOf(c, 'id')))));
   r.patch('/targets/:id', async (c) => c.json(success(admin.update(actorOf(c), idOf(c, 'id'), await body(c), meta(c)))));
