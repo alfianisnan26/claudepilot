@@ -4622,7 +4622,8 @@ export const MIGRATIONS: Migration[] = [
       // - users.avatar: the sha256 of a user_avatars row (the persona pipeline re-encodes it; a table of its own, so the persona sweep never
       //   removes a person's picture), or null: initials.
       // - name_locked / avatar_locked: 1 once the person (or an admin) set it, so an SSO sign-in never overwrites it. An account with a
-      //   password of its own named itself at creation: locked. avatar_source_url: the IdP picture last taken (not fetched again).
+      //   password of its own named itself at creation: locked (told as migration 460 tells password_set, which runs AFTER this one on a
+      //   new database: versions run in order). avatar_source_url: the IdP picture last taken (not fetched again).
       // - web_sessions.device ("Safari on iPhone", from the User-Agent, never the raw header) and .method (`password`, `code`, `sso:<id>`).
       db.exec(`
         ALTER TABLE users ADD COLUMN username TEXT CHECK (username IS NULL OR length(username) BETWEEN 3 AND 32);
@@ -4632,7 +4633,7 @@ export const MIGRATIONS: Migration[] = [
         ALTER TABLE users ADD COLUMN name_locked INTEGER NOT NULL DEFAULT 0 CHECK (name_locked IN (0, 1));
         ALTER TABLE users ADD COLUMN avatar_locked INTEGER NOT NULL DEFAULT 0 CHECK (avatar_locked IN (0, 1));
         ALTER TABLE users ADD COLUMN avatar_source_url TEXT;
-        UPDATE users SET name_locked = 1 WHERE password_set = 1;
+        UPDATE users SET name_locked = 1 WHERE NOT (created_by LIKE 'sso:%' AND password_changed_at = created_at);
         CREATE TABLE user_avatars (
           sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
           png BLOB NOT NULL,

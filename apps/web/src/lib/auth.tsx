@@ -3,6 +3,7 @@ import { removeThisBrowserRegistration } from '@/features/notify/deviceId';
 import { resetNotifyStore } from '@/features/notify/store';
 import { resetAttention } from '@/features/attention/store';
 import { api, onUnauthorized } from './api';
+import { resetMe } from './me';
 import { authStateOf, type AuthState } from './authState';
 
 export { authStateOf, isAdminState, type AuthState } from './authState';
@@ -39,12 +40,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (code: string) => {
     await api.login(code);
+    resetMe();
     // The server code is the platform's own sign-in: always the admin's app.
     setState({ status: 'in', admin: true });
   }, []);
 
   const loginEmail = useCallback(async (email: string, password: string) => {
     await api.loginEmail(email, password);
+    resetMe();
     // A member account gets the member's app (D-82 S1a): the server says which.
     await refresh();
   }, [refresh]);
@@ -55,6 +58,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resetNotifyStore();
     resetAttention();
     await api.logout().catch(() => undefined);
+    // The next person's account menu never shows this one's name.
+    resetMe();
     await refresh();
   }, [refresh]);
 
