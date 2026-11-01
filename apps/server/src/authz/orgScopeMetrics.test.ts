@@ -241,6 +241,35 @@ test('Usage (spend summary): the summary is asked with the workspaces of the con
   assert.deepEqual(await get(`/?org=${orgB}`), { kept: [] });
 });
 
+test('Usage page per org (owner bug 2026-11-01): the strip, Requests, attribution, budgets, spikes and alerts are asked in the context', async () => {
+  const kept = (inWorkspace: InWorkspace | undefined) => (inWorkspace ? [...Object.values(WS), null].filter((w) => inWorkspace(w)) : 'all');
+  const usage = {
+    summary: async (o: { inWorkspace?: InWorkspace }) => ({ kept: kept(o.inWorkspace) }),
+    requestsReport: (_r: string, o: { inWorkspace?: InWorkspace }) => ({ kept: kept(o.inWorkspace) }),
+  } as unknown as ClaudeUsageMonitor;
+  const u = caller(createClaudeUsageRoutes(usage), person(OWNER));
+  for (const path of ['/summary', '/requests?range=1d']) {
+    assert.deepEqual(await u(path), { kept: 'all' }, `${path}: no context, as before`);
+    assert.deepEqual(await u(`${path}${path.includes('?') ? '&' : '?'}org=${orgA}`), { kept: [WS.org] }, path);
+    assert.deepEqual(await u(`${path}${path.includes('?') ? '&' : '?'}org=personal`), { kept: [WS.own, null] }, path);
+    assert.deepEqual(await u(`${path}${path.includes('?') ? '&' : '?'}org=${orgB}`), { kept: [] }, `${path}: an org she is not in`);
+  }
+  const spend = {
+    attribution: (_q: unknown, _a: string, o: { inWorkspace?: InWorkspace }) => ({ kept: kept(o.inWorkspace) }),
+    budgets: (_a: string, inWorkspace?: InWorkspace) => ({ kept: kept(inWorkspace) }),
+    spikes: (_r: string, _a: string, inWorkspace?: InWorkspace) => ({ kept: kept(inWorkspace) }),
+    alerts: (_a: string, inWorkspace?: InWorkspace) => ({ kept: kept(inWorkspace) }),
+  } as unknown as UsageSpend;
+  const s = caller(createUsageSpendRoutes(spend), person(OWNER));
+  for (const path of ['/attribution?by=claude&range=1d', '/budgets', '/spikes?range=7d', '/alerts']) {
+    const and = path.includes('?') ? '&' : '?';
+    assert.deepEqual(await s(path), { kept: 'all' }, `${path}: no context, as before`);
+    assert.deepEqual(await s(`${path}${and}org=${orgA}`), { kept: [WS.org] }, path);
+    assert.deepEqual(await s(`${path}${and}org=personal`), { kept: [WS.own, null] }, path);
+    assert.deepEqual(await s(`${path}${and}org=${orgB}`), { kept: [] }, path);
+  }
+});
+
 test('Autonomy (Keep going): a chat through its workspace, after view', async () => {
   const chats = KEYS.map((k) => ({ id: `s_${k}`, workspaceId: WS[k] }));
   const owner = { actorOf: (c: { get(k: string): Actor }) => ({ actor: c.get('actor'), userId: OWNER, admin: true, label: 'test' }), can: () => true, isAdmin: () => true } as unknown as PlatformOwner;

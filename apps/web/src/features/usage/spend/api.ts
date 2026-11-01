@@ -45,17 +45,18 @@ export const usageSpendApi = {
   summary: () => request<SpendSummary>('GET', scopedPath(USAGE_SPEND_API.summary)),
   /** The last day's budget and spike alerts that are not snoozed, newest first. */
   alerts: () => request<SpendAlert[]>('GET', USAGE_SPEND_API.alerts),
-  /** `done`: by ticket, only tickets closed as done in the window. */
-  attribution: (by: AttributionBy, range: ChatUsageRange, done = false) => request<AttributionReport>('GET', attributionUrl(USAGE_SPEND_API.attribution, by, range, { done })),
+  /** `done`: by ticket, only tickets closed as done in the window. In the org context (`?org=`), like every Usage tab. */
+  attribution: (by: AttributionBy, range: ChatUsageRange, done = false) => request<AttributionReport>('GET', scopedPath(attributionUrl(USAGE_SPEND_API.attribution, by, range, { done }))),
   /** A download link for the same rows, the same filter (the browser sends the session cookie). */
-  attributionCsv: (by: AttributionBy, range: ChatUsageRange, done = false) => attributionUrl(USAGE_SPEND_API.attribution, by, range, { done, csv: true }),
-  budgets: () => request<BudgetsReport>('GET', USAGE_SPEND_API.budgets),
+  attributionCsv: (by: AttributionBy, range: ChatUsageRange, done = false) => scopedPath(attributionUrl(USAGE_SPEND_API.attribution, by, range, { done, csv: true })),
+  /** The budgets of the org context's workspaces. */
+  budgets: () => request<BudgetsReport>('GET', scopedPath(USAGE_SPEND_API.budgets)),
   createBudget: (input: BudgetInput) => request<BudgetState>('POST', USAGE_SPEND_API.budgets, input),
   updateBudget: (id: string, input: Partial<BudgetInput>) => request<BudgetState>('PUT', USAGE_SPEND_API.budget(id), input),
   deleteBudget: (id: string) => request<{ id: string }>('DELETE', USAGE_SPEND_API.budget(id)),
   snoozeBudget: (id: string, until: BudgetSnoozeUntil) => request<BudgetState>('PUT', USAGE_SPEND_API.budgetSnooze(id), { until }),
   unsnoozeBudget: (id: string) => request<BudgetState>('DELETE', USAGE_SPEND_API.budgetSnooze(id)),
-  spikes: (range: '1d' | '7d' | '30d') => request<SpikesReport>('GET', `${USAGE_SPEND_API.spikes}?range=${range}`),
+  spikes: (range: '1d' | '7d' | '30d') => request<SpikesReport>('GET', scopedPath(`${USAGE_SPEND_API.spikes}?range=${range}`)),
   snoozeSpike: (subject: string, until: SpikeSnoozeUntil) => request<SpikesReport>('PUT', USAGE_SPEND_API.spikeSnooze, { subject, until }),
   unsnoozeSpike: (subject: string) => request<SpikesReport>('DELETE', `${USAGE_SPEND_API.spikeSnooze}?subject=${encodeURIComponent(subject)}`),
 };

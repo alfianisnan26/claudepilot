@@ -34,6 +34,7 @@ import {
   type SpikesReport,
   type UsageAlertLevel,
 } from '@portal/contracts';
+import { anchorWorkspace, oldName, sessionPlaces } from '../authz/usageAnchor.js';
 import type { Store } from '../store/store.js';
 import { OWNER_ACTOR, UI_OWNER, type SpendObject, type Visibility, type Who } from './actor.js';
 import { attribute, chainOf, chainRootOf, workspaceNameOf } from './attribution.js';
@@ -205,12 +206,29 @@ export class UsageSpend {
     return rows.filter((r) => ok(workspaces, 'workspace', r.workspaceId) && ok(sessions, 'session', r.sessionId));
   }
 
+  /**
+   * The org context as a filter of rows that name a workspace and maybe a session (a request, a spike): through the session as it is now (a
+   * relocated chat's usage follows it), a decommissioned workspace through its heir (authz/usageAnchor.ts). Undefined: no context.
+   */
+  #anchoredIn(inWorkspace: InWorkspace | undefined): ((r: { workspaceId: string; sessionId?: string | null }) => boolean) | undefined {
+    if (!inWorkspace) return undefined;
+    const place = sessionPlaces(() => this.o.store.db);
+    return (r) => inWorkspace(anchorWorkspace(r.workspaceId, place(r.sessionId)));
+  }
+
   /** What the actor's visible requests used over [fromMs, toMs): the SQL sum for the owner, the filtered rows for anyone behind a rule. */
   #totals(actorId: string, fromMs: number, toMs: number, inWorkspace?: InWorkspace): ChatUsageTotals {
     if (!this.o.visible && !inWorkspace) return this.#store.sum({ kind: 'all', id: null }, fromMs, toMs);
     const t = zeroTotals();
-    for (const r of this.#visibleRows(actorId, this.#store.usageRows(fromMs, toMs))) if (!inWorkspace || inWorkspace(r.workspaceId)) addRow(t, r);
+    const kept = this.#anchoredIn(inWorkspace);
+    for (const r of this.#visibleRows(actorId, this.#store.usageRows(fromMs, toMs))) if (!kept || kept(r)) addRow(t, r);
     return { ...t, costUsd: roundUsd(t.costUsd) };
+  }
+
+  /** A budget in the org context: by the workspace it counts (a decommissioned one's heir); one on everything has none (Personal only). */
+  #budgetIn(inWorkspace: InWorkspace, scope: BudgetFields['scope']): boolean {
+    const ws = this.#budgetWorkspace(scope);
+    return inWorkspace(ws === null ? null : anchorWorkspace(ws, null));
   }
 
   /** What a person changed, and who did it and how. Never throws: the audit must not undo the change. */
@@ -395,13 +413,13 @@ export class UsageSpend {
     return true;
   }
 
-  /** The budgets the actor may see, with what each has used. */
-  budgets(actorId: string = OWNER_ACTOR): BudgetsReport {
+  /** The budgets the actor may see, with what each has used; `inWorkspace` (the org context): only the budgets of its workspaces. */
+  budgets(actorId: string = OWNER_ACTOR, inWorkspace?: InWorkspace): BudgetsReport {
     const now = this.#now();
     return {
       budgets: this.#store
         .budgets()
-        .filter((b) => this.#sees(actorId, 'budget', b.id))
+        .filter((b) => this.#sees(actorId, 'budget', b.id) && (!inWorkspace || this.#budgetIn(inWorkspace, b.scope)))
         .map((b) => this.#state(b, now)),
       thresholds: { warn: USAGE_THRESHOLDS.warn, critical: USAGE_THRESHOLDS.critical },
       timezone: this.timezone,
@@ -621,12 +639,15 @@ export class UsageSpend {
     return rows.filter((r) => this.#sees(actorId, 'workspace', r.workspaceId) && (!r.sessionId || this.#sees(actorId, 'session', r.sessionId)));
   }
 
-  spikes(range: unknown = '7d', actorId: string = OWNER_ACTOR): SpikesReport {
+  /** The spike events of `range` the actor may see; `inWorkspace` (the org context): only those anchored in it. */
+  spikes(range: unknown = '7d', actorId: string = OWNER_ACTOR, inWorkspace?: InWorkspace): SpikesReport {
     if (typeof range !== 'string' || !(range in SPIKE_RANGES)) throw invalid('range', 'Pick 1d, 7d or 30d.');
     const now = this.#now();
+    const kept = this.#anchoredIn(inWorkspace);
+    const rows = this.#visibleSpikes(actorId, this.#store.spikesSince(now - SPIKE_RANGES[range as keyof typeof SPIKE_RANGES]));
     return {
       range: range as keyof typeof SPIKE_RANGES,
-      events: this.#spikeEvents(this.#visibleSpikes(actorId, this.#store.spikesSince(now - SPIKE_RANGES[range as keyof typeof SPIKE_RANGES])), now),
+      events: this.#spikeEvents(kept ? rows.filter(kept) : rows, now),
       settings: spikeSettingsOf(this.o.settings),
       now: iso(now),
     };
@@ -668,15 +689,16 @@ export class UsageSpend {
     for (const b of this.#store.budgets()) {
       const m = b.mark;
       if (!m || m.quiet || !b.enabled || now - m.atMs > ALERT_WINDOW_MS || !this.#sees(actorId, 'budget', b.id)) continue;
-      if (inWorkspace && !inWorkspace(this.#budgetWorkspace(b.scope))) continue;
+      if (inWorkspace && !this.#budgetIn(inWorkspace, b.scope)) continue;
       if (b.snoozedUntilMs !== null && b.snoozedUntilMs > now) continue;
       const bounds = periodBounds(b.period, tz, now);
       if (m.periodStartMs !== bounds.start) continue; // told for a period that is over
       out.push(this.#budgetAlert(b, m, { scopeLabel: this.#scopeLabel(b.scope), periodEnd: iso(bounds.end) }));
     }
     const snoozes = this.#store.spikeSnoozes(now);
+    const kept = this.#anchoredIn(inWorkspace);
     for (const e of this.#visibleSpikes(actorId, this.#store.spikesSince(now - ALERT_WINDOW_MS))) {
-      if (!e.alerted || snoozes.has(e.subject) || (inWorkspace && !inWorkspace(e.workspaceId))) continue;
+      if (!e.alerted || snoozes.has(e.subject) || (kept && !kept(e))) continue;
       out.push(this.#spikeAlert(e));
     }
     return out.sort((a, b) => b.at.localeCompare(a.at));
@@ -689,7 +711,8 @@ export class UsageSpend {
   summary(actorId: string = OWNER_ACTOR, inWorkspace?: InWorkspace): SpendSummary {
     const now = this.#now();
     const tz = this.timezone;
-    const states = this.budgets(actorId).budgets.filter((s) => !inWorkspace || inWorkspace(this.#budgetWorkspace(s.budget.scope)));
+    const states = this.budgets(actorId, inWorkspace).budgets;
+    const kept = this.#anchoredIn(inWorkspace);
     const live = states.filter((s) => s.budget.enabled);
     return {
       today: this.#totals(actorId, periodBounds('day', tz, now).start, now + 1, inWorkspace),
@@ -703,7 +726,7 @@ export class UsageSpend {
         exhausted: live.filter((s) => s.level === 'exhausted').length,
         paused: live.filter((s) => s.paused).length,
       },
-      spikes24h: this.#visibleSpikes(actorId, this.#store.spikesSince(now - DAY)).filter((e) => !inWorkspace || inWorkspace(e.workspaceId)).length,
+      spikes24h: this.#visibleSpikes(actorId, this.#store.spikesSince(now - DAY)).filter((e) => !kept || kept(e)).length,
       alerts: this.alerts(actorId, inWorkspace),
       now: iso(now),
     };
@@ -712,15 +735,16 @@ export class UsageSpend {
   /* ---------- Attribution ---------- */
 
   #claudeName(claudeId: string): string {
-    if (claudeId.startsWith('default:')) return 'Default';
-    return this.#store.claudes().get(claudeId)?.name ?? 'Claude';
+    if (claudeId.startsWith('default:')) return oldName('Default', claudeId.slice('default:'.length));
+    const c = this.#store.claudes().get(claudeId);
+    return c ? oldName(c.name, c.workspaceId) : 'Claude';
   }
 
   /**
    * The window's requests grouped by one dimension, for what `actorId` may see (§22). By ticket, `ticketVisible` (T-2945) is the caller's
    * bucket check: a ticket it may not see reads like one that does not exist (no type, status or done time).
    */
-  attribution(q: AttributionQuery = {}, actorId: string = OWNER_ACTOR, opts: { ticketVisible?: (ticketId: string) => boolean } = {}): AttributionReport {
+  attribution(q: AttributionQuery = {}, actorId: string = OWNER_ACTOR, opts: { ticketVisible?: (ticketId: string) => boolean; inWorkspace?: InWorkspace } = {}): AttributionReport {
     const by = (q.by ?? 'session') as AttributionBy;
     if (!(ATTRIBUTION_BY as readonly unknown[]).includes(by)) throw invalid('by', `Pick ${ATTRIBUTION_BY.join(', ')}.`);
     const range = (q.range ?? '7d') as ChatUsageRange;
@@ -734,10 +758,13 @@ export class UsageSpend {
     const now = this.#now();
     const from = now - RANGE_MS[range];
     const tree = q.sessionId ? new Set([q.sessionId, ...this.#store.descendants(q.sessionId)]) : undefined;
-    const rows = this.#visibleRows(
+    const kept = this.#anchoredIn(opts.inWorkspace);
+    const visibleRows = this.#visibleRows(
       actorId,
       this.#store.usageRows(from, now + 1, { ...(q.claudeId ? { claudeId: q.claudeId } : {}), ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}), ...(tree ? { sessionIds: tree } : {}) }),
     );
+    // The org context (owner request 2026-11-01): only the requests anchored in it.
+    const rows = kept ? visibleRows.filter(kept) : visibleRows;
     const ids = new Set(rows.map((r) => r.sessionId));
     const sessions = this.#store.sessions(ids);
     // An agent's view of its own tree starts at its own session: nothing above it is shown, neither its parent nor a chat it continues (T-312),

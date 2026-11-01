@@ -3,7 +3,7 @@
 
 import type { ChatUsageRange, ClaudeUsageHistory } from '@portal/contracts';
 import { usageWindow } from '../chat/usage.js';
-import { ClaudeIndex, zeroTotals, addRow, type ClaudeKey, type SpendReader } from './spend.js';
+import { ClaudeIndex, zeroTotals, addRow, type ClaudeKey, type SpendReader, type SpendRow } from './spend.js';
 
 /** A CSV cell: quoted when it holds a comma, a quote or a line break; a leading `=`, `+`, `-`, `@`, tab or carriage return is defused with `'`. */
 export function csvCell(v: string | number | null | undefined): string {
@@ -26,7 +26,7 @@ export const REQUESTS_CSV_HEADER = ['bucket_start', 'claude', 'workspace', 'mode
  * One row per bucket, Claude and model that ran something, oldest bucket first (docs §20.9). Tokens and requests are stored counts; the dollar
  * column is named for what it is: Claude Code's price estimate, not a bill.
  */
-export function requestsCsv(reader: SpendReader, range: ChatUsageRange, opts: { claudeId?: string; tzOffsetMin?: number; now: number; allow?: (claude: ClaudeKey) => boolean }): string {
+export function requestsCsv(reader: SpendReader, range: ChatUsageRange, opts: { claudeId?: string; tzOffsetMin?: number; now: number; allow?: (claude: ClaudeKey) => boolean; rowAllow?: (row: SpendRow) => boolean }): string {
   const w = usageWindow(range, opts.now, opts.tzOffsetMin);
   const index = new ClaudeIndex(reader.claudes());
   const cells = new Map<string, { bucket: number; claude: string; workspace: string; model: string; totals: ReturnType<typeof zeroTotals> }>();
@@ -34,6 +34,7 @@ export function requestsCsv(reader: SpendReader, range: ChatUsageRange, opts: { 
     const ref = index.resolve(r);
     if (opts.claudeId && ref.claudeId !== opts.claudeId && ref.key !== opts.claudeId) continue;
     if (opts.allow && !opts.allow(ref)) continue;
+    if (opts.rowAllow && !opts.rowAllow(r)) continue;
     const bucket = Math.floor((r.atMs - w.start) / w.bucket);
     if (bucket < 0 || bucket >= w.count) continue;
     const key = `${bucket}\u0000${ref.key}\u0000${r.model}`;

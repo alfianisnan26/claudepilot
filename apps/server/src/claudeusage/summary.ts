@@ -18,6 +18,8 @@ export interface SummaryInput {
   claudeId?: string;
   /** Multi-user seam: false leaves a Claude's requests out. Absent: all. */
   allow?: (claude: ClaudeKey) => boolean;
+  /** The org context (authz/usageAnchor.ts): false leaves a request out (it counts in another context). Absent: all. */
+  rowAllow?: (row: SpendRow) => boolean;
 }
 
 /** The earliest finish time `buildSummary` needs rows from. */
@@ -34,6 +36,7 @@ export function buildSummary(input: SummaryInput): UsageSummary {
   for (const r of input.rows) {
     const ref = index.resolve(r);
     if (input.allow && !input.allow(ref)) continue;
+    if (input.rowAllow && !input.rowAllow(r)) continue;
     visible.push(r);
     const list = byClaude.get(ref.claudeId);
     if (list) list.push(r);

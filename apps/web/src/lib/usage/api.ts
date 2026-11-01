@@ -11,6 +11,7 @@ import {
   type UsageSummary,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
+import { scopedPath } from '@/lib/orgContext';
 
 /** Same shape as the other features' `request`: same-origin credentials, the `{ data }` / `{ error }` envelope unwrapped. */
 async function request<T>(path: string): Promise<T> {
@@ -37,12 +38,12 @@ const q = (params: Record<string, string | number | undefined>): string => {
 /** The usage insight routes (docs/prd/claude-usage.md §20): the page's and the widgets' reads. */
 export const usageApi = {
   palette: () => request<UsagePalette>(CLAUDE_USAGE_API.palette),
-  /** The summary strip. Without `claudeId` every Claude counts. */
-  summary: (claudeId?: string) => request<UsageSummary>(`${CLAUDE_USAGE_API.summary}${q({ claudeId, tz: tz() })}`),
-  /** The Requests report with the previous period, the cache split, palette slots and per-bucket series. */
-  requests: (range: ChatUsageRange, claudeId?: string) => request<RequestsReport>(`${CLAUDE_USAGE_API.requests}${q({ range, claudeId, tz: tz() })}`),
+  /** The summary strip, in the org context (`?org=`). Without `claudeId` every Claude of the context counts. */
+  summary: (claudeId?: string) => request<UsageSummary>(scopedPath(`${CLAUDE_USAGE_API.summary}${q({ claudeId, tz: tz() })}`)),
+  /** The Requests report with the previous period, the cache split, palette slots and per-bucket series, in the org context. */
+  requests: (range: ChatUsageRange, claudeId?: string) => request<RequestsReport>(scopedPath(`${CLAUDE_USAGE_API.requests}${q({ range, claudeId, tz: tz() })}`)),
   /** The Claudes a chat in `workspaceId` can move to, ranked; `from` is the Claude it leaves. */
   recommend: (workspaceId: string, from?: string) => request<MoveRecommendation>(`${CLAUDE_USAGE_API.recommend}${q({ workspaceId, from })}`),
-  /** A download link (the browser sends the session cookie): `what` requests or quota, as csv or json. */
-  exportUrl: (query: Omit<UsageExportQuery, 'tz'>) => usageExportUrl(CLAUDE_USAGE_API.export, { ...query, tz: tz() }),
+  /** A download link (the browser sends the session cookie): `what` requests or quota, as csv or json, in the org context. */
+  exportUrl: (query: Omit<UsageExportQuery, 'tz'>) => scopedPath(usageExportUrl(CLAUDE_USAGE_API.export, { ...query, tz: tz() })),
 };

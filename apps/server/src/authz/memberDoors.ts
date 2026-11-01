@@ -56,6 +56,16 @@ export const MEMBER_DOORS: Readonly<Record<string, string>> = {
   'DELETE /api/notify/mutes': 'the person’s own',
   'POST /api/notify/act': 'a one-time action token made for this person; the decision is checked with can() again',
   'GET /api/platform/audit': 'a person who is not an admin reads only rows about themselves (platform/routes.ts)',
+  // Auto move (owner bug 2026-11-01: a Claude's "Auto move" sheet answered "Not found." to an org member). Every answer is keyed by the
+  // actor's user id; the Claudes listed are the usage report's for that person (the seam's operate on each Claude, its workspace's org).
+  'GET /api/autotransfer': 'the person’s own choices, and their Claudes from the usage report filtered by can(operate) (autotransfer/routes.ts)',
+  'PUT /api/autotransfer/prefs': 'the person’s own choices, audited',
+  'GET /api/autotransfer/state': 'the live chats the person may view only (engine.engineState filters by can(view))',
+  'GET /api/autotransfer/events': 'the person’s own trail (store.events by owner_id)',
+  'GET /api/autotransfer/leaving': 'the person’s own Claudes from the usage report filtered by can(operate)',
+  'POST /api/autotransfer/suggestions/:id/move': 'only the person’s own card (engine.#ownSuggestion), the destination checked with can(operate)',
+  'POST /api/autotransfer/suggestions/:id/later': 'only the person’s own card (engine.#ownSuggestion)',
+  'POST /api/autotransfer/suggestions/:id/always': 'only the person’s own card (engine.#ownSuggestion), the destination checked with can(operate)',
 };
 
 export const isMemberDoor = (key: string): boolean => Object.prototype.hasOwnProperty.call(MEMBER_DOORS, key);
