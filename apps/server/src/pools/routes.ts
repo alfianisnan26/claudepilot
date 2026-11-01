@@ -14,6 +14,8 @@ import type {
   WorkspacePools,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { poolRef, workspaceRef } from '@portal/contracts';
+import { actorOf, actorUserId, can, requireCan, visible } from '../authz/seam.js';
 import type { Reconciler } from '../delivery/reconciler.js';
 import { workspaceGuard } from '../workspaces/authz.js';
 import { deliveryState } from '../workspaces/view.js';
@@ -65,8 +67,12 @@ export function createPoolRoutes({ service }: Pick<PoolRoutesDeps, 'service'>): 
   };
 
   app.get('/', (c) => c.json(success({ types: service.types() })));
-  app.get('/:type', (c) => c.json(success(service.list(type(c)))));
-  app.post('/:type', async (c) => c.json(success(service.create(type(c), await body<PoolRequest>(c))), 201));
+  // Org isolation (owner request 2026-11-01): the list keeps the sets the caller may view; a new set (or a copy) is its maker's.
+  app.get('/:type', (c) => {
+    const t = type(c);
+    return c.json(success(visible(actorOf(c), 'pool', service.list(t), (p) => p.id, t as MultiPoolType)));
+  });
+  app.post('/:type', async (c) => c.json(success(service.create(type(c), await body<PoolRequest>(c), actorUserId(actorOf(c)))), 201));
   // "Preview files" for a pool not saved yet.
   app.post('/:type/preview', async (c) => c.json(success(service.preview(type(c), null, await optionalBody<PoolPreviewRequest>(c)))));
   app.get('/:type/:id', (c) => c.json(success(service.get(pool(c)))));
@@ -80,7 +86,7 @@ export function createPoolRoutes({ service }: Pick<PoolRoutesDeps, 'service'>): 
   app.post('/:type/:id/duplicate', async (c) => {
     const id = pool(c);
     const { name } = await body<DuplicatePoolRequest>(c);
-    return c.json(success(service.duplicate(id, name)), 201);
+    return c.json(success(service.duplicate(id, name, actorUserId(actorOf(c)))), 201);
   });
   app.post('/:type/:id/revisions/:rev/approve', (c) => c.json(success(service.approve(pool(c), revision(c)))));
   app.post('/:type/:id/revisions/:rev/current', async (c) => {
@@ -97,6 +103,10 @@ export function createPoolRoutes({ service }: Pick<PoolRoutesDeps, 'service'>): 
   app.post('/:type/:id/assign', async (c) => {
     const id = pool(c);
     const { workspaceIds } = await body<AssignPoolRequest>(c);
+    // Each workspace it goes into needs `manage` there, as the workspace's own pools route asks (a workspace the caller may not manage is
+    // the same 404 as a missing one); the set itself was checked by the route's policy (operate).
+    const actor = actorOf(c);
+    if (Array.isArray(workspaceIds)) for (const w of workspaceIds) if (typeof w === 'string') requireCan(actor, 'manage', workspaceRef(w));
     return c.json(success(service.assignToMany(id, workspaceIds)));
   });
   app.post('/:type/:id/preview', async (c) => {
@@ -127,7 +137,9 @@ export function createWorkspacePoolRoutes({ service, reconciler }: PoolRoutesDep
     const type = c.req.param('type');
     service.kind(type);
     const { items } = await body<SetWorkspacePoolsRequest>(c);
-    return c.json(success(service.setAssignments(workspaceId(c), type, items)));
+    // A set added here must be one the caller may use (operate); sets already assigned may stay or go.
+    const actor = actorOf(c);
+    return c.json(success(service.setAssignments(workspaceId(c), type, items, (poolId) => can(actor, 'operate', poolRef(poolId, type as MultiPoolType)).allow)));
   });
   return app;
 }

@@ -5,12 +5,19 @@
 // URLs were cleaned when they were read.
 
 import { AppError } from '@isnanme/core';
-import { REPO_EVENT_KINDS, REPO_KINDS, type RepoEvent, type RepoNode, type RepoSummary } from '@portal/contracts';
+import { REPO_EVENT_KINDS, REPO_KINDS, workspaceRef, type RepoEvent, type RepoNode, type RepoSummary } from '@portal/contracts';
+import { actorOfPrincipal, can } from '../authz/seam.js';
 import { paginate, pageInput } from '../portalmcp/paging.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { isWorkspaceId } from '../names.js';
 import { absPath, repoId, REPO_ID } from './text.js';
 import type { ReposService } from './service.js';
+
+/** Org isolation: an answer across workspaces keeps only the workspaces the token's person may view (never another org's). */
+const viewable = (ctx: PortalToolContext) => {
+  const actor = actorOfPrincipal(ctx.principal);
+  return (workspaceId: string) => can(actor, 'view', workspaceRef(workspaceId)).allow;
+};
 
 const SOURCE = 'git';
 
@@ -150,7 +157,7 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
       const ws = workspaceArg(ctx, args.workspace_id);
       if (!ws && args.name !== undefined) throw new AppError('VALIDATION_FAILED', 'A name filter needs a workspace_id.', { details: { workspace_id: 'Give the workspace to search in.' } });
       if (!ws) {
-        const o = await repos.overview();
+        const o = await repos.overview(viewable(ctx));
         return {
           summary: lineOf('All workspaces', o.total),
           total: o.total,
@@ -225,11 +232,11 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
       before: z.string().max(20).optional().describe('From the previous page’s `next`.'),
       limit: z.number().int().min(1).max(100).optional().describe('At most this many (default 25).'),
     }),
-    handler(ctx, args) {
+    async handler(ctx, args) {
       let ws = workspaceArg(ctx, args.workspace_id);
       if (args.repo_id) ws = repoArg(ctx, repos, args.repo_id, args.workspace_id);
       if (ctx.isAgent && !ws) ws = ctx.workspaceId;
-      const page = repos.events({ workspaceId: ws ?? undefined, repoId: args.repo_id, kind: args.kind?.join(','), group: args.audit ? 'audit' : undefined, before: args.before, limit: args.limit ?? 25 });
+      const page = await repos.eventsWithin({ workspaceId: ws ?? undefined, repoId: args.repo_id, kind: args.kind?.join(','), group: args.audit ? 'audit' : undefined, before: args.before, limit: args.limit ?? 25 }, viewable(ctx));
       return {
         summary: `${page.events.length} event${page.events.length === 1 ? '' : 's'}${page.next ? ', more before ' + page.next : ''}.`,
         events: page.events.map((e) => eventView(ctx, e)),
@@ -253,7 +260,7 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
       const ws = workspaceArg(ctx, args.workspace_id);
       const limit = args.limit ?? 20;
       if (!ws) {
-        const o = await repos.overview();
+        const o = await repos.overview(viewable(ctx));
         return { summary: lineOf('All workspaces', o.total), repos: o.attention.slice(0, limit).map((n) => ({ workspace_id: n.workspaceId, ...compact(ctx, n) })) };
       }
       const data = await repos.workspace(ws);

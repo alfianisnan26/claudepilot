@@ -6,8 +6,7 @@ import type { SnoozeKind, SnoozeUntil, UsageExportQuery } from '@portal/contract
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { byWorkspace, orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
-import { actorOf as seamActorOf } from '../authz/seam.js';
-import { OWNER_ACTOR } from './actor.js';
+import { actorUserId, actorOf as seamActorOf } from '../authz/seam.js';
 import type { ClaudeUsageMonitor } from './service.js';
 
 /** `until` of a snooze (FR17). */
@@ -28,8 +27,8 @@ function idOf(c: Context, name: string): string | undefined {
   return v;
 }
 
-/** Who is asking. Until users exist (PLAN-10) it is the owner; the monitor's seam filters by it. */
-const actorOf = (_c: Context): string => OWNER_ACTOR;
+/** Who is asking: the signed-in person (org isolation); the monitor's seam keeps the Claudes they may use. Nobody: an empty id (nothing). */
+const actorOf = (c: Context): string => actorUserId(seamActorOf(c)) ?? '';
 
 export function createClaudeUsageRoutes(usage: ClaudeUsageMonitor): Hono {
   const r = new Hono();
@@ -68,7 +67,7 @@ export function createClaudeUsageRoutes(usage: ClaudeUsageMonitor): Hono {
   // GET /api/claude-usage[?watch=1][&org=]: every Claude's windows. `watch` is the Usage tab being open (faster probing). `?org=` (personal |
   // an org id; authz/orgScope.ts) keeps the Claudes whose workspace that context owns, and their alerts; an org the caller is not in: none.
   r.get('/', async (c) => {
-    const report = await usage.report({ watch: c.req.query('watch') === '1' });
+    const report = await usage.report({ watch: c.req.query('watch') === '1', actorId: actorOf(c) });
     const scope = orgScopeOf(c);
     if (!scope) return c.json(success(report));
     const inWorkspace = byWorkspace(orgScopeFilter(seamActorOf(c), scope)!);

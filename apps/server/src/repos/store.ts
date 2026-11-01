@@ -287,12 +287,18 @@ export class RepoStore {
   }
 
   /** Newest first. `next` is the cursor of the page after this one. */
-  events(q: RepoEventQuery & { limit?: number }): { events: RepoEvent[]; next: string | null } {
+  events(q: RepoEventQuery & { limit?: number; workspaceIds?: readonly string[] }): { events: RepoEvent[]; next: string | null } {
     const db = this.store.db;
     if (!db) return { events: [], next: null };
     const limit = Math.min(200, Math.max(1, Math.floor(q.limit ?? 50)));
     const where: string[] = [];
     const args: (string | number)[] = [];
+    // Only these workspaces (the caller's, org isolation); an empty list keeps nothing.
+    if (q.workspaceIds) {
+      if (!q.workspaceIds.length) return { events: [], next: null };
+      where.push(`workspace_id IN (${q.workspaceIds.map(() => '?').join(',')})`);
+      args.push(...q.workspaceIds);
+    }
     if (q.workspaceId) {
       where.push('workspace_id = ?');
       args.push(q.workspaceId);

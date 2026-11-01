@@ -1,5 +1,5 @@
 import { AppError } from '@isnanme/core';
-import { actorUserId, can } from '../authz/seam.js';
+import { actorUserId, asUser, can } from '../authz/seam.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
 import { parseBucketRoutes, routeByTags } from './bucketRoutes.js';
 import {
@@ -28,6 +28,7 @@ import {
   TICKET_DEFAULT_BUCKET,
   ticketBucketRef,
   type Actor,
+  type UserId,
   type CreateTicketBucketRequest,
   type MergeTicketBucketRequest,
   type MergeTicketBucketResult,
@@ -576,12 +577,15 @@ export class Tickets {
   }
 
   /**
-   * The seam's actor for a caller (T-1857), or null when no bucket rule applies to it (the portal, a trigger, a person's route that checks it).
+   * The seam's actor for a caller (T-1857), or null when no bucket rule applies to it (the portal, a person's route that checks it).
    * Organizations slice 0 (review m4): an agent or a token that came without its actor is nobody (every bucket refused), never the founding user.
+   * Org isolation (owner request 2026-11-01): a trigger acts as its owner (organizations §6.3: "runs as its owner with `can` at run time"), so
+   * its ticket lands only in a bucket the owner may file in, never in another org's by a tag route or a workspace default.
    */
   #actorOf(caller: Caller): Actor | null {
     if (caller.kind === 'agent' || caller.kind === 'token') return caller.actor ?? { kind: 'anonymous' };
     if (caller.kind === 'ui') return caller.actor ?? null;
+    if (caller.kind === 'trigger') return asUser(caller.ownerId as UserId, `trigger:${caller.triggerId}`);
     return null;
   }
 
@@ -2205,7 +2209,7 @@ export class Tickets {
 
   /**
    * T-1993 (FR39): whether the caller may file a new ticket in `b`: the agents' workspace rule (`#bucketOpenTo`) and, for a caller with a seam
-   * actor (an agent, a token, a person whose route passes it), `operate` on the bucket. The portal itself (system, a trigger) files anywhere.
+   * actor (an agent, a token, a trigger's owner, a person whose route passes it), `operate` on the bucket. The portal itself files anywhere.
    */
   #mayFileIn(caller: Caller, b: BucketRow): boolean {
     if (!this.#bucketOpenTo(caller, b)) return false;

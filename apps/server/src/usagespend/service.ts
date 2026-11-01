@@ -180,6 +180,12 @@ export class UsageSpend {
     const rule = this.o.visible;
     if (!rule) return true;
     try {
+      // A budget is seen by who may see what it counts (org isolation): its workspace, or its Claude; one on everything is the budget's own.
+      if (kind === 'budget') {
+        const scope = this.#store.budget(id)?.scope;
+        if (scope?.kind === 'workspace' && scope.id) return rule(actorId, { kind: 'workspace', id: scope.id });
+        if (scope?.kind === 'claude' && scope.id) return rule(actorId, { kind: 'claude', id: scope.id });
+      }
       return rule(actorId, { kind, id });
     } catch {
       return false;

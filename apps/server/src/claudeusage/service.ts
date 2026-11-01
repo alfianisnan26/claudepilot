@@ -36,7 +36,6 @@ import type { Store } from '../store/store.js';
 import type { ExecSession } from '../workspaces/runtime.js';
 import { ALERT_RANK, alertLevelOf, headroomOf, stateOf, viewWindows, withLimitReport } from './derive.js';
 import { LIMIT_MESSAGE_SOURCE } from './limitMessage.js';
-import { OWNER_ACTOR } from './actor.js';
 import { exportFileName, quotaCsv, requestsCsv } from './exporter.js';
 import { outlookOf, unavailableOutlook, windowLengthMs, windowPace } from './pace.js';
 import { Palette } from './palette.js';
@@ -176,9 +175,12 @@ export class ClaudeUsageMonitor {
     this.#palette = new Palette(o.store, () => this.#now());
   }
 
-  /** Whether the asking user may use (and so see the usage of) a Claude: the multi-user seam, open to all until users exist. */
-  #mayUse(actorId: string, claudeId: string): boolean {
-    if (!this.o.canUseClaude) return true;
+  /**
+   * Whether the asking user may use (and so see the usage of) a Claude: the multi-user seam (index.ts installs the seam's `operate` on the
+   * Claude, which follows its workspace and so its org). No actor is the portal itself (the chat's worker pick, the lab): everything.
+   */
+  #mayUse(actorId: string | undefined, claudeId: string): boolean {
+    if (!this.o.canUseClaude || actorId === undefined) return true;
     try {
       return this.o.canUseClaude(actorId, claudeId);
     } catch {
@@ -807,7 +809,7 @@ export class ClaudeUsageMonitor {
       }
     }
     alerts.sort((a, b) => b.at.localeCompare(a.at));
-    const actor = opts.actorId ?? OWNER_ACTOR;
+    const actor = opts.actorId;
     return {
       claudes: claudes.filter((c) => this.#mayUse(actor, c.claudeId)),
       alerts: alerts.filter((a) => this.#mayUse(actor, a.claudeId)),
@@ -845,13 +847,13 @@ export class ClaudeUsageMonitor {
   /** The Requests report with the previous period, the cache split, palette slots and the series for stacked charts (§20.8). */
   requestsReport(range: unknown, opts: { claudeId?: string; tzOffsetMin?: number; actorId?: string } = {}): RequestsReport {
     if (!isUsageRange(range)) throw new AppError('VALIDATION_FAILED', `Pick a range: ${CHAT_USAGE_RANGES.join(', ')}.`, { details: { range: `One of ${CHAT_USAGE_RANGES.join(', ')}.` } });
-    const actor = opts.actorId ?? OWNER_ACTOR;
+    const actor = opts.actorId;
     return buildRequestsReport({ reader: this.#spend, palette: this.#palette, allow: (k) => this.#mayUse(actor, k.claudeId || k.key) }, range, { claudeId: opts.claudeId || undefined, tzOffsetMin: opts.tzOffsetMin, now: this.#now() });
   }
 
   /** The summary strip (§20.7): spend today, speed, time until the limit and the next reset, overall or for one Claude. */
   async summary(opts: { claudeId?: string; tzOffsetMin?: number; actorId?: string } = {}): Promise<UsageSummary> {
-    const actor = opts.actorId ?? OWNER_ACTOR;
+    const actor = opts.actorId;
     const report = await this.report({ actorId: actor });
     if (opts.claudeId && !report.claudes.some((c) => c.claudeId === opts.claudeId)) throw new AppError('NOT_FOUND', 'No such Claude.');
     const nowMs = this.#now();
@@ -862,13 +864,13 @@ export class ClaudeUsageMonitor {
    * The Claudes of `workspaceId` a chat can move to, ranked (§20.5), `fromClaudeId` (the one it leaves) left out, and only those `actorId` may use.
    * In-process for the auto-transfer; the route and the Portal MCP tool call it too. Advice only: nothing is moved.
    */
-  async recommend(workspaceId: string, fromClaudeId?: string | null, actorId: string = OWNER_ACTOR): Promise<MoveRecommendation> {
+  async recommend(workspaceId: string, fromClaudeId?: string | null, actorId?: string): Promise<MoveRecommendation> {
     const report = await this.report({ actorId });
     return recommendMove(report.claudes, { workspaceId, from: fromClaudeId || null, nowMs: this.#now() });
   }
 
   /** The same when only the Claude the chat leaves is known: its workspace is the one. */
-  async recommendFrom(fromClaudeId: string, actorId: string = OWNER_ACTOR): Promise<MoveRecommendation> {
+  async recommendFrom(fromClaudeId: string, actorId?: string): Promise<MoveRecommendation> {
     const report = await this.report({ actorId });
     const workspaceId = report.claudes.find((c) => c.claudeId === fromClaudeId)?.workspaceId;
     if (!workspaceId) throw new AppError('NOT_FOUND', 'No such Claude.');
@@ -905,7 +907,7 @@ export class ClaudeUsageMonitor {
   }
 
   /** A download (§20.9): the Requests report or the plan readings, as CSV or JSON. */
-  async exportFile(q: Partial<UsageExportQuery>, actorId: string = OWNER_ACTOR): Promise<{ body: string; contentType: string; fileName: string }> {
+  async exportFile(q: Partial<UsageExportQuery>, actorId?: string): Promise<{ body: string; contentType: string; fileName: string }> {
     const what = q.what ?? 'requests';
     const format = q.format ?? 'json';
     if (what !== 'requests' && what !== 'quota') throw new AppError('VALIDATION_FAILED', 'Pick requests or quota.', { details: { what: 'One of requests, quota.' } });

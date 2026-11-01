@@ -1,5 +1,6 @@
 import { AppError, newId } from '@isnanme/core';
 import {
+  isUserId,
   MULTI_POOL_TYPES,
   POOL_NAME_MAX,
   POOL_REDACTED,
@@ -313,7 +314,11 @@ export class PoolService {
     return { ...this.#summary(p), revisions, assignedTo };
   }
 
-  create(type: string, req: Partial<PoolRequest>): PoolSummary {
+  /**
+   * `ownerId`: the person who makes it owns it (org isolation, owner request 2026-11-01: a set is its maker's, never the founding user's by
+   * default); absent (the portal's own sets, module tests), the column's default.
+   */
+  create(type: string, req: Partial<PoolRequest>, ownerId?: string | null): PoolSummary {
     const kind = this.kind(type);
     const id = newId();
     const now = new Date().toISOString();
@@ -323,6 +328,7 @@ export class PoolService {
       this.#db
         .prepare('INSERT INTO pools (id, type, name, description, current_revision, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
         .run(id, type, name, description(req.description), now, now);
+      this.#own(id, ownerId);
       const content = kind.parse(req.content, null, { poolId: id, revision: 1 });
       this.#addRevision(kind, id, 1, content, req, null, now);
     });
@@ -462,7 +468,12 @@ export class PoolService {
   }
 
   /** A new pool with the newest revision's content as its first revision; write-only values carry over through `parse`. */
-  duplicate(id: string, name: unknown): PoolSummary {
+  /** A new set's owner: the person (a user id), else the column's default. */
+  #own(id: string, ownerId: string | null | undefined): void {
+    if (ownerId && isUserId(ownerId)) this.#db.prepare("UPDATE pools SET owner_kind = 'user', owner_id = ? WHERE id = ?").run(ownerId, id);
+  }
+
+  duplicate(id: string, name: unknown, ownerId?: string | null): PoolSummary {
     const src = this.#pool(id);
     const kind = this.kind(src.type);
     const latest = this.#latest(id);
@@ -474,6 +485,7 @@ export class PoolService {
       this.#db
         .prepare('INSERT INTO pools (id, type, name, description, current_revision, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)')
         .run(copyId, src.type, copyName, src.description, now, now);
+      this.#own(copyId, ownerId);
       const source: unknown = JSON.parse(latest.content);
       const content = kind.parse(kind.view(source), source, { poolId: copyId, revision: 1 });
       this.#addRevision(kind, copyId, 1, content, { note: `Copy of ${src.name} r${latest.revision}` }, null, now);
@@ -577,7 +589,11 @@ export class PoolService {
    * kind may refuse or warn first), added ones an assignment, and a pending removal of a pool added
    * back is superseded. For a pool it keeps, an omitted pin or options keep what's there.
    */
-  setAssignments(workspaceId: string, type: string, items: unknown): SetWorkspacePoolsResult {
+  /**
+   * `mayUse` (the route's: `operate` on the set for the person asking): a set ADDED to the workspace must be one they may use, else it answers
+   * like a set that does not exist (org isolation: nobody puts another person's or org's set into a workspace). Sets already there stay.
+   */
+  setAssignments(workspaceId: string, type: string, items: unknown, mayUse?: (poolId: string) => boolean): SetWorkspacePoolsResult {
     const kind = this.kind(type);
     workspaceIdOf(workspaceId);
     if (!Array.isArray(items)) throw invalid('items', 'Send the list of pools.');
@@ -588,8 +604,8 @@ export class PoolService {
       const poolId = item.poolId;
       if (wanted.has(poolId)) throw invalid('items', 'A pool is listed twice.');
       const pool = this.store.db?.prepare('SELECT * FROM pools WHERE id = ?').get(poolId) as PoolRow | undefined;
-      if (!pool || pool.type !== type) throw invalid('items', 'One of the pools no longer exists.');
       const had = existing.get(poolId);
+      if (!pool || pool.type !== type || (!had && mayUse && !mayUse(poolId))) throw invalid('items', 'One of the pools no longer exists.');
       const pinned = item.pinnedRevision === undefined ? (had?.pinned_revision ?? null) : this.#pin(poolId, item.pinnedRevision);
       let options = had?.options ?? '{}';
       if (item.options !== undefined || !had) {

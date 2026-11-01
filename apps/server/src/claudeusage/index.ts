@@ -24,6 +24,8 @@ export interface ClaudeUsageDeps {
   settings: { get(key: string): unknown };
   /** The platform audit (one `claude.usage.prime` row per prime). */
   audit: NonNullable<UsageOptions['audit']>;
+  /** Whether a person may use (and so see the usage of) a Claude: the seam's answer (org isolation). Absent: everyone. */
+  canUseClaude?: UsageOptions['canUseClaude'];
 }
 
 export function createClaudeUsage(deps: ClaudeUsageDeps): ClaudeUsageMonitor {
@@ -34,5 +36,6 @@ export function createClaudeUsage(deps: ClaudeUsageDeps): ClaudeUsageMonitor {
     notify: deps.notify,
     primeMin: () => Number(deps.settings.get(PRIME_MIN_SETTING)),
     audit: deps.audit,
+    canUseClaude: deps.canUseClaude,
   });
 }

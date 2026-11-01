@@ -8,7 +8,7 @@
 import { AppError } from '@isnanme/core';
 import { CHAT_USAGE_RANGES, headroomFrom, reasonText, type ClaudeUsage, type Figure, type LimitOutlook, type WindowPace } from '@portal/contracts';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
-import { OWNER_ACTOR } from './actor.js';
+import { actorOfPrincipal, actorUserId } from '../authz/seam.js';
 import type { ClaudeUsageMonitor } from './service.js';
 
 /** The windows Claude Code names itself come from a third party: only the ones the portal labels are plain text. */
@@ -77,6 +77,9 @@ function lineOf(c: ClaudeUsage): string {
   return `${c.claudeName}: ${h.limiting.label.toLowerCase()} ${Math.round(h.limiting.usedPct)} % used${h.limiting.resetsAt ? `, resets ${h.limiting.resetsAt}` : ''}.${runsOut}`;
 }
 
+/** Org isolation: the person a token acts for; their usage is that of the Claudes they may use (the monitor's seam). Nobody: an empty id. */
+const userOf = (ctx: PortalToolContext): string => actorUserId(actorOfPrincipal(ctx.principal)) ?? '';
+
 export function registerClaudeUsageTools(usage: ClaudeUsageMonitor, registry: ToolRegistry = portalTools): void {
   registry.register({
     name: 'claude_usage',
@@ -87,7 +90,7 @@ export function registerClaudeUsageTools(usage: ClaudeUsageMonitor, registry: To
     hints: { readOnly: true, idempotent: true },
     input: z.object({ claude_id: z.string().max(80).optional().describe('Admin tokens only: one Claude (as listed). Default: every Claude.') }),
     async handler(ctx, args) {
-      const report = await usage.report();
+      const report = await usage.report({ actorId: userOf(ctx) });
       let claudes = report.claudes;
       if (ctx.isAgent) {
         const own = ctx.sessionId ? usage.claudeOfSession(ctx.sessionId) : null;
@@ -118,8 +121,8 @@ export function registerClaudeUsageTools(usage: ClaudeUsageMonitor, registry: To
       claude_id: z.string().max(120).optional().describe('One Claude (as listed). Default: every Claude.'),
       tz_offset_min: z.number().int().min(-1440).max(1440).optional().describe('The caller’s Date.getTimezoneOffset(), so "today" starts at their midnight. Default: UTC.'),
     }),
-    async handler(_ctx, args) {
-      const s = await usage.summary({ claudeId: args.claude_id, tzOffsetMin: args.tz_offset_min, actorId: OWNER_ACTOR });
+    async handler(ctx, args) {
+      const s = await usage.summary({ claudeId: args.claude_id, tzOffsetMin: args.tz_offset_min, actorId: userOf(ctx) });
       const money = (f: Figure<number>) => (f.value === null ? 'unknown' : `$${f.value.toFixed(2)}`);
       const limit =
         s.limit.status.value === 'over'
@@ -150,7 +153,7 @@ export function registerClaudeUsageTools(usage: ClaudeUsageMonitor, registry: To
       include_buckets: z.boolean().optional().describe('Also the per-bucket totals (about 24 to 30 rows). Default false.'),
     }),
     async handler(ctx, args) {
-      const r = usage.requestsReport(args.range ?? '1d', { claudeId: args.claude_id, tzOffsetMin: args.tz_offset_min, actorId: OWNER_ACTOR });
+      const r = usage.requestsReport(args.range ?? '1d', { claudeId: args.claude_id, tzOffsetMin: args.tz_offset_min, actorId: userOf(ctx) });
       const money = `$${r.totals.costUsd.toFixed(2)}`;
       const change = r.previous.change.costUsd;
       return {
@@ -181,9 +184,9 @@ export function registerClaudeUsageTools(usage: ClaudeUsageMonitor, registry: To
       workspace_id: z.string().max(120).optional().describe('`<target>/<name>`. Optional when from_claude_id is given.'),
       from_claude_id: z.string().max(120).optional().describe('The Claude the chat leaves; left out of the candidates.'),
     }),
-    async handler(_ctx, args) {
+    async handler(ctx, args) {
       if (!args.workspace_id && !args.from_claude_id) throw new AppError('VALIDATION_FAILED', 'Give workspace_id, or from_claude_id.');
-      const m = args.workspace_id ? await usage.recommend(args.workspace_id, args.from_claude_id, OWNER_ACTOR) : await usage.recommendFrom(args.from_claude_id!, OWNER_ACTOR);
+      const m = args.workspace_id ? await usage.recommend(args.workspace_id, args.from_claude_id, userOf(ctx)) : await usage.recommendFrom(args.from_claude_id!, userOf(ctx));
       const best = m.candidates.find((c) => c.recommended);
       return {
         summary: best ? `Move to ${best.name} (${best.reason.replace('_', ' ')}${best.leftPct.value !== null ? `, ${best.leftPct.value} % left` : ''}).` : `No Claude is recommended (${(m.none ?? 'none').replace(/_/g, ' ')}).`,

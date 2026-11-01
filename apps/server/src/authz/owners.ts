@@ -1,7 +1,10 @@
 // Owners of the object types the seam decides by ownership (docs/prd/organizations.md §13 P3, migration 410). One resolver per type, each a
 // small synchronous read of the owner columns: workspace (`workspace_owners`), vault (`kg_vaults`), set (`pools`, every multi-pool type),
 // account pool (`pools` of type 'account'), account (`accounts`) and endpoint (`endpoints`). CI runs and remotes take their workspace's owner
-// (ci/authz.ts asks the workspace resolver registered here). Templates have no table yet: the type fails closed (no resolver, required).
+// (ci/authz.ts asks the workspace resolver registered here). A workspace Claude (`workspace_claudes`) and a repository (`repos`) are their
+// workspace's too (org isolation, owner request 2026-11-01): the workspace's owner, its grants, and it as their parent, so an org workspace's
+// Claudes and repositories follow the org (its quota alerts reach the org's owners) and never another admin outside it. Templates have no
+// table yet: the type fails closed (no resolver, required).
 //
 // Fail closed, three ways:
 //   - `registerOwnerResolvers` also marks every type it registers as RESOLVER_REQUIRED (seam.ts `requireResolvers`), so once the portal has
@@ -21,7 +24,7 @@ import { registerResolver, requireResolvers, type ResolvedObject } from './seam.
 /** The types this file resolves; `template` is required with no resolver (no table yet). */
 export const OWNED_TYPES = ['workspace', 'vault', 'pool', 'account_pool', 'account', 'endpoint'] as const satisfies readonly ObjectType[];
 /** Every type P3 puts behind a resolver (fail closed): the owned ones, CI's two (via their workspace) and templates. */
-export const P3_REQUIRED_TYPES: readonly ObjectType[] = [...OWNED_TYPES, 'ci_run', 'ci_repo', 'template'];
+export const P3_REQUIRED_TYPES: readonly ObjectType[] = [...OWNED_TYPES, 'ci_run', 'ci_repo', 'template', 'claude', 'repo'];
 
 /** An owner as the columns store it, or null when the seam cannot read it yet (unowned). */
 export function ownerFromColumns(kind: unknown, id: unknown): Owner | null {
@@ -106,5 +109,26 @@ export function registerOwnerResolvers(deps: OwnerResolverDeps): void {
   byRow('account_pool', "SELECT owner_kind, owner_id FROM pools WHERE id = ? AND type = 'account'");
   byRow('account', 'SELECT owner_kind, owner_id FROM accounts WHERE id = ?');
   byRow('endpoint', 'SELECT owner_kind, owner_id FROM endpoints WHERE id = ?');
+  // Children of a workspace (OBJECT_TYPES parent 'workspace'): the workspace's owner and grants. A removed Claude still resolves, so its
+  // history (usage, a budget on it) stays its workspace's people's; `default:<workspace>` is a workspace's default Claude (usage spend).
+  const ws = workspaceOwnerResolver(deps);
+  const child = (type: 'claude' | 'repo', workspaceOf: (id: string) => string | null) =>
+    registerResolver({
+      type,
+      resolve(id) {
+        if (typeof id !== 'string' || !id || id.length > 200) return null;
+        const wsId = workspaceOf(id);
+        const parent = wsId ? ws.resolve(wsId) : null;
+        if (!parent) return null;
+        return { ref: objectRef(type, id), owner: parent.owner, parent: parent.ref, attrs: { workspaceId: parent.ref.id }, grantsFrom: parent.ref };
+      },
+    });
+  const column = (sql: string) => (id: string) => {
+    const row = read<{ workspace_id: string }>(deps, sql, id);
+    return row && row !== 'error' ? row.workspace_id : null;
+  };
+  const claudeWorkspace = column('SELECT workspace_id FROM workspace_claudes WHERE id = ?');
+  child('claude', (id) => (id.startsWith('default:') ? id.slice('default:'.length) : claudeWorkspace(id)));
+  child('repo', column('SELECT workspace_id FROM repos WHERE id = ?'));
   requireResolvers(P3_REQUIRED_TYPES);
 }

@@ -72,14 +72,15 @@ test('a user sees the usage of the Claudes they may use: the snapshot, the repor
   }
 });
 
-test('a seam that throws hides rather than leaks', async () => {
+test('a seam that throws hides rather than leaks; no actor is the portal itself (the chat’s worker pick), which the seam never filters', async () => {
   const h = await rig(() => {
     throw new Error('boom');
   });
   try {
-    assert.deepEqual((await h.usage.report()).claudes, []);
-    assert.equal(h.usage.requestsReport('1d').totals.requests, 0);
-    assert.deepEqual((await h.usage.recommend('docker/ws1')).candidates, []);
+    assert.deepEqual((await h.usage.report({ actorId: OWNER_ACTOR })).claudes, []);
+    assert.equal(h.usage.requestsReport('1d', { actorId: OWNER_ACTOR }).totals.requests, 0);
+    assert.deepEqual((await h.usage.recommend('docker/ws1', null, OWNER_ACTOR)).candidates, []);
+    assert.equal((await h.usage.report()).claudes.length, 2, 'the portal itself');
   } finally {
     h.done();
   }

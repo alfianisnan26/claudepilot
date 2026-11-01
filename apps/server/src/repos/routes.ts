@@ -3,7 +3,10 @@
 
 import { AppError, success } from '@isnanme/core';
 import type { CreateRepoWorktreeRequest, RepoEventQuery, ScanReposRequest, SetRepoSyncRequest, UpdateRepoSettingsRequest } from '@portal/contracts';
+import { objectRef, workspaceRef } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import { orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
+import { actorOf, can, requireCan } from '../authz/seam.js';
 import { workspaceGuard } from '../workspaces/authz.js';
 import { declareWorkspaceReposPolicies } from './authz.js';
 import type { ReposService } from './service.js';
@@ -37,10 +40,18 @@ function repoParam(c: Context): string {
 export function createReposRoutes(repos: ReposService): Hono {
   const r = new Hono();
 
-  r.get('/', async (c) => c.json(success(await repos.overview())));
+  // Org isolation (owner request 2026-11-01): the overview and the log list across workspaces, so each keeps only the workspaces the caller
+  // may view, narrowed by the org context (`?org=`, authz/orgScope.ts); a log asked for one workspace or one repository needs `view` on it.
+  const keepOf = (c: Context) => {
+    const actor = actorOf(c);
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    return (workspaceId: string) => can(actor, 'view', workspaceRef(workspaceId)).allow && (!inScope || inScope(workspaceRef(workspaceId)));
+  };
+
+  r.get('/', async (c) => c.json(success(await repos.overview(keepOf(c)))));
 
   // The audit and the timeline: GET /api/repos/events?workspaceId=&repoId=&kind=a,b&group=audit&before=&limit=
-  r.get('/events', (c) => {
+  r.get('/events', async (c) => {
     const q: RepoEventQuery = {
       workspaceId: c.req.query('workspaceId') || undefined,
       repoId: c.req.query('repoId') || undefined,
@@ -50,7 +61,10 @@ export function createReposRoutes(repos: ReposService): Hono {
       limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
     };
     if (q.limit !== undefined && !Number.isFinite(q.limit)) throw new AppError('VALIDATION_FAILED', 'Check the limit.', { details: { limit: 'Expected a number.' } });
-    return c.json(success(repos.events(q)));
+    const actor = actorOf(c);
+    if (q.workspaceId) requireCan(actor, 'view', workspaceRef(q.workspaceId));
+    if (q.repoId) requireCan(actor, 'view', objectRef('repo', q.repoId));
+    return c.json(success(await repos.eventsWithin(q, keepOf(c))));
   });
 
   r.get('/:id', (c) => c.json(success(repos.detail(repoParam(c)))));
