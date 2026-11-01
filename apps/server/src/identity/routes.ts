@@ -199,7 +199,7 @@ export function identityRoutes(d: IdentityRouteDeps) {
     });
     admin.patch('/sso/:id', async (c) => {
       const req = await d.body<SsoProviderRequest>(c);
-      const p = sso.update(c.req.param('id'), req, redirectUri(c));
+      const p = sso.update(c.req.param('id'), req, redirectUri(c), actorOfAdmin(c).label);
       // The fields that changed, never the secret's value (only that it changed).
       const changed = Object.keys(req).filter((k) => k !== 'clientSecret');
       audit('sso.provider_changed', null, { providerId: p.id, changed, secretChanged: req.clientSecret !== undefined, domains: p.domains, enabled: p.enabled }, 'medium', actorOfAdmin(c).by);

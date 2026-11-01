@@ -3,10 +3,14 @@
 // never `none`, never an HMAC a client secret could forge), its issuer, its audience (and `azp` when there are several), its expiry and
 // its nonce. Every outbound call goes through the SSRF guard (a public address unless the provider allows a private network), with a
 // time limit and a size cap. Nothing here logs a token, a code or a secret.
+// Organizations slice 2 (P6, organizations PRD §9.8): by default every call is a PINNED fetch (mcp/pinnedFetch.ts): the name is resolved
+// once, checked, and the connection goes to that address, so a DNS-rebinding issuer cannot reach the private network between the check
+// and the fetch. The discovery and JWKS caches are keyed by (url, allowPrivate): a document read for a provider that may use a private
+// network is never served to one that may not.
 
 import { createHash, createPublicKey, randomBytes, verify as verifySig, constants, type JsonWebKey, type KeyObject } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { assertPublicUrl } from '../mcp/spec.js';
+import { pinnedFetch, type Resolver } from '../mcp/pinnedFetch.js';
 import './errors.js';
 
 export interface OidcDiscovery {
@@ -70,24 +74,39 @@ export function normalizeIssuer(raw: string): string {
   return u.href.replace(/\/+$/, '');
 }
 
+/** A cache entry is for one URL read under one network rule (P6). */
+const cacheKey = (url: string, allowPrivate: boolean) => `${allowPrivate ? 'private' : 'public'} ${url}`;
+
 const sameIssuer = (a: string, b: string) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
 
 export class OidcClient {
   readonly #discovery = new Map<string, { at: number; doc: OidcDiscovery }>();
   readonly #jwks = new Map<string, { at: number; keys: JsonWebKey[] }>();
 
+  /**
+   * With no `fetchImpl` (production) every call is pinned: resolved once by `resolve`, checked, connected to the checked address. A test
+   * passes a `fetchImpl` (the fake IdP) and a `guard`, which then run one after the other as before.
+   */
   constructor(
-    private readonly fetchImpl: Fetch = (u, i) => fetch(u, i),
-    private readonly guard: Guard = assertPublicUrl,
+    private readonly fetchImpl: Fetch | null = null,
+    private readonly guard: Guard = async () => {},
     private readonly now: () => number = () => Date.now(),
+    private readonly resolve?: Resolver,
   ) {}
+
+  async #fetch(url: string, init: RequestInit, allowPrivate: boolean): Promise<Response> {
+    if (!this.fetchImpl) return pinnedFetch(url, init, { allowPrivate, resolve: this.resolve, maxBytes: MAX_BODY + 1, timeoutMs: TIMEOUT_MS });
+    await this.guard(url, allowPrivate);
+    return this.fetchImpl(url, init);
+  }
 
   async #json(url: string, allowPrivate: boolean, init?: RequestInit): Promise<unknown> {
     const u = new URL(url);
     const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
     if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) throw new AppError('BAD_GATEWAY', 'The provider gave an address that is not https.');
-    await this.guard(url, allowPrivate);
-    const res = await this.fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(() => {
+    const res = await this.#fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) }, allowPrivate).catch((e: unknown) => {
+      // The guard's own refusal says why (a private or metadata address, a name that does not resolve); anything else is the provider not answering.
+      if (e instanceof AppError) throw e;
       throw new AppError('BAD_GATEWAY', 'The provider did not answer.');
     });
     const text = await res.text();
@@ -108,7 +127,8 @@ export class OidcClient {
 
   /** The issuer's discovery document, cached ten minutes. */
   async discover(issuer: string, allowPrivate: boolean, fresh = false): Promise<OidcDiscovery> {
-    const hit = this.#discovery.get(issuer);
+    const key = cacheKey(issuer, allowPrivate);
+    const hit = this.#discovery.get(key);
     if (hit && !fresh && this.now() - hit.at < 10 * 60_000) return hit.doc;
     const doc = (await this.#json(`${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`, allowPrivate)) as Partial<OidcDiscovery>;
     for (const f of ['issuer', 'authorization_endpoint', 'token_endpoint', 'jwks_uri'] as const)
@@ -119,7 +139,7 @@ export class OidcClient {
       const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
       if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) throw new AppError('BAD_GATEWAY', `The provider’s ${f} is not https.`);
     }
-    this.#discovery.set(issuer, { at: this.now(), doc: doc as OidcDiscovery });
+    this.#discovery.set(key, { at: this.now(), doc: doc as OidcDiscovery });
     return doc as OidcDiscovery;
   }
 
@@ -161,11 +181,12 @@ export class OidcClient {
   }
 
   async #keys(doc: OidcDiscovery, allowPrivate: boolean, fresh: boolean): Promise<JsonWebKey[]> {
-    const hit = this.#jwks.get(doc.jwks_uri);
+    const key = cacheKey(doc.jwks_uri, allowPrivate);
+    const hit = this.#jwks.get(key);
     if (hit && !fresh && this.now() - hit.at < 10 * 60_000) return hit.keys;
     const body = (await this.#json(doc.jwks_uri, allowPrivate)) as { keys?: unknown };
     const keys = Array.isArray(body?.keys) ? (body.keys as JsonWebKey[]) : [];
-    this.#jwks.set(doc.jwks_uri, { at: this.now(), keys });
+    this.#jwks.set(key, { at: this.now(), keys });
     return keys;
   }
 

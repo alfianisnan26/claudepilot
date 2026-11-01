@@ -31,6 +31,11 @@ interface Row {
   trust_unverified_email: number;
   allow_private_network: number;
   enabled: number;
+  /** Migration 420: when (and by whom) "every new account from these domains is a full admin" was confirmed; null: never, or cleared. */
+  admin_ack_at: string | null;
+  admin_ack_by: string | null;
+  /** An organization's provider (organizations PRD §9.1, a later slice adds the column): never makes an instance admin. Absent: instance-wide. */
+  org_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +72,16 @@ export function normalizeDomains(raw: unknown): string[] {
   if (!out.length || out.length > 50 || out.some((d) => !DOMAIN.test(d)))
     throw new AppError('VALIDATION_FAILED', 'Each domain is like konfersi.com (no @, no wildcard).', { details: { domains: 'e.g. konfersi.com' } });
   return out;
+}
+
+/**
+ * The platform role an account made at first sign-in gets (organizations slice 2, P6): admin only from an INSTANCE provider whose "every new
+ * account is a full admin" was confirmed and recorded (migration 420); an organization's provider never makes an instance admin (it makes
+ * org roles, §9.1); anything else is a member.
+ */
+export function jitRole(r: Pick<Row, 'default_role' | 'auto_create' | 'admin_ack_at' | 'org_id'>): 'admin' | 'member' {
+  if (r.org_id) return 'member';
+  return r.default_role === 'admin' && r.auto_create === 1 && !!r.admin_ack_at ? 'admin' : 'member';
 }
 
 export class SsoProviders {
@@ -165,11 +180,15 @@ export class SsoProviders {
     const autoCreate = flag(req.autoCreate, base?.auto_create, true);
     // Review: every verified address of the domain becoming a full admin is a decision, not a default.
     const newlyAdmin = defaultRole === 'admin' && autoCreate === 1 && !(base?.default_role === 'admin' && base.auto_create === 1);
-    if (newlyAdmin && req.acknowledgeAdminAutoCreate !== true)
+    // Migration 420: the confirmation is recorded; it lasts while the provider still makes admins, and goes when it stops.
+    const makesAdmins = defaultRole === 'admin' && autoCreate === 1;
+    const adminAck = !makesAdmins ? null : newlyAdmin || !base?.admin_ack_at ? (req.acknowledgeAdminAutoCreate === true ? 'now' : null) : 'kept';
+    if (makesAdmins && adminAck === null)
       throw new AppError('VALIDATION_FAILED', 'Every new account from these domains would be a full admin. Confirm that, or pick member.', {
         details: { acknowledgeAdminAutoCreate: 'Required for admin with Make accounts.' },
       });
     return {
+      adminAck,
       name,
       issuer,
       clientId,
@@ -198,16 +217,18 @@ export class SsoProviders {
     const id = `sso_${randomBytes(9).toString('base64url')}`;
     const secret = req.clientSecret !== undefined ? this.#sealSecret(id, req.clientSecret) : null;
     const at = this.now().toISOString();
+    const ackAt = f.adminAck ? at : null;
     this.#w()
       .prepare(
         `INSERT INTO sso_providers (id, name, issuer, client_id, client_secret, domains, scopes, default_role, default_team_id, auto_create,
-           trust_unverified_email, allow_private_network, enabled, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           trust_unverified_email, allow_private_network, enabled, admin_ack_at, admin_ack_by, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, f.name, f.issuer, f.clientId, secret, JSON.stringify(f.domains), f.scopes, f.defaultRole, f.defaultTeamId, f.autoCreate, f.trustUnverified, f.allowPrivate, f.enabled, by, at, at);
+      .run(id, f.name, f.issuer, f.clientId, secret, JSON.stringify(f.domains), f.scopes, f.defaultRole, f.defaultTeamId, f.autoCreate, f.trustUnverified, f.allowPrivate, f.enabled, ackAt, ackAt ? by : null, by, at, at);
     return this.get(id, redirectUri);
   }
 
-  update(id: string, req: SsoProviderRequest, redirectUri: string): SsoProvider {
+  update(id: string, req: SsoProviderRequest, redirectUri: string, by = 'ui'): SsoProvider {
     const base = this.#row(id);
     const f = this.#fields(req, base);
     if (f.enabled) this.#assertDomainsFree(f.domains, id);
@@ -216,12 +237,14 @@ export class SsoProviders {
     if (moved && base.client_secret && req.clientSecret === undefined)
       throw new AppError('VALIDATION_FAILED', 'A new issuer or client ID needs its client secret again.', { details: { clientSecret: 'Enter it again (or clear it).' } });
     const secret = req.clientSecret !== undefined ? this.#sealSecret(id, req.clientSecret) : base.client_secret;
+    const at = this.now().toISOString();
+    const [ackAt, ackBy] = f.adminAck === 'kept' ? [base.admin_ack_at, base.admin_ack_by] : f.adminAck === 'now' ? [at, by] : [null, null];
     this.#w()
       .prepare(
         `UPDATE sso_providers SET name = ?, issuer = ?, client_id = ?, client_secret = ?, domains = ?, scopes = ?, default_role = ?, default_team_id = ?,
-           auto_create = ?, trust_unverified_email = ?, allow_private_network = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+           auto_create = ?, trust_unverified_email = ?, allow_private_network = ?, enabled = ?, admin_ack_at = ?, admin_ack_by = ?, updated_at = ? WHERE id = ?`,
       )
-      .run(f.name, f.issuer, f.clientId, secret, JSON.stringify(f.domains), f.scopes, f.defaultRole, f.defaultTeamId, f.autoCreate, f.trustUnverified, f.allowPrivate, f.enabled, this.now().toISOString(), id);
+      .run(f.name, f.issuer, f.clientId, secret, JSON.stringify(f.domains), f.scopes, f.defaultRole, f.defaultTeamId, f.autoCreate, f.trustUnverified, f.allowPrivate, f.enabled, ackAt, ackBy, at, id);
     for (const [k, p] of this.#pending) if (p.providerId === id) this.#pending.delete(k); // a changed provider: sign-ins started before it start again
     return this.get(id, redirectUri);
   }
@@ -342,10 +365,13 @@ export class SsoProviders {
       // links such an account from inside the portal (later slice), or the person keeps signing in with their password.
       if (user && !this.users.linkableByEmail(user.id))
         throw new SsoError('no_account', 'An account with this email exists. Sign in with its password, or ask an admin to link it.');
+      // Organizations slice 2 (P6, §9.4 "with a verified email"): an address the provider does not vouch for (a provider set to trust
+      // unverified emails) may make a NEW account, never take an existing one by its email.
+      if (user && !verified) throw new SsoError('no_account', 'An account with this email exists, and the provider does not vouch for the address.');
       if (!user) {
         if (r.auto_create !== 1) throw new SsoError('no_account', 'There is no account for this email. Ask an admin.');
         const name = typeof claims.name === 'string' ? claims.name : typeof claims.preferred_username === 'string' ? claims.preferred_username : '';
-        user = await this.users.createExternal(email, name, r.default_role, `sso:${r.id}`);
+        user = await this.users.createExternal(email, name, jitRole(r), `sso:${r.id}`);
         created = true;
         if (r.default_team_id && this.teams.exists(r.default_team_id)) this.teams.setMember(r.default_team_id, user.id, 'member', `sso:${r.id}`);
       }
