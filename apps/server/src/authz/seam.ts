@@ -4,7 +4,8 @@
 // The portal still has one person, `u_owner`, so today:
 //   - `actorOf(c)` answers the owner for a signed-in request and `anonymous` otherwise (the old session cookie is the only sign-in);
 //   - `can()` allows the owner (`u_owner`), `system` and `job` actors acting for the owner, everything on every object, and refuses `anonymous`;
-//   - a token is capped by its scope (read = view, operate = operate, admin = manage), an agent by `operate` and by its own session and workspace;
+//   - a token is capped by its scope (read = view, operate = operate, admin = manage), an agent by `operate` and by its own session and workspace
+//     (T-3319: an org-owned object only when the same org owns the agent's workspace);
 //   - for an object type that has a RESOLVER registered (`registerResolver`), `can()` already decides by ownership: the owner or nothing (and
 //     what the resolver calls `public`). That is how a module adopts default-deny early and tests it with two fake users (`u_a`, `u_b`).
 // ORGANIZATIONS SLICE 0 (docs/prd/organizations.md §13, P1 and P2): the signed-in person is real. The session middleware sets `actor` to the
@@ -247,6 +248,19 @@ function orgReadOfSession(actor: Actor, userId: UserId, found: ResolvedObject): 
   return null;
 }
 
+/**
+ * T-3319: the org that owns an agent's workspace, or null (a personal, platform or team workspace, an unknown one, no resolver, a read that
+ * fails: fail closed). Read on every decision, like every other owner.
+ */
+export function agentWorkspaceOrg(workspaceId: string): string | null {
+  try {
+    const ws = resolvers.get('workspace')?.resolve(workspaceId);
+    return ws?.owner?.kind === 'org' ? ws.owner.id : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Inside `visible()`: a list's filter is not a read of the transcript, so it writes no transcript audit row. */
 let listing = 0;
 
@@ -438,6 +452,10 @@ export const singleOwner: Authz = {
         // admin account holds NOTHING by being one (no founding-user rights here). The one exception is a person who is an instance admin
         // with an open break-glass entry on that org (§6.7, OD-4): manage, and every mutation under it is recorded.
         if (!orgAuthority) return deny('unowned');
+        // T-3319: an agent reaches an org's object only from a workspace that SAME org owns (its box is its workspace, and the workspace's
+        // org is the only org it acts in); from a personal workspace or another org's, the object is not found. Within that, its person's
+        // rights below decide, capped at operate. Agents still never reach the `org` object itself (the box above: no org settings, members).
+        if (actor.kind === 'agent' && agentWorkspaceOrg(actor.workspaceId) !== found.owner.id) return deny('not_found');
         // Slice 10: requireSso. A person it binds, acting from a session or a token it does not accept, holds nothing here (fail closed).
         let ssoOk = true;
         if (orgAuthority.ssoGate) {
