@@ -406,8 +406,8 @@ function WorkspaceRow({
   // Running and stopped show in the icon and the action (Shell or Start); other states get a badge.
   const settled = (w.status === 'running' || w.status === 'stopped') && !busy;
   const [open, setOpen] = useState(false);
-  // The tab the sheet opens on: Details from the row, Repos from the repositories chip.
-  const [tab, setTab] = useState<SheetTab>('details');
+  // The tab the sheet opens on: its first (Claudes, or Details) from the row, Repos from the repositories chip.
+  const [tab, setTab] = useState<SheetTab | undefined>(undefined);
 
   return (
     <li className="flex items-center gap-3 p-4 sm:px-5">
@@ -415,7 +415,7 @@ function WorkspaceRow({
       {/* While picking for bulk assignment the whole row toggles the selection instead. */}
       <button
         type="button"
-        onClick={picking ? onToggle : (e) => (setTab((e.target as HTMLElement).closest(`[${REPOS_CHIP_ATTR}]`) ? 'repos' : 'details'), setOpen(true))}
+        onClick={picking ? onToggle : (e) => (setTab((e.target as HTMLElement).closest(`[${REPOS_CHIP_ATTR}]`) ? 'repos' : undefined), setOpen(true))}
         role={picking ? 'checkbox' : undefined}
         aria-checked={picking ? !!selected : undefined}
         aria-label={picking ? `Select ${workspaceDisplayName(w)}` : `Details for ${workspaceDisplayName(w)}${reposTab && reposLabel(repos) ? `, ${reposLabel(repos)}` : ''}`}
