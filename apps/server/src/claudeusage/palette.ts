@@ -66,7 +66,11 @@ export class Palette {
         }
       }
       if (slot === undefined) {
-        out.set(k.key, null);
+        // All eight held by keys still too recent to recycle (e.g. the Claudes of a removed workspace): borrow, for this answer only and
+        // not kept, a slot no key of THIS answer shows, so the Claudes on one screen (one org) never share the grey (owner, 2026-11-01).
+        const shown = new Set([...out.values()].filter((v): v is number => v !== null));
+        const borrow = [...Array(USAGE_PALETTE_SLOTS).keys()].find((s) => !shown.has(s));
+        out.set(k.key, borrow ?? null);
         continue;
       }
       out.set(k.key, slot);

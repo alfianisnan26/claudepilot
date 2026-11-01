@@ -45,7 +45,9 @@ test('nine keys: eight slots, the ninth is grey (null) and is not kept, so it ca
     assert.deepEqual(p.all().models, { b: 1, c: 2, d: 3, e: 4, f: 5, g: 6, h: 7, i: 0 });
     // And nobody who is being shown is ever taken from.
     t.now = T0 + 47 * DAY;
-    assert.deepEqual(slotsOf(p.slots('model', [{ key: 'j', seenMs: 0 }])), { j: null }, 'every other key was seen within 45 days');
+    // Every other key was seen within 45 days, so none is taken from; shown alone, j borrows a slot nobody on its screen has (not kept).
+    assert.deepEqual(slotsOf(p.slots('model', [{ key: 'j', seenMs: 0 }])), { j: 0 }, 'a borrowed slot, unused in this answer');
+    assert.equal(p.all().models.j, undefined, 'the borrowed slot is not kept');
   } finally {
     h.done();
   }
@@ -56,4 +58,22 @@ test('a store that cannot be written still answers, with slots worked out in the
   const p = new Palette(store, () => T0);
   assert.deepEqual(slotsOf(p.slots('claude', [{ key: 'x', seenMs: 2 }, { key: 'y', seenMs: 1 }])), { y: 0, x: 1 });
   assert.deepEqual(p.all(), { slots: 8, claudes: {}, models: {} });
+});
+
+test('owner 2026-11-01: with all eight held by recent keys (a removed workspace\'s Claudes), the keys on one screen get distinct borrowed slots, not grey', async () => {
+  const h = await usageHarness();
+  try {
+    const t = { now: T0 };
+    const p = new Palette(h.store, () => t.now);
+    p.slots('claude', 'abcdefgh'.split('').map((key, i) => ({ key: `old/${key}`, seenMs: i })));
+    t.now = T0 + DAY;
+    const got = slotsOf(p.slots('claude', ['fadlilah', 'hasyim', 'satria'].map((key, i) => ({ key: `konfersi/${key}`, seenMs: i }))));
+    assert.deepEqual(got, { 'konfersi/fadlilah': 0, 'konfersi/hasyim': 1, 'konfersi/satria': 2 });
+    // Next to a key that holds slot 0, a borrower takes the next unused one.
+    const mixed = slotsOf(p.slots('claude', [{ key: 'old/a', seenMs: 0 }, { key: 'konfersi/fadlilah', seenMs: 1 }]));
+    assert.deepEqual(mixed, { 'old/a': 0, 'konfersi/fadlilah': 1 });
+    assert.equal(Object.keys(p.all().claudes).length, 8, 'borrowed slots are not kept');
+  } finally {
+    h.done();
+  }
 });
