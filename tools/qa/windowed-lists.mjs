@@ -138,8 +138,10 @@ try {
           // The filters stick: scroll well down; the header stays at the top of the screen.
           const stuck = await b.eval(`(async () => { window.scrollTo({ top: 2500 }); await new Promise((r) => setTimeout(r, 500));
             const h = document.querySelector('[data-windowed-header]'); const r = h?.getBoundingClientRect();
-            return { has: !!h, top: r ? Math.round(r.top) : null, scrolled: Math.round(scrollY), rendered: document.querySelectorAll('[data-wl-index]').length }; })()`);
-          if (stuck.has) check(`${t} ${pg.id}: the filters stick while the page scrolls`, stuck.scrolled < 100 || (stuck.top >= 0 && stuck.top < 160), JSON.stringify(stuck));
+            const bar = [...document.querySelectorAll('[data-tab-bar]')].find((e) => !h?.contains(e))?.getBoundingClientRect();
+            return { has: !!h, top: r ? Math.round(r.top) : null, tabsBottom: bar ? Math.round(bar.bottom) : null, scrolled: Math.round(scrollY), rendered: document.querySelectorAll('[data-wl-index]').length }; })()`);
+          // They stick at the top, under the page's own tab bar when it has one (CI, Notifications), never over it.
+          if (stuck.has) check(`${t} ${pg.id}: the filters stick while the page scrolls, under the tab bar`, stuck.scrolled < 100 || (stuck.top >= 0 && stuck.top < 200 && (stuck.tabsBottom === null || stuck.top >= stuck.tabsBottom - 1)), JSON.stringify(stuck));
           check(`${t} ${pg.id}: scrolled, still a window of rows`, stuck.rendered < 100, `rendered=${stuck.rendered}`);
           await b.shot(`wl-${pg.id}-${t}-scrolled`);
           await b.eval('window.scrollTo({ top: 0 })');
