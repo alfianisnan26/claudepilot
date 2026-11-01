@@ -11,6 +11,7 @@ import type { SsoProviders } from '../identity/sso.js';
 import { PlatformAudit } from '../platform/audit.js';
 import type { Store } from '../store/store.js';
 import { UserAbilities } from './abilities.js';
+import { OrgAccess, type AccessNotice } from './access.js';
 import { orgAuthority } from './authority.js';
 import { declareOrgPolicies } from './authz.js';
 import { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
@@ -23,6 +24,7 @@ import { OrgTransfers, type WorkspaceCredentials } from './transfer.js';
 export { OrgSso, normalizeOrgDomain, type TxtResolver } from './sso.js';
 export { createOrgSsoRoutes } from './ssoRoutes.js';
 export { UserAbilities, requireInstanceAdmin } from './abilities.js';
+export { OrgAccess, type AccessNotice } from './access.js';
 export { ORG_ROUTE_POLICIES, ORG_TRANSFER_POLICIES, orgLevel, orgResolver } from './authz.js';
 export { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
 export { createMoveToOrgRoute, createOrgRoutes } from './routes.js';
@@ -42,6 +44,8 @@ export interface OrgsModule {
   invitations: OrgInvitations;
   /** Slice 10: org SSO (domains, the org's provider, requireSso); null without the portal's SSO providers. */
   sso: OrgSso | null;
+  /** Fine-grained access (docs/prd/access.md): who reaches what and why, access requests. */
+  access: OrgAccess;
 }
 
 export function createOrgs(deps: {
@@ -55,6 +59,8 @@ export function createOrgs(deps: {
   ssoProviders?: SsoProviders;
   /** Slice 10: the TXT lookup of domain verification (a test passes a fake; default `node:dns`). */
   resolveTxt?: TxtResolver;
+  /** Fine-grained access: tells deciders of a new access request, and the requester of the decision. */
+  notifyAccess?: (to: UserId[], notice: AccessNotice) => void;
 }): OrgsModule {
   declareOrgPolicies();
   const audit = new PlatformAudit(deps.store, deps.now);
@@ -77,5 +83,6 @@ export function createOrgs(deps: {
   const sharing = new OrgSharing({ db, writable, orgs, grants, audit: record, credentials, now: deps.now });
   useOrgAuthority(orgAuthority({ db, orgs, grants, breakGlass, sharing, ...(sso ? { ssoGate: (orgId: string, actor: Actor) => sso.gate(orgId, actor) } : {}) }));
   const invitations = new OrgInvitations({ db, writable, orgs, audit: record, now: deps.now });
-  return { orgs, abilities, grants, breakGlass, transfers, sharing, invitations, sso };
+  const access = new OrgAccess({ db, writable, orgs, sharing, grants, audit: record, credentials, notify: (to, n) => deps.notifyAccess?.(to, n), now: deps.now });
+  return { orgs, abilities, grants, breakGlass, transfers, sharing, invitations, sso, access };
 }

@@ -13,6 +13,11 @@ const ROWS: { key: Key; label: string; about: ReactNode }[] = [
   { key: 'membersMayInvite', label: 'Members invite', about: 'Members (not only owners and admins) may invite people, up to member.' },
   { key: 'membersCreateTeams', label: 'Members create teams', about: 'Members may create teams. Owners and admins always can.' },
   {
+    key: 'adminsMayShare',
+    label: 'Admins share',
+    about: 'Admins may grant access to the organization’s things and decide access requests. Owners always can; someone given Manage on one thing can share that thing.',
+  },
+  {
     key: 'externalShares',
     label: 'Outside shares',
     about: 'Kept for sharing the organization’s things outside it. Not in effect yet: shares stay inside the organization.',

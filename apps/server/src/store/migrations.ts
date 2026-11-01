@@ -4598,6 +4598,89 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 477,
+    name: 'fine-grained org access: shares to one person, with an end and a note; access requests',
+    up(db) {
+      // docs/prd/access.md (owner request 2026-11-01). `org_shares` takes the subject kind 'user' (one person, an active member of the org),
+      // `expires_at` (the grant's own `expires_at` is what decisions read; this is the record and what the sweep ends as 'expired') and
+      // `note`. SQLite can't change a CHECK, so the table is rebuilt with every row kept (the migration runs in the store's transaction); its
+      // triggers are dropped first and made again, and the membership triggers also end the shares TO a person who stops being an active
+      // member. `access_requests`: a member asks for a level on one of the org's objects; owners and admins (and the object's managers)
+      // approve with a level and an end (a share is made) or deny. Numbered after 476 on purpose: a fresh database runs migrations in order.
+      db.exec(`
+        DROP TRIGGER org_members_end_shares;
+        DROP TRIGGER org_members_end_shares_delete;
+        DROP TRIGGER teams_end_shares;
+        CREATE TABLE org_shares_new (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'osh_?*'),
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          object_type TEXT NOT NULL CHECK (object_type IN ('workspace', 'ticket_bucket', 'vault')),
+          object_id TEXT NOT NULL,
+          subject_kind TEXT NOT NULL CHECK (subject_kind IN ('org', 'team', 'user')),
+          subject_id TEXT NOT NULL,
+          level TEXT NOT NULL CHECK (level IN ('view', 'operate', 'manage')),
+          personal INTEGER NOT NULL CHECK (personal IN (0, 1)),
+          created_by TEXT NOT NULL CHECK (created_by GLOB 'u_?*'),
+          created_at TEXT NOT NULL,
+          ended_at TEXT,
+          ended_by TEXT,
+          end_reason TEXT CHECK (end_reason IS NULL OR end_reason IN ('revoked', 'member_left', 'team_removed', 'expired')),
+          expires_at TEXT,
+          note TEXT CHECK (note IS NULL OR length(note) <= 200),
+          CHECK (subject_kind != 'org' OR level != 'manage'),
+          CHECK (subject_kind != 'user' OR subject_id GLOB 'u_?*')
+        ) STRICT;
+        INSERT INTO org_shares_new (id, org_id, object_type, object_id, subject_kind, subject_id, level, personal, created_by, created_at, ended_at, ended_by, end_reason)
+          SELECT id, org_id, object_type, object_id, subject_kind, subject_id, level, personal, created_by, created_at, ended_at, ended_by, end_reason FROM org_shares;
+        DROP TABLE org_shares;
+        ALTER TABLE org_shares_new RENAME TO org_shares;
+        CREATE INDEX org_shares_org ON org_shares (org_id) WHERE ended_at IS NULL;
+        CREATE UNIQUE INDEX org_shares_open ON org_shares (object_type, object_id, subject_kind, subject_id) WHERE ended_at IS NULL;
+        CREATE INDEX org_shares_expiry ON org_shares (expires_at) WHERE ended_at IS NULL AND expires_at IS NOT NULL;
+        CREATE TRIGGER org_members_end_shares AFTER UPDATE OF state ON org_members
+          WHEN OLD.state = 'active' AND NEW.state != 'active'
+        BEGIN
+          DELETE FROM grants WHERE share_id IN (SELECT id FROM org_shares WHERE org_id = NEW.org_id AND ended_at IS NULL
+            AND ((created_by = NEW.user_id AND personal = 1) OR (subject_kind = 'user' AND subject_id = NEW.user_id)));
+          UPDATE org_shares SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_by = 'system:org-membership', end_reason = 'member_left'
+            WHERE org_id = NEW.org_id AND ended_at IS NULL AND ((created_by = NEW.user_id AND personal = 1) OR (subject_kind = 'user' AND subject_id = NEW.user_id));
+        END;
+        CREATE TRIGGER org_members_end_shares_delete AFTER DELETE ON org_members
+        BEGIN
+          DELETE FROM grants WHERE share_id IN (SELECT id FROM org_shares WHERE org_id = OLD.org_id AND ended_at IS NULL
+            AND ((created_by = OLD.user_id AND personal = 1) OR (subject_kind = 'user' AND subject_id = OLD.user_id)));
+          UPDATE org_shares SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_by = 'system:org-membership', end_reason = 'member_left'
+            WHERE org_id = OLD.org_id AND ended_at IS NULL AND ((created_by = OLD.user_id AND personal = 1) OR (subject_kind = 'user' AND subject_id = OLD.user_id));
+        END;
+        CREATE TRIGGER teams_end_shares AFTER DELETE ON teams
+        BEGIN
+          DELETE FROM grants WHERE subject_kind = 'team' AND subject_id = OLD.id;
+          UPDATE org_shares SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_by = 'system:team-removed', end_reason = 'team_removed'
+            WHERE subject_kind = 'team' AND subject_id = OLD.id AND ended_at IS NULL;
+        END;
+        CREATE TABLE access_requests (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'arq_?*'),
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          object_type TEXT NOT NULL CHECK (object_type IN ('workspace', 'ticket_bucket', 'vault')),
+          object_id TEXT NOT NULL,
+          requester TEXT NOT NULL CHECK (requester GLOB 'u_?*'),
+          level TEXT NOT NULL CHECK (level IN ('view', 'operate', 'manage')),
+          note TEXT CHECK (note IS NULL OR length(note) <= 200),
+          state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'approved', 'denied', 'cancelled')),
+          created_at TEXT NOT NULL,
+          decided_by TEXT,
+          decided_at TEXT,
+          decision_note TEXT CHECK (decision_note IS NULL OR length(decision_note) <= 200),
+          granted_level TEXT CHECK (granted_level IS NULL OR granted_level IN ('view', 'operate', 'manage')),
+          expires_at TEXT,
+          share_id TEXT
+        ) STRICT;
+        CREATE UNIQUE INDEX access_requests_open ON access_requests (object_type, object_id, requester) WHERE state = 'open';
+        CREATE INDEX access_requests_org ON access_requests (org_id, state, created_at);
+      `);
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {

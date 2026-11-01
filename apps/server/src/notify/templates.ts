@@ -3,7 +3,7 @@
 // A number says what it is (an estimate carries "est."). A destination with "Include detail" adds the event's redacted detail, clipped
 // and labelled untrusted. Pure.
 
-import { isPortalPath, KEEPGOING_CAUSE_TEXT, NOTIFY_KIND_INFO, notifyPath, timeMark, zonedTime, zoneLabel, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
+import { isOrgId, isPortalPath, KEEPGOING_CAUSE_TEXT, NOTIFY_KIND_INFO, notifyPath, timeMark, zonedTime, zoneLabel, type NotifyEvent, type NotifyKind, type NotifySeverity } from '@portal/contracts';
 
 export interface Rendered {
   title: string;
@@ -104,6 +104,11 @@ function pathOf(e: NotifyEvent): string {
       // A Needs you item (T-146, subject `attention:<kind>:<id>`): the deck opens at that card; the path is checked like any other.
       if (e.kind === 'attention' && s.id.startsWith('attention:')) {
         const p = `/admin/attention?item=${encodeURIComponent(s.id.slice('attention:'.length))}`;
+        if (isPortalPath(p)) return p;
+      }
+      // An access request or its decision (docs/prd/access.md): the org's Access section.
+      if (e.kind === 'attention' && s.id.startsWith('access-request:') && isOrgId(f.orgId)) {
+        const p = `/admin/orgs/${f.orgId}?tab=access`;
         if (isPortalPath(p)) return p;
       }
       return notifyPath.notifications;
