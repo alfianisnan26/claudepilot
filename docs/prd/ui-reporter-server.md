@@ -70,6 +70,17 @@ Every route of `REPORTER_ROUTES` under `/reporter/v1` from `me` down. No `Access
   address (10/8, 172.16/12, 192.168/16, 127/8, fc00::/7, ::1; `isInternalIp` in contracts) is labelled "<ip> (internal: behind the cluster
   proxy)" in the Context view, the description and the Evidence viewer: in k3s the service load balancer rewrites the source before
   Traefik, so the portal sees a pod address, never presented as the reporter's public IP.
+  Behind Cloudflare (`PORTAL_TRUST_CLOUDFLARE=true`, set in `deploy/k3s/portal.yaml`; audit 2026-11-01: every reporter IP was 10.42.x)
+  the reporter's IP is `CF-Connecting-IP`, read only when the proxy is trusted and the hop Traefik saw is a private address (Cloudflare's
+  tunnel in the cluster); from a public hop the header is the client's own and is ignored, and it must be an address. Only the shown and
+  stored reporter IP (`visitorIp` in the routes' deps) uses it: rate limits keep the hop, since a pod in the cluster or a device at home
+  could set the header itself.
+- The panel's ticket list (`GET /tickets`, its counts and its search) holds only tickets that came through the reporter: an evidence
+  record or a capture added from a page. An agent's internal tickets in the same bucket stay in the portal (audit 2026-11-01). A token
+  is only valid for a person who may operate the bucket, so this is not an authorization rule (the portal shows them everything): the
+  token lives in someone else's page and the panel is about that site's reports. A ticket opened by its key (a link in a chat) opens.
+- Ticket attachments: a download keeps `application/json` (a capture's evidence file); every other type that is not an inline image is
+  served as `application/octet-stream`; always `attachment`, `nosniff` and a sandbox CSP.
 - `GET /me` also returns `portalRelease`: the image's release tag (`PORTAL_RELEASE`, baked in by `deploy/k3s-build` from the build's
   tag; only a plain tag is believed), null when the server does not know it (the panel then says "unknown").
 
