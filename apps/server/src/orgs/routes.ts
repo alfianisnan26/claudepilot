@@ -3,7 +3,7 @@
 // the service decides every right (the org resolver through `can()`, the owner-only rules, the ability to create).
 
 import { AppError, success } from '@isnanme/core';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import type { ChangeOrgMemberRoleRequest, CreateOrgRequest, MoveToOrgRequest, OrgId, OrgTransferKind, UpdateOrgRequest } from '@portal/contracts';
 import { actorOf } from '../authz/seam.js';
 import type { BreakGlassService } from './breakGlass.js';
@@ -63,6 +63,8 @@ export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassServic
  */
 export function createMoveToOrgRoute(transfers: OrgTransfers, kind: OrgTransferKind, path: string, param: string): Hono {
   const r = new Hono();
-  r.post(path, async (c) => c.json(success(transfers.moveToOrg(actorOf(c), kind, c.req.param(param) ?? '', (await body(c)) as Partial<MoveToOrgRequest>))));
+  // A workspace id is `<target>/<name>`: its route takes both parts (`param` 'target+name'), since one path segment cannot hold the slash.
+  const idOf = (c: Context): string => (param === 'target+name' ? `${c.req.param('target') ?? ''}/${c.req.param('name') ?? ''}` : (c.req.param(param) ?? ''));
+  r.post(path, async (c) => c.json(success(transfers.moveToOrg(actorOf(c), kind, idOf(c), (await body(c)) as Partial<MoveToOrgRequest>))));
   return r;
 }

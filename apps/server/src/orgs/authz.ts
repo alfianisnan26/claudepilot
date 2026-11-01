@@ -63,7 +63,7 @@ export const ORG_ROUTE_POLICIES: RoutePolicies = {
  * is not in answer the same 404). Each route is mounted on its object's router (workspaces, tickets, knowledge) by app.ts.
  */
 export const ORG_TRANSFER_POLICIES: RoutePolicies = {
-  'POST /api/workspaces/:ref/move-to-org': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'ref' }], audit: 'object.transferred' },
+  'POST /api/workspaces/:target/:name/move-to-org': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'target+name' }], audit: 'object.transferred' },
   'POST /api/tickets/buckets/:key/move-to-org': { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'manage', from: 'path', param: 'key' }], audit: 'object.transferred' },
   'POST /api/knowledge/vaults/:id/move-to-org': { kind: 'objects', checks: [{ type: 'vault', verb: 'manage', from: 'path', param: 'id' }], audit: 'object.transferred' },
 };

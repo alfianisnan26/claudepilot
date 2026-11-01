@@ -214,7 +214,7 @@ export const ORGS_API = {
   /** Slice 5. POST: an org owner ends an open entry early. */
   endBreakGlass: (id: OrgId, entryId: string) => `/api/orgs/${id}/break-glass/${encodeURIComponent(entryId)}/end`,
   /** Slice 5. POST MoveToOrgRequest -> MoveToOrgResult: Move to organization (manage on the object, member or up in the org). */
-  moveWorkspace: (ref: string) => `/api/workspaces/${encodeURIComponent(ref)}/move-to-org`,
+  moveWorkspace: (ref: string) => `/api/workspaces/${ref.split('/').map(encodeURIComponent).join('/')}/move-to-org`,
   moveBucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/move-to-org`,
   moveVault: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/move-to-org`,
 } as const;

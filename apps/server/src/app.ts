@@ -1179,7 +1179,7 @@ export function createApp(
   // Relocation, the bulk form: a plan of sessions moves off this workspace (the platform admin; chat/relocateRoutes.ts).
   ws.route('/', createSessionRelocateRoutes(chatController));
   // Organizations slice 5: Move to organization (manage on the workspace, member or up in the org).
-  ws.route('/', createMoveToOrgRoute(orgsModule.transfers, 'workspace', '/:ref/move-to-org', 'ref'));
+  ws.route('/', createMoveToOrgRoute(orgsModule.transfers, 'workspace', '/:target/:name/move-to-org', 'target+name'));
   app.route('/api/workspaces', ws);
 
   const acc = new Hono<Env>();
