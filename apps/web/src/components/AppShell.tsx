@@ -48,7 +48,10 @@ function Shell() {
   const hasHeaderStrip = useHasStrip('header');
   const key = workbenchPage(pathname) ?? pageKey(pathname);
   // A new page starts at the top of the content pane (a desktop; on a phone the document scrolls as before).
-  useEffect(() => scrollPane()?.scrollTo({ top: 0 }), [key]);
+  useEffect(() => {
+    // Braces: a browser that has scroll promises returns one from scrollTo, and an effect may return only a clean-up.
+    scrollPane()?.scrollTo({ top: 0 });
+  }, [key]);
   // A Workbench page (T-158) gets less padding under it (it ends at the window's bottom), and stays mounted across its own sub-paths:
   // opening a ticket beside the board must not remount (and refetch) the board.
   const workbench = workbenchPage(pathname);
