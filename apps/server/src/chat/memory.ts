@@ -9,10 +9,10 @@
 // crossing is a new item (a new notification).
 
 import { createHash } from 'node:crypto';
-import { CHAT_API, workspaceRef, type AttentionItem } from '@portal/contracts';
+import { CHAT_API, workspaceRef } from '@portal/contracts';
 import { AppError, defineErrorCodes } from '@isnanme/core';
 import { can } from '../authz/seam.js';
-import { readsPersonOnly, verbFor, type AttentionSource } from '../attention/registry.js';
+import { readsPersonOnly, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 import type { MemoryReading } from '../workspaces/memory.js';
 
 const MiB = 1024 * 1024;
@@ -187,12 +187,13 @@ export function memoryAttentionSource(memory: Pick<WorkspaceMemory, 'alerts'>): 
       return memory
         .alerts()
         .filter((a) => can(actor, verbFor(scope, 'operate'), workspaceRef(a.workspaceId)).allow)
-        .map((a): AttentionItem => {
+        .map((a): AnchoredItem => {
           const r = a.reading;
           const pct = Math.round((r.usedBytes / r.limitBytes) * 100);
           const top = r.top.map((p) => `${p.name} ${p.mb} MB`).join(', ');
           return {
             kind: 'workspace_memory',
+            anchor: workspaceRef(a.workspaceId),
             id: memoryItemId(a.workspaceId, a.since),
             title: `${a.workspaceId}: memory ${pct}%${top ? ` (${top})` : ''}`,
             who: [],

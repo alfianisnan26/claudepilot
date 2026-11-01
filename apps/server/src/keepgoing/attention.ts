@@ -3,10 +3,10 @@
 // notification); this lists it until the chat runs again (the next look clears the report). Class: a question, a person decides how to bring
 // it back. Who decides: operate on the chat (the module's own `can()`); the item opens the chat, whose page recovers or continues it.
 
-import { CHAT_API, sessionRef, type AttentionItem } from '@portal/contracts';
+import { CHAT_API, sessionRef, workspaceRef } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, sessionWho, ticketWho, verbFor, type AttentionSource } from '../attention/registry.js';
+import { clip, present, sessionWho, ticketWho, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   session_id: string;
@@ -34,8 +34,9 @@ export function keepGoingAttentionSource(db: () => DatabaseSync | null): Attenti
       return rows
         .filter((r) => can(actor, verbFor(scope, 'operate'), sessionRef(r.session_id)).allow)
         .map(
-          (r): AttentionItem => ({
+          (r): AnchoredItem => ({
             kind: 'keepgoing_down',
+            anchor: r.workspace_id ? workspaceRef(r.workspace_id) : null,
             id: r.session_id,
             title: `${clip(r.session_title, 60) || 'A chat'}: left down`,
             who: present([sessionWho(r.session_id, r.session_title), ticketWho(r.ticket_id)]),

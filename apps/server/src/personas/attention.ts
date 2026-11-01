@@ -5,10 +5,10 @@
 // Who decides: a person (the decide route is a signed-in person's, `POST /api/personas/proposals/:id/approve`) with manage on the persona.
 // Read only, next to the module and without touching its service: one query on persona_proposals.
 
-import { objectRef, type AttentionItem, type PersonaProposalKind } from '@portal/contracts';
+import { objectRef, type PersonaProposalKind } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, readsPersonOnly, sessionWho, verbFor, type AttentionSource } from '../attention/registry.js';
+import { clip, present, readsPersonOnly, sessionWho, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   id: string;
@@ -62,8 +62,9 @@ export function personaAttentionSource(db: () => DatabaseSync | null): Attention
       return rows
         .filter((r) => can(actor, verbFor(scope, 'manage'), objectRef('pool', r.pool_id, 'persona')).allow)
         .map(
-          (r): AttentionItem => ({
+          (r): AnchoredItem => ({
             kind: 'persona_proposal',
+            anchor: objectRef('pool', r.pool_id, 'persona'),
             id: r.id,
             title: `${clip(r.pool_name, 60)}: ${WHAT[r.kind] ?? clip(r.kind, 20)}`,
             who: present([sessionWho(r.session_id, r.session_title)]),

@@ -14,7 +14,7 @@ import {
 } from '@isnanme/ui';
 import { isLastKnownStatus, workspaceDisplayName, type AccountPool, type DeliveryStatus, type RepoWorkspaceSummary, type Workspace, type WorkspaceStatus, type WorkspaceTarget, type WorkspaceUsage } from '@portal/contracts';
 import { AppWindow, Box, Boxes, Check, ChevronRight, ListChecks, Play, Plus, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
@@ -22,6 +22,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { ReposChip, REPOS_CHIP_ATTR, reposLabel, useReposOverview } from '@/features/repos';
 import { api, errorText } from '@/lib/api';
 import { isAdminState, useAuth } from '@/lib/auth';
+import { scopedPush } from '@/lib/orgContext';
 import { useLive, useLiveConnected } from '@/lib/live';
 import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
 import { BulkAssignDialog } from './BulkAssignDialog';
@@ -109,7 +110,16 @@ export function WorkspacesPage() {
   // The portal pushes the list when it changes, and usage while something runs.
   const live = useLiveConnected();
   const anyRunning = !!list?.some((w) => w.status === 'running');
-  useLive('workspaces', (msg) => setList(msg.data));
+  // The push carries every workspace the person may see, whatever the context: it only updates this context's rows (lib/orgContext scopedPush).
+  const held = useRef(list);
+  held.current = list;
+  const pushedIds = useRef('');
+  useLive('workspaces', (msg) => {
+    const { next, ids } = scopedPush(msg.data, held.current, pushedIds.current);
+    pushedIds.current = ids;
+    if (next) setList(next);
+    else void loadList().catch(() => undefined);
+  });
   useLive('usage', (msg) => setUsage(new Map(msg.data.map((x) => [x.id, x]))), anyRunning);
   useLive('accounts', () => void api.accounts.pools().then(setPools, () => undefined));
   // How many repositories of each workspace need a look: the chip on its row.

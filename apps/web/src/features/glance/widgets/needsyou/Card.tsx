@@ -4,9 +4,10 @@ import { KIND_ICON } from '@/features/attention/look';
 import { ATTENTION_PATH } from '@/features/attention/model';
 import { CardFoot, CardList, CardRow, Stat, Stats } from '../shared/card';
 import { shortAgo } from '../shared/format';
-import { GlanceFailed, GlanceLine, GlanceSkeleton } from '../shared/states';
+import { GlanceFailed, GlanceSkeleton } from '../shared/states';
 import { useNow } from '../shared/useNow';
 import { reviewView } from './model';
+import { ContextLine } from '../shared/context';
 
 /** Home's Review: the count by source (each opens the list of that kind) and the newest item (opens the deck at its card). */
 export function ReviewCard() {
@@ -35,7 +36,7 @@ export function ReviewCard() {
           />
         </CardList>
       ) : (
-        <GlanceLine>Nothing needs you.</GlanceLine>
+        <ContextLine>Nothing needs you.</ContextLine>
       )}
       <CardFoot to={ATTENTION_PATH}>{v.total ? `Open deck · ${v.total}` : 'Open'}</CardFoot>
     </div>

@@ -5,6 +5,8 @@ import { AppError, success } from '@isnanme/core';
 import type { SnoozeKind, SnoozeUntil, UsageExportQuery } from '@portal/contracts';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { byWorkspace, orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
+import { actorOf as seamActorOf } from '../authz/seam.js';
 import { OWNER_ACTOR } from './actor.js';
 import type { ClaudeUsageMonitor } from './service.js';
 
@@ -63,8 +65,17 @@ export function createClaudeUsageRoutes(usage: ClaudeUsageMonitor): Hono {
     return c.body(file.body, 200, { 'Content-Type': file.contentType, 'Content-Disposition': `attachment; filename="${file.fileName}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   });
 
-  // GET /api/claude-usage[?watch=1]: every Claude's windows. `watch` is the Usage tab being open (faster probing).
-  r.get('/', async (c) => c.json(success(await usage.report({ watch: c.req.query('watch') === '1' }))));
+  // GET /api/claude-usage[?watch=1][&org=]: every Claude's windows. `watch` is the Usage tab being open (faster probing). `?org=` (personal |
+  // an org id; authz/orgScope.ts) keeps the Claudes whose workspace that context owns, and their alerts; an org the caller is not in: none.
+  r.get('/', async (c) => {
+    const report = await usage.report({ watch: c.req.query('watch') === '1' });
+    const scope = orgScopeOf(c);
+    if (!scope) return c.json(success(report));
+    const inWorkspace = byWorkspace(orgScopeFilter(seamActorOf(c), scope)!);
+    const claudes = report.claudes.filter((u) => inWorkspace(u.workspaceId));
+    const kept = new Set(claudes.map((u) => u.claudeId));
+    return c.json(success({ ...report, claudes, alerts: report.alerts.filter((a) => kept.has(a.claudeId)) }));
+  });
 
   // GET /api/claude-usage/:claudeId/history?range=1d|7d|30d
   r.get('/:claudeId/history', async (c) => c.json(success(await usage.history(c.req.param('claudeId'), c.req.query('range') ?? '1d'))));

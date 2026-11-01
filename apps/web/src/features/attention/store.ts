@@ -1,5 +1,6 @@
 import type { AttentionItem, AttentionList } from '@portal/contracts';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { subscribeContext } from '@/lib/orgContext';
 import { fetchAttention } from './api';
 
 /**
@@ -46,6 +47,13 @@ export function useAttention(): State & { reload: () => Promise<void> } {
   const reload = useCallback(() => loadAttention(), []);
   return { ...s, reload };
 }
+
+// Another context (lib/orgContext, owner request 2026-11-01): the list held is the old context's; a load already running is not kept (seq).
+subscribeContext(() => {
+  seq++;
+  set({ list: null, failed: false });
+  if (started) void loadAttention();
+});
 
 /** One item as the server now shows it (a snooze set or cleared), in place, until the next load brings the same. */
 export function patchAttentionItem(next: AttentionItem): void {

@@ -10,6 +10,7 @@ import { AppError, success } from '@isnanme/core';
 import { KEEPGOING_BOUNDS as B, KEEPGOING_PROGRAM_RE, type ChatKeepGoingPolicy, type UpdateKeepGoingRequest } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { byWorkspace, orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import type { PlatformOwner } from '../platform/owner.js';
 import type { KeepGoingChatPort, KeepGoingEngine } from './engine.js';
 
@@ -29,7 +30,12 @@ export function createKeepGoingListRoutes(d: { owner: PlatformOwner; engine: Pic
     const userId = who.userId;
     if (!userId) throw new AppError('NOT_FOUND', 'Not found.');
     const own = who.actor.kind === 'agent' ? who.actor.sessionId : null;
-    return c.json(success(d.engine.list((s) => (own === null || own === s.id) && d.owner.can(userId, 'view', { type: 'session', id: s.id, workspaceId: s.workspaceId }))));
+    // `?org=` (personal | an org id; authz/orgScope.ts): only the chats in that context's workspaces, after `view`; never wider.
+    const inScope = orgScopeFilter(who.actor, orgScopeOf(c));
+    const inWorkspace = inScope ? byWorkspace(inScope) : null;
+    return c.json(
+      success(d.engine.list((s) => (own === null || own === s.id) && d.owner.can(userId, 'view', { type: 'session', id: s.id, workspaceId: s.workspaceId }) && (!inWorkspace || inWorkspace(s.workspaceId)))),
+    );
   });
   return app;
 }

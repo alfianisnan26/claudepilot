@@ -2,9 +2,11 @@ import { Gauge } from 'lucide-react';
 import { lazy, useMemo } from 'react';
 import { paceCompact } from '@/features/lab/summaryModel';
 import type { GlanceCompact, GlanceWidget } from '../../types';
+import { personalOnlyCard, personalOnlyHook } from '../shared/context';
 import { paceStore } from './store';
 
-const PaceCard = lazy(() => import('./Card').then((m) => ({ default: m.PaceCard })));
+// The portal's own pilot numbers: Personal only (shared/context).
+const PaceCard = personalOnlyCard('Pace', lazy(() => import('./Card').then((m) => ({ default: m.PaceCard }))));
 
 function usePaceCompact(): GlanceCompact {
   const { data, failed } = paceStore.use();
@@ -22,7 +24,7 @@ export const paceWidget: GlanceWidget = {
   about: 'How the crew spends its quota (1 : 1 is exactly by the reset), what it used, and how many tickets it resolved, at what cost, and created per closed.',
   href: '/admin/usage?tab=crew',
   defaultHidden: true,
-  useCompact: usePaceCompact,
+  useCompact: personalOnlyHook('Pace', usePaceCompact),
   Full: PaceCard,
   Card: PaceCard,
 };

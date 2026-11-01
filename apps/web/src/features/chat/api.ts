@@ -43,7 +43,7 @@ import {
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 import { asPage } from './history';
-import { scopedList } from '@/lib/orgContext';
+import { scopedList, scopedPath } from '@/lib/orgContext';
 
 /**
  * The chat endpoints, fetched exactly like `lib/api.ts`: same-origin credentials (Hono's `csrf`
@@ -187,7 +187,8 @@ export const chatApi = {
   /** Keep going (T-259): the chat's policy, today's counts and its last action; null when it never had one. */
   keepGoing: (id: string) => request<ChatKeepGoing | null>('GET', CHAT_API.keepGoing(id)),
   /** The chats with Keep going on (the Home card "Autonomy", T-259 slice 2). */
-  keepGoingList: () => request<KeepGoingList>('GET', KEEPGOING_API.list),
+  /** The chats Keep going watches, in the org context (`?org=`: a chat through its workspace). */
+  keepGoingList: () => request<KeepGoingList>('GET', scopedPath(KEEPGOING_API.list)),
   /** Sets Keep going (a person only). */
   setKeepGoing: (id: string, body: UpdateKeepGoingRequest) => request<ChatKeepGoing>('PUT', CHAT_API.keepGoing(id), body),
   /** Pauses or resumes Keep going for a program, or all (a platform admin; T-259 slice 3). */

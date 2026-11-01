@@ -23,11 +23,20 @@ import {
   type AttentionKind,
   type AttentionList,
   type AttentionScope,
+  type ObjectRef,
   type Verb,
 } from '@portal/contracts';
 import { AppError } from '@isnanme/core';
+import type { AnchorFilter } from '../authz/orgScope.js';
 import { systemActor } from '../authz/seam.js';
 import type { AttentionSnoozes } from './snooze.js';
+
+/**
+ * An item as a source hands it over: `anchor` is the object that carries its owner for the org context (authz/orgScope.ts): a session's or a
+ * run's workspace, a ticket's bucket, the catalog entry or pool it is about. Absent or null: no anchor (Personal only). The registry strips it
+ * before an item leaves.
+ */
+export type AnchoredItem = AttentionItem & { anchor?: ObjectRef | null };
 
 export interface AttentionSource {
   kind: AttentionKind;
@@ -35,7 +44,7 @@ export interface AttentionSource {
    * Everything of this kind that waits for a person and that `actor` may decide (the module's own `can()`), or with scope `see` may view
    * (`verbFor`, `readsPersonOnly`); absent is `decide`. One read of the module's state, no N+1.
    */
-  list(actor: Actor, now: number, scope?: AttentionScope): AttentionItem[];
+  list(actor: Actor, now: number, scope?: AttentionScope): AnchoredItem[];
 }
 
 /** One item, as an event names it: never its text. */
@@ -110,14 +119,18 @@ export class AttentionRegistry {
   }
 
   /** Every source read once for `actor`: the items, and the kinds that could not be read. */
-  #read(actor: Actor, scope: AttentionScope = 'decide'): { items: AttentionItem[]; counts: AttentionList['counts']; unavailable: AttentionKind[] } {
+  #read(actor: Actor, scope: AttentionScope = 'decide', inScope: AnchorFilter | null = null): { items: AttentionItem[]; counts: AttentionList['counts']; unavailable: AttentionKind[] } {
     const now = this.#now();
     const items: AttentionItem[] = [];
     const counts = Object.fromEntries(ATTENTION_KINDS.map((k) => [k, this.#sources.has(k) ? 0 : null])) as AttentionList['counts'];
     const unavailable: AttentionKind[] = [];
     for (const source of this.#sources.values()) {
       try {
-        const found = source.list(actor, now, scope).filter((i) => i.kind === source.kind);
+        // The org context keeps only the items anchored in it, in the counts too; the anchor never leaves.
+        const found = source
+          .list(actor, now, scope)
+          .filter((i) => i.kind === source.kind && (!inScope || inScope(i.anchor ?? null)))
+          .map(({ anchor: _anchor, ...item }): AttentionItem => item);
         counts[source.kind] = found.length;
         items.push(...found);
       } catch (e) {
@@ -129,9 +142,12 @@ export class AttentionRegistry {
     return { items, counts, unavailable };
   }
 
-  /** `GET /api/attention`: the counts of every kind and one page of the items, grouped by why and then by age. */
-  list(actor: Actor, q: { kind?: AttentionKind | null; limit?: number; offset?: number; scope?: AttentionScope } = {}): AttentionList {
-    const { items, counts, unavailable } = this.#read(actor, q.scope);
+  /**
+   * `GET /api/attention`: the counts of every kind and one page of the items, grouped by why and then by age. `inScope`: the request's org
+   * context (`?org=`), which keeps only items anchored in it; null or absent: everything the actor may decide.
+   */
+  list(actor: Actor, q: { kind?: AttentionKind | null; limit?: number; offset?: number; scope?: AttentionScope; inScope?: AnchorFilter | null } = {}): AttentionList {
+    const { items, counts, unavailable } = this.#read(actor, q.scope, q.inScope ?? null);
     const limit = Math.min(Math.max(Math.trunc(Number.isFinite(q.limit) ? q.limit! : ATTENTION_PAGE_DEFAULT), 0), ATTENTION_PAGE_MAX);
     const offset = Math.max(Math.trunc(Number.isFinite(q.offset) ? q.offset! : 0), 0);
     const chosen = (q.kind ? items.filter((i) => i.kind === q.kind) : items).sort(attentionOrder);

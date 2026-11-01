@@ -3,11 +3,13 @@ import { GLANCE_API, type GlanceSnapshot } from '@portal/contracts';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { useLive, useLiveConnected } from '@/lib/live';
+import { scopedPath, subscribeContext } from '@/lib/orgContext';
 
 /**
  * One copy of the glance snapshot for every place that shows it (the header, the dock, the Sessions list, the composer strip and the
  * app badge each call a widget's hook): the portal is asked once however many of them are on screen, and the live topic `glance`
- * says when to ask again. No polling of its own (docs/prd/glance-widgets.md §4).
+ * says when to ask again. No polling of its own (docs/prd/glance-widgets.md §4). It is the snapshot of the org context (`?org=`, lib/orgContext):
+ * a context switch drops what is held and asks again (owner request 2026-11-01, metrics per org).
  */
 interface Snap {
   data: GlanceSnapshot | null;
@@ -36,7 +38,7 @@ const subscribe = (fn: () => void) => {
 async function fetchSnapshot(): Promise<GlanceSnapshot> {
   let res: Response;
   try {
-    res = await fetch(GLANCE_API.snapshot, { credentials: 'same-origin' });
+    res = await fetch(scopedPath(GLANCE_API.snapshot), { credentials: 'same-origin' });
   } catch {
     throw new ApiError('NETWORK_ERROR', 'Could not reach the server.', 0);
   }
@@ -47,24 +49,38 @@ async function fetchSnapshot(): Promise<GlanceSnapshot> {
   throw new ApiError('INTERNAL_ERROR', `Unexpected response (${res.status}).`, res.status);
 }
 
+/** Bumped by a context switch: a snapshot asked for before it is not kept. */
+let gen = 0;
+
 /** Loads the snapshot (one request at a time, however many ask). */
 export function reloadGlance(): Promise<void> {
   if (inflight) return inflight;
-  inflight = fetchSnapshot()
+  const g = gen;
+  const p: Promise<void> = fetchSnapshot()
     .then(
       (data) => {
-        snap = { data, failed: false, denied: false, loadedAt: Date.now() };
+        if (g === gen) snap = { data, failed: false, denied: false, loadedAt: Date.now() };
       },
       (e: unknown) => {
-        snap = { ...snap, failed: true, denied: e instanceof ApiError && e.status === 403 };
+        if (g === gen) snap = { ...snap, failed: true, denied: e instanceof ApiError && e.status === 403 };
       },
     )
     .finally(() => {
-      inflight = null;
+      if (inflight === p) inflight = null;
       emit();
     });
-  return inflight;
+  inflight = p;
+  return p;
 }
+
+// Another context: the snapshot held is the old context's, never shown as the new one's.
+subscribeContext(() => {
+  gen++;
+  inflight = null;
+  snap = { data: null, failed: false, denied: false, loadedAt: 0 };
+  emit();
+  if (listeners.size) void reloadGlance();
+});
 
 export interface GlanceState {
   data: GlanceSnapshot | null;

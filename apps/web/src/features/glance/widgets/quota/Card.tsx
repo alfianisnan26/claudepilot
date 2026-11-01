@@ -5,10 +5,11 @@ import { useClaudeUsage, useNow } from '@/features/usage/claude/useClaudeUsage';
 import { useGlanceSettings } from '../../settings';
 import { CardFoot } from '../shared/card';
 import { shortAgo } from '../shared/format';
-import { GlanceFailed, GlanceLine } from '../shared/states';
+import { GlanceFailed } from '../shared/states';
 import { autoStore } from './autoStore';
 import { AUTO_MODE_WORD, autoLine, quotaBoard } from './board';
 import { ClaudeBlock } from './Full';
+import { ContextLine } from '../shared/context';
 
 /**
  * Home's Quota: every Claude, the one closest to running out first and open (each window with its meter and reset; a tap opens the pace),
@@ -23,7 +24,7 @@ export function QuotaCard() {
   return (
     <>
       {rows.length === 0 ? (
-        <GlanceLine>No Claudes.</GlanceLine>
+        <ContextLine>No Claudes.</ContextLine>
       ) : (
         <ul aria-label="Claudes, closest to running out first" className="flex flex-col divide-y divide-line">
           {rows.map((r, i) => (

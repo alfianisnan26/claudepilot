@@ -88,7 +88,29 @@ export function subscribeContext(fn: () => void): () => void {
  */
 export function scopedList<T>(path: string, run: (path: string) => Promise<T>, empty: () => T, ctx: AppContext = current, live = ORG_SCOPED_LISTS_LIVE): Promise<T> {
   if (!live) return ctx.kind === 'personal' ? run(path) : Promise.resolve(empty());
-  return run(withOrg(path, ctx.kind === 'org' ? ctx.id : PERSONAL_ORG_PARAM));
+  return run(scopedPath(path, ctx));
+}
+
+/**
+ * A summary's path in the context (owner request 2026-11-01, metrics per org): the same `?org=` a list gets, for the Home cards and the glance
+ * rail (glance, Needs you, quota, spend, Keep going). Their stores load again when the context changes (`subscribeContext`).
+ */
+export const scopedPath = (path: string, ctx: AppContext = current): string => withOrg(path, ctx.kind === 'org' ? ctx.id : PERSONAL_ORG_PARAM);
+
+/**
+ * A live push of a whole list (the `workspaces` topic) in the context (owner request 2026-11-01: an org's Home showed another org's workspace
+ * from it). The push carries every row the person may see, whatever the context, so it never adds one: while the pushed set of ids is the one
+ * pushed last time, the held (context) list takes the pushed rows of its own ids, in the pushed order (a state changes without a request);
+ * when a row came or went, or nothing is held yet, `next` is null: load the list again in the context. `ids` is what to pass as `lastIds` next.
+ */
+export function scopedPush<T extends { id: string }>(pushed: readonly T[], held: readonly T[] | null, lastIds: string): { next: T[] | null; ids: string } {
+  const ids = pushed
+    .map((r) => r.id)
+    .sort()
+    .join('\n');
+  if (ids !== lastIds || !held) return { next: null, ids };
+  const mine = new Set(held.map((r) => r.id));
+  return { next: pushed.filter((r) => mine.has(r.id)), ids };
 }
 
 /** The browser's local storage, or null where it cannot be reached. */

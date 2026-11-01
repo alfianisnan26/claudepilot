@@ -6,6 +6,7 @@ import { GlanceFailed, GlanceSkeleton, StaleNote } from '../shared/states';
 import { useNow } from '../shared/useNow';
 import { ticketsView } from './model';
 import { ticketsStore } from './store';
+import { ContextLine } from '../shared/context';
 
 /** Home's Tickets: the queue by status, how many wait for a person (a tap lists them), and the three newest open tickets. */
 export function TicketsCard() {
@@ -41,7 +42,7 @@ export function TicketsCard() {
           ))}
         </CardList>
       ) : (
-        <p className="py-2 text-center text-sm text-muted">No open tickets.</p>
+        <ContextLine>No open tickets.</ContextLine>
       )}
       <CardFoot to="/admin/tickets">All tickets</CardFoot>
     </>

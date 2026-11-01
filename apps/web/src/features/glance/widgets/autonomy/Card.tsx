@@ -8,10 +8,11 @@ import { errorText } from '@/lib/api';
 import { LevelDot } from '../../ui';
 import { CardList, CardRow, Stat, Stats } from '../shared/card';
 import { shortAgo } from '../shared/format';
-import { GlanceFailed, GlanceLine, GlanceSkeleton, StaleNote } from '../shared/states';
+import { GlanceFailed, GlanceSkeleton, StaleNote } from '../shared/states';
 import { useNow } from '../shared/useNow';
 import { autonomyView } from './model';
 import { autonomyStore } from './store';
+import { ContextLine } from '../shared/context';
 
 /** Home's Autonomy: the chats kept going, the ones left down first, each with its state and Keep going's last action; a tap opens the chat. */
 export function AutonomyCard() {
@@ -38,7 +39,7 @@ export function AutonomyCard() {
         <Stat value={v.actions} label="Today" />
       </Stats>
       {v.rows.length === 0 ? (
-        <GlanceLine>No chat has Keep going on.</GlanceLine>
+        <ContextLine>No chat has Keep going on.</ContextLine>
       ) : (
         <CardList label="Chats kept going">
           {v.rows.map((r) => {

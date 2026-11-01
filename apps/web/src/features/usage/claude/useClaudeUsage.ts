@@ -1,6 +1,7 @@
 import { headroomFrom, type ClaudeUsage, type ClaudeUsageReport, type ClaudeUsageWindow, type Headroom } from '@portal/contracts';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useLive, useLiveConnected } from '@/lib/live';
+import { subscribeContext } from '@/lib/orgContext';
 import { claudeUsageApi } from './api';
 
 /**
@@ -27,26 +28,42 @@ const subscribe = (fn: () => void) => {
   return () => void listeners.delete(fn);
 };
 
-/** Loads the snapshot (one request at a time, however many ask). `watch`: the Usage tab is open. */
+/** Bumped by a context switch: a report asked for before it is not kept. */
+let gen = 0;
+
+/** Loads the snapshot (one request at a time, however many ask), in the org context. `watch`: the Usage tab is open. */
 export function reloadClaudeUsage(watch = false): Promise<void> {
   if (inflight) return inflight;
-  inflight = claudeUsageApi
+  const g = gen;
+  const p: Promise<void> = claudeUsageApi
     .report(watch)
     .then(
       (report) => {
+        if (g !== gen) return;
         snap = { report, failed: false };
         loadedAt = Date.now();
       },
       () => {
-        snap = { report: snap.report, failed: true };
+        if (g === gen) snap = { report: snap.report, failed: true };
       },
     )
     .finally(() => {
-      inflight = null;
+      if (inflight === p) inflight = null;
       emit();
     });
-  return inflight;
+  inflight = p;
+  return p;
 }
+
+// Another context (lib/orgContext, owner request 2026-11-01): the Claudes held are the old context's; ask again for whoever is looking.
+subscribeContext(() => {
+  gen++;
+  inflight = null;
+  snap = { report: null, failed: false };
+  loadedAt = 0;
+  emit();
+  if (listeners.size) void reloadClaudeUsage();
+});
 
 /** Puts one Claude's fresh row (from a check or a snooze) into the shared copy. */
 export function replaceClaude(row: ClaudeUsage): void {

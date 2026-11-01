@@ -4,10 +4,10 @@
 // `production`), or a person added `owner-checklist` (the ticket's events say who: the `created` row's tags, then each `tags` row).
 // Class: a question. Read only, next to the tickets module and without touching its service. Who decides: a person with operate on the ticket.
 
-import { objectRef, ticketIdOf, type AttentionItem, type TicketPriority } from '@portal/contracts';
+import { objectRef, ticketBucketRef, ticketIdOf, type TicketPriority } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, readsPersonOnly, verbFor, type AttentionSource } from '../attention/registry.js';
+import { clip, present, readsPersonOnly, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 import { AGENT_ASSIGN_USER_TAGS_DEFAULT, allowedAssignTags, OWNER_CHECKLIST_TAG } from './authz.js';
 
 /** An event actor that is a person: the page (`ui`) or a named person (`user:<name>`), as notify/adapters/tickets.ts counts. Agents, admin tokens, triggers and the portal are not (T-527). */
@@ -22,6 +22,7 @@ interface Row {
   reporter_kind: string;
   reporter_label: string;
   workspace_id: string | null;
+  bucket_key: string | null;
   created_at: string;
 }
 
@@ -73,7 +74,7 @@ export function ticketAttentionSource(db: () => DatabaseSync | null, agentAssign
       const allowed = allowedAssignTags(raw);
       const rows = d
         .prepare(
-          `SELECT number, type, assignee_kind, priority, summary, reporter_kind, reporter_label, workspace_id, created_at FROM tickets
+          `SELECT number, type, assignee_kind, priority, summary, reporter_kind, reporter_label, workspace_id, bucket_key, created_at FROM tickets
            WHERE ((type = 'approval' AND assignee_kind = 'user')
                   OR number IN (SELECT ticket_number FROM ticket_tags WHERE tag = ?))
              AND closed_at IS NULL AND status NOT IN ('done', 'wont_do')
@@ -99,8 +100,9 @@ export function ticketAttentionSource(db: () => DatabaseSync | null, agentAssign
         .map((r) => ({ r, id: ticketIdOf(r.number) }))
         .filter(({ id }) => can(actor, verbFor(scope, 'operate'), objectRef('ticket', id)).allow)
         .map(
-          ({ r, id }): AttentionItem => ({
+          ({ r, id }): AnchoredItem => ({
             kind: 'ticket_approval',
+            anchor: r.bucket_key ? ticketBucketRef(r.bucket_key) : null,
             id,
             title: clip(r.summary, 120),
             who: present([r.reporter_kind === 'ui' ? null : { label: clip(r.reporter_label, 60) || 'An agent', link: null }]),

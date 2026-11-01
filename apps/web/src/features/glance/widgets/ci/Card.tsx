@@ -2,10 +2,11 @@ import { StatusIcon } from '@/features/ci/parts';
 import { useGlance } from '../shared/store';
 import { CardFoot, CardList, CardRow, Stat, Stats } from '../shared/card';
 import { shortAgo } from '../shared/format';
-import { GlanceFailed, GlanceLine, GlanceSkeleton, StaleNote } from '../shared/states';
+import { GlanceFailed, GlanceSkeleton, StaleNote } from '../shared/states';
 import { useNow } from '../shared/useNow';
 import { ciView, holdsDeploy } from './model';
 import { ciStore } from './store';
+import { ContextLine } from '../shared/context';
 
 /** Home's CI: deploys waiting for your approval, failures that still stand, what runs now, and the last runs; a tap opens a run. */
 export function CiCard() {
@@ -23,7 +24,7 @@ export function CiCard() {
         <Stat value={v.active} label="Running" tone={v.active ? 'accent' : undefined} />
       </Stats>
       {v.runs.length === 0 ? (
-        <GlanceLine>No runs yet.</GlanceLine>
+        <ContextLine>No runs yet.</ContextLine>
       ) : (
         <CardList label="Last runs">
           {v.runs.map((r) => {

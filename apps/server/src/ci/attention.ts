@@ -4,10 +4,11 @@
 // manage on the run, as the approve route (tokens and agents never approve, so they never see it to decide; the `see` scope
 // shows it to whoever may view the run, read only).
 
-import { objectRef, type AttentionItem } from '@portal/contracts';
+import { objectRef } from '@portal/contracts';
+import { parentAnchor } from '../authz/orgScope.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, readsPersonOnly, sessionWho, ticketWho, verbFor, whoOf, type AttentionSource } from '../attention/registry.js';
+import { clip, present, readsPersonOnly, sessionWho, ticketWho, verbFor, whoOf, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   id: string;
@@ -62,10 +63,11 @@ export function ciAttentionSource(db: () => DatabaseSync | null): AttentionSourc
         .all() as unknown as Row[];
       return rows
         .filter((r) => can(actor, verbFor(scope, 'manage'), objectRef('ci_run', r.run_id)).allow)
-        .map((r): AttentionItem => {
+        .map((r): AnchoredItem => {
           const ref = r.tag ?? r.branch ?? '';
           return {
             kind: 'ci_deploy',
+            anchor: parentAnchor('ci_run', r.run_id),
             id: r.id,
             title: `${clip(r.repo, 40)} #${r.run_number}: ${clip(r.job, 30)} to ${clip(r.environment, 30)}`,
             who: present([sessionWho(r.session_id, r.session_title), ticketWho(r.ticket_id), !r.session_id ? whoOf(r.actor) : null]),
