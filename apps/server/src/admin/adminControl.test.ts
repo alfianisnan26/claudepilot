@@ -486,7 +486,7 @@ test('founder (owner request 2026-11-01): only the current founder, or the serve
   const row = audit('identity.founder_transferred')[0]!;
   assert.equal(row.severity, 'high');
   const detail = JSON.parse(row.detail);
-  assert.deepEqual([detail.to, detail.from, detail.via, detail.reason], ['ops@example.test', null, 'server-code', reason]);
+  assert.deepEqual([detail.to, detail.from, detail.how, detail.reason], ['ops@example.test', null, 'server-code', reason]);
   assert.ok(!JSON.stringify(store.db!.prepare('SELECT detail FROM platform_audit').all()).includes(code), 'the code is in no audit row');
   const list = (await p.call('GET', '/admin-api/users', { cookie })).json?.data as { id: string; founder?: boolean }[];
   assert.deepEqual(list.filter((u) => u.founder).map((u) => u.id), [otherAdminId]);

@@ -649,7 +649,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
         to: r.to.email,
         from: r.from?.email ?? null,
         fromId: r.from?.id ?? null,
-        via,
+        how: via, // `via` is the console's own key (admin-console)
         reason,
         movedRows,
         ...(movedRows ? { movedTables: Object.entries(r.moved).map(([t, n]) => `${t}:${n}`).join(',') } : {}),
