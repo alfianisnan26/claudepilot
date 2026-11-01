@@ -289,8 +289,8 @@ test('accounts: create shows a one-time password once (it signs in, it is in no 
   assert.deepEqual(revoked, [user.id], 'a demotion ends the main-portal sessions');
   assert.equal((await p.call('PATCH', `/admin-api/users/${adminId}`, { cookie, body: { role: 'member' } })).status, 409, 'not your own');
   assert.equal((await p.call('PATCH', `/admin-api/users/${user.id}`, { cookie, body: {} })).status, 422, 'nothing to change');
-  const updated = audit('account.updated').map((r) => JSON.parse(r.detail) as { role?: { from: string; to: string } });
-  assert.deepEqual(updated.map((d) => d.role), [{ from: 'member', to: 'admin' }, { from: 'admin', to: 'member' }]);
+  const updated = audit('account.updated').map((r) => JSON.parse(r.detail) as { roleFrom?: string; roleTo?: string });
+  assert.deepEqual(updated.map((d) => [d.roleFrom, d.roleTo]), [['member', 'admin'], ['admin', 'member']]);
 
   // Password reset: a new one-time password, the old one stops working; never your own here.
   const reset = await p.call('POST', `/admin-api/users/${user.id}/password`, { cookie, body: { reason: 'forgot it' } });

@@ -6,16 +6,49 @@ import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { auditSearch } from './api';
-import { AUDIT_KINDS, ago, auditWho, oidcOutcome, oidcStartHref, tabFromHash } from './model';
+import { AUDIT_KINDS, TABS, ago, auditDates, auditWho, oidcOutcome, oidcStartHref, settingInput, slugOf, tabFromHash } from './model';
 
 const src = fileURLToPath(new URL('..', import.meta.url));
 const web = fileURLToPath(new URL('../..', import.meta.url));
 
-test('tabFromHash names a section or falls back to Users', () => {
+test('tabFromHash names a section or falls back to Users; the six sections are in order; #sso opens Sign-in', () => {
+  assert.deepEqual([...TABS], ['users', 'orgs', 'workspaces', 'signin', 'settings', 'audit']);
   assert.equal(tabFromHash('#orgs'), 'orgs');
+  assert.equal(tabFromHash('#workspaces'), 'workspaces');
+  assert.equal(tabFromHash('#settings'), 'settings');
   assert.equal(tabFromHash('#audit'), 'audit');
+  assert.equal(tabFromHash('#sso'), 'signin');
   assert.equal(tabFromHash(''), 'users');
   assert.equal(tabFromHash('#nope'), 'users');
+  // The OIDC return names the section to come back to; the server takes only [a-z]{1,20}.
+  for (const t of TABS) assert.match(t, /^[a-z]{1,20}$/);
+});
+
+test('slugOf makes a slug the server accepts, or nothing', () => {
+  const ok = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){1,39}$/;
+  assert.equal(slugOf('Acme Corp'), 'acme-corp');
+  assert.equal(slugOf('  Café -- Ünïcode!  '), 'cafe-unicode');
+  assert.equal(slugOf('x'), '');
+  assert.equal(slugOf('!!!'), '');
+  const long = slugOf(`${'ab-'.repeat(30)}end`);
+  assert.ok(long.length <= 40 && ok.test(long), long);
+  assert.ok(ok.test(slugOf('Team 42')));
+});
+
+test('settingInput: numbers become numbers (or null), text stays text', () => {
+  assert.equal(settingInput('number', ' 30 '), 30);
+  assert.equal(settingInput('number', '1.5'), 1.5);
+  assert.equal(settingInput('number', 'abc'), null);
+  assert.equal(settingInput('number', ''), null);
+  assert.equal(settingInput('string', ' keep '), ' keep ');
+});
+
+test('auditDates passes date fields as they are and drops empty or malformed ones', () => {
+  assert.deepEqual(auditDates('', ''), {});
+  assert.deepEqual(auditDates('2026-01-02', ''), { from: '2026-01-02' });
+  assert.deepEqual(auditDates('2026-01-02', '2026-01-03'), { from: '2026-01-02', to: '2026-01-03' });
+  assert.deepEqual(auditDates('yesterday', '2026-1-3'), {});
+  assert.equal(auditSearch({ actor: 'system:', org: 'org_x', ...auditDates('2026-01-02', '') }), '?actor=system%3A&org=org_x&from=2026-01-02');
 });
 
 test('ago is relative to the given clock and says unknown for a bad time', () => {

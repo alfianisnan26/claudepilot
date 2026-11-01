@@ -1,12 +1,39 @@
 // Pure helpers of the Admin console (tested in model.test.ts).
 
-export const TABS = ['users', 'orgs', 'sso', 'audit'] as const;
+export const TABS = ['users', 'orgs', 'workspaces', 'signin', 'settings', 'audit'] as const;
 export type Tab = (typeof TABS)[number];
 
-/** The section a URL hash names (`#orgs`), or Users. */
+/** The section a URL hash names (`#orgs`), or Users. `#sso` (the section before Sign-in held it) opens Sign-in. */
 export function tabFromHash(hash: string): Tab {
   const t = hash.replace(/^#/, '');
+  if (t === 'sso') return 'signin';
   return (TABS as readonly string[]).includes(t) ? (t as Tab) : 'users';
+}
+
+/** A slug from an org name: lower case letters, digits and single hyphens, 2 to 40 characters (what ORG_SLUG_PATTERN accepts), or ''. */
+export function slugOf(name: string): string {
+  const s = name
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/, '');
+  return s.length >= 2 ? s : '';
+}
+
+/** What a setting's text field holds, as the value to send: a number for a number setting (or null when it is not one), else the text. */
+export function settingInput(type: 'boolean' | 'string' | 'number', raw: string): string | number | null {
+  if (type !== 'number') return raw;
+  const n = Number(raw.trim());
+  return raw.trim() !== '' && Number.isFinite(n) ? n : null;
+}
+
+/** The audit's date filters from the page's date fields (`YYYY-MM-DD`): passed as they are, an empty one dropped. */
+export function auditDates(from: string, to: string): { from?: string; to?: string } {
+  const ok = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  return { ...(ok(from) ? { from } : {}), ...(ok(to) ? { to } : {}) };
 }
 
 /** A short "how long ago" for a timestamp; an unreadable one is shown as unknown, never guessed. */
@@ -36,7 +63,7 @@ export function oidcStartHref(start: string, o: { stepUp?: boolean; next?: Tab }
 }
 
 /** Audit kinds offered as filters (the field still takes any kind or prefix). */
-export const AUDIT_KINDS = ['admin.signin_refused', 'admin.signin', 'admin.step_up', 'admin', 'account', 'ability', 'org'] as const;
+export const AUDIT_KINDS = ['admin.signin_refused', 'admin.signin', 'admin.step_up', 'admin', 'account', 'ability', 'org', 'workspace', 'sso', 'portal', 'setting'] as const;
 
 /** The second line of a refused sign-in's audit row: who tried, how and why (the email, else the provider's subject). */
 export function auditWho(kind: string, detail: Record<string, unknown> | undefined): string | null {

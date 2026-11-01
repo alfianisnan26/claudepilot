@@ -545,7 +545,8 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return d.accounts;
   };
   // The caller is an active admin and may not demote or remove themself, so another active admin always remains.
-  const tokensDetail = (t: { pmcp: number; reporter: number; agent: number } | null) => (t && t.pmcp + t.reporter + t.agent > 0 ? { tokens: t } : {});
+  // The audit keeps one level of plain values (platform/audit.ts cleanDetail): counts and roles go flat.
+  const tokensDetail = (t: { pmcp: number; reporter: number; agent: number } | null) => (t && t.pmcp + t.reporter + t.agent > 0 ? { tokensPmcp: t.pmcp, tokensReporter: t.reporter, agents: t.agent } : {});
   on('POST', '/admin-api/users', async (c) => {
     const b = await body(c);
     const actor = c.get('actor');
@@ -569,7 +570,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     const adminSessions = before.role === 'admin' && after.role === 'member' ? sessions.endAllFor(u.id, 'account demoted') : 0;
     record(c, 'account.updated', u.id, {
       email: u.email,
-      ...(role && role !== before.role ? { role: { from: before.role, to: after.role } } : {}),
+      ...(role && role !== before.role ? { roleFrom: before.role, roleTo: after.role } : {}),
       ...(displayName ? { name: true } : {}),
       ...(adminSessions ? { adminSessions } : {}),
       ...tokensDetail(tokens),
