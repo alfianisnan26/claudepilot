@@ -28,6 +28,7 @@ import {
   type WriteNoteResult,
 } from '@portal/contracts';
 import { api, ApiError } from '@/lib/api';
+import { scopedList } from '@/lib/orgContext';
 
 /**
  * The knowledge routes (`/api/knowledge`). The same contract as lib/api's client: `{ data }` on success, an
@@ -59,7 +60,7 @@ const enc = encodeURIComponent;
 
 export const knowledgeApi = {
   sources: () => request<KnowledgeSource[]>('GET', KNOWLEDGE_API.sources),
-  vaults: () => request<VaultSummary[]>('GET', KNOWLEDGE_API.vaults),
+  vaults: () => scopedList(KNOWLEDGE_API.vaults, (p) => request<VaultSummary[]>('GET', p), () => []),
   vault: (id: string) => request<VaultSummary>('GET', KNOWLEDGE_API.vault(id)),
   createVault: (body: CreateVaultRequest) => request<VaultSummary>('POST', KNOWLEDGE_API.vaults, body),
   updateVault: (id: string, body: UpdateVaultRequest) => request<VaultSummary>('PATCH', KNOWLEDGE_API.vault(id), body),

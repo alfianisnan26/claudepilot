@@ -7,12 +7,16 @@ import { BAR_ITEMS, HOME, MORE_ITEMS, NAV, NAV_GROUPS, type NavItem } from '@/ap
 import { GlanceDock } from '@/features/glance/Dock';
 import { NavBadge } from '@/features/notify/NavBadge';
 import { AttentionBadge, AttentionRoot } from '@/features/attention/Root';
+import { ContextSwitcher, OrgMark } from '@/features/orgs/ContextSwitcher';
+import { OrgsProvider, useOrgs } from '@/features/orgs/OrgsProvider';
 import { GlanceStrip, useHasStrip } from '@/features/glance/Strip';
 import { api } from '@/lib/api';
+import { ORG_SCOPED_LISTS_LIVE, serializeContext } from '@/lib/orgContext';
 import { workbenchPage } from '@/lib/panels';
 import { useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
-import { BRAND_NAME, Logo, LogoMark } from './Logo';
+import { InfoTip } from './InfoTip';
+import { Logo } from './Logo';
 
 /** A phone tab bar only earns its place with two or more sections. */
 const showTabBar = NAV.length > 1;
@@ -23,7 +27,17 @@ const showTabBar = NAV.length > 1;
  * the foot.
  */
 export function AppShell() {
+  return (
+    <OrgsProvider>
+      <Shell />
+    </OrgsProvider>
+  );
+}
+
+function Shell() {
   const { logout } = useAuth();
+  // The context (Personal or an org, §7): pages wait for it once, then remount when it changes, so every list asks again in the new one.
+  const { orgs, context, currentOrg } = useOrgs();
   const { pathname } = useLocation();
   // A Workbench page (T-158) gets the whole width (no centred column), less padding under it (it ends at the window's bottom), and
   // stays mounted across its own sub-paths: opening a ticket beside the board must not remount (and refetch) the board.
@@ -49,6 +63,7 @@ export function AppShell() {
           <Logo to={HOME} label={!glance} />
           <div className="ml-auto flex items-center gap-1.5">
             <GlanceStrip placement="header" />
+            <ContextSwitcher variant="icon" />
             <AccountMenu onLogout={() => void logout()} />
           </div>
         </div>
@@ -57,14 +72,19 @@ export function AppShell() {
       <main id="main" tabIndex={-1} data-focus-container className={cn('mx-auto px-4 pt-6 outline-none sm:px-6 sm:pt-10', !workbench && 'max-w-4xl')}>
         {/* Enter-only page transition: navigation never waits for an exit animation. */}
         <motion.div
-          key={workbench ?? pathname}
+          key={`${serializeContext(context)} ${workbench ?? pathname}`}
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease }}
         >
-          <Suspense fallback={<div className="skeleton h-40 rounded-[24px]" aria-busy="true" />}>
-            <Outlet />
-          </Suspense>
+          {currentOrg && !ORG_SCOPED_LISTS_LIVE && !pathname.startsWith('/admin/orgs/') && <OrgScopeNote name={currentOrg.name} />}
+          {orgs === null ? (
+            <div className="skeleton h-40 rounded-[24px]" aria-busy="true" />
+          ) : (
+            <Suspense fallback={<div className="skeleton h-40 rounded-[24px]" aria-busy="true" />}>
+              <Outlet />
+            </Suspense>
+          )}
         </motion.div>
       </main>
 
@@ -78,11 +98,9 @@ export function AppShell() {
 function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => void }) {
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-20 flex-col border-r border-line bg-bg sm:flex lg:w-64">
-      <div className="flex h-16 shrink-0 items-center justify-center px-3 lg:justify-start lg:px-5">
-        <Link to={HOME} aria-label={BRAND_NAME} className="inline-flex items-center gap-2 rounded-lg font-extrabold tracking-tight">
-          <LogoMark className="size-8" />
-          <span className="hidden text-lg lg:inline">{BRAND_NAME}</span>
-        </Link>
+      {/* The context switcher sits where the logo was (owner, 2026-11-01): the mark, the current context, a chevron. */}
+      <div className="flex h-16 shrink-0 items-center px-3 lg:px-4">
+        <ContextSwitcher variant="sidebar" />
       </div>
       <nav aria-label="Main" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:thin] lg:px-4">
         <ul className="flex flex-col gap-1">
@@ -244,5 +262,16 @@ function MoreList({ pathname, onPick }: { pathname: string; onPick: () => void }
         </Fragment>
       ))}
     </ul>
+  );
+}
+
+/** In an org context, until the server scopes lists by org (slices 5 and 6), every list is empty: this says why, once, above the page. */
+function OrgScopeNote({ name }: { name: string }) {
+  return (
+    <div data-org-scope-note="" className="mb-4 flex min-w-0 items-center gap-2 text-[13px] font-semibold text-muted">
+      <OrgMark org={{ name }} className="size-5 text-[10px]" />
+      <span className="min-w-0 truncate">{name}</span>
+      <InfoTip label="About this organization’s lists">Nothing is in this organization yet. Switch to Personal to see your own things.</InfoTip>
+    </div>
   );
 }

@@ -21,6 +21,8 @@ export function createOrgRoutes(orgs: OrgsService): Hono {
   const r = new Hono();
 
   r.get('/', (c) => c.json(success(orgs.mine(actorOf(c)))));
+  // Before `/:id`, so `abilities` is never read as an org id (the route guard takes the first match, too).
+  r.get('/abilities', (c) => c.json(success(orgs.myAbilities(actorOf(c)))));
   r.post('/', async (c) => c.json(success(orgs.create(actorOf(c), (await body(c)) as Partial<CreateOrgRequest>)), 201));
   r.get('/:id', (c) => c.json(success(orgs.get(actorOf(c), c.req.param('id')))));
   r.patch('/:id', async (c) => c.json(success(orgs.update(actorOf(c), c.req.param('id'), (await body(c)) as Partial<UpdateOrgRequest>))));

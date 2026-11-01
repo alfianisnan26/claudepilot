@@ -43,6 +43,7 @@ import {
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
 import { asPage } from './history';
+import { scopedList } from '@/lib/orgContext';
 
 /**
  * The chat endpoints, fetched exactly like `lib/api.ts`: same-origin credentials (Hono's `csrf`
@@ -80,10 +81,10 @@ const childrenQuery = (children?: 'end') => query({ children });
 export const chatApi = {
   /** One page of sessions, newest activity first (D-58): `next` goes back as `cursor`. */
   list: (opts: { cursor?: string | null; limit?: number; parentId?: string } = {}) =>
-    request<CursorPage<ChatSession>>(
-      'GET',
-      CHAT_API.list +
-        query({ limit: opts.limit ? String(opts.limit) : undefined, cursor: opts.cursor ?? undefined, parentId: opts.parentId }),
+    scopedList(
+      CHAT_API.list + query({ limit: opts.limit ? String(opts.limit) : undefined, cursor: opts.cursor ?? undefined, parentId: opts.parentId }),
+      (p) => request<CursorPage<ChatSession>>('GET', p),
+      () => ({ items: [], next: null }),
     ),
   /** Every session, by following the pages (at most `maxPages` of 100): for a caller that needs the whole set (the palette, a picker, a lead's workers). */
   listAll: async (opts: { parentId?: string; maxPages?: number } = {}): Promise<ChatSession[]> => {

@@ -25,6 +25,7 @@ import {
   type ValidateCiResult,
 } from '@portal/contracts';
 import { api, ApiError } from '@/lib/api';
+import { scopedList } from '@/lib/orgContext';
 
 /** Same contract as lib/api's client: `{ data }` on success, an ApiError otherwise; a 401 tells the app the session ended. */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -63,7 +64,7 @@ function query(f: CiRunFilter): string {
 }
 
 export const ciApi = {
-  runs: (filter: CiRunFilter = {}) => request<CiRunPage>('GET', `${CI_API.runs}${query(filter)}`),
+  runs: (filter: CiRunFilter = {}) => scopedList(`${CI_API.runs}${query(filter)}`, (p) => request<CiRunPage>('GET', p), () => ({ items: [], next: null, total: 0, active: 0 })),
   run: (id: string) => request<CiRun>('GET', CI_API.run(id)),
   log: (id: string, job: string, step: number, offset: number) =>
     request<CiLogChunk>('GET', `${CI_API.log(id)}?job=${encodeURIComponent(job)}&step=${step}&offset=${offset}`),
@@ -73,7 +74,7 @@ export const ciApi = {
   bump: (id: string, body: BumpRequest) => request<CiRun>('POST', CI_API.bump(id), body),
   start: (body: StartCiRunRequest) => request<CiRun>('POST', CI_API.runs, body),
   repos: (workspace?: string) =>
-    request<CiRepo[]>('GET', `${CI_API.repos}${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
+    scopedList(`${CI_API.repos}${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`, (p) => request<CiRepo[]>('GET', p), () => []),
   createRepo: (body: CreateCiRepoRequest) => request<CiRepo>('POST', CI_API.repos, body),
   updateRepo: (id: string, body: UpdateCiRepoRequest) => request<CiRepo>('PATCH', CI_API.repo(id), body),
   removeRepo: (id: string) => request<{ ok: true }>('DELETE', CI_API.repo(id)),

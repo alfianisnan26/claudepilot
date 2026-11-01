@@ -90,7 +90,15 @@ import {
   type WorkspaceUsage,
   type WorkspaceResources,
   type UpdateWorkspaceResourcesRequest,
+  ORGS_API,
+  type ChangeOrgMemberRoleRequest,
+  type CreateOrgRequest,
+  type MyAbilities,
+  type Org,
+  type OrgMember,
+  type UpdateOrgRequest,
 } from '@portal/contracts';
+import { scopedList } from './orgContext';
 
 export class ApiError extends Error {
   constructor(
@@ -231,7 +239,8 @@ export const api = {
   workspaces: {
     targets: (fresh = false) => request<WorkspaceTarget[]>('GET', WORKSPACE_API.targets + (fresh ? '?fresh=1' : '')),
     // Every list teaches the labels (T-42), so places that only hold a workspace id name it by its label.
-    list: () => request<Workspace[]>('GET', WORKSPACE_API.list).then((list) => (rememberWorkspaceLabels(list), list)),
+    list: () =>
+      scopedList(WORKSPACE_API.list, (p) => request<Workspace[]>('GET', p), () => []).then((list) => (rememberWorkspaceLabels(list), list)),
     /** The labels of renamed workspaces (T-42), learned once at the app's start. */
     labels: () => request<Record<string, string>>('GET', WORKSPACE_API.labels).then((map) => (rememberWorkspaceLabelMap(map), map)),
     /** Renames a workspace: its label only (T-42); nothing running is touched. */
@@ -260,6 +269,18 @@ export const api = {
     terminals: (id: string) => request<WorkspaceTerminal[]>('GET', WORKSPACE_API.terminals(id)),
     openTerminal: (id: string, body: CreateTerminalRequest) => request<WorkspaceTerminal>('POST', WORKSPACE_API.terminals(id), body),
     closeTerminal: (id: string, terminal: string) => request<{ ok: true }>('DELETE', `${WORKSPACE_API.terminals(id)}/${terminal}`),
+  },
+  /** Organizations (docs/prd/organizations.md §10): mine, create, settings, members. Never scoped by the context (they ARE the contexts). */
+  orgs: {
+    mine: () => request<Org[]>('GET', ORGS_API.orgs),
+    abilities: () => request<MyAbilities>('GET', ORGS_API.abilities),
+    create: (body: CreateOrgRequest) => request<Org>('POST', ORGS_API.orgs, body),
+    get: (id: string) => request<Org>('GET', ORGS_API.org(id)),
+    update: (id: string, body: UpdateOrgRequest) => request<Org>('PATCH', ORGS_API.org(id), body),
+    members: (id: string) => request<OrgMember[]>('GET', ORGS_API.members(id)),
+    setRole: (id: string, userId: string, body: ChangeOrgMemberRoleRequest) => request<OrgMember[]>('PATCH', ORGS_API.member(id, userId), body),
+    remove: (id: string, userId: string) => request<{ removed: true }>('DELETE', ORGS_API.member(id, userId)),
+    leave: (id: string) => request<{ left: true }>('POST', ORGS_API.leave(id)),
   },
   /** Multi-assignment pools (secrets & env, skillsets, MCP sets): one API for every type. */
   pools: {

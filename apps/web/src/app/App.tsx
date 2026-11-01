@@ -20,6 +20,7 @@ import { NotificationsPage } from '@/features/notify/NotificationsPage';
 import { NotifyRoot } from '@/features/notify/Root';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { connectReturnPath } from '@/features/auth/next';
+import { OrgSettingsPage } from '@/features/orgs/OrgSettingsPage';
 import { PoolsHub } from '@/features/pools/PoolsHub';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { POOL_TABS } from '@/features/pools/registry';
@@ -141,6 +142,8 @@ function Pages() {
         <Route path="access" element={<AccessPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        {/* Org settings (organizations §7): its own page per org, reached from the context switcher. */}
+        <Route path="orgs/:id" element={<OrgSettingsPage />} />
         {/* The VS Code extension's sign-in: a person approves the code their editor shows (T-1974). */}
         <Route path="vscode" element={<VscodePage />} />
       </Route>

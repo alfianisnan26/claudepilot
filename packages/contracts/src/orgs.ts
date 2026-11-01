@@ -112,9 +112,16 @@ export interface UserAbility {
   grantedAt: string;
 }
 
+/** `GET /api/orgs/abilities`: the abilities the signed-in person may use (an instance admin: every one; a token or an agent: none). */
+export interface MyAbilities {
+  abilities: Ability[];
+}
+
 export const ORGS_API = {
   /** GET: my organizations; POST: CreateOrgRequest -> Org (needs the ability `orgs.create` or an instance admin; the creator is its first owner). */
   orgs: '/api/orgs',
+  /** GET: MyAbilities (so the web shows "New organization" only to someone who may create one; the POST still decides). */
+  abilities: '/api/orgs/abilities',
   /** GET (view), PATCH (manage): UpdateOrgRequest. */
   org: (id: OrgId) => `/api/orgs/${id}`,
   /** GET: members and up (guests are refused). */
