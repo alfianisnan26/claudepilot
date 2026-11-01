@@ -171,12 +171,15 @@ spec:
             - name: NODE_OPTIONS
               value: --max-old-space-size=1536
           # T-365: a 1 s timeout dropped a slow but alive portal from the Service and the liveness kill restarted it while the node's
-          # disk was busy, which made the stall longer. Out of the Service after 3 slow checks (30 s), restarted only after 5 minutes.
+          # disk was busy, which made the stall longer. Out of the Service after 30 s of slow checks, restarted only after 5 minutes.
+          # Checked every 2 s (owner request 2026-11-01, performance): with 10 s a release stayed out of the Service up to 10 s after the
+          # portal listened (Recreate: that is downtime); 15 failures x 2 s keeps the 30 s before it is taken out.
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
-            periodSeconds: 10
+            periodSeconds: 2
+            failureThreshold: 15
             timeoutSeconds: 3
           livenessProbe:
             httpGet:

@@ -5,35 +5,17 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { AppShell } from '@/components/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Unreachable } from '@/components/Unreachable';
-import { AccessPage } from '@/features/admin/AccessPage';
 import { HomePage } from '@/features/home/HomePage';
-import { NeedsYouPage } from '@/features/attention/NeedsYouPage';
-import { ApprovalPage } from '@/features/approvals/ApprovalPage';
-import { SessionsPage } from '@/features/chat/SessionsPage';
-import { TicketsPage } from '@/features/tickets/TicketsPage';
-import { CiPage } from '@/features/ci/CiPage';
-import { RunPage } from '@/features/ci/RunPage';
-import { KnowledgePage } from '@/features/knowledge/KnowledgePage';
 import { ClaudeUsageWatcher } from '@/features/usage/claude/AlertWatcher';
 import { GlanceRoot } from '@/features/glance/Root';
-import { NotificationsPage } from '@/features/notify/NotificationsPage';
 import { NotifyRoot } from '@/features/notify/Root';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { connectReturnPath } from '@/features/auth/next';
-import { OrgInvitePage } from '@/features/orgs/OrgInvitePage';
-import { OrgSettingsPage } from '@/features/orgs/OrgSettingsPage';
-import { PoolsHub } from '@/features/pools/PoolsHub';
-import { SettingsPage } from '@/features/settings/SettingsPage';
-import { POOL_TABS } from '@/features/pools/registry';
-import { TargetsPage } from '@/features/targets';
-import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
-import { VscodePage } from '@/features/vscode/VscodePage';
 import { useAppUpdate } from '@/lib/appUpdate';
-import { MemberPage } from '@/features/auth/MemberPage';
-import { ProfilePage } from '@/features/profile/ProfilePage';
 import { profileReturnPath } from '@/features/profile/model';
 import { AuthProvider, isAdminState, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
+import { Lazy, lazyPage, preloadPages } from './lazyPage';
 import { HOME, isAdminOnlyPath } from './nav';
 import { uiStrings } from './strings';
 
@@ -50,6 +32,29 @@ const KnowledgeGraphPage = lazy(() => import('@/features/knowledge/GraphPage').t
 // The Usage page (stacked charts, budgets, attribution, spikes) is large and not every visit needs it: it loads on first use, behind a skeleton.
 const SchedulesPage = lazy(() => import('@/features/schedules/SchedulesPage').then((m) => ({ default: m.SchedulesPage })));
 const UsagePage = lazy(() => import('@/features/usage/UsagePage').then((m) => ({ default: m.UsagePage })));
+// Every other page of the app frame loads on first use too (owner request 2026-11-01, performance): the first load carries Home, the
+// shell and the sign-in only; the rest is fetched while the browser is idle after the first paint (preloadPages), so a tap still opens
+// a page at once. Each page waits inside the frame (Lazy), so the side panel and tab bar never blank.
+const AccessPage = lazyPage(() => import('@/features/admin/AccessPage'), (m) => m.AccessPage);
+const NeedsYouPage = lazyPage(() => import('@/features/attention/NeedsYouPage'), (m) => m.NeedsYouPage);
+const ApprovalPage = lazyPage(() => import('@/features/approvals/ApprovalPage'), (m) => m.ApprovalPage);
+const SessionsPage = lazyPage(() => import('@/features/chat/SessionsPage'), (m) => m.SessionsPage);
+const TicketsPage = lazyPage(() => import('@/features/tickets/TicketsPage'), (m) => m.TicketsPage);
+const CiPage = lazyPage(() => import('@/features/ci/CiPage'), (m) => m.CiPage);
+const RunPage = lazyPage(() => import('@/features/ci/RunPage'), (m) => m.RunPage);
+const KnowledgePage = lazyPage(() => import('@/features/knowledge/KnowledgePage'), (m) => m.KnowledgePage);
+const NotificationsPage = lazyPage(() => import('@/features/notify/NotificationsPage'), (m) => m.NotificationsPage);
+const OrgInvitePage = lazyPage(() => import('@/features/orgs/OrgInvitePage'), (m) => m.OrgInvitePage);
+const OrgSettingsPage = lazyPage(() => import('@/features/orgs/OrgSettingsPage'), (m) => m.OrgSettingsPage);
+const PoolsHub = lazyPage(() => import('@/features/pools/PoolsHub'), (m) => m.PoolsHub);
+const SettingsPage = lazyPage(() => import('@/features/settings/SettingsPage'), (m) => m.SettingsPage);
+const TargetsPage = lazyPage(() => import('@/features/targets'), (m) => m.TargetsPage);
+const WorkspacesPage = lazyPage(() => import('@/features/workspaces/WorkspacesPage'), (m) => m.WorkspacesPage);
+const VscodePage = lazyPage(() => import('@/features/vscode/VscodePage'), (m) => m.VscodePage);
+const MemberPage = lazyPage(() => import('@/features/auth/MemberPage'), (m) => m.MemberPage);
+const ProfilePage = lazyPage(() => import('@/features/profile/ProfilePage'), (m) => m.ProfilePage);
+// A pool type's own pages (library, catalog, review, editors) come with the pool registry, in its own chunk.
+const PoolRoutes = lazyPage(() => import('@/features/pools/PoolRoutes'), (m) => m.PoolRoutes);
 
 export function App() {
   useEffect(() => initViewportFix(), []);
@@ -111,16 +116,16 @@ function Pages() {
       >
         <Route index element={<Navigate to={HOME} replace />} />
         <Route path="home" element={<HomePage />} />
-        <Route path="attention" element={<NeedsYouPage />} />
+        <Route path="attention" element={<Lazy><NeedsYouPage /></Lazy>} />
         {/* An agent's request for the portal to act for it; the deck's card opens this (approvals PRD). */}
-        <Route path="approvals/:id" element={<ApprovalPage />} />
-        <Route path="workspaces" element={<WorkspacesPage />} />
-        <Route path="sessions" element={<SessionsPage />} />
+        <Route path="approvals/:id" element={<Lazy><ApprovalPage /></Lazy>} />
+        <Route path="workspaces" element={<Lazy><WorkspacesPage /></Lazy>} />
+        <Route path="sessions" element={<Lazy><SessionsPage /></Lazy>} />
         {/* One page for the queue and an open ticket (a Workbench, T-158): beside the board on a desktop, in its place on a phone. */}
-        <Route path="tickets/:id?" element={<TicketsPage />} />
-        <Route path="ci/:tab?" element={<CiPage />} />
-        <Route path="ci/runs/:id" element={<RunPage />} />
-        <Route path="knowledge" element={<KnowledgePage />} />
+        <Route path="tickets/:id?" element={<Lazy><TicketsPage /></Lazy>} />
+        <Route path="ci/:tab?" element={<Lazy><CiPage /></Lazy>} />
+        <Route path="ci/runs/:id" element={<Lazy><RunPage /></Lazy>} />
+        <Route path="knowledge" element={<Lazy><KnowledgePage /></Lazy>} />
         <Route
           path="usage/:tab?"
           element={
@@ -137,22 +142,22 @@ function Pages() {
             </Suspense>
           }
         />
-        <Route path="pools/:tab?" element={<PoolsHub />} />
+        <Route path="pools/:tab?" element={<Lazy><PoolsHub /></Lazy>} />
         {/* Each pool type's own pages (library, catalog, review, page editors) are routes, not nested tabs. */}
-        {POOL_TABS.flatMap((t) => (t.routes ?? []).map((r) => <Route key={`${t.id}/${r.path}`} path={`pools/${t.id}/${r.path}`} element={r.element} />))}
+        <Route path="pools/:type/*" element={<Lazy><PoolRoutes /></Lazy>} />
         <Route path="accounts" element={<Navigate to="/admin/pools" replace />} />
-        <Route path="targets" element={<TargetsPage />} />
-        <Route path="access/:tab?" element={<AccessPage />} />
-        <Route path="notifications/:tab?" element={<NotificationsPage />} />
-        <Route path="settings/:tab?" element={<SettingsPage />} />
+        <Route path="targets" element={<Lazy><TargetsPage /></Lazy>} />
+        <Route path="access/:tab?" element={<Lazy><AccessPage /></Lazy>} />
+        <Route path="notifications/:tab?" element={<Lazy><NotificationsPage /></Lazy>} />
+        <Route path="settings/:tab?" element={<Lazy><SettingsPage /></Lazy>} />
         {/* The person's own account (owner request 2026-11-01), from the account menu; members and admins alike. */}
-        <Route path="profile/:tab?" element={<ProfilePage />} />
+        <Route path="profile/:tab?" element={<Lazy><ProfilePage /></Lazy>} />
         {/* Org settings (organizations §7): its own page per org, reached from the context switcher. */}
-        <Route path="orgs/:id/:tab?" element={<OrgSettingsPage />} />
+        <Route path="orgs/:id/:tab?" element={<Lazy><OrgSettingsPage /></Lazy>} />
         {/* Accepting an organization invitation (slice 8): the code is in the link's fragment. */}
-        <Route path="org-invite" element={<OrgInvitePage />} />
+        <Route path="org-invite" element={<Lazy><OrgInvitePage /></Lazy>} />
         {/* The VS Code extension's sign-in: a person approves the code their editor shows (T-1974). */}
-        <Route path="vscode" element={<VscodePage />} />
+        <Route path="vscode" element={<Lazy><VscodePage /></Lazy>} />
       </Route>
       {/* Full screen, outside the app frame: the chat view owns the viewport (composer pinned, no tab bar). */}
       <Route
@@ -170,7 +175,9 @@ function Pages() {
         path="/admin/shared"
         element={
           <SignedInOnly>
-            <MemberPage />
+            <Suspense fallback={<Splash />}>
+              <MemberPage />
+            </Suspense>
           </SignedInOnly>
         }
       />
@@ -244,6 +251,12 @@ function SignedInOnly({ children }: { children: ReactNode }) {
   if (state.status === 'out') return <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />;
   // D-82 S1a: a member account gets the normal app; a platform area (its nav item hidden) sends it home, the server refuses its calls anyway.
   if (!isAdminState(state) && isAdminOnlyPath(location.pathname)) return <Navigate to={HOME} replace />;
+  return <PreloadPages>{children}</PreloadPages>;
+}
+
+/** Signed in and on a page: the other pages' chunks load while the browser is idle (lazyPage.tsx). */
+function PreloadPages({ children }: { children: ReactNode }) {
+  useEffect(() => preloadPages(), []);
   return children;
 }
 
