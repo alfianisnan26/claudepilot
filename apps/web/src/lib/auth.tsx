@@ -3,9 +3,9 @@ import { removeThisBrowserRegistration } from '@/features/notify/deviceId';
 import { resetNotifyStore } from '@/features/notify/store';
 import { resetAttention } from '@/features/attention/store';
 import { api, onUnauthorized } from './api';
+import { authStateOf, type AuthState } from './authState';
 
-/** `unreachable`: the server didn't answer, which says nothing about whether you are signed in. */
-type AuthState = { status: 'loading' } | { status: 'out'; enabled: boolean; emailSignIn: boolean } | { status: 'in' } | { status: 'member' } | { status: 'unreachable' };
+export { authStateOf, isAdminState, type AuthState } from './authState';
 
 interface AuthContextValue {
   state: AuthState;
@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const s = await api.session();
-      setState(s.authenticated ? (s.member ? { status: 'member' } : { status: 'in' }) : { status: 'out', enabled: s.enabled, emailSignIn: !!s.emailSignIn });
+      setState(authStateOf(s));
     } catch {
       // Not "signed out": the server may be restarting or the network gone. Keep what we knew, or wait and retry.
       setState((prev) => (prev.status === 'in' ? prev : { status: 'unreachable' }));
@@ -39,12 +39,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (code: string) => {
     await api.login(code);
-    setState({ status: 'in' });
+    // The server code is the platform's own sign-in: always the admin's app.
+    setState({ status: 'in', admin: true });
   }, []);
 
   const loginEmail = useCallback(async (email: string, password: string) => {
     await api.loginEmail(email, password);
-    // A member account lands on the member page (MU2 S1a): the server says which.
+    // A member account gets the member's app (D-82 S1a): the server says which.
     await refresh();
   }, [refresh]);
 

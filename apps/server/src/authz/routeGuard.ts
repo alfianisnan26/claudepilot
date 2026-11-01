@@ -8,13 +8,16 @@
 //   - `platform`: the area at the verb;
 //   - `signed-in`, `self`: the actor is a signed-in person (the middleware made sure); lists filter in their handler (`filter`);
 //   - `public`, `bearer`, `handler`: their own door (they are not behind the session middleware; one that is passes through).
+// D-82 S1a (member access): a member's session passes the middleware too. For a person who is not a platform admin, `signed-in`, `self` and
+// `handler` doors open only where listed in authz/memberDoors.ts, and an `objects` route whose checks named no object in the request as well.
 // It only ever refuses: every handler's own checks stay.
 
 import { AppError } from '@isnanme/core';
 import type { Context } from 'hono';
 import { matchedRoutes } from 'hono/route';
 import { isStableWorkspaceId, objectRef, platformRef, workspaceRef, type ObjectCheck, type ObjectRef, type RoutePolicy } from '@portal/contracts';
-import { actorOf, can, policyFor, refusal } from './seam.js';
+import { isMemberDoor } from './memberDoors.js';
+import { actorOf, can, isPlatformAdmin, policyFor, refusal } from './seam.js';
 
 
 /** The route that will answer this request: the first matched entry for its method that is not a middleware (`use`, method ALL). */
@@ -100,6 +103,10 @@ export async function enforceRoutePolicy(c: Context): Promise<void> {
   }
   const actor = actorOf(c);
   if (actor.kind === 'anonymous') throw new AppError('UNAUTHORIZED', 'Sign in again.');
+  // D-82 S1a (member access): a person who is not a platform admin passes a door that names no object only where it was read and listed
+  // (authz/memberDoors.ts); anything else is the same 404 as an unknown route. Admins are never held to the list.
+  const member = actor.kind === 'user' && !isPlatformAdmin(actor.userId);
+  if (member && policy.kind !== 'objects' && policy.kind !== 'platform' && !isMemberDoor(key)) throw new AppError('NOT_FOUND', 'Not found.');
   if (policy.kind === 'platform') {
     const ref = platformRef(policy.area);
     const d = can(actor, policy.verb, ref);
@@ -110,6 +117,7 @@ export async function enforceRoutePolicy(c: Context): Promise<void> {
   const params = routeParams(route.path, c.req.path) ?? {};
   let bodyRead: Promise<Record<string, unknown> | null> | null = null;
   const body = () => (bodyRead ??= jsonBody(c));
+  let decided = 0;
   for (const check of policy.checks) {
     const ids = await idsOf(c, check, params, body);
     const poolType = check.poolTypeParam ? params[check.poolTypeParam] : undefined;
@@ -125,6 +133,10 @@ export async function enforceRoutePolicy(c: Context): Promise<void> {
       const ref: ObjectRef = check.type === 'workspace' ? workspaceRef(id) : objectRef(check.type, id, poolType as ObjectRef['poolType']);
       const d = can(actor, check.verb, ref);
       if (!d.allow) throw refusal(d, check.verb, ref);
+      decided++;
     }
   }
+  // D-82 S1a: for a member, a route whose checks named no object in this request (each optional or left out) reaches its handler only when
+  // it is a listed door; its handler might otherwise fall back to something of its own.
+  if (member && decided === 0 && !isMemberDoor(key)) throw new AppError('NOT_FOUND', 'Not found.');
 }

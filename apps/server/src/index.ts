@@ -425,7 +425,8 @@ workspaces.hooks.audit = (e) => platform.audit.record(e);
 const view = workspaceView(pools, reconciler, claudeVersions.brief);
 const live = new LiveHub(
   { workspaces: async () => (await workspaces.list()).map(view), usage: () => workspaces.usage() },
-  (req) => !!portal.session(cookie(req, config.session.cookie)),
+  // D-82 S1a: a member's tab too; each tab gets only its own person's cut (organizations slice 2).
+  (req) => !!portal.personSession(cookie(req, config.session.cookie)),
 );
 // Needs you (docs/prd/attention.md): what waits for a person, read from each module's own state. The topics of the modules it reads
 // (pools: MCP catalog and skills; tickets; CI) make it look again; the chat's events and a minute's tick are chained further down.
@@ -870,7 +871,7 @@ const platform = createPlatform({
   selfOrigin: `http://localhost:${config.port}`,
   // Organizations slice 2 (P5): a notification's nudge goes to the tabs of the people it is for, nobody else's.
   publish: (topic, to) => (to ? live.publish(topic, to) : notify(topic)),
-  socketAuthorized: (req) => !!portal.session(cookie(req, config.session.cookie)),
+  socketAuthorized: (req) => !!portal.personSession(cookie(req, config.session.cookie)),
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);
 // A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
@@ -883,7 +884,8 @@ const appPorts = new AppPorts({
   portalPort: config.port,
   denyPorts: config.portProxy.denyPorts,
   workspaces,
-  sessionValid: (token) => !!portal.session(token),
+  // D-82 S1a: a member's app grant too; every proxied request asks the seam for operate on the workspace again (appports/proxy.ts).
+  sessionValid: (token) => !!portal.personSession(token),
   limits: { idleMs: config.portProxy.idleMs, socketIdleMs: config.portProxy.socketIdleMs, maxPerGrant: config.portProxy.maxPerGrant, maxPerWorkspace: config.portProxy.maxPerWorkspace },
 });
 const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, {
@@ -930,7 +932,8 @@ connect.attach(server, portal);
 attachShell(server, portal, workspaces);
 browser.attach(server, portal);
 live.attach(server);
-attachChat(server, chatController, (req) => !!portal.session(cookie(req, config.session.cookie)));
+// D-82 S1a: a member's chat socket too; every message that names a session asks can() for this person (organizations slice 2).
+attachChat(server, chatController, (req) => !!portal.personSession(cookie(req, config.session.cookie)));
 
 if (config.dev) {
   // One port for everything: the API through Hono, the rest through Vite (with HMR on this server).

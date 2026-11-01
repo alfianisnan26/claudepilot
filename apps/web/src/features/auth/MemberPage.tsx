@@ -2,6 +2,8 @@ import { Button } from '@isnanme/ui';
 import type { DelegatedSession, PortalTeam, SignedInAs } from '@portal/contracts';
 import { MessageSquare, UserRound, Users } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
+import { HOME } from '@/app/nav';
 import { AuthLayout } from '@/components/AuthLayout';
 import { InfoTip } from '@/components/InfoTip';
 import { useAuth } from '@/lib/auth';
@@ -11,7 +13,10 @@ import { TeamDialog } from './TeamDialog';
 import { CAP_LABEL, endText } from '@/features/chat/ShareSessionDialog';
 import { api } from '@/lib/api';
 
-/** A member account (MU2 S1a): who is signed in, the sessions shared with it (directly or through a team), its teams, and a way out. */
+/**
+ * A member account (MU2 S1a): who is signed in, the sessions shared with it (directly or through a team), its teams, and a way out. Since D-82
+ * S1a members use the normal app; this is its Shared page (`/admin/shared`), full screen, with a way back.
+ */
 export function MemberPage() {
   const { logout } = useAuth();
   const [me, setMe] = useState<SignedInAs | null>(null);
@@ -42,7 +47,7 @@ export function MemberPage() {
       </AuthLayout>
     );
   return (
-    <AuthLayout title="Signed in">
+    <AuthLayout title="Shared">
       <div className="flex flex-col gap-4" data-member-page="">
         <div className="flex items-center gap-3 rounded-2xl bg-surface-2 px-4 py-3">
           <UserRound className="size-5 shrink-0 text-muted" aria-hidden="true" />
@@ -89,6 +94,9 @@ export function MemberPage() {
           </ul>
         )}
         <TeamDialog teamId={teamId} manage={false} meId={user?.id ?? null} open={!!teamId} onClose={() => setTeamId(null)} onChanged={loadTeams} />
+        <Link to={HOME} className="press flex min-h-11 items-center justify-center rounded-2xl text-[15px] font-semibold text-ink hover:bg-surface-2">
+          Back to the app
+        </Link>
         <Button size="lg" variant="ghost" className="w-full" onClick={() => setChanging(true)}>
           Change password
         </Button>

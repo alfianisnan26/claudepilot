@@ -93,7 +93,38 @@ export const TICKET_BUCKET_TOOL_POLICIES = {
 } satisfies ToolPolicies;
 
 /** The seam's resolver for `ticket_bucket`: its owner, read now (a removed bucket is not found). */
-export function registerTicketBucketAuthz(tickets: { bucketOwner(key: string): string | null; bucketOwnerOf?(key: string): { kind: string; id: string } | null }): void {
+export function registerTicketBucketAuthz(tickets: {
+  bucketOwner(key: string): string | null;
+  bucketOwnerOf?(key: string): { kind: string; id: string } | null;
+  bucketOf?(ref: string): string | null;
+}): void {
+  // D-82 S1a (member access): a ticket is decided as its bucket. Its owner is the bucket's owner and the grants on the bucket (an org share,
+  // a team share) count for it (`grantsFrom`), so a member reaches exactly the tickets of the buckets shared to them. Before this the type had
+  // no resolver and the seam answered the founding user only. A ticket that does not exist is not found.
+  const { bucketOf } = tickets;
+  if (bucketOf)
+    registerResolver({
+      type: 'ticket',
+      resolve(id) {
+        let key: string | null;
+        try {
+          key = bucketOf.call(tickets, id);
+        } catch {
+          return null;
+        }
+        if (!key) return null;
+        let owner: { kind: string; id: string } | null;
+        try {
+          owner = tickets.bucketOwnerOf ? tickets.bucketOwnerOf(key) : ((u: string | null) => (u ? { kind: 'user', id: u } : null))(tickets.bucketOwner(key));
+        } catch {
+          return null;
+        }
+        const bucketRef = objectRef('ticket_bucket', key.trim().toUpperCase());
+        // A key no bucket row has (never made, or gone): the platform's, as the founding user always saw those tickets; nobody else.
+        if (!owner) return { ref: objectRef('ticket', id), owner: { kind: 'platform' }, parent: bucketRef };
+        return { ref: objectRef('ticket', id), owner: ownerFromColumns(owner.kind, owner.id), parent: bucketRef, grantsFrom: bucketRef };
+      },
+    });
   registerResolver({
     type: 'ticket_bucket',
     resolve(id) {
@@ -129,7 +160,8 @@ export const TICKET_ROUTE_POLICIES: RoutePolicies = {
   'POST /api/tickets/:id/close': onTicket('operate'),
   'DELETE /api/tickets/:id/close': onTicket('operate'),
   'POST /api/tickets/:id/comments': onTicket('operate'),
-  'POST /api/tickets/:id/session': onTicket('operate'),
+  // D-82 S1a: the session starts in the body's workspace, so that needs operate too (it ran in any workspace before, on the ticket's right alone).
+  'POST /api/tickets/:id/session': { kind: 'objects', checks: [{ type: 'ticket', verb: 'operate', from: 'path', param: 'id' }, { type: 'workspace', verb: 'operate', from: 'body', param: 'workspaceId' }] },
 };
 
 export function declareTicketPolicies(): void {

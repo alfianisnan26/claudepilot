@@ -33,7 +33,7 @@ export class SocketGuard {
   readonly #timer: NodeJS.Timeout;
 
   constructor(
-    private readonly portal: Pick<Portal, 'session'>,
+    private readonly portal: Pick<Portal, 'personSession'>,
     private readonly cookie: string,
     private readonly unansweredMs = UNANSWERED_MS,
   ) {
@@ -51,7 +51,7 @@ export class SocketGuard {
       socket.once('close', () => clearTimeout(unanswered));
 
       const token = tokenOf(req, this.cookie);
-      if (!token || !this.portal.session(token)) return; // the owner of the path answers 401
+      if (!token || !this.portal.personSession(token)) return; // the owner of the path answers 401
       let sockets = this.#open.get(token);
       if (!sockets) this.#open.set(token, (sockets = new Set()));
       sockets.add(socket);
@@ -65,7 +65,7 @@ export class SocketGuard {
   /** Cuts every tracked socket whose session has ended. Called on sign-out, on a new code and on a timer. */
   sweep() {
     for (const [token, sockets] of this.#open) {
-      if (this.portal.session(token)) continue;
+      if (this.portal.personSession(token)) continue;
       for (const socket of sockets) socket.destroy();
       this.#open.delete(token);
     }
