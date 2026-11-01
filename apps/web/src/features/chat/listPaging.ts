@@ -10,6 +10,11 @@ export function keepsOlder(prevNext: string | null | undefined, nextNext: string
   return prevNext !== undefined && prevNext === nextNext;
 }
 
+/** Where page 1 ends: its last row, and whether more follow (null at the end), as one comparable value for `keepsOlder`. */
+export function seamOf(page: { items: readonly { id: string }[]; next: string | null }): string | null {
+  return page.next === null ? null : `after:${page.items.at(-1)?.id ?? ''}`;
+}
+
 /** A refused cursor (a 400: it expired with a server restart, or it was made for another list): the list starts again from page 1. */
 export function cursorExpired(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { status?: unknown }).status === 400;
@@ -31,13 +36,17 @@ export type MoreFailure = 'restart' | 'retry' | 'stale';
 export class ListPager<T extends { id: string }> {
   head: PageLike<T> | null = null;
   older: PageLike<T> | null = null;
+  /** The seam under page 1 (seamOf), undefined before the first page. */
   private headNext: string | null | undefined = undefined;
   private gen = 0;
 
   /** A poll or a first load brought page 1. The older pages stay only while the seam under it holds. */
   applyHead(page: PageLike<T>): void {
-    if (!keepsOlder(this.headNext, page.next)) this.dropOlder();
-    this.headNext = page.next;
+    // The seam is page 1's last row and whether more follow, not the cursor's text: the server mints a new opaque cursor on every call, so
+    // comparing cursors dropped the older pages on every poll (and a windowed list that pages in by itself then fetched them again, forever).
+    const seam = seamOf(page);
+    if (!keepsOlder(this.headNext, seam)) this.dropOlder();
+    this.headNext = seam;
     this.head = page;
   }
 

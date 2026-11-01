@@ -1,7 +1,7 @@
 // The session list keeps older pages only while the seam under the first page has not moved (T-382 S2 fix); a refused cursor starts over.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cursorExpired, keepsOlder, ListPager } from './listPaging';
+import { cursorExpired, keepsOlder, ListPager, seamOf } from './listPaging';
 
 test('a poll that finds the same last row keeps the older pages', () => {
   assert.equal(keepsOlder('cursor-after-row-50', 'cursor-after-row-50'), true);
@@ -105,4 +105,18 @@ test('pager: at the end there is nothing to load', () => {
   assert.equal(p.beginMore(), null);
   p.applyHead(page(['a'], null));
   assert.equal(p.beginMore(), null);
+});
+
+test('pager: the server mints a new cursor on every call; the same last row on page 1 still keeps the older pages (seam by row, not cursor text)', () => {
+  // The windowed Agents list pages in by itself: comparing cursor text dropped the older pages on every 5 s poll and fetched them again.
+  const p = new ListPager<{ id: string }>();
+  p.applyHead(page(['a', 'b'], 'opaque-1'));
+  p.finishMore(p.beginMore()!, page(['c'], null));
+  p.applyHead(page(['a', 'b'], 'opaque-2'));
+  assert.deepEqual(
+    p.items!.map((x) => x.id),
+    ['a', 'b', 'c'],
+  );
+  assert.equal(seamOf(page(['a', 'b'], 'x')), seamOf(page(['b', 'a', 'b'], 'y')), 'the seam is the last row');
+  assert.notEqual(seamOf(page(['a', 'b'], 'x')), seamOf(page(['a', 'b'], null)), 'more to come or not');
 });

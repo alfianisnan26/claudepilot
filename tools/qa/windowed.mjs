@@ -27,13 +27,16 @@ const scrollTo = (top) => `(() => {
 export async function sweepRows(b, rowsExpr, { key = (r) => r.id, settle = 250, maxSteps = 400 } = {}) {
   // First every page: rows that arrive late regroup the list (a worker on an older page joins its lead's crew), so reading while pages
   // still arrive would keep a reading of the moment. Scroll to the end until the list stops growing, then read on a second pass.
+  // Done when the list knows its size (aria-setsize is -1 while more pages are to come) and its height holds; at most a minute.
   let last = -1;
-  for (let i = 0, still = 0; i < maxSteps && still < 3; i++) {
+  const until = Date.now() + 60_000;
+  for (let still = 0; still < 2 && Date.now() < until; ) {
     const v = await b.eval(VIEW);
     await b.eval(scrollTo(v.max));
     await sleep(settle * 2);
     const now = (await b.eval(VIEW)).max;
-    still = now === last ? still + 1 : 0;
+    const size = await setSize(b);
+    still = size !== -1 && Math.abs(now - last) < 2 ? still + 1 : 0;
     last = now;
   }
   const seen = new Map();

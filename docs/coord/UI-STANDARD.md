@@ -85,5 +85,11 @@ Titles of one or two words, explanations in an InfoTip, icon-only on a phone wit
 
 Listed in `uiStandard.test.ts` (the lists may only shrink): the browser app view's tabs, the reporter's evidence tabs; dialogs by role
 (account menu, popovers, the switcher, viewers, the reporter's annotator and image viewer). Not windowed yet: the Tickets board and
-timeline, the Agents tree view (their own layouts). Older QA harnesses that count every session row (`session-crew.mjs`, `crew-tree.mjs`,
-`session-density.mjs`, `session-limits.mjs`) see only the drawn window now and need to scroll the list or read the set size.
+timeline, the Agents tree view (their own layouts). A harness that reads every row of a windowed list sweeps it with `sweepRows`
+(`tools/qa/windowed.mjs`: every page in first, then a screen at a time; `setSize` reads the list's own count), as `crew-tree.mjs`,
+`session-density.mjs` and `session-limits.mjs` do.
+
+Paging under a windowed list: the session list's pager (`features/chat/listPaging.ts`) keeps the older pages while page 1 ends on the same
+row (`seamOf`), not while its cursor text is the same: the server mints a new opaque cursor on every call, so the cursor rule dropped the
+older pages on every 5 s poll, and a list that pages in by itself fetched them again without end (seen with 500 sessions: 150 requests in
+a few minutes, and a lead on page 2 dropping out so its workers showed flat).
