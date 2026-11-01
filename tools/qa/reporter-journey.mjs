@@ -200,6 +200,8 @@ try {
       await sleep(500);
       const tool = await b.eval(`${q('[data-annotator]')}.dataset.tool`);
       if (tool !== 'rect') fail(`${label}: the editor opened on ${tool}, expected rect`);
+      // The editor has the focus (the form's title field behind it must not swallow the tool keys).
+      if (!(await b.eval(`!!${F}.activeElement?.closest('[data-annotator]')`))) fail(`${label}: the editor opened without the focus`);
       await audit('editor');
       await shot('editor-auto');
       await focusPanel();

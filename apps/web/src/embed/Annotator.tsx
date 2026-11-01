@@ -109,6 +109,10 @@ export function Annotator({
 }) {
   const { post } = usePanel();
   const frame = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  // The editor takes the focus when it opens: it now opens by itself after a capture, over a form whose title field had it, and the tool
+  // keys must reach the editor, not type into that hidden field.
+  useEffect(() => root.current?.focus({ preventScroll: true }), []);
   const baseCanvas = useRef<HTMLCanvasElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
@@ -675,10 +679,12 @@ export function Annotator({
 
   return (
     <div
+      ref={root}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label="Annotate"
-      className="anim-fade fixed inset-0 z-[70] flex flex-col"
+      className="anim-fade fixed inset-0 z-[70] flex flex-col outline-hidden"
       style={DARK}
       data-annotator
       data-marks={doc.marks.length}
