@@ -112,8 +112,19 @@ export interface AdminSignInMethods {
   oidc: { name: string } | null;
 }
 
-/** The query the console's page is opened with after a refused OIDC sign-in or step-up (the same neutral answer for every reason). */
-export const ADMIN_OIDC_RESULT = { param: 'oidc', refused: 'refused', unavailable: 'unavailable' } as const;
+/**
+ * The query the console's page is opened with after a refused OIDC sign-in or step-up (the same neutral answer for every reason). A step-up
+ * started in a popup (`popup=1` on the start) comes back with `popup=1` and, on success, `oidc=stepped`: that page tells the console that
+ * opened it and closes, and the console runs the action the step-up interrupted (owner, 2026-11-01: no "do it again").
+ */
+export const ADMIN_OIDC_RESULT = { param: 'oidc', refused: 'refused', unavailable: 'unavailable', stepped: 'stepped', popup: 'popup' } as const;
+
+/** The message a step-up popup sends back to the console (window.opener and a BroadcastChannel of this name, same origin only). */
+export const ADMIN_STEP_UP_CHANNEL = 'pilot-admin-step-up';
+export interface AdminStepUpMessage {
+  type: 'admin-step-up';
+  outcome: 'stepped' | 'refused' | 'unavailable';
+}
 
 export interface AdminStepUpRequest {
   password: string;

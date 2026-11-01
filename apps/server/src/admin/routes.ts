@@ -347,7 +347,8 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return oidc;
   };
   const back = (next?: string) => `${ADMIN_UI_BASE}${next ? `#${next}` : ''}`;
-  const outcome = (v: string, next?: string) => `${ADMIN_UI_BASE}?${ADMIN_OIDC_RESULT.param}=${v}${next ? `#${next}` : ''}`;
+  const outcome = (v: string, next?: string, popup = false) =>
+    `${ADMIN_UI_BASE}?${ADMIN_OIDC_RESULT.param}=${v}${popup ? `&${ADMIN_OIDC_RESULT.popup}=1` : ''}${next ? `#${next}` : ''}`;
   on('GET', '/admin-api/session/methods', (c) => c.json(success<AdminSignInMethods>({ password: true, oidc: oidc ? { name: oidc.config.name } : null })));
   on('GET', '/admin-api/session/oidc/start', async (c) => {
     const o = needOidc();
@@ -355,11 +356,13 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     // A step-up is bound to the session that asked for it: the return only marks THAT session, and only for the same account.
     const sessionId = stepUp ? signedIn(c).session.id : undefined;
     const next = c.req.query('next');
+    // A step-up in a popup (owner, 2026-11-01): the return page tells the console that opened it, which then runs the interrupted action.
+    const popup = stepUp && c.req.query(ADMIN_OIDC_RESULT.popup) === '1';
     let started: { url: string; cookie: string };
     try {
-      started = await o.start({ sessionId, next });
+      started = await o.start({ sessionId, next, popup });
     } catch {
-      return c.redirect(outcome(ADMIN_OIDC_RESULT.unavailable, next && /^[a-z]{1,20}$/.test(next) ? next : undefined), 302);
+      return c.redirect(outcome(ADMIN_OIDC_RESULT.unavailable, next && /^[a-z]{1,20}$/.test(next) ? next : undefined, popup), 302);
     }
     // Lax, not Strict: the provider's redirect back is a top-level navigation that must carry it. Host-only, Secure, HttpOnly, 10 minutes.
     setCookie(c, ADMIN_OIDC_COOKIE, started.cookie, { httpOnly: true, secure: true, sameSite: 'Lax', path: '/', maxAge: Math.floor(ADMIN_OIDC_STATE_TTL_MS / 1000) });
@@ -370,6 +373,8 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     const stateCookie = getCookie(c, ADMIN_OIDC_COOKIE);
     deleteCookie(c, ADMIN_OIDC_COOKIE, { path: '/', secure: true });
     const q = c.req.query();
+    // A refusal before the token is checked still answers a popup when the state cookie names one (else the popup shows the console's refusal).
+    const popup = o.pending(stateCookie, q.state)?.popup === true;
     const refuse = (e: AdminOidcRefused, purpose: 'sign-in' | 'step-up', next?: string) => {
       // Who tried (the provider's subject and the email it gave), never a token or a code: the owner can allow them later.
       audit({
@@ -379,7 +384,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
         userId: null,
         detail: { method: 'oidc', purpose, reason: e.reason, issuer: o.config.issuer, subject: e.who.subject ?? null, email: e.who.email ?? null },
       });
-      return c.redirect(outcome(ADMIN_OIDC_RESULT.refused, next), 302);
+      return c.redirect(outcome(ADMIN_OIDC_RESULT.refused, next, popup), 302);
     };
     let r: Awaited<ReturnType<AdminOidc['finish']>>;
     try {
@@ -399,7 +404,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
       sessions.stepUp(s.id);
       const actor = actorFor(s);
       audit({ kind: 'admin.step_up', actor: actorString(actor), userId: actor.userId, subject: `user:${account.id}`, detail: { session: s.id, method: 'oidc', issuer: o.config.issuer } });
-      return c.redirect(back(r.pending.next), 302);
+      return c.redirect(r.pending.popup ? outcome(ADMIN_OIDC_RESULT.stepped, r.pending.next, true) : back(r.pending.next), 302);
     }
     const { token, session } = sessions.open(account.id);
     // A sign-in at the provider just now is a fresh authentication: step-up actions work for the next 5 minutes.

@@ -19,6 +19,7 @@ import { Bot, ChartGantt, ChevronDown, ChevronsUp, Columns3, FolderKanban, List,
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
+import { WindowedList } from '@/components/WindowedList';
 import { usePanel, Workbench } from '@/components/Workbench';
 import { errorText } from '@/lib/api';
 import { useLive } from '@/lib/live';
@@ -243,24 +244,15 @@ function TicketQueue({ selected }: { selected: string | null }) {
       </Button>
     </div>
   ) : null;
-  const body =
+  const filtered = !!(q || needs || queue || orphans || priority || type || tag || bucket);
+  const emptyState = (
+    <EmptyState icon={<TicketIcon className="size-6" />} title={filtered ? 'No match' : 'No tickets'} action={filtered ? undefined : add} />
+  );
+  // The board (columns that scroll on their own) keeps its "More"; the list is windowed and pages in as its end comes into view.
+  const board =
     data &&
     (data.items.length === 0 ? (
-      <EmptyState
-        icon={<TicketIcon className="size-6" />}
-        title={q || needs || queue || orphans || priority || type || tag || bucket ? 'No match' : 'No tickets'}
-        action={q || needs || queue || orphans || priority || type || tag || bucket ? undefined : add}
-      />
-    ) : view === 'timeline' ? null : view === 'list' ? (
-      // As many columns of rows as the panel has room for (one on a phone): a wide screen shows more tickets, not longer rows.
-      <>
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] gap-2">
-          {data.items.map((t) => (
-            <TicketRow key={t.id} ticket={t} selected={isTicket(t, selected)} onOpen={() => open(t.key ?? t.id)} onBump={() => setBumping(t)} />
-          ))}
-        </ul>
-        {moreButton}
-      </>
+      emptyState
     ) : (
       <>
         <Board items={data.items} selected={selected} search={search} pinned={pinned} onMove={move} onBump={setBumping} />
@@ -268,10 +260,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
       </>
     ));
 
-  return (
-    <div className={cn(pinned && 'flex min-h-0 flex-1 flex-col')}>
-      <PageHeader title="Tickets" action={none ? undefined : add} />
-
+  const filters = (
       <div className={cn('mb-4 flex flex-col gap-2.5', none && 'hidden')}>
         <div className="flex gap-2">
           {/* A form field keeps a usable width on a wide screen: the room goes to the board, not to the search box. */}
@@ -417,6 +406,13 @@ function TicketQueue({ selected }: { selected: string | null }) {
           )}
         </div>
       </div>
+  );
+
+  return (
+    <div className={cn(pinned && 'flex min-h-0 flex-1 flex-col')}>
+      <PageHeader title="Tickets" action={none ? undefined : add} />
+
+      {!(view === 'list' && data) && filters}
 
       {view === 'timeline' ? (
         <div className={cn(pinned && '-mx-1 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-4')}>
@@ -430,15 +426,27 @@ function TicketQueue({ selected }: { selected: string | null }) {
           {!data && !failed && <RowsSkeleton rows={4} lines={2} trailing icon="rounded-2xl" />}
         </>
       )}
-      {view === 'timeline' ? null : !pinned ? (
-        body
-      ) : view === 'board' && data?.items.length ? (
-        // The board fills the rest of the panel: its columns scroll down, the board itself sideways.
-        <div className="flex min-h-0 flex-1 flex-col">{body}</div>
-      ) : (
-        // Room around the rows for their focus ring, which the scroller would clip.
-        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-4">{body}</div>
+      {view === 'list' && data && (
+        // THE windowed list (components/WindowedList.tsx): pinned (a desktop) it fills the panel under the filters and scrolls inside; on a
+        // phone the filters stick under the top bar and the list scrolls with the page. As many columns as the panel has room for.
+        <WindowedList
+          label="Tickets"
+          items={data.items}
+          itemKey={(t) => t.id}
+          estimate={112}
+          minColumn={448}
+          fill={pinned ? 'parent' : 'auto'}
+          header={filters}
+          hasMore={!!data.next}
+          loadingMore={loadingMore}
+          onLoadMore={() => void loadMore()}
+          empty={emptyState}
+          scrollClassName="-mx-1 px-1 pt-1 pb-4"
+          renderItem={(t) => <TicketRow ticket={t} selected={isTicket(t, selected)} onOpen={() => open(t.key ?? t.id)} onBump={() => setBumping(t)} />}
+        />
       )}
+      {view === 'board' &&
+        (!pinned ? board : data?.items.length ? <div className="flex min-h-0 flex-1 flex-col">{board}</div> : <div className="-mx-1 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-1 pb-4">{board}</div>)}
 
       <TicketBumpDialog
         ticket={bumping}
@@ -559,7 +567,7 @@ function TicketRow({
 }) {
   const open = !isTicketClosed(t.status);
   return (
-    <li className="relative min-w-0">
+    <div className="relative h-full min-w-0">
       <button
         type="button"
         onClick={onOpen}
@@ -601,7 +609,7 @@ function TicketRow({
           />
         </div>
       )}
-    </li>
+    </div>
   );
 }
 

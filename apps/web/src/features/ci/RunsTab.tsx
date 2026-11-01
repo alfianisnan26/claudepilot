@@ -3,6 +3,7 @@ import { isCiActive, type CiRunPage, type CiRunSummary, type CiStatus } from '@p
 import { ChevronDown, ChevronsUp, CircleCheck, CircleX, List, LoaderCircle, Plus, Server, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
+import { WindowedList } from '@/components/WindowedList';
 import { ListPager } from '@/features/chat/listPaging';
 import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
@@ -106,8 +107,7 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
   const filtered = scope !== 'all' || !!repo || !!branch;
   const names = useMemo(() => new Map(repos.map((r) => [r.id, r.name])), [repos]);
 
-  return (
-    <>
+  const filters = (
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div role="group" aria-label="Show" className="flex shrink-0 rounded-full border border-line bg-surface p-0.5">
           {SCOPES.map(({ id, label, Icon }) => (
@@ -160,45 +160,51 @@ export function RunsTab({ onNewRemote }: { onNewRemote: () => void }) {
           </button>
         )}
       </div>
+  );
+
+  return (
+    <>
+      {!data && filters}
 
       {failed && !data && <LoadError onRetry={load} />}
       {!data && !failed && <RowsSkeleton rows={4} lines={1} icon="rounded-full" />}
-      {data &&
-        (data.items.length === 0 ? (
-          <EmptyState
-            icon={<Workflow className="size-6" />}
-            title={filtered ? 'No match' : 'No runs yet'}
-            action={
-              filtered ? undefined : repos.length === 0 ? (
-                <Button icon={<Plus className="size-4" />} onClick={onNewRemote}>
-                  New remote
-                </Button>
-              ) : undefined
-            }
-          />
-        ) : (
-          <>
-            <ul className="flex flex-col gap-2">
-              {rows.map((r) => (
-                <RunRow
-                  key={r.id}
-                  run={r}
-                  now={now}
-                  remote={repos.length > 1 ? names.get(r.repoId) : undefined}
-                  onOpen={() => navigate(`/admin/ci/runs/${r.id}`)}
-                  onBump={() => setBumping(r)}
-                />
-              ))}
-            </ul>
-            {after && (
-              <div className="mt-3 flex justify-center">
-                <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
-                  More
-                </Button>
-              </div>
-            )}
-          </>
-        ))}
+      {data && (
+        // THE windowed list (components/WindowedList.tsx): it fills the pane on a desktop under the filters and scrolls inside; on a phone
+        // the filters stick and the list scrolls with the page. Older pages load as the end comes into view (D-58, through the ListPager).
+        <WindowedList
+          label="Runs"
+          items={rows}
+          itemKey={(r) => r.id}
+          estimate={68}
+          gap={8}
+          header={filters}
+          hasMore={!!after}
+          loadingMore={loadingMore}
+          onLoadMore={() => void loadMore()}
+          empty={
+            <EmptyState
+              icon={<Workflow className="size-6" />}
+              title={filtered ? 'No match' : 'No runs yet'}
+              action={
+                filtered ? undefined : repos.length === 0 ? (
+                  <Button icon={<Plus className="size-4" />} onClick={onNewRemote}>
+                    New remote
+                  </Button>
+                ) : undefined
+              }
+            />
+          }
+          renderItem={(r) => (
+            <RunRow
+              run={r}
+              now={now}
+              remote={repos.length > 1 ? names.get(r.repoId) : undefined}
+              onOpen={() => navigate(`/admin/ci/runs/${r.id}`)}
+              onBump={() => setBumping(r)}
+            />
+          )}
+        />
+      )}
       <RunBumpDialog
         run={bumping}
         onClose={() => setBumping(null)}
@@ -230,7 +236,7 @@ function RunRow({
   const reason = r.status === 'failed' ? reasonLabel(r.reason) : null;
   const on = runnerLine(r);
   return (
-    <li className="relative">
+    <div className="relative">
       <button
         type="button"
         onClick={onOpen}
@@ -268,6 +274,6 @@ function RunRow({
           items={[{ label: 'Bump…', icon: <ChevronsUp className="size-4" />, onSelect: onBump }]}
         />
       </div>
-    </li>
+    </div>
   );
 }

@@ -13,6 +13,7 @@ import {
 } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogoMark } from '../components/LogoMark';
+import { TabBar } from '../components/TabBar';
 import {
   clearToken,
   connectCode,
@@ -571,28 +572,17 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         ) : (
           <>
             {!detail && (
-            <nav role="tablist" aria-label="Sections" className="flex shrink-0 border-b border-line">
-              {tabs.map((t) => (
-                <button
-                  key={t.id}
-                  role="tab"
-                  type="button"
-                  aria-selected={tab === t.id}
-                  aria-label={t.label}
-                  title={t.label}
-                  onClick={() => setTab(t.id)}
-                  className={`relative flex min-h-11 min-w-0 items-center justify-center ${tab === t.id ? 'flex-[2.2]' : 'flex-1'} md:flex-1 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${tab === t.id ? 'text-ink' : 'text-muted'}`}
-                >
-                  <Icon name={t.icon} />
-                  {/* The word beside the active icon; every word from 768 px. */}
-                  <span className={`ml-1.5 text-[13px] font-semibold ${tab === t.id ? 'inline' : 'hidden md:inline'}`}>{t.label}</span>
-                  {!!t.badge && (
-                    <span className="absolute top-1.5 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-accent px-1 text-center text-[10.5px] leading-4 font-bold text-primary-ink tabular-nums">{t.badge}</span>
-                  )}
-                  {tab === t.id && <span aria-hidden="true" className="anim-grow-x absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-ink" />}
-                </button>
-              ))}
-            </nav>
+            // The shared tab bar (components/TabBar.tsx, docs/coord/UI-STANDARD.md §2): pill tabs, arrow keys, 44 px; in this narrow frame the
+            // open tab shows its word and the others their icon (every word from 768 px).
+            <TabBar
+              label="Sections"
+              compact
+              tabs={tabs.map((t) => ({ id: t.id, label: t.label, icon: <Icon name={t.icon} />, badge: t.badge || undefined }))}
+              active={tab}
+              onSelect={(id) => setTab(id as Tab)}
+              className="shrink-0"
+              innerClassName="justify-between px-2"
+            />
             )}
             <main id="panel-main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {/* A short fade when the tab changes (keyed by the tab, so nothing replays while a tab re-renders). */}

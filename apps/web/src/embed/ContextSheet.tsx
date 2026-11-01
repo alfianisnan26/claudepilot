@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Sheet } from '../components/Sheet';
 import { usePanel } from './context';
 import { REDACTION_RULES, carriesRows, contextGroups, contextText, type CtxRow } from './formModel';
 import { Icon } from './icons';
@@ -35,33 +36,30 @@ export function ContextSheet({ section, onClose }: { section: 'context' | 'carri
   useEffect(() => {
     if (section === 'carries') carriesRef.current?.scrollIntoView({ block: 'start' });
   }, [section]);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
-
   const all = `${contextText(groups)}\nWhat a ticket carries\n${carries.map((r) => `  ${r.label}: ${r.value}`).join('\n')}`;
   return (
-    <div role="dialog" aria-modal="true" aria-label="Context" className="anim-in fixed inset-0 z-50 flex flex-col bg-bg">
-      <header className="flex min-h-11 shrink-0 items-center gap-1 border-b border-line pt-[env(safe-area-inset-top)] pr-12 pl-1">
-        <IconBtn icon="chevronLeft" label="Back" onClick={onClose} />
-        <h2 className="flex-1 text-[15px] font-bold">Context</h2>
-        <button
-          type="button"
-          onClick={() => void copy(all).then((ok) => notify(ok ? 'Copied' : 'Copy is blocked here.', ok ? 'ok' : 'error'))}
-          className="inline-flex min-h-11 items-center gap-1.5 rounded-xl px-3 text-[13px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
-        >
-          <Icon name="copy" className="size-4" />
-          Copy all
-        </button>
-      </header>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+    // The whole panel (the shared kit-free Sheet's `page`, docs/coord/UI-STANDARD.md §5): Back, Esc and focus return come with it.
+    <Sheet
+      title="Context"
+      variant="page"
+      onClose={onClose}
+      className="anim-in"
+      bodyClassName="px-3 pb-[max(1rem,env(safe-area-inset-bottom))]"
+      head={
+          <header className="flex min-h-11 shrink-0 items-center gap-1 border-b border-line pt-[env(safe-area-inset-top)] pr-12 pl-1">
+            <IconBtn icon="chevronLeft" label="Back" onClick={onClose} />
+            <h2 className="flex-1 text-[15px] font-bold">Context</h2>
+            <button
+              type="button"
+              onClick={() => void copy(all).then((ok) => notify(ok ? 'Copied' : 'Copy is blocked here.', ok ? 'ok' : 'error'))}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-xl px-3 text-[13px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden"
+            >
+              <Icon name="copy" className="size-4" />
+              Copy all
+            </button>
+          </header>
+      }
+    >
         {groups.map((g) => (
           <section key={g.title} className="mt-3">
             <h3 className="mb-1 px-1 text-[12.5px] font-semibold text-muted">{g.title}</h3>
@@ -89,8 +87,7 @@ export function ContextSheet({ section, onClose }: { section: 'context' | 'carri
             ))}
           </ul>
         </section>
-      </div>
-    </div>
+    </Sheet>
   );
 }
 

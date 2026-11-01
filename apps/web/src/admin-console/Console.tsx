@@ -1,6 +1,6 @@
-import { ADMIN_API, type AdminMe, type AdminSignInMethods } from '@portal/contracts';
-import { Boxes, Building2, KeyRound, LogIn, LogOut, ScrollText, SlidersHorizontal, Users } from 'lucide-react';
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { ADMIN_API, ADMIN_STEP_UP_CHANNEL, type AdminMe, type AdminSignInMethods, type AdminStepUpMessage } from '@portal/contracts';
+import { Boxes, Building2, KeyRound, Loader2, LogIn, LogOut, ScrollText, SlidersHorizontal, Users } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react';
 import { AdminApiError, api } from './api';
 import { AuditView } from './AuditView';
 import { TABS, oidcOutcome, oidcStartHref, tabFromHash, type Tab } from './model';
@@ -14,9 +14,9 @@ import { WorkspacesView } from './WorkspacesView';
 /*
  * The Admin console (docs/prd/organizations.md §6.11): the one place where the instance is controlled (owner, 2026-11-01). Users, Orgs,
  * Workspaces, Sign-in, Settings, Audit. Phone first (390 px: an icon-only bottom bar), 44 px targets, light and dark from the system, titles of
- * one word, explanations behind an ⓘ. Writes ask for the password again when the server says REAUTH_REQUIRED, then run once more. With the
- * console's OIDC provider configured (git.isnan.me), Sign in leads with its button and the step-up dialog offers it too; both are full
- * navigations that come back to the console (`?oidc=refused` on a refusal).
+ * one word, explanations behind an ⓘ. Writes that the server answers REAUTH_REQUIRED ask once (StepUp: the password inline, or the console's
+ * OIDC provider, git.isnan.me, in a popup window) and run by themselves when it is given. Sign in with the provider is a full navigation that
+ * comes back to the console (`?oidc=refused` on a refusal).
  */
 
 const ICONS: Record<Tab, typeof Users> = { users: Users, orgs: Building2, workspaces: Boxes, signin: KeyRound, settings: SlidersHorizontal, audit: ScrollText };
@@ -201,17 +201,84 @@ function SignIn({ onIn, oidc, outcome }: { onIn: (me: AdminMe) => void; oidc: Ad
   );
 }
 
+/** A message from the step-up popup (main.tsx), whatever carried it. */
+const isStepUpMessage = (d: unknown): d is AdminStepUpMessage =>
+  !!d && typeof d === 'object' && (d as AdminStepUpMessage).type === 'admin-step-up' && ['stepped', 'refused', 'unavailable'].includes((d as AdminStepUpMessage).outcome);
+
+/**
+ * The calm step-up (owner, 2026-11-01): an action that needs a fresh sign-in asks once, here, and RUNS BY ITSELF when it is given, never "do it
+ * again". The password inline; with the console's provider (git.isnan.me) a re-auth in a POPUP window, so the page and the pending action stay:
+ * the popup comes back to the console with `?oidc=stepped&popup=1`, tells this page (window.opener, else a BroadcastChannel: the provider's
+ * pages can cut the opener) and closes. As a last resort the page asks the server every few seconds whether the session is fresh. A blocked
+ * popup falls back to the full navigation of before (the action then has to be done again).
+ */
 function StepUp({ onDone, onCancel, oidc, tab }: { onDone: () => void; onCancel: () => void; oidc: AdminSignInMethods['oidc']; tab: Tab }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  // Once: the popup's message can come twice (opener and channel), and a poll can see the fresh session too.
+  const finished = useRef(false);
+  const done = useRef(onDone);
+  done.current = onDone;
+  const finish = useCallback(() => {
+    if (finished.current) return;
+    finished.current = true;
+    done.current();
+  }, []);
+
+  useEffect(() => {
+    const hear = (d: unknown) => {
+      if (!isStepUpMessage(d)) return;
+      setWaiting(false);
+      if (d.outcome === 'stepped') finish();
+      else setError(d.outcome === 'refused' ? 'Re-auth refused.' : 'Sign-in provider unavailable.');
+    };
+    const onMessage = (e: MessageEvent) => e.origin === window.location.origin && hear(e.data);
+    window.addEventListener('message', onMessage);
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel(ADMIN_STEP_UP_CHANNEL);
+      channel.onmessage = (e) => hear(e.data);
+    } catch {
+      // no BroadcastChannel: the opener message or the poll below
+    }
+    return () => {
+      window.removeEventListener('message', onMessage);
+      channel?.close();
+    };
+  }, [finish]);
+
+  // While the popup is out: is the session fresh yet? (The popup's message may never come: closed by hand, a browser without the channel.)
+  useEffect(() => {
+    if (!waiting) return;
+    const t = window.setInterval(
+      () =>
+        void api.me().then(
+          (me) => me.freshUntil && Date.parse(me.freshUntil) > Date.now() && finish(),
+          () => undefined,
+        ),
+      2500,
+    );
+    return () => window.clearInterval(t);
+  }, [waiting, finish]);
+
+  const popup = (e: MouseEvent<HTMLAnchorElement>) => {
+    const w = window.open(oidcStartHref(ADMIN_API.oidcStart, { stepUp: true, popup: true, next: tab }), 'pilot-admin-reauth', 'popup,width=520,height=720');
+    // Blocked: the link's own navigation (the page leaves and comes back) is the fallback.
+    if (!w) return;
+    e.preventDefault();
+    setError(null);
+    setWaiting(true);
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
       await api.stepUp(password);
-      onDone();
+      finish();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'That did not work.');
     } finally {
@@ -219,18 +286,24 @@ function StepUp({ onDone, onCancel, oidc, tab }: { onDone: () => void; onCancel:
     }
   };
   return (
-    <Sheet title="Confirm" onClose={onCancel}>
+    <Sheet title="Confirm it’s you" onClose={onCancel}>
+      <p className="text-sm text-muted">The action goes on by itself once you confirm.</p>
       {oidc && (
-        // Leaves the page: the provider sends the browser back here, fresh for 5 minutes; the action is then done once more by hand.
-        <a className={`${btnPrimary} break-any text-center`} href={oidcStartHref(ADMIN_API.oidcStart, { stepUp: true, next: tab })}>
-          <LogIn size={18} aria-hidden />
-          Re-auth with {oidc.name}
+        <a
+          data-step-up-oidc=""
+          className={`${btnPrimary} break-any text-center`}
+          href={oidcStartHref(ADMIN_API.oidcStart, { stepUp: true, next: tab })}
+          onClick={popup}
+          aria-busy={waiting || undefined}
+        >
+          {waiting ? <Loader2 size={18} className="animate-spin" aria-hidden /> : <LogIn size={18} aria-hidden />}
+          {waiting ? `Waiting for ${oidc.name}` : `Re-auth with ${oidc.name}`}
         </a>
       )}
       <form className="flex flex-col gap-3" onSubmit={(e) => void submit(e)}>
         <label className="flex flex-col gap-1 text-sm">
           Password
-          <input className={field} type="password" autoComplete="current-password" required autoFocus value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input className={field} type="password" autoComplete="current-password" required autoFocus={!oidc} value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         {error && (
           <p role="alert" className="text-sm text-danger">

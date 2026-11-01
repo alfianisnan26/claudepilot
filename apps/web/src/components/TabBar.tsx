@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 // No UI-kit import: the Admin console draws this bar too and keeps its bundle small.
 const cn = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
@@ -12,6 +12,8 @@ export interface TabItem {
   badgeTone?: 'attention' | 'info';
   /** A destructive section (an org's Danger zone): its label in the danger colour. */
   danger?: boolean;
+  /** An icon before the label (the reporter panel's tabs). */
+  icon?: ReactNode;
 }
 
 /**
@@ -29,6 +31,7 @@ export function TabBar({
   hrefOf,
   className = 'sticky top-[calc(var(--safe-top)+4rem)] z-20 -mx-4 mb-4 sm:top-0 sm:-mx-6 lg:-mx-8',
   innerClassName = 'px-3 sm:px-5 lg:px-7',
+  compact = false,
 }: {
   label: string;
   tabs: readonly TabItem[];
@@ -37,6 +40,8 @@ export function TabBar({
   hrefOf?: (id: string) => string;
   className?: string;
   innerClassName?: string;
+  /** Tabs with icons show their label only on the open tab (from 768 px on every tab): a narrow frame (the reporter panel) fits them all. */
+  compact?: boolean;
 }) {
   const strip = useRef<HTMLDivElement>(null);
 
@@ -77,10 +82,12 @@ export function TabBar({
           const look = cn(
             'press flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[14px] font-semibold whitespace-nowrap outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-accent',
             on ? (t.danger ? 'bg-danger text-white' : 'bg-primary text-primary-ink') : t.danger ? 'text-danger hover:bg-surface-2' : 'text-muted hover:bg-surface-2 hover:text-ink',
+            compact && 'min-w-11 justify-center px-3',
           );
           const body = (
             <>
-              <span>{t.label}</span>
+              {t.icon}
+              <span className={cn(compact && !!t.icon && !on && 'sr-only md:not-sr-only')}>{t.label}</span>
               {/* Flex drops this space visually; it keeps the name "Label 2" for screen readers. */}
               {!!t.badge && ' '}
               {!!t.badge && (
@@ -95,7 +102,8 @@ export function TabBar({
               )}
             </>
           );
-          const common = { id: `tab-${t.id}`, role: 'tab', 'aria-selected': on, 'aria-controls': `panel-${t.id}`, tabIndex: on ? 0 : -1, 'data-tab': t.id, className: look } as const;
+          // A tab with an icon carries its label as its name too (an icon-only tab on a narrow screen).
+          const common = { id: `tab-${t.id}`, role: 'tab', 'aria-selected': on, 'aria-controls': `panel-${t.id}`, 'aria-label': t.icon ? t.label : undefined, title: t.icon ? t.label : undefined, tabIndex: on ? 0 : -1, 'data-tab': t.id, className: look } as const;
           return hrefOf ? (
             <a
               key={t.id}

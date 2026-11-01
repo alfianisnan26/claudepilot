@@ -2,13 +2,16 @@ import type { AdminOrg, AdminOrgDetail, AdminOrgObject, OrgId } from '@portal/co
 import { Plus } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from './api';
-import { ago, slugOf } from './model';
-import { btnDanger, btnPlain, btnPrimary, chip, Confirm, Empty, field, Field, InfoTip, list, Section, Sheet, useList, type Run } from './ui';
+import { TabBar } from '../components/TabBar';
+import { WindowedList } from '../components/WindowedList';
+import { ago, ORG_TAB_LABEL, ORG_TABS, slugOf, type OrgTab } from './model';
+import { btnDanger, btnPlain, btnPrimary, chip, Confirm, CONSOLE_STICKY, DetailPanel, Empty, field, Field, InfoTip, MasterDetail, Section, Sheet, useList, type Run } from './ui';
 
 /*
  * Orgs: every organization (names, owners, member counts, state; never content), New org with the owner picked from the accounts, and per
- * org its members and roles, what it owns, pending invitations, its SSO and domains (where built), with Suspend/Resume, Recover owner,
- * Break-glass (start with a reason, end), Delete (only when it owns nothing). Every write is a step-up action with a platform audit row.
+ * org (beside the list on a desktop, a sheet on a phone) its tabs: Overview (state, Suspend/Resume, Recover owner, Delete only when it owns
+ * nothing), Members, Objects, Invitations, Sign-in (SSO and domains, where built), Break-glass (start with a reason, end). Every write is a
+ * step-up action with a platform audit row.
  */
 
 const OBJECT_LABEL: Record<AdminOrgObject['kind'], string> = {
@@ -36,35 +39,53 @@ export function OrgsView({ run, meId }: { run: Run; meId: string }) {
         </button>
       }
     >
-      <Empty items={items} />
-      <ul className={list}>
-        {items?.map((o) => (
-          <li key={o.id}>
-            <button type="button" className="flex min-h-14 w-full flex-col gap-1 px-3 py-2 text-left" onClick={() => setOpen(o.id)}>
-              <span className="flex w-full items-center gap-2">
-                <span className="min-w-0 flex-1">
-                  <span className="break-any block text-sm font-medium">{o.name}</span>
-                  <span className="break-any block text-xs text-muted">
-                    {o.slug} · {o.members} members
+      {/* Master-detail (ui.tsx): the org opens beside the list on a desktop, as a sheet on a phone; the list is windowed. */}
+      <MasterDetail
+        list={
+          <WindowedList
+            label="Orgs"
+            items={items ?? []}
+            itemKey={(o) => o.id}
+            estimate={78}
+            gap={6}
+            stickyClassName={CONSOLE_STICKY}
+            empty={<Empty items={items} />}
+            renderItem={(o) => (
+              <button
+                type="button"
+                aria-current={open === o.id ? 'true' : undefined}
+                className={`flex min-h-14 w-full flex-col gap-1 rounded-xl border bg-surface px-3 py-2 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-accent ${open === o.id ? 'border-primary' : 'border-line'}`}
+                onClick={() => setOpen(o.id)}
+              >
+                <span className="flex w-full items-center gap-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="break-any block text-sm font-medium">{o.name}</span>
+                    <span className="break-any block text-xs text-muted">
+                      {o.slug} · {o.members} members
+                    </span>
                   </span>
+                  <OrgChips o={o} />
                 </span>
-                <OrgChips o={o} />
-              </span>
-              <span className="break-any text-xs text-muted">{o.owners.length ? o.owners.map((w) => `${w.email ?? w.userId}${w.active ? '' : ' (off)'}`).join(', ') : 'No owners'}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {open && (
-        <OrgSheet
-          id={open}
-          run={run}
-          onClose={() => {
-            setOpen(null);
-            reload();
-          }}
-        />
-      )}
+                <span className="break-any text-xs text-muted">{o.owners.length ? o.owners.map((w) => `${w.email ?? w.userId}${w.active ? '' : ' (off)'}`).join(', ') : 'No owners'}</span>
+              </button>
+            )}
+          />
+        }
+        detail={
+          open && (
+            <OrgDetail
+              key={open}
+              id={open}
+              run={run}
+              onChanged={reload}
+              onClose={() => {
+                setOpen(null);
+                reload();
+              }}
+            />
+          )
+        }
+      />
       {adding && (
         <NewOrg
           run={run}
@@ -141,114 +162,147 @@ function NewOrg({ run, meId, onDone, onClose }: { run: Run; meId: string; onDone
 
 type Ask = 'suspend' | 'resume' | 'delete' | 'breakglass' | 'endglass' | 'recover';
 
-function OrgSheet({ id, run, onClose }: { id: OrgId; run: Run; onClose: () => void }) {
+function OrgDetail({ id, run, onChanged, onClose }: { id: OrgId; run: Run; onChanged: () => void; onClose: () => void }) {
   const [o, setO] = useState<AdminOrgDetail | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
+  const [tab, setTab] = useState<OrgTab>('overview');
   const load = useCallback(() => void run(() => api.org(id)).then((v) => v && setO(v)), [run, id]);
   useEffect(load, [load]);
   if (!o)
     return (
-      <Sheet title="Org" onClose={onClose}>
+      <DetailPanel title="Org" onClose={onClose}>
         <p className="text-sm text-muted">Loading</p>
-      </Sheet>
+      </DetailPanel>
     );
+  // The panel stays open beside the list: a change shows in both.
   const done = async (fn: () => Promise<unknown>) => {
     const r = await run(fn);
-    if (r !== undefined) load();
+    if (r !== undefined) (load(), onChanged());
     return r !== undefined;
   };
   const glass = o.breakGlassOpen.length > 0;
+  // Usage-style tabs (docs/coord/UI-STANDARD.md §2): one section at a time; Sign-in only where SSO or domains are built.
+  const tabs = ORG_TABS.filter((t) => t !== 'signin' || !!o.sso || !!o.domains).map((t) => ({
+    id: t,
+    label: ORG_TAB_LABEL[t],
+    badge: t === 'members' ? o.memberList.length : t === 'objects' ? o.objects.length || undefined : t === 'invitations' ? o.invitations.length || undefined : t === 'breakglass' && glass ? 'on' : undefined,
+    badgeTone: t === 'breakglass' ? ('attention' as const) : ('info' as const),
+  }));
   return (
-    <Sheet title={o.name} onClose={onClose}>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        <dt className="text-muted">Slug</dt>
-        <dd className="break-any">{o.slug}</dd>
-        <dt className="text-muted">State</dt>
-        <dd>{o.state}</dd>
-        <dt className="text-muted">Made</dt>
-        <dd>{ago(o.createdAt)}</dd>
-        {glass && (
+    <DetailPanel title={o.name} onClose={onClose}>
+      <TabBar label={`${o.name} sections`} tabs={tabs} active={tab} onSelect={(t) => setTab(t as OrgTab)} className="-mx-4 -mt-4 lg:sticky lg:top-0 lg:z-10" innerClassName="px-3" />
+      <div role="tabpanel" data-org-tab={tab} className="flex flex-col gap-4">
+        {tab === 'overview' && (
           <>
-            <dt className="text-muted">Break-glass</dt>
-            <dd>until {new Date(o.breakGlassOpen[0]!.expiresAt).toLocaleTimeString()}</dd>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+              <dt className="text-muted">Slug</dt>
+              <dd className="break-any">{o.slug}</dd>
+              <dt className="text-muted">State</dt>
+              <dd>{o.state}</dd>
+              <dt className="text-muted">Made</dt>
+              <dd>{ago(o.createdAt)}</dd>
+              <dt className="text-muted">Members</dt>
+              <dd>{o.memberList.length}</dd>
+              <dt className="text-muted">Owns</dt>
+              <dd>{o.objects.length}</dd>
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              {o.state === 'active' ? (
+                <button type="button" className={btnDanger} onClick={() => setAsk('suspend')}>
+                  Suspend
+                </button>
+              ) : (
+                <button type="button" className={btnPlain} onClick={() => setAsk('resume')}>
+                  Resume
+                </button>
+              )}
+              {o.needsOwner && (
+                <button type="button" className={btnPlain} onClick={() => setAsk('recover')}>
+                  Recover owner
+                </button>
+              )}
+              <button type="button" className={btnDanger} disabled={o.objects.length > 0} title={o.objects.length > 0 ? 'Move what it owns out first' : undefined} onClick={() => setAsk('delete')}>
+                Delete
+              </button>
+            </div>
           </>
         )}
-      </dl>
-      <div className="flex flex-wrap gap-2">
-        {o.state === 'active' ? (
-          <button type="button" className={btnDanger} onClick={() => setAsk('suspend')}>
-            Suspend
-          </button>
-        ) : (
-          <button type="button" className={btnPlain} onClick={() => setAsk('resume')}>
-            Resume
-          </button>
+        {tab === 'members' && (
+          <Group title="Members">
+            {o.memberList.map((m) => (
+              <li key={m.userId} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <span className="break-any min-w-0 flex-1">{m.email || m.displayName}</span>
+                <span className={`${chip} bg-surface-2`}>{m.role}</span>
+              </li>
+            ))}
+          </Group>
         )}
-        {o.needsOwner && (
-          <button type="button" className={btnPlain} onClick={() => setAsk('recover')}>
-            Recover owner
-          </button>
+        {tab === 'objects' && (
+          <Group title="Owns" tip="Names only. Moving things between orgs is done from the item in the portal.">
+            {o.objects.map((x) => (
+              <li key={`${x.kind}:${x.id}`} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <span className="break-any min-w-0 flex-1">{x.name}</span>
+                <span className="shrink-0 text-xs text-muted">{OBJECT_LABEL[x.kind]}</span>
+              </li>
+            ))}
+          </Group>
         )}
-        {glass ? (
-          <button type="button" className={btnPlain} onClick={() => setAsk('endglass')}>
-            End break-glass
-          </button>
-        ) : (
-          <button type="button" className={btnPlain} disabled={o.state !== 'active'} onClick={() => setAsk('breakglass')}>
-            Break-glass
-          </button>
+        {tab === 'invitations' && (
+          <Group title="Invitations">
+            {o.invitations.map((i) => (
+              <li key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                <span className="break-any min-w-0 flex-1">{i.email}</span>
+                <span className="shrink-0 text-xs text-muted">
+                  {i.role} · {i.state}
+                </span>
+              </li>
+            ))}
+          </Group>
         )}
-        <button type="button" className={btnDanger} disabled={o.objects.length > 0} title={o.objects.length > 0 ? 'Move what it owns out first' : undefined} onClick={() => setAsk('delete')}>
-          Delete
-        </button>
+        {tab === 'signin' && (
+          <>
+            {o.sso && (
+              <Group title="SSO">
+                {o.sso.map((sp) => (
+                  <li key={sp.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                    <span className="break-any min-w-0 flex-1">{sp.name}</span>
+                    <span className={`${chip} ${sp.enabled ? 'bg-accent-soft' : 'bg-surface-2'}`}>{sp.enabled ? 'on' : 'off'}</span>
+                  </li>
+                ))}
+              </Group>
+            )}
+            {o.domains && (
+              <Group title="Domains">
+                {o.domains.map((d) => (
+                  <li key={d.domain} className="flex items-center gap-2 px-3 py-2 text-sm">
+                    <span className="break-any min-w-0 flex-1">{d.domain}</span>
+                    <span className="shrink-0 text-xs text-muted">{d.verified ? 'verified' : 'pending'}</span>
+                  </li>
+                ))}
+              </Group>
+            )}
+          </>
+        )}
+        {tab === 'breakglass' && (
+          <>
+            <p className="flex items-center gap-1 text-sm">
+              {glass ? `Open until ${new Date(o.breakGlassOpen[0]!.expiresAt).toLocaleTimeString()}` : 'Closed'}
+              <InfoTip label="About break-glass">One hour of full access to the org’s content in the portal, with a reason. Its owners are told, and every access is audited.</InfoTip>
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {glass ? (
+                <button type="button" className={btnPlain} onClick={() => setAsk('endglass')}>
+                  End break-glass
+                </button>
+              ) : (
+                <button type="button" className={btnDanger} disabled={o.state !== 'active'} title={o.state !== 'active' ? 'Resume the org first' : undefined} onClick={() => setAsk('breakglass')}>
+                  Start break-glass
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
-
-      <Group title={`Members (${o.memberList.length})`}>
-        {o.memberList.map((m) => (
-          <li key={m.userId} className="flex items-center gap-2 px-3 py-2 text-sm">
-            <span className="break-any min-w-0 flex-1">{m.email || m.displayName}</span>
-            <span className={`${chip} bg-surface-2`}>{m.role}</span>
-          </li>
-        ))}
-      </Group>
-      <Group title={`Owns (${o.objects.length})`} tip="Names only. Moving things between orgs is done from the item in the portal.">
-        {o.objects.map((x) => (
-          <li key={`${x.kind}:${x.id}`} className="flex items-center gap-2 px-3 py-2 text-sm">
-            <span className="break-any min-w-0 flex-1">{x.name}</span>
-            <span className="shrink-0 text-xs text-muted">{OBJECT_LABEL[x.kind]}</span>
-          </li>
-        ))}
-      </Group>
-      <Group title={`Invitations (${o.invitations.length})`}>
-        {o.invitations.map((i) => (
-          <li key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-            <span className="break-any min-w-0 flex-1">{i.email}</span>
-            <span className="shrink-0 text-xs text-muted">
-              {i.role} · {i.state}
-            </span>
-          </li>
-        ))}
-      </Group>
-      {o.sso && (
-        <Group title={`SSO (${o.sso.length})`}>
-          {o.sso.map((p) => (
-            <li key={p.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <span className="break-any min-w-0 flex-1">{p.name}</span>
-              <span className={`${chip} ${p.enabled ? 'bg-accent-soft' : 'bg-surface-2'}`}>{p.enabled ? 'on' : 'off'}</span>
-            </li>
-          ))}
-        </Group>
-      )}
-      {o.domains && (
-        <Group title={`Domains (${o.domains.length})`}>
-          {o.domains.map((d) => (
-            <li key={d.domain} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <span className="break-any min-w-0 flex-1">{d.domain}</span>
-              <span className="shrink-0 text-xs text-muted">{d.verified ? 'verified' : 'pending'}</span>
-            </li>
-          ))}
-        </Group>
-      )}
 
       {ask === 'suspend' && (
         <Confirm
@@ -289,8 +343,8 @@ function OrgSheet({ id, run, onClose }: { id: OrgId; run: Run; onClose: () => vo
           onClose={() => setAsk(null)}
         />
       )}
-      {ask === 'recover' && <Recover org={o} run={run} onDone={load} onClose={() => setAsk(null)} />}
-    </Sheet>
+      {ask === 'recover' && <Recover org={o} run={run} onDone={() => (load(), onChanged())} onClose={() => setAsk(null)} />}
+    </DetailPanel>
   );
 }
 

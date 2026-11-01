@@ -11,8 +11,8 @@ import {
 import { ChevronDown, CircleAlert, Plus, MessagesSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
+import { WindowedList } from '@/components/WindowedList';
 import { GlanceStrip } from '@/features/glance/Strip';
 import { usePersonaIdentities } from '@/features/personas/identities';
 import { useClaudeUsage, useNow } from '@/features/usage/claude/useClaudeUsage';
@@ -246,6 +246,24 @@ export function SessionsPage() {
     await reload();
   };
 
+  const toolbar = (
+    <SessionsToolbar
+      view={view}
+      counts={counts}
+      programs={programs}
+      onChange={change}
+      selecting={selecting}
+      onSelect={() => setSelecting(true)}
+      tree={tree}
+      onTree={changeTree}
+    />
+  );
+  const showQueue = !!list && !view.archived && view.filter !== 'attention' && !byStatus && list.attention.length > 0;
+  const items = useMemo(
+    () => (list ? flatItems(list.groups, { grouped: view.groupBy !== 'none' || byStatus, byStatus, folded, queue: showQueue ? list.attention : null }) : []),
+    [list, view.groupBy, byStatus, folded, showQueue],
+  );
+
   return (
     <>
       <PageHeader
@@ -267,97 +285,85 @@ export function SessionsPage() {
       {failed && !sessions && <LoadError onRetry={reload} />}
       {!sessions && !failed && <RowsSkeleton rows={3} lines={1} trailing icon="rounded-2xl" />}
 
-      {sessions && sessions.length > 0 && (
-        <SessionsToolbar
-          view={view}
-          counts={counts}
-          programs={programs}
-          onChange={change}
-          selecting={selecting}
-          onSelect={() => setSelecting(true)}
-          tree={tree}
-          onTree={changeTree}
-        />
+      {tree && sessions && sessions.length > 0 && (
+        <>
+          {toolbar}
+          <AgentTreeView sessions={sessions} query={view.query} onChanged={() => void reload()} />
+        </>
       )}
 
-      {tree && sessions && sessions.length > 0 && <AgentTreeView sessions={sessions} query={view.query} onChanged={() => void reload()} />}
-
-      {/* What waits on you, on top of the other chips' lists (All has it as its first heading, Needs you is it). */}
-      {list &&
-        sessions &&
-        sessions.length > 0 &&
-        !tree &&
-        !view.archived &&
-        view.filter !== 'attention' &&
-        !byStatus &&
-        list.attention.length > 0 && <Queue rows={list.attention} />}
-
-      {list &&
-        sessions &&
-        !(tree && sessions.length > 0) &&
-        (sessions.length === 0 ? (
-          <EmptyState
-            icon={<MessagesSquare className="size-6" />}
-            title="No agents yet"
-            action={
-              <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
-                New session
-              </Button>
-            }
-          >
-            Start an agent to chat with Claude Code in one of your running workspaces.
-          </EmptyState>
-        ) : list.shown === 0 ? (
-          <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No agents match'}>
-            {view.archived ? 'Archived agents end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
-            {(view.query || view.filter !== 'all' || view.archived || view.program) && (
-              <button
-                type="button"
-                className="font-semibold text-ink underline underline-offset-2"
-                onClick={() => change({ query: '', filter: 'all', archived: false, program: null })}
+      {list && sessions && !(tree && sessions.length > 0) && (
+        // THE windowed list (components/WindowedList.tsx): the groups flattened into heads and rows, only those in view drawn; on a desktop
+        // it fills the pane under the toolbar and scrolls inside, on a phone the toolbar sticks and the list scrolls with the page. Older
+        // pages load as the end comes into view (D-58: the 5 s refresh still asks for page 1 only).
+        <WindowedList
+          label="Agents"
+          items={items}
+          itemKey={(it) => it.key}
+          estimate={68}
+          gap={0}
+          header={sessions.length > 0 ? toolbar : undefined}
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          onLoadMore={() => void loadMore()}
+          empty={
+            sessions.length === 0 ? (
+              <EmptyState
+                icon={<MessagesSquare className="size-6" />}
+                title="No agents yet"
+                action={
+                  <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
+                    New session
+                  </Button>
+                }
               >
-                Show everything
-              </button>
-            )}
-          </EmptyState>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {list.groups.map((g) => (
-              <Group
-                key={g.key || 'all'}
-                group={g}
-                grouped={view.groupBy !== 'none' || byStatus}
+                Start an agent to chat with Claude Code in one of your running workspaces.
+              </EmptyState>
+            ) : (
+              <EmptyState icon={<MessagesSquare className="size-6" />} title={view.archived ? 'Nothing archived' : 'No agents match'}>
+                {view.archived ? 'Archived agents end and wait here, with their transcripts.' : 'Nothing fits this search and filter.'}{' '}
+                {(view.query || view.filter !== 'all' || view.archived || view.program) && (
+                  <button
+                    type="button"
+                    className="font-semibold text-ink underline underline-offset-2"
+                    onClick={() => change({ query: '', filter: 'all', archived: false, program: null })}
+                  >
+                    Show everything
+                  </button>
+                )}
+              </EmptyState>
+            )
+          }
+          renderItem={(it) =>
+            it.kind === 'queue' ? (
+              <Queue rows={it.rows} />
+            ) : it.kind === 'head' ? (
+              <GroupHead
+                group={it.group}
                 status={byStatus}
-                folded={folded.has(g.key) && (!byStatus || canFold(g.key))}
-                onFold={!byStatus || canFold(g.key) ? () => setFolded((f) => flip(f, g.key)) : undefined}
-              >
-                {g.rows.map((r) => (
-                  <SessionRow
-                    key={r.session.id}
-                    row={r}
-                    groupBy={view.groupBy}
-                    selecting={selecting}
-                    selected={selected}
-                    collapsed={collapsed}
-                    onToggle={toggle}
-                    onCollapse={(id) => setCollapsed((c) => flip(c, id))}
-                    actions={actions}
-                    personas={personas}
-                    facts={factsByGroup.get(g.key)}
-                  />
-                ))}
-              </Group>
-            ))}
-          </div>
-        ))}
-
-      {/* D-58: the list loads the newest page; the 5 s refresh asks for that page only. */}
-      {sessions && hasMore && (
-        <div className="mt-4 flex justify-center">
-          <Button variant="secondary" loading={loadingMore} onClick={() => void loadMore()}>
-            Older
-          </Button>
-        </div>
+                folded={it.folded}
+                first={it.first}
+                gap={it.gap}
+                onFold={it.foldable ? () => setFolded((f) => flip(f, it.group.key)) : undefined}
+              />
+            ) : (
+              <RowSlice first={it.first} last={it.last} status={byStatus ? it.group.key : undefined}>
+                <SessionRow
+                  row={it.row}
+                  groupBy={view.groupBy}
+                  selecting={selecting}
+                  selected={selected}
+                  collapsed={collapsed}
+                  onToggle={toggle}
+                  onCollapse={(id) => setCollapsed((c) => flip(c, id))}
+                  actions={actions}
+                  personas={personas}
+                  facts={factsByGroup.get(it.group.key)}
+                />
+              </RowSlice>
+            )
+          }
+        />
       )}
 
       {selecting && (
@@ -418,32 +424,33 @@ function Queue({ rows }: { rows: ListRow[] }) {
   );
 }
 
-/**
- * A group of rows in one card. Grouped (by workspace, Claude, … or, in All, by status), it has a heading with its count that folds the group;
- * a heading without `onFold` (Needs you) never folds. The card's rows keep to its corners by their own radius (RowList), not by an overflow
- * clip, so a row's ⋯ menu can still open past the card (T-100).
- */
-function Group({
-  group,
-  grouped,
-  status,
-  folded,
-  onFold,
-  children,
-}: {
-  group: ListGroup;
-  grouped: boolean;
-  status: boolean;
-  folded: boolean;
-  onFold?: () => void;
-  children: React.ReactNode;
-}) {
-  const rows = (
-    <Card>
-      <RowList>{children}</RowList>
-    </Card>
-  );
-  if (!grouped) return rows;
+/** One line of the windowed list: the Needs you queue, a group's heading (or, ungrouped, the gap between cards), or a row in its group's card. */
+type Item =
+  | { kind: 'queue'; key: string; rows: ListRow[] }
+  | { kind: 'head'; key: string; group: ListGroup; folded: boolean; foldable: boolean; first: boolean; gap: boolean }
+  | { kind: 'row'; key: string; group: ListGroup; row: ListRow; first: boolean; last: boolean };
+
+/** The groups flattened into lines (a heading per group when grouped, its rows unless folded), the queue first when it shows. */
+function flatItems(
+  groups: readonly ListGroup[],
+  o: { grouped: boolean; byStatus: boolean; folded: ReadonlySet<string>; queue: ListRow[] | null },
+): Item[] {
+  const out: Item[] = [];
+  if (o.queue) out.push({ kind: 'queue', key: 'queue', rows: o.queue });
+  groups.forEach((g, gi) => {
+    const foldable = !o.byStatus || canFold(g.key);
+    const folded = o.grouped && foldable && o.folded.has(g.key);
+    if (o.grouped) out.push({ kind: 'head', key: `head:${g.key}`, group: g, folded, foldable, first: gi === 0 && !o.queue, gap: false });
+    else if (gi > 0) out.push({ kind: 'head', key: `gap:${g.key}`, group: g, folded: false, foldable: false, first: false, gap: true });
+    if (folded) return;
+    g.rows.forEach((r, i) => out.push({ kind: 'row', key: `row:${g.key}:${r.session.id}`, group: g, row: r, first: i === 0, last: i === g.rows.length - 1 }));
+  });
+  return out;
+}
+
+/** A group's heading with its count; it folds the group (a heading without `onFold`, Needs you, never folds). `gap`: only the space between cards. */
+function GroupHead({ group, status, folded, first, gap, onFold }: { group: ListGroup; status: boolean; folded: boolean; first: boolean; gap: boolean; onFold?: () => void }) {
+  if (gap) return <div aria-hidden="true" className="h-4" />;
   const head = (
     <>
       <span data-group-title className="min-w-0 truncate text-[15px] font-bold">
@@ -462,7 +469,7 @@ function Group({
   );
   const headClass = 'mb-1.5 flex min-h-11 w-full items-center gap-2 rounded-xl px-1 text-left sm:min-h-9';
   return (
-    <section aria-label={group.title} data-status-group={status ? group.key : undefined}>
+    <div data-status-group={status ? group.key : undefined} className={first ? undefined : 'pt-4'}>
       {onFold ? (
         <button type="button" data-group-head aria-expanded={!folded} onClick={onFold} className={cn('press', headClass)}>
           {head}
@@ -472,24 +479,31 @@ function Group({
           {head}
         </h2>
       )}
-      {!folded && rows}
-    </section>
+    </div>
   );
 }
 
 /**
- * The rows of a card. The row at the top and the row at the bottom (a nested one too: its right corner is the card's) take the card's inner
- * corners (its 24 px radius less the 1 px border) on their swipe box, and the row's background and the swipe panes inherit them, so nothing
- * square paints past the curve (T-100: each row's square background did, at rest and mid-swipe). The card itself does not clip, so a
- * row's ⋯ menu opens past it.
+ * A row in its group's card. The card is drawn by its rows (a border on the sides, the top on the first, the bottom on the last, a hairline
+ * between), so a windowed list can draw part of a group. The first and last rows take the card's inner corners (its 24 px radius less the
+ * 1 px border) on their swipe box (T-100: nothing square paints past the curve); the card does not clip, so a row's ⋯ menu opens past it.
  */
-const ROW_CORNERS =
-  '[&>li:first-child>div:first-child]:rounded-t-[23px] [&>li:last-child>div:last-child]:rounded-b-[23px] [&>li:last-child_li:last-child>div:last-child]:rounded-br-[23px]';
-function RowList({ children }: { children: React.ReactNode }) {
+function RowSlice({ first, last, status, children }: { first: boolean; last: boolean; status?: string; children: React.ReactNode }) {
   return (
-    <ul data-session-rows className={cn('divide-y divide-line', ROW_CORNERS)}>
-      {children}
-    </ul>
+    <div
+      data-status-group={status}
+      className={cn('border-x border-t border-line bg-surface', first && 'rounded-t-[24px]', last && 'rounded-b-[24px] border-b')}
+    >
+      <ul
+        data-session-rows
+        className={cn(
+          first && '[&>li:first-child>div:first-child]:rounded-t-[23px]',
+          last && '[&>li:last-child>div:last-child]:rounded-b-[23px] [&>li:last-child_li:last-child>div:last-child]:rounded-br-[23px]',
+        )}
+      >
+        {children}
+      </ul>
+    </div>
   );
 }
 

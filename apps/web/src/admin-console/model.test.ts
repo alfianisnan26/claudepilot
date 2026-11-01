@@ -6,7 +6,24 @@ import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { auditSearch } from './api';
-import { AUDIT_KINDS, TABS, USER_FILTERS, ago, auditDates, auditWho, oidcOutcome, oidcStartHref, settingInput, slugOf, tabFromHash, userShows } from './model';
+import {
+  AUDIT_KINDS,
+  AUDIT_TABS,
+  ORG_TABS,
+  TABS,
+  USER_FILTERS,
+  ago,
+  auditDates,
+  auditTabKind,
+  auditWho,
+  oidcOutcome,
+  oidcStartHref,
+  popupResult,
+  settingInput,
+  slugOf,
+  tabFromHash,
+  userShows,
+} from './model';
 
 const src = fileURLToPath(new URL('..', import.meta.url));
 const web = fileURLToPath(new URL('../..', import.meta.url));
@@ -74,11 +91,26 @@ test('OIDC sign-in: the outcome query, the start link, and who a refused sign-in
   const start = '/admin-api/session/oidc/start';
   assert.equal(oidcStartHref(start), start);
   assert.equal(oidcStartHref(start, { stepUp: true, next: 'orgs' }), `${start}?for=step-up&next=orgs`);
+  assert.equal(oidcStartHref(start, { stepUp: true, popup: true, next: 'orgs' }), `${start}?for=step-up&popup=1&next=orgs`);
+  assert.equal(oidcStartHref(start, { popup: true }), start, 'a sign-in is never a popup');
   assert.ok(AUDIT_KINDS.includes('admin.signin_refused'), 'the Audit filter offers refused sign-ins');
   assert.equal(auditWho('admin.signin_refused', { method: 'oidc', reason: 'not_allowed', email: 'eve@example.test', subject: '77' }), 'eve@example.test · oidc · not allowed');
   assert.equal(auditWho('admin.signin_refused', { method: 'oidc', reason: 'state', email: null, subject: null }), 'oidc · state');
   assert.equal(auditWho('admin.signin_refused', { subject: '77' }), 'subject 77');
   assert.equal(auditWho('admin.signin', { email: 'x@example.test' }), null);
+});
+
+test('a step-up popup reads its outcome only with popup=1; the org and audit tabs (owner, 2026-11-01)', () => {
+  assert.equal(popupResult('?oidc=stepped&popup=1'), 'stepped');
+  assert.equal(popupResult('?oidc=refused&popup=1'), 'refused');
+  assert.equal(popupResult('?oidc=stepped'), null, 'not a popup: the console itself');
+  assert.equal(popupResult('?oidc=<x>&popup=1'), null);
+  assert.deepEqual([...ORG_TABS], ['overview', 'members', 'objects', 'invitations', 'signin', 'breakglass']);
+  assert.deepEqual([...AUDIT_TABS], ['all', 'refused', 'org', 'security']);
+  assert.equal(auditTabKind('all'), null);
+  assert.equal(auditTabKind('refused'), 'admin.signin_refused');
+  assert.equal(auditTabKind('org'), 'org');
+  assert.equal(auditTabKind('security'), 'admin');
 });
 
 function files(dir: string): string[] {
@@ -115,4 +147,8 @@ test('the console follows the UI standard: on a desktop only the content pane sc
   assert.match(consoleSrc, /lg:h-dvh[^'"]*lg:overflow-hidden/);
   assert.match(readFileSync(join(src, 'admin-console', 'UsersView.tsx'), 'utf8'), /from '\.\.\/components\/TabBar'/);
   assert.match(readFileSync(join(src, 'admin-console', 'console.css'), 'utf8'), /@source '\.\.\/components\/TabBar\.tsx'/);
+  // Users and Audit are THE windowed list; Users and Orgs open their detail beside the list (master-detail).
+  for (const f of ['UsersView.tsx', 'AuditView.tsx']) assert.match(readFileSync(join(src, 'admin-console', f), 'utf8'), /<WindowedList\b/, f);
+  for (const f of ['UsersView.tsx', 'OrgsView.tsx']) assert.match(readFileSync(join(src, 'admin-console', f), 'utf8'), /<MasterDetail\b/, f);
+  assert.match(readFileSync(join(src, 'admin-console', 'console.css'), 'utf8'), /@source '\.\.\/components\/WindowedList\.tsx'/);
 });

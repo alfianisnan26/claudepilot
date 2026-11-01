@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from './api';
 import { TabBar } from '../components/TabBar';
 import { ago, USER_FILTER_LABEL, USER_FILTERS, userShows, type UserFilter } from './model';
-import { btnDanger, btnPlain, btnPrimary, chip, Confirm, Empty, field, Field, InfoTip, list, Secret, Section, Sheet, useList, type Run } from './ui';
+import { WindowedList } from '../components/WindowedList';
+import { btnDanger, btnPlain, btnPrimary, chip, Confirm, CONSOLE_STICKY, DetailPanel, Empty, field, Field, InfoTip, MasterDetail, Secret, Section, Sheet, useList, type Run } from './ui';
 
 /*
  * Users: every account, new account (the server makes a one-time password, shown once), and per account its role, state, abilities, sessions
@@ -30,41 +31,62 @@ export function UsersView({ run, meId }: { run: Run; meId: string }) {
         </button>
       }
     >
-      {/* Pill tabs (docs/coord/UI-STANDARD.md §2), the same bar as the portal's: All, Admins, Members, Disabled with their counts. */}
-      <TabBar
-        label="Users"
-        tabs={USER_FILTERS.map((f) => ({ id: f, label: USER_FILTER_LABEL[f], badge: f === 'all' || !items ? undefined : items.filter((u) => userShows(u, f)).length || undefined, badgeTone: 'info' as const }))}
-        active={show}
-        onSelect={(id) => setShow(id as UserFilter)}
-        className="sticky top-[calc(env(safe-area-inset-top)+3rem)] z-[5] -mx-4 lg:top-0 lg:-mx-8"
-        innerClassName="px-3 lg:px-7"
+      {/* Master-detail (ui.tsx): the user opens beside the list on a desktop, as a sheet on a phone. The list is THE windowed list
+          (components/WindowedList.tsx): it fills the pane under its tabs and scrolls inside; on a phone the tabs stick. */}
+      <MasterDetail
+        list={
+          <WindowedList
+            label="Users"
+            items={shown ?? []}
+            itemKey={(u) => u.id}
+            estimate={58}
+            gap={6}
+            header={
+              // Pill tabs (docs/coord/UI-STANDARD.md §2), the same bar as the portal's: All, Admins, Members, Disabled with their counts.
+              <TabBar
+                label="Users"
+                tabs={USER_FILTERS.map((f) => ({ id: f, label: USER_FILTER_LABEL[f], badge: f === 'all' || !items ? undefined : items.filter((u) => userShows(u, f)).length || undefined, badgeTone: 'info' as const }))}
+                active={show}
+                onSelect={(id) => setShow(id as UserFilter)}
+                className="-mx-4 mb-3 lg:mx-0"
+                innerClassName="px-3 lg:px-0"
+              />
+            }
+            stickyClassName={CONSOLE_STICKY}
+            empty={<Empty items={shown} />}
+            renderItem={(u) => (
+              <button
+                type="button"
+                aria-current={open === u.id ? 'true' : undefined}
+                className={`flex min-h-14 w-full items-center gap-3 rounded-xl border bg-surface px-3 py-2 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-accent ${open === u.id ? 'border-primary' : 'border-line'}`}
+                onClick={() => setOpen(u.id)}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="break-any block text-sm font-medium">{u.email}</span>
+                  <span className="block text-xs text-muted">{u.lastLoginAt ? ago(u.lastLoginAt) : 'never'}</span>
+                </span>
+                <UserChips u={u} />
+              </button>
+            )}
+          />
+        }
+        detail={
+          open && (
+            <UserDetail
+              key={open}
+              id={open}
+              self={open === meId}
+              run={run}
+              onSecret={setSecret}
+              onChanged={reload}
+              onClose={() => {
+                setOpen(null);
+                reload();
+              }}
+            />
+          )
+        }
       />
-      <Empty items={shown} />
-      <ul className={list}>
-        {shown?.map((u) => (
-          <li key={u.id}>
-            <button type="button" className="flex min-h-14 w-full items-center gap-3 px-3 py-2 text-left" onClick={() => setOpen(u.id)}>
-              <span className="min-w-0 flex-1">
-                <span className="break-any block text-sm font-medium">{u.email}</span>
-                <span className="block text-xs text-muted">{u.lastLoginAt ? ago(u.lastLoginAt) : 'never'}</span>
-              </span>
-              <UserChips u={u} />
-            </button>
-          </li>
-        ))}
-      </ul>
-      {open && (
-        <UserSheet
-          id={open}
-          self={open === meId}
-          run={run}
-          onSecret={setSecret}
-          onClose={() => {
-            setOpen(null);
-            reload();
-          }}
-        />
-      )}
       {adding && (
         <NewUser
           run={run}
@@ -130,26 +152,28 @@ function NewUser({ run, onDone, onClose }: { run: Run; onDone: (email: string, p
 
 type Ask = { kind: 'suspend' | 'remove' | 'reset' | 'sessions' | 'demote' | 'founder' };
 
-function UserSheet({ id, self, run, onSecret, onClose }: { id: string; self: boolean; run: Run; onSecret: (s: { title: string; value: string }) => void; onClose: () => void }) {
+function UserDetail({ id, self, run, onSecret, onChanged, onClose }: { id: string; self: boolean; run: Run; onSecret: (s: { title: string; value: string }) => void; onChanged: () => void; onClose: () => void }) {
   const [u, setU] = useState<AdminUserDetail | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
   const load = useCallback(() => void run(() => api.user(id)).then((v) => v && setU(v)), [run, id]);
   useEffect(load, [load]);
-  const act = (fn: () => Promise<unknown>) => void run(fn).then(load);
+  // The panel stays open beside the list: a change shows in both.
+  const changed = () => (load(), onChanged());
+  const act = (fn: () => Promise<unknown>) => void run(fn).then(changed);
   if (!u)
     return (
-      <Sheet title="User" onClose={onClose}>
+      <DetailPanel title="User" onClose={onClose}>
         <p className="text-sm text-muted">Loading</p>
-      </Sheet>
+      </DetailPanel>
     );
   const canCreate = u.role === 'admin' || u.abilities.includes('orgs.create');
   const done = async (fn: () => Promise<unknown>) => {
     const r = await run(fn);
-    if (r !== undefined) load();
+    if (r !== undefined) changed();
     return r !== undefined;
   };
   return (
-    <Sheet title={u.email} onClose={onClose}>
+    <DetailPanel title={u.email} onClose={onClose}>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="text-muted">Name</dt>
         <dd className="break-any">{u.displayName}</dd>
@@ -266,7 +290,7 @@ function UserSheet({ id, self, run, onSecret, onClose }: { id: string; self: boo
           onClose={() => setAsk(null)}
         />
       )}
-      {ask?.kind === 'founder' && <TransferFounder u={u} run={run} onDone={load} onClose={() => setAsk(null)} />}
+      {ask?.kind === 'founder' && <TransferFounder u={u} run={run} onDone={changed} onClose={() => setAsk(null)} />}
       {ask?.kind === 'remove' && (
         <Confirm
           title="Remove"
@@ -281,7 +305,7 @@ function UserSheet({ id, self, run, onSecret, onClose }: { id: string; self: boo
           onClose={() => setAsk(null)}
         />
       )}
-    </Sheet>
+    </DetailPanel>
   );
 }
 

@@ -4,6 +4,7 @@ import { ArrowRight, CheckCheck, ChevronRight, Clock } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { PageHeader } from '@/components/PageHeader';
+import { WindowedList } from '@/components/WindowedList';
 import { InfoTip } from '@/components/InfoTip';
 import { useEngaged, useSteadyRows } from '@/features/glance/widgets/shared/steady';
 import { useNow } from '@/features/glance/widgets/shared/useNow';
@@ -20,6 +21,12 @@ const VIEWS: { value: View; label: string }[] = [
 ];
 
 const itemKey = (i: AttentionItem) => `${i.kind}:${i.id}`;
+
+/** One line of the windowed list: a "why" heading, the refused calls' toggle, or a row. */
+type Line =
+  | { kind: 'head'; key: string; why: AttentionItem['why']; label: string; count: number; first: boolean }
+  | { kind: 'refused'; key: string }
+  | { kind: 'row'; key: string; item: AttentionItem };
 
 /**
  * Needs you (docs/prd/attention.md): every thing that waits for a person, from every module, in one list. Grouped by why a person is
@@ -50,6 +57,19 @@ export function NeedsYouPage() {
   const groups = useMemo(() => groupByWhy(rows.map((r) => r.row)), [rows]);
   const refused = useMemo(() => refusalsOf(rows.map((r) => r.row)), [rows]);
   const choices = kindChoices(list, ATTENTION_KIND_LABEL);
+  const [refusedOpen, setRefusedOpen] = useState(false);
+  const lines = useMemo(() => {
+    const out: Line[] = [];
+    groups.forEach((g, gi) => {
+      out.push({ kind: 'head', key: `why:${g.why}`, why: g.why, label: g.label, count: g.items.length, first: gi === 0 });
+      for (const i of g.items) out.push({ kind: 'row', key: itemKey(i), item: i });
+    });
+    if (refused.items.length > 0) {
+      out.push({ kind: 'refused', key: 'refused' });
+      if (refusedOpen) for (const i of refused.items) out.push({ kind: 'row', key: itemKey(i), item: i });
+    }
+    return out;
+  }, [groups, refused, refusedOpen]);
 
   return (
     <div>
@@ -64,73 +84,81 @@ export function NeedsYouPage() {
       {!list && !failed && <RowsSkeleton rows={3} lines={2} card label="Loading what needs you" />}
       {list && view === 'deck' && <SwipeDeck items={list.items} now={now} openKey={params.get('item')} />}
       {list && view === 'list' && (
-        <>
-          {choices.length > 2 && (
-            <div role="group" aria-label="Kind" className="mb-4 flex flex-wrap gap-2">
-              {choices.map((c) => (
-                <button
-                  key={c.value}
-                  type="button"
-                  aria-pressed={kind === c.value}
-                  onClick={() => setKind(c.value)}
-                  className={cn(chipClass(kind === c.value), 'min-h-11')}
-                >
-                  {c.label}
-                  <span className="ml-1.5 tabular-nums opacity-70">{c.count ?? '–'}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {list.unavailable.length > 0 && (
-            <p role="status" className="mb-3 text-[13px] text-muted">
-              Unavailable: {list.unavailable.map((k) => ATTENTION_KIND_LABEL[k]).join(', ')}
-            </p>
-          )}
-          {groups.length === 0 && refused.items.length === 0 ? (
-            <EmptyState icon={<CheckCheck className="size-6" />} title="Nothing needs you" />
-          ) : (
-            <div {...bind} className="flex flex-col gap-6">
-              {groups.map((g) => (
-                <section key={g.why} aria-labelledby={`why-${g.why}`}>
-                  <h2 id={`why-${g.why}`} className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-ink-soft">
-                    {g.label}
-                    <span className="tabular-nums text-muted">{g.items.length}</span>
-                    <InfoTip label={`About ${g.label}`}>{WHY_ABOUT[g.why]}</InfoTip>
-                  </h2>
-                  <ul className="flex flex-col gap-2">
-                    {g.items.map((i) => (
-                      <Row key={itemKey(i)} item={i} now={now} gone={gone.has(itemKey(i))} />
-                    ))}
-                  </ul>
-                </section>
-              ))}
-              {refused.items.length > 0 && (
+        // THE windowed list (components/WindowedList.tsx): the groups flattened into headings and rows, only those in view drawn; it fills the
+        // pane on a desktop (the kind chips above it), and scrolls with the page on a phone (the chips stick).
+        <div {...bind}>
+          <WindowedList
+            label="Needs you"
+            items={lines}
+            itemKey={(l) => l.key}
+            estimate={92}
+            gap={8}
+            header={
+              (choices.length > 2 || list.unavailable.length > 0) && (
+                <>
+                  {choices.length > 2 && (
+                    <div role="group" aria-label="Kind" className="mb-4 flex flex-wrap gap-2">
+                      {choices.map((c) => (
+                        <button
+                          key={c.value}
+                          type="button"
+                          aria-pressed={kind === c.value}
+                          onClick={() => setKind(c.value)}
+                          className={cn(chipClass(kind === c.value), 'min-h-11')}
+                        >
+                          {c.label}
+                          <span className="ml-1.5 tabular-nums opacity-70">{c.count ?? '–'}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {list.unavailable.length > 0 && (
+                    <p role="status" className="mb-3 text-[13px] text-muted">
+                      Unavailable: {list.unavailable.map((k) => ATTENTION_KIND_LABEL[k]).join(', ')}
+                    </p>
+                  )}
+                </>
+              )
+            }
+            empty={<EmptyState icon={<CheckCheck className="size-6" />} title="Nothing needs you" />}
+            footer={
+              list.total > list.items.length && (
+                <p className="text-center text-[13px] text-muted">
+                  {list.items.length} of {list.total} shown
+                </p>
+              )
+            }
+            renderItem={(l) =>
+              l.kind === 'row' ? (
+                <Row item={l.item} now={now} gone={gone.has(itemKey(l.item))} />
+              ) : l.kind === 'refused' ? (
                 // T-3114: refused calls are the guard working, not asks: one collapsed group below the real ones.
-                <details data-attention-refusals="" className="group/refused">
-                  <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-[13px] font-semibold text-ink-soft [&::-webkit-details-marker]:hidden">
-                    <ChevronRight className="size-4 shrink-0 transition-transform group-open/refused:rotate-90" aria-hidden="true" />
+                <div data-attention-refusals="" className="flex items-center gap-1.5 pt-4">
+                  <button
+                    type="button"
+                    aria-expanded={refusedOpen}
+                    onClick={() => setRefusedOpen((v) => !v)}
+                    className="flex min-h-11 items-center gap-1.5 rounded-lg text-[13px] font-semibold text-ink-soft outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    <ChevronRight className={cn('size-4 shrink-0 transition-transform', refusedOpen && 'rotate-90')} aria-hidden="true" />
                     {refusedTitle(refused.calls)}
                     <span className="tabular-nums text-muted">{refused.items.length}</span>
-                    <InfoTip label="About refused calls">
-                      The rule guard refused these tool calls. Most need nothing: the agent goes on. Allow one only if that exact call
-                      should run once. A card leaves after 30 minutes, or when its session ends; the same call again adds to its count.
-                    </InfoTip>
-                  </summary>
-                  <ul className="mt-2 flex flex-col gap-2">
-                    {refused.items.map((i) => (
-                      <Row key={itemKey(i)} item={i} now={now} gone={gone.has(itemKey(i))} />
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          )}
-          {list.total > list.items.length && (
-            <p className="mt-4 text-center text-[13px] text-muted">
-              {list.items.length} of {list.total} shown
-            </p>
-          )}
-        </>
+                  </button>
+                  <InfoTip label="About refused calls">
+                    The rule guard refused these tool calls. Most need nothing: the agent goes on. Allow one only if that exact call should run
+                    once. A card leaves after 30 minutes, or when its session ends; the same call again adds to its count.
+                  </InfoTip>
+                </div>
+              ) : (
+                <h2 id={`why-${l.why}`} className={cn('flex items-center gap-1.5 text-[13px] font-semibold text-ink-soft', !l.first && 'pt-4')}>
+                  {l.label}
+                  <span className="tabular-nums text-muted">{l.count}</span>
+                  <InfoTip label={`About ${l.label}`}>{WHY_ABOUT[l.why]}</InfoTip>
+                </h2>
+              )
+            }
+          />
+        </div>
       )}
     </div>
   );
@@ -140,7 +168,7 @@ export function NeedsYouPage() {
 function Row({ item: i, now, gone }: { item: AttentionItem; now: number; gone: boolean }) {
   const Icon = KIND_ICON[i.kind];
   return (
-    <li
+    <div
       data-attention-item={`${i.kind}:${i.id}`}
       aria-disabled={gone || undefined}
       className={cn('flex min-w-0 items-start gap-3 rounded-2xl border border-line bg-surface px-3.5 py-3', gone && 'pointer-events-none opacity-50')}
@@ -186,6 +214,6 @@ function Row({ item: i, now, gone }: { item: AttentionItem; now: number; gone: b
         <span className="hidden sm:inline">{i.action.label}</span>
         <ArrowRight className="size-4" aria-hidden="true" />
       </Link>
-    </li>
+    </div>
   );
 }

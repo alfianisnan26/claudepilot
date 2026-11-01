@@ -373,3 +373,24 @@ test('step-up through the provider: needs the admin session, marks only the sess
   assert.equal((await action()).json?.error?.code, 'REAUTH_REQUIRED');
   assert.equal(rows('admin.step_up').length, 1);
 });
+
+test('step-up in a popup (owner, 2026-11-01): the return says stepped or refused with popup=1, so the console resumes the interrupted action', async () => {
+  const p = portal();
+  const cookie = await p.passwordSignIn();
+  const action = () => p.call('POST', `/admin-api/users/${memberId}/sessions/end`, { cookies: [cookie] });
+  assert.equal((await action()).json?.error?.code, 'REAUTH_REQUIRED');
+  const ok = await p.flow({ sub: 'gitea-1', email: 'root@example.test' }, { start: '/admin-api/session/oidc/start?for=step-up&popup=1&next=users', cookies: [cookie] });
+  assert.equal(ok.cb.location, '/admin-ui/?oidc=stepped&popup=1#users');
+  assert.equal(ok.adminCookie, '', 'a step-up opens no new session');
+  assert.equal((await action()).status, 200, 'fresh now: the console runs the action again without asking');
+
+  // Refused (another admin's identity): the popup hears it too, and nothing is marked.
+  clock += 6 * MIN;
+  const refused = await p.flow({ sub: 'gitea-2', email: 'ops@example.test' }, { start: '/admin-api/session/oidc/start?for=step-up&popup=1&next=audit', cookies: [cookie] });
+  assert.equal(refused.cb.location, '/admin-ui/?oidc=refused&popup=1#audit');
+  assert.equal((await action()).json?.error?.code, 'REAUTH_REQUIRED');
+
+  // A sign-in (not a step-up) ignores popup=1: it comes back to the console as before.
+  const signIn = await p.flow({ sub: 'gitea-1', email: 'root@example.test' }, { start: '/admin-api/session/oidc/start?popup=1' });
+  assert.equal(signIn.cb.location, '/admin-ui/');
+});

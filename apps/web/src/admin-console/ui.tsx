@@ -1,5 +1,9 @@
 import { Check, Copy, Info, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Sheet, sheetsOpen } from '../components/Sheet';
+import { usePaneFill } from '../components/WindowedList';
+
+export { Sheet };
 
 /*
  * The Admin console's small kit: buttons, fields, a sheet (bottom on phones, centred on desktop), a section with a reload button, an InfoTip,
@@ -14,51 +18,75 @@ export const btnPrimary = `${btn} bg-primary text-primary-ink`;
 export const field = 'min-h-11 w-full rounded-lg border border-line bg-surface px-3 text-base text-ink';
 export const chip = 'inline-flex items-center rounded-full px-2 py-0.5 text-xs';
 export const list = 'flex flex-col divide-y divide-line rounded-xl border border-line bg-surface';
+/** Where a windowed list's filters stick on a phone: under the console's top bar (the document scrolls there). */
+export const CONSOLE_STICKY = 'sticky top-[calc(env(safe-area-inset-top)+3rem)] z-[5] -mx-4 bg-bg/95 px-4 pt-1 backdrop-blur';
 
 /** Runs an action through the console: a step-up refusal asks for the password and runs it again; an error shows in the banner. */
 export type Run = <T>(action: () => Promise<T>) => Promise<T | undefined>;
 
-/** Open sheets, the top last: Escape closes only the top one (a confirmation over a user's sheet). */
-const openSheets: object[] = [];
+/** A desktop (1024 px and up): the console's content pane scrolls and a detail opens beside its list. */
+export function useWide(): boolean {
+  const query = '(min-width: 1024px)';
+  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const m = matchMedia(query);
+    const on = () => setWide(m.matches);
+    on();
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return wide;
+}
 
-export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  // The latest onClose, so a parent's re-render (a new arrow each time) neither re-focuses the sheet nor reorders the stack.
+/**
+ * Master-detail (docs/coord/UI-STANDARD.md §4; owner, 2026-11-01): on a desktop the list and, when one is open, its detail side by side,
+ * the detail a panel that fills the pane's height and scrolls inside; on a phone the list alone and the detail as a sheet (DetailPanel).
+ */
+export function MasterDetail({ list, detail }: { list: ReactNode; detail: ReactNode }) {
+  return (
+    <div data-master-detail={detail ? 'open' : 'closed'} className={detail ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(22rem,30rem)] lg:items-start lg:gap-6' : undefined}>
+      <div className="min-w-0">{list}</div>
+      {detail}
+    </div>
+  );
+}
+
+/** The detail of a master-detail: a side panel on a desktop (its own scroll, the pane's height), a sheet on a phone. Escape closes either. */
+export function DetailPanel({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const wide = useWide();
+  const box = useRef<HTMLElement>(null);
+  const height = usePaneFill(box, wide, 320);
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
-    const me = {};
-    openSheets.push(me);
-    const prev = document.activeElement as HTMLElement | null;
-    ref.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && openSheets.at(-1) === me && close.current();
+    if (!wide) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && sheetsOpen() === 0 && close.current();
     window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      openSheets.splice(openSheets.indexOf(me), 1);
-      prev?.focus?.();
-    };
-  }, []);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [wide]);
+  if (!wide)
+    return (
+      <Sheet title={title} onClose={onClose}>
+        {children}
+      </Sheet>
+    );
   return (
-    <div className="fixed inset-0 z-20 flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose}>
-      <div
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        className="max-h-[90dvh] w-full overflow-y-auto overscroll-contain rounded-t-2xl bg-bg pb-[env(safe-area-inset-bottom)] outline-hidden sm:max-w-lg sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-bg px-4">
-          <h2 className="break-any min-w-0 flex-1 py-3 text-base font-semibold">{title}</h2>
-          <button type="button" className={btnPlain} aria-label="Close" onClick={onClose}>
-            <X size={18} aria-hidden />
-          </button>
-        </div>
-        <div className="flex flex-col gap-4 p-4">{children}</div>
+    <aside
+      ref={box}
+      data-detail-panel=""
+      aria-label={title}
+      className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-surface"
+      style={height !== null ? { height } : undefined}
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-4">
+        <h3 className="break-any min-w-0 flex-1 py-3 text-base font-semibold">{title}</h3>
+        <button type="button" className={btnPlain} aria-label="Close" onClick={onClose}>
+          <X size={18} aria-hidden />
+        </button>
       </div>
-    </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain p-4">{children}</div>
+    </aside>
   );
 }
 

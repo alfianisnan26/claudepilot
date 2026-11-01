@@ -11,6 +11,7 @@ import { notifyApi } from './api';
 import { bodyText, dayLabel } from './inbox';
 import { scrollPageTo } from '@/lib/pane';
 import { MuteDialog } from './MuteDialog';
+import { WindowedList } from '@/components/WindowedList';
 import { loadNotifyOverview, patchOverview, useNotifyOverview } from './store';
 
 /** The history, newest first: an unread dot, dimmed when dealt with; a tap opens the item. */
@@ -32,6 +33,7 @@ export function InboxTab() {
   const muted = useRef(false);
   muted.current = withMuted;
   const [muting, setMuting] = useState<string | null>(null);
+  const box = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     const mine = ++seq.current;
@@ -66,7 +68,7 @@ export function InboxTab() {
   };
 
   const loadMore = async () => {
-    if (!next) return;
+    if (!next || more) return;
     setMore(true);
     try {
       const page = await notifyApi.history({ before: next, limit: 30, muted: withMuted });
@@ -94,6 +96,8 @@ export function InboxTab() {
     for (const i of pending) shown.current.add(i.id);
     setItems((cur) => [...pending, ...(cur ?? [])]);
     setPending([]);
+    // To the top: the list's own scroll on a desktop, the page on a phone.
+    box.current?.querySelector('[data-windowed=fill] [data-windowed-scroll]')?.scrollTo({ top: 0 });
     scrollPageTo(0);
   };
 
@@ -134,34 +138,53 @@ export function InboxTab() {
       </>
     );
 
+  // A day's heading stands over its first item.
+  const headings = new Map<string, string>();
   let day = '';
+  for (const i of items) {
+    const label = dayLabel(i.at);
+    if (label !== day) headings.set(i.id, (day = label));
+  }
   return (
-    <>
-      <div className="mb-3 flex items-center justify-end gap-2">
-        {mutedButton}
-        <Button variant="secondary" size="sm" disabled={!overview?.unread} onClick={() => void markRead()}>
-          Mark all read
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setClearing(true)}>
-          Clear
-        </Button>
-      </div>
-      {/* Zero height and sticky: the pill floats over the list and never pushes it. */}
-      <div className="sticky top-20 z-10 h-0 sm:top-4">
-        {pending.length > 0 && (
-          <div className="flex justify-center">
-            <button type="button" onClick={merge} aria-live="polite" className="press rounded-full bg-primary px-4 py-2 text-[13px] font-semibold text-primary-ink shadow-lift focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
-              {pending.length} new
-            </button>
-          </div>
-        )}
-      </div>
-      <ul className="flex flex-col gap-2">
-        {items.map((i) => {
-          const label = dayLabel(i.at);
-          const heading = label !== day ? ((day = label), label) : null;
+    <div ref={box}>
+      {/* THE windowed list (components/WindowedList.tsx): it fills the pane on a desktop and scrolls inside, the actions above it; on a phone
+          the actions stick and the list scrolls with the page. Older items load as the end comes into view. */}
+      <WindowedList
+        label="Inbox"
+        items={items}
+        itemKey={(i) => i.id}
+        estimate={84}
+        gap={8}
+        hasMore={!!next}
+        loadingMore={more}
+        onLoadMore={() => void loadMore()}
+        header={
+          <>
+            <div className="mb-3 flex items-center justify-end gap-2">
+              {mutedButton}
+              <Button variant="secondary" size="sm" disabled={!overview?.unread} onClick={() => void markRead()}>
+                Mark all read
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setClearing(true)}>
+                Clear
+              </Button>
+            </div>
+            {/* Zero height: the pill floats over the list and never pushes it. */}
+            <div className="relative z-10 h-0">
+              {pending.length > 0 && (
+                <div className="flex justify-center pt-2">
+                  <button type="button" onClick={merge} aria-live="polite" className="press rounded-full bg-primary px-4 py-2 text-[13px] font-semibold text-primary-ink shadow-lift focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden">
+                    {pending.length} new
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        }
+        renderItem={(i) => {
+          const heading = headings.get(i.id);
           return (
-            <li key={i.id} className="list-none">
+            <>
               {heading && <h3 className="mt-2 mb-1.5 px-1 text-[12.5px] font-semibold text-muted">{heading}</h3>}
               <div className="flex items-start rounded-2xl border border-line bg-surface">
                 <button
@@ -194,19 +217,12 @@ export function InboxTab() {
                   </div>
                 )}
               </div>
-            </li>
+            </>
           );
-        })}
-      </ul>
-      {next && (
-        <div className="mt-3 flex justify-center">
-          <Button variant="secondary" loading={more} onClick={() => void loadMore()}>
-            Older
-          </Button>
-        </div>
-      )}
+        }}
+      />
       <MuteDialog muteRef={muting} onClose={() => setMuting(null)} onMuted={() => void load()} />
       <ConfirmDialog open={clearing} title="Clear the Inbox" description="Removes every item. Devices and channels keep their settings." confirmLabel="Clear" onConfirm={() => void clear()} onClose={() => setClearing(false)} />
-    </>
+    </div>
   );
 }

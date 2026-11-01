@@ -13,6 +13,7 @@ import {
 } from '@portal/contracts';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { appendPage, filterChips, refreshLimit, reuseRows, rowThumb, splitPrefix, windowRange } from './chatModel';
+import { Sheet } from '../components/Sheet';
 import { SEVERITIES, deployLine, pathnameOf, shortCommit, shotCaption } from '@/features/reporter/shared';
 import { usePanel } from './context';
 import { useFreshKeys } from './hooks';
@@ -404,25 +405,39 @@ function FilterSheet({ prefs, counts, items, onApply, onClose }: { prefs: ListPr
     // 'open' as a query means every open status (the contract's group), so the status itself is not offered twice.
     ...TICKET_STATUSES.filter((s) => s !== 'open').map((s) => ({ value: s, label: TICKET_STATUS_LABEL[s] })),
   ];
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
   return (
-    <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Filter">
-      <button type="button" aria-label="Close filters" tabIndex={-1} onClick={onClose} className="anim-fade absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.35)' }} />
-      <div className="anim-sheet relative flex max-h-[85%] flex-col rounded-t-2xl bg-bg shadow-lg">
+    // The shared kit-free Sheet (docs/coord/UI-STANDARD.md §5): Esc, the backdrop and focus return come with it; Clear and Apply stay in view.
+    <Sheet
+      title="Filter"
+      variant="bottom"
+      onClose={onClose}
+      className="anim-sheet max-h-[85%]"
+      bodyClassName="flex flex-col gap-4 px-3 pb-3"
+      head={
         <div className="flex shrink-0 items-center gap-1 px-3 pt-1">
           <h2 className="flex-1 text-[15px] font-bold">Filter</h2>
           <IconBtn icon="x" label="Close filters" onClick={onClose} />
         </div>
-        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain px-3 pb-3">
+      }
+      footer={
+        <div className="flex shrink-0 gap-2 border-t border-line px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <Btn tone="ghost" onClick={() => setDraft({ ...draft, status: 'open', priority: [], type: [], tags: [], mine: false })}>
+            Clear
+          </Btn>
+          <Btn
+            tone="primary"
+            className="flex-1"
+            onClick={() => {
+              onApply(draft);
+              onClose();
+            }}
+          >
+            Apply
+          </Btn>
+        </div>
+      }
+    >
+
           <Group label="Status">
             {statusOptions.map((o) => (
               <Chip key={o.value} on={draft.status === o.value} onClick={() => setDraft({ ...draft, status: o.value })} count={counts?.status[o.value]}>
@@ -460,24 +475,7 @@ function FilterSheet({ prefs, counts, items, onApply, onClose }: { prefs: ListPr
               </Chip>
             </Group>
           )}
-        </div>
-        <div className="flex shrink-0 gap-2 border-t border-line px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <Btn tone="ghost" onClick={() => setDraft({ ...draft, status: 'open', priority: [], type: [], tags: [], mine: false })}>
-            Clear
-          </Btn>
-          <Btn
-            tone="primary"
-            className="flex-1"
-            onClick={() => {
-              onApply(draft);
-              onClose();
-            }}
-          >
-            Apply
-          </Btn>
-        </div>
-      </div>
-    </div>
+    </Sheet>
   );
 }
 

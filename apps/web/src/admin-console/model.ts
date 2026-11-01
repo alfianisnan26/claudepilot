@@ -53,13 +53,46 @@ export function oidcOutcome(search: string): 'refused' | 'unavailable' | null {
   return v === 'refused' || v === 'unavailable' ? v : null;
 }
 
-/** The link that starts OIDC sign-in (or, with `stepUp`, re-authentication), coming back to `next`. A full navigation, not a fetch. */
-export function oidcStartHref(start: string, o: { stepUp?: boolean; next?: Tab } = {}): string {
+/**
+ * The link that starts OIDC sign-in (or, with `stepUp`, re-authentication), coming back to `next`. A navigation, not a fetch; with `popup`
+ * the step-up runs in a popup window that tells this page when it is done (popupResult).
+ */
+export function oidcStartHref(start: string, o: { stepUp?: boolean; next?: Tab; popup?: boolean } = {}): string {
   const p = new URLSearchParams();
   if (o.stepUp) p.set('for', 'step-up');
+  if (o.stepUp && o.popup) p.set('popup', '1');
   if (o.next) p.set('next', o.next);
   const s = p.toString();
   return s ? `${start}?${s}` : start;
+}
+
+/** What a step-up popup came back with (`?oidc=stepped&popup=1`, the server's ADMIN_OIDC_RESULT), or null when this page is not one. */
+export function popupResult(search: string): 'stepped' | 'refused' | 'unavailable' | null {
+  const q = new URLSearchParams(search);
+  if (q.get('popup') !== '1') return null;
+  const v = q.get('oidc');
+  return v === 'stepped' || v === 'refused' || v === 'unavailable' ? v : null;
+}
+
+/** An org's detail tabs (owner, 2026-11-01: the Usage pattern), one section at a time. Sign-in only where SSO or domains are built. */
+export const ORG_TABS = ['overview', 'members', 'objects', 'invitations', 'signin', 'breakglass'] as const;
+export type OrgTab = (typeof ORG_TABS)[number];
+export const ORG_TAB_LABEL: Record<OrgTab, string> = {
+  overview: 'Overview',
+  members: 'Members',
+  objects: 'Objects',
+  invitations: 'Invitations',
+  signin: 'Sign-in',
+  breakglass: 'Break-glass',
+};
+
+/** The Audit's tabs: every row, the refused sign-ins, org rows, and the console's own security rows (sign-ins, step-ups, failures). */
+export const AUDIT_TABS = ['all', 'refused', 'org', 'security'] as const;
+export type AuditTab = (typeof AUDIT_TABS)[number];
+export const AUDIT_TAB_LABEL: Record<AuditTab, string> = { all: 'All', refused: 'Refused', org: 'Org', security: 'Security' };
+/** The kind (or prefix) a tab fixes; All leaves the Kind field to the person. */
+export function auditTabKind(tab: AuditTab): string | null {
+  return tab === 'refused' ? 'admin.signin_refused' : tab === 'org' ? 'org' : tab === 'security' ? 'admin' : null;
 }
 
 /** Audit kinds offered as filters (the field still takes any kind or prefix). */

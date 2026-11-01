@@ -135,6 +135,16 @@
 }
 
 /*
+ * A page whose windowed list fills the content pane (components/WindowedList.tsx) leaves only a little room under it: the list ends near the
+ * window's bottom instead of over the frame's usual 4 rem.
+ */
+@media (min-width: 1024px) {
+  #main:has([data-windowed='fill']) {
+    padding-bottom: 1rem;
+  }
+}
+
+/*
  * Under the status bar: a frosted band the page scrolls under. A black-translucent status bar draws WHITE text in both themes, so
  * the band dims what passes under it enough for white to read (4.5:1 over solid white, measured), lighter in the dark theme where
  * the page is already dark. Nothing shows where there is no inset (a browser tab, a desktop).

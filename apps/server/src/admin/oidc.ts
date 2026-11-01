@@ -68,6 +68,8 @@ interface Pending {
   sid?: string;
   /** the console section to come back to */
   next?: string;
+  /** a step-up started in a popup window: the return tells the console that opened it, then closes (ADMIN_OIDC_RESULT) */
+  popup?: boolean;
 }
 
 /** Why a sign-in was refused: one code in the audit row, the same neutral page for the browser. */
@@ -99,11 +101,12 @@ export class AdminOidc {
   }
 
   /** Where to send the browser, and the value of the state cookie. */
-  async start(o: { sessionId?: string; next?: string } = {}): Promise<{ url: string; cookie: string }> {
+  async start(o: { sessionId?: string; next?: string; popup?: boolean } = {}): Promise<{ url: string; cookie: string }> {
     const doc = await this.client.discover(this.config.issuer, this.config.allowPrivate);
     const p: Pending = { s: randomToken(), n: randomToken(), v: randomToken(), at: this.now() };
     if (o.sessionId) p.sid = o.sessionId;
     if (o.next && SECTION.test(o.next)) p.next = o.next;
+    if (o.popup && o.sessionId) p.popup = true;
     const body = Buffer.from(JSON.stringify(p)).toString('base64url');
     return {
       url: this.client.authorizeUrl(doc, { clientId: this.config.clientId, redirectUri: this.redirectUri, scope: ADMIN_OIDC_SCOPES, state: p.s, nonce: p.n, verifier: p.v }),

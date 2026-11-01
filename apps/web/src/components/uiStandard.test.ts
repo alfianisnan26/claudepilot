@@ -20,21 +20,20 @@ const read = (f: string) => readFileSync(join(src, f), 'utf8');
 const hits = (re: RegExp) => files.filter((f) => re.test(read(f)));
 
 test('tab bars: only the shared TabBar draws a tablist (and the kit’s PageTabs is not used)', () => {
-  // Not yet migrated (docs/coord/UI-STANDARD.md §9): the reporter panel's own tabs, its evidence tabs, the browser app view's tabs.
-  const legacy = ['embed/Panel.tsx', 'features/reporter/Evidence.tsx', 'features/browser/AppView.tsx'];
+  // Not yet migrated (docs/coord/UI-STANDARD.md §9): the reporter's evidence tabs, the browser app view's tabs.
+  const legacy = ['features/reporter/Evidence.tsx', 'features/browser/AppView.tsx'];
   assert.deepEqual(hits(/role="tablist"/).filter((f) => !legacy.includes(f)), ['components/TabBar.tsx']);
   assert.deepEqual(hits(/import \{[^}]*\bPageTabs\b[^}]*\} from '@isnanme\/ui'/), [], 'use RoutedTabs (a portal page) or TabBar');
 });
 
 test('dialogs: a page uses the kit’s Dialog, Sheet or ConfirmDialog, not a hand-rolled role="dialog"', () => {
-  // Popovers and panels that are dialogs by role (menus with text, the switcher, viewers) and the reporter panel's sheets, not yet migrated.
+  // Popovers and panels that are dialogs by role (menus with text, the switcher, viewers) and the reporter's annotator and viewer, not yet migrated.
   const allowed = [
     'components/AccountMenu.tsx',
     'components/Popover.tsx',
+    // THE kit-free sheet of the two small bundles (the console, the reporter panel); portal pages use the kit's Dialog.
+    'components/Sheet.tsx',
     'embed/Annotator.tsx',
-    'embed/ContextSheet.tsx',
-    'embed/RuntimeSheet.tsx',
-    'embed/TicketsTab.tsx',
     'embed/Viewer.tsx',
     'features/chat/AgentsPanel.tsx',
     'features/chat/FilesPanel.tsx',
@@ -65,4 +64,12 @@ test('page scrolling: only lib/pane.ts scrolls the page, and only the app frames
 test('the frame: the portal scrolls one content pane on a desktop (the console checks its own frame in its own test)', () => {
   assert.match(read('components/AppShell.tsx'), /id=\{PANE_ID\}[^>]*lg:overflow-y-auto/);
   assert.match(read('components/AppShell.tsx'), /lg:h-dvh[^'"]*lg:overflow-hidden/);
+});
+
+test('full-page lists are windowed: Tickets, Agents, Needs you, the Inbox and CI runs draw THE WindowedList', () => {
+  // docs/coord/UI-STANDARD.md §4 (owner, 2026-11-01: "no unbounded page growth"). The console's Users and Audit: its own test.
+  for (const f of ['features/tickets/TicketsPage.tsx', 'features/chat/SessionsPage.tsx', 'features/attention/NeedsYouPage.tsx', 'features/notify/InboxTab.tsx', 'features/ci/RunsTab.tsx']) {
+    assert.match(read(f), /<WindowedList\b/, f);
+    assert.doesNotMatch(read(f), />\s*Older\s*</, `${f}: no "Older" button: the list pages in by itself`);
+  }
 });

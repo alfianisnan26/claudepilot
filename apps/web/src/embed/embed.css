@@ -4,6 +4,8 @@
 @source './';
 @source '../features/reporter/shared.ts';
 @source '../components/LogoMark.tsx';
+@source '../components/TabBar.tsx';
+@source '../components/Sheet.tsx';
 
 html,
 body {
