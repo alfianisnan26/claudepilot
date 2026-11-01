@@ -108,7 +108,7 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
         >
           <span className="relative">
             <LogoMark className="size-7" />
-            {currentOrg && <OrgMark org={currentOrg} className="absolute -right-1.5 -bottom-1.5 size-[18px] text-[9px] ring-2 ring-bg" />}
+            {currentOrg && <OrgMark org={currentOrg} className="absolute -right-1.5 -bottom-1.5 size-[18px] bg-surface text-[9px] ring-2 ring-bg" />}
           </span>
         </button>
         <Dialog open={open} onClose={() => setOpen(false)} title="Context" size="sm">
@@ -134,7 +134,7 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
       >
         <span className="relative shrink-0">
           <LogoMark className="size-8" />
-          {currentOrg && <OrgMark org={currentOrg} className="absolute -right-1.5 -bottom-1.5 size-5 text-[10px] ring-2 ring-bg" />}
+          {currentOrg && <OrgMark org={currentOrg} className="absolute -right-1.5 -bottom-1.5 size-5 bg-surface text-[10px] ring-2 ring-bg" />}
         </span>
         <span className="hidden min-w-0 flex-1 truncate text-[15px] font-extrabold tracking-tight lg:block">{label}</span>
         <ChevronsUpDown aria-hidden="true" className="hidden size-4 shrink-0 text-muted lg:block" />
