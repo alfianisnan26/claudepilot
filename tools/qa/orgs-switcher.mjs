@@ -95,7 +95,7 @@ try {
       await b.clickText('Acme', { selector: '[data-context-list] button' });
       await sleep(1200);
       check(`${t}: picking Acme stores org:<id> for this user`, (await stored(b)) === `org:${acme.id}`, String(await stored(b)));
-      check(`${t}: the org's note says its lists are empty for now`, await b.eval(`!!document.querySelector('[data-org-scope-note]')`));
+      check(`${t}: the org's note names it above its lists`, await b.eval(`!!document.querySelector('[data-org-scope-note]')`));
       await b.shot(`orgs-context-acme-${t}`);
 
       await b.goto(`/admin/orgs/${acme.id}`, 2500);

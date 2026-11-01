@@ -12,6 +12,7 @@ import { attachmentHeaders } from './attachments.js';
 import { KnowledgeError } from './errors.js';
 import { importZip } from './importer.js';
 import { actorOf, can } from '../authz/seam.js';
+import { orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import { UI_ACTOR, type CallerScope, type KnowledgeService } from './service.js';
 
 /**
@@ -104,7 +105,12 @@ export function createKnowledgeRoutes(service: KnowledgeService) {
 
   r.get('/sources', (c) => c.json(success(service.sources())));
 
-  r.get('/vaults', (c) => c.json(success(service.list(viewScope(c)))));
+  // `?org=` (organizations §7): only narrows what the caller may view, to one org's vaults or the personal ones.
+  r.get('/vaults', (c) => {
+    const inScope = orgScopeFilter(actorOf(c), orgScopeOf(c));
+    const seen = service.list(viewScope(c));
+    return c.json(success(inScope ? seen.filter((v) => inScope(vaultRef(v.id))) : seen));
+  });
   r.post('/vaults', async (c) => c.json(success(service.create(await body<CreateVaultRequest>(c))), 201));
 
   // A zip of a vault, raw in the body (Content-Type: application/zip). `?into=<vault>` adds to one, else a new vault is made.

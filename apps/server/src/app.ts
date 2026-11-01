@@ -56,6 +56,7 @@ import {
   type OpenAppPortResult,
   type Actor,
   FOUNDING_USER_ID,
+  workspaceRef,
 } from '@portal/contracts';
 import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
@@ -130,6 +131,7 @@ import type { Platform } from './platform/index.js';
 import { declareAllPolicies } from './authz/declarations.js';
 import { enforceRoutePolicy, useWorkspaceAlias } from './authz/routeGuard.js';
 import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
+import { orgScopeFilter, orgScopeOf } from './authz/orgScope.js';
 import { cookie as cookieOf } from './workspaces/shell.js';
 import { revokeAccountTokens } from './identity/accountGate.js';
 import type { HeldShare } from './identity/grants.js';
@@ -1048,7 +1050,13 @@ export function createApp(
     chatController.removeClaude(`${target}/${name}`, claudeId);
     return c.json(success({ ok: true }));
   });
-  ws.get('/', async (c) => c.json(success(visible(actorOf(c), 'workspace', await workspaces.list(), (w) => w.id).map(decorate))));
+  // `?org=` (organizations §7, authz/orgScope.ts) narrows what the caller may see to one org, or to `personal`; absent, nothing changes.
+  ws.get('/', async (c) => {
+    const actor = actorOf(c);
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    const seen = visible(actor, 'workspace', await workspaces.list(), (w) => w.id);
+    return c.json(success((inScope ? seen.filter((w) => inScope(workspaceRef(w.id))) : seen).map(decorate)));
+  });
   // One workspace by either form of its id (T-42): `/api/workspaces/ws_0123456789ab` or the alias `/api/workspaces/<target>/<name>`. Both go
   // through the manager's one resolver, which follows the alias before the seam is asked; unknown and not yours are the same 404.
   ws.get('/:ref', refToView, async (c) => {

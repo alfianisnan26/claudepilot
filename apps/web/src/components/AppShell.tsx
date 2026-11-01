@@ -11,7 +11,7 @@ import { ContextSwitcher, OrgMark } from '@/features/orgs/ContextSwitcher';
 import { OrgsProvider, useOrgs } from '@/features/orgs/OrgsProvider';
 import { GlanceStrip } from '@/features/glance/Strip';
 import { api } from '@/lib/api';
-import { ORG_SCOPED_LISTS_LIVE, serializeContext } from '@/lib/orgContext';
+import { serializeContext } from '@/lib/orgContext';
 import { workbenchPage } from '@/lib/panels';
 import { useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
@@ -74,7 +74,7 @@ function Shell() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease }}
         >
-          {currentOrg && !ORG_SCOPED_LISTS_LIVE && !pathname.startsWith('/admin/orgs/') && <OrgScopeNote name={currentOrg.name} />}
+          {currentOrg && !pathname.startsWith('/admin/orgs/') && <OrgScopeNote name={currentOrg.name} />}
           {orgs === null ? (
             <div className="skeleton h-40 rounded-[24px]" aria-busy="true" />
           ) : (
@@ -262,13 +262,13 @@ function MoreList({ pathname, onPick }: { pathname: string; onPick: () => void }
   );
 }
 
-/** In an org context, until the server scopes lists by org (slices 5 and 6), every list is empty: this says why, once, above the page. */
+/** In an org context the lists show only what the org owns: the org's name above the page, and why a list may be empty in its InfoTip. */
 function OrgScopeNote({ name }: { name: string }) {
   return (
     <div data-org-scope-note="" className="mb-4 flex min-w-0 items-center gap-2 text-[13px] font-semibold text-muted">
       <OrgMark org={{ name }} className="size-5 text-[10px]" />
       <span className="min-w-0 truncate">{name}</span>
-      <InfoTip label="About this organization’s lists">Nothing is in this organization yet. Switch to Personal to see your own things.</InfoTip>
+      <InfoTip label="About this organization’s lists">Lists show only what this organization owns. Switch to Personal to see your own things.</InfoTip>
     </div>
   );
 }

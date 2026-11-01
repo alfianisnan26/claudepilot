@@ -24,6 +24,7 @@ import {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, actorString, requireCan, visible } from '../authz/seam.js';
+import { orgScopeFilter, orgScopeOf, parentAnchor } from '../authz/orgScope.js';
 import { RateLimiter } from '../rateLimit.js';
 import { ticketKeyOf } from '../tickets/keys.js';
 import { serveBlob } from './artifacts/index.js';
@@ -84,7 +85,9 @@ export function createChatRoutes(controller: ChatController): Hono {
   // Each row is checked with `view` BEFORE it is shown, and `next` points at the last row shown, so a cursor never reveals a session the caller may not see. A bad cursor is a 400.
   chat.get('/', (c) => {
     const actor = actorOf(c);
-    const keep = (s: { id: string }) => visible(actor, 'session', [s], (x) => x.id).length > 0;
+    // `?org=` (organizations §7): a session belongs to its workspace's org; it only narrows, after `view`.
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    const keep = (s: { id: string }) => visible(actor, 'session', [s], (x) => x.id).length > 0 && (!inScope || inScope(parentAnchor('session', s.id)));
     const page = controller.listPage(
       { ...(c.req.query('parentId') ? { parentId: c.req.query('parentId')! } : {}) },
       { cursor: c.req.query('cursor') || undefined, limit: c.req.query('limit'), keep },

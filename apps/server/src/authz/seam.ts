@@ -157,6 +157,15 @@ export const useOrgAuthority = (a: OrgAuthority | null): OrgAuthority | null => 
   return was;
 };
 
+/** The user's active role in an active org (authority's `roleIn`); null without the orgs module or when it cannot be read (fail closed). */
+export function orgRoleIn(orgId: string, userId: UserId): OrgRole | null {
+  try {
+    return orgAuthority?.roleIn(orgId, userId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** The grants' level on a resolved object; `none` without the orgs module or when it cannot be read. */
 function grantsOf(userId: UserId, found: ResolvedObject): Level {
   if (!orgAuthority) return 'none';

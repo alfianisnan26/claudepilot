@@ -30,6 +30,7 @@ import {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, actorUserId, can, refusal, requireCan, visible } from '../authz/seam.js';
+import { orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import { declareTicketPolicies, registerTicketBucketAuthz } from './authz.js';
 import { setTicketKeyLookup } from './keys.js';
 import type { Caller, Tickets } from './service.js';
@@ -138,7 +139,11 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     const filter = filterOf(q);
     // D-58: `{ items, next }` (25 by default, 100 at most), summary rows, keyset. Each row passes `view` before it is shown and `next` points at
     // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
-    const keep = viewerOf(actorOf(c), filter);
+    const actor = actorOf(c);
+    const seen = viewerOf(actor, filter);
+    // `?org=` (organizations §7): a ticket belongs to its bucket's org; it only narrows, after `view`.
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    const keep = inScope ? (t: { id: string; bucket?: string }) => seen(t) && inScope(t.bucket ? ticketBucketRef(t.bucket) : null) : seen;
     return c.json(success(tickets.listPage(viewer(c), filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
   });
 
@@ -152,7 +157,9 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   // Buckets (T-1098). Registered before `/:id`.
   app.get('/buckets', (c) => {
     const actor = actorOf(c);
-    return c.json(success(visible(actor, 'ticket_bucket', tickets.buckets(UI), (b) => b.key)));
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    const seen = visible(actor, 'ticket_bucket', tickets.buckets(UI), (b) => b.key);
+    return c.json(success(inScope ? seen.filter((b) => inScope(ticketBucketRef(b.key))) : seen));
   });
   app.post('/buckets', async (c) => {
     const actor = actorOf(c);
