@@ -32,6 +32,11 @@ export const isUserId = (v: unknown): v is UserId => typeof v === 'string' && US
 export type TeamId = string;
 export const TEAM_ID_PATTERN = /^tm_[a-z0-9]{6,40}$/;
 
+/** An organization's id (docs/prd/organizations.md §6.1): `org_` plus base64url characters (orgs/service.ts). Public, unguessable, never relied on. */
+export type OrgId = string;
+export const ORG_ID_PATTERN = /^org_[A-Za-z0-9_-]{6,40}$/;
+export const isOrgId = (v: unknown): v is OrgId => typeof v === 'string' && ORG_ID_PATTERN.test(v);
+
 /** What a person may do with an object. Each level includes the ones before it. */
 export const VERBS = ['view', 'operate', 'manage'] as const;
 export type Verb = (typeof VERBS)[number];
@@ -74,6 +79,7 @@ export type ObjectType =
   | 'platform'
   | 'user'
   | 'team'
+  | 'org'
   | 'target'
   | 'workspace'
   | 'claude'
@@ -106,6 +112,12 @@ export const OBJECT_TYPES: Record<ObjectType, ObjectTypeInfo> = {
   user: { label: 'User', owners: ['platform'], grants: false, inherit: 'none', id: 'a user id' },
   /** A team. Its OWNERS manage it, its members view it; membership is in `team_members`, not in grants. */
   team: { label: 'Team', owners: ['platform'], grants: false, inherit: 'none', id: 'tm_…' },
+  /**
+   * An organization (docs/prd/organizations.md §6.1, §6.5; slice 3). Its level comes from MEMBERSHIP (`org_members`), read on every decision:
+   * owner and admin `manage`, member and guest `view`, anyone else none (the same 404 as a missing one). A platform admin holds nothing on it
+   * by being an admin: the Admin console reads the list through the service, and content only through break-glass (§6.7, slice 5).
+   */
+  org: { label: 'Organization', owners: ['platform'], grants: false, inherit: 'none', id: 'org_…' },
   /** A place workspaces can run (Connect, Docker, This machine). Platform-owned; `operate` = place a workspace there. */
   target: { label: 'Target', owners: ['platform'], grants: true, inherit: 'none', id: 'the target id (docker, docker-host, local, …)' },
 
@@ -188,6 +200,7 @@ export const vaultRef = (id: string): ObjectRef => objectRef('vault', id);
 export const platformRef = (area: PlatformArea): ObjectRef => objectRef('platform', area);
 export const userRef = (id: UserId): ObjectRef => objectRef('user', id);
 export const teamRef = (id: TeamId): ObjectRef => objectRef('team', id);
+export const orgRef = (id: OrgId): ObjectRef => objectRef('org', id);
 
 /* ---------- Actors ---------- */
 

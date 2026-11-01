@@ -4160,6 +4160,81 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 463,
+    name: 'organizations slice 3: organizations and their members, and the "always one active owner" trigger',
+    up(db) {
+      // docs/prd/organizations.md §6.1, §8 (block 460-479). An organization has a slug (URLs, the switcher), a state and its policies (JSON,
+      // validated by orgs/service.ts). A membership is one row per person per org; leaving or removal keeps the row (`removed`, for audit).
+      // The invariant "an org that is active or suspended keeps at least one ACTIVE owner" is the service's (orgs/service.ts, in an
+      // IMMEDIATE transaction) and these triggers', so two writers on two connections cannot each remove "the other" owner. An org being
+      // deleted (`deleting`) or gone (a cascade) is not held to it. Inserting an org with no owner is the service's to prevent (one transaction).
+      db.exec(`
+        CREATE TABLE orgs (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'org_?*'),
+          slug TEXT NOT NULL UNIQUE CHECK (length(slug) BETWEEN 2 AND 40 AND slug NOT GLOB '*[^a-z0-9-]*' AND slug NOT GLOB '-*' AND slug NOT GLOB '*-'),
+          name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
+          state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'suspended', 'deleting')),
+          policies TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(policies)),
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          deleted_at TEXT
+        ) STRICT;
+        CREATE TABLE org_members (
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL CHECK (user_id GLOB 'u_?*'),
+          role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member', 'guest')),
+          state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'removed')),
+          via TEXT NOT NULL CHECK (via IN ('created', 'invite', 'sso_jit', 'domain_join', 'migration', 'recovered')),
+          added_by TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          ended_at TEXT,
+          PRIMARY KEY (org_id, user_id)
+        ) STRICT;
+        CREATE INDEX org_members_user ON org_members (user_id) WHERE state = 'active';
+        CREATE INDEX org_members_owner ON org_members (org_id) WHERE role = 'owner' AND state = 'active';
+        CREATE TRIGGER org_members_keep_owner_update BEFORE UPDATE OF org_id, role, state ON org_members
+          WHEN OLD.role = 'owner' AND OLD.state = 'active'
+            AND (NEW.role != 'owner' OR NEW.state != 'active' OR NEW.org_id != OLD.org_id)
+            AND (SELECT o.state FROM orgs o WHERE o.id = OLD.org_id) IN ('active', 'suspended')
+            AND NOT EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = OLD.org_id AND m.user_id != OLD.user_id AND m.role = 'owner' AND m.state = 'active')
+        BEGIN
+          SELECT RAISE(ABORT, 'ORG_NEEDS_OWNER: an organization keeps at least one active owner');
+        END;
+        CREATE TRIGGER org_members_keep_owner_delete BEFORE DELETE ON org_members
+          WHEN OLD.role = 'owner' AND OLD.state = 'active'
+            AND (SELECT o.state FROM orgs o WHERE o.id = OLD.org_id) IN ('active', 'suspended')
+            AND NOT EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = OLD.org_id AND m.user_id != OLD.user_id AND m.role = 'owner' AND m.state = 'active')
+        BEGIN
+          SELECT RAISE(ABORT, 'ORG_NEEDS_OWNER: an organization keeps at least one active owner');
+        END;
+        CREATE TRIGGER orgs_keep_owner_state BEFORE UPDATE OF state ON orgs
+          WHEN NEW.state IN ('active', 'suspended') AND OLD.state = 'deleting'
+            AND NOT EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = OLD.id AND m.role = 'owner' AND m.state = 'active')
+        BEGIN
+          SELECT RAISE(ABORT, 'ORG_NEEDS_OWNER: an organization keeps at least one active owner');
+        END;
+      `);
+    },
+  },
+  {
+    version: 464,
+    name: 'organizations slice 3: per-user abilities an instance admin grants (orgs.create)',
+    up(db) {
+      // docs/prd/organizations.md §6.11, OD-2. One row per ability a person holds; no row is no ability (off by default). An instance admin
+      // (role = admin) holds every ability without a row. The names are validated by orgs/abilities.ts (`ABILITIES` in the contracts), so a new
+      // ability needs no table change. Granting and revoking write the platform audit.
+      db.exec(`
+        CREATE TABLE user_abilities (
+          user_id TEXT NOT NULL CHECK (user_id GLOB 'u_?*'),
+          ability TEXT NOT NULL CHECK (length(ability) BETWEEN 3 AND 60 AND ability NOT GLOB '*[^a-z0-9._]*'),
+          granted_by TEXT NOT NULL,
+          granted_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, ability)
+        ) STRICT;
+      `);
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {
