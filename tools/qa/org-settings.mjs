@@ -52,7 +52,7 @@ const MEASURE = (scope) => `(() => {
   const doc = document.scrollingElement;
   return { small, controls: ctl.length, docScroll: doc.scrollWidth, docClient: doc.clientWidth, text: roots.map((r) => r.innerText).join('\\n') };
 })()`;
-const ALL = ['general', 'members', 'teams', 'invitations', 'objects', 'sharing', 'sign-in', 'policies', 'audit', 'danger'];
+const ALL = ['general', 'members', 'teams', 'invitations', 'objects', 'access', 'sign-in', 'policies', 'audit', 'danger'];
 
 const b = await Browser.launch({ width: 390, height: 844, mobile: true, cookie });
 const SIZES = [

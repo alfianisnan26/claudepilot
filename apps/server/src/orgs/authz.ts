@@ -67,6 +67,16 @@ export const ORG_ROUTE_POLICIES: RoutePolicies = {
   'POST /api/orgs/:id/shares': { ...org('view'), audit: 'org.share_created' },
   'DELETE /api/orgs/:id/shares/:shareId': { ...org('view'), audit: 'org.share_ended' },
   'GET /api/orgs/:id/transcript-views': org('manage'),
+  // Fine-grained access (docs/prd/access.md, ./access.ts): view on the org (members and guests); the service asks the role, `view` on the
+  // object (the same 404), who may grant (the ceiling) and who may decide a request on top.
+  'GET /api/orgs/:id/access/catalog': org('view'),
+  'GET /api/orgs/:id/access/object': org('view'),
+  'GET /api/orgs/:id/access/people/:uid': org('view'),
+  'GET /api/orgs/:id/access/requests': org('view'),
+  'POST /api/orgs/:id/access/requests': { ...org('view'), audit: 'org.access_requested' },
+  'POST /api/orgs/:id/access/requests/:requestId/approve': { ...org('view'), audit: 'org.access_request_approved' },
+  'POST /api/orgs/:id/access/requests/:requestId/deny': { ...org('view'), audit: 'org.access_request_denied' },
+  'DELETE /api/orgs/:id/access/requests/:requestId': { ...org('view'), audit: 'org.access_request_cancelled' },
   // Slice 8 (§6.8-§6.10). Accepting names no org in the path: a signed-in person, the code and an email match, throttled (the service).
   'POST /api/orgs/invitations/accept': { kind: 'signed-in', audit: 'org.member_joined' },
   'GET /api/orgs/:id/invitations': org('manage'),

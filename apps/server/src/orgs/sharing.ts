@@ -17,6 +17,13 @@
 // (`share_ended`), so their sockets drop what they may no longer view and their sessions in a workspace they may no longer operate stop
 // (chat/accessStop.ts). Audit: `org.share_created|ended`, `org.team_created|removed|member_set|member_removed`.
 //
+// FINE-GRAINED ACCESS (docs/prd/access.md, owner request 2026-11-01). A share may also go to ONE PERSON who is an active member of the org (a
+// guest too), may END by itself (`expiresAt`: the grant's own `expires_at` is what every decision reads, so access stops at that instant;
+// `sweepExpired` only closes the record, writes `org.share_expired` and tells the receivers' sockets) and carries a note. Who may grant
+// (`ceiling`): a person holding `manage` on the object, never above their own level and never past their own end: the object's personal
+// owner; for an org object its org's owners, its admins while the policy `adminsMayShare` is on (the default), or anyone holding manage on
+// it through a grant (delegation: a creator grant, a manage share to them or their team). A guest never grants.
+//
 // TRANSCRIPT READS (OD-3). The seam gives an org owner or admin `view` on a member's session in an org-owned workspace and calls
 // `transcriptRead` (authz/seam.ts `orgReadOfSession`); this writes `org.transcript_viewed` (no content: viewer, session, member, workspace)
 // with `user_id` = the member, so the member reads it in their own platform audit (`GET /api/platform/audit?kind=org.transcript_viewed`) and
@@ -26,6 +33,8 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { AppError } from '@isnanme/core';
 import {
+  ACCESS_LIMITS,
+  LEVEL_RANK,
   ORG_POLICY_DEFAULTS,
   ORGS_ERROR_CODES,
   actorString,
@@ -34,6 +43,7 @@ import {
   objectRef,
   orgRef,
   type Actor,
+  type AccessLevel,
   type CreateOrgShareRequest,
   type CreateOrgTeamRequest,
   type ObjectRef,
@@ -48,7 +58,7 @@ import {
   type UserId,
 } from '@portal/contracts';
 import type { Grants } from '../authz/grants.js';
-import { can, emitAccessChange, requireCan, resolve } from '../authz/seam.js';
+import { can, emitAccessChange, levelOf, requireCan, resolve, type ResolvedObject } from '../authz/seam.js';
 import type { AuditInput } from '../platform/audit.js';
 import type { OrgsService } from './service.js';
 import type { WorkspaceCredentials } from './transfer.js';
@@ -63,18 +73,30 @@ const notFound = (text = 'Not found.') => new AppError('NOT_FOUND', text);
 const clean = (v: string) => v.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
 const isManager = (role: OrgRole | null) => role === 'owner' || role === 'admin';
 
-interface ShareRow {
+export interface ShareRow {
   id: string;
   org_id: string;
   object_type: OrgTransferKind;
   object_id: string;
-  subject_kind: 'org' | 'team';
+  subject_kind: 'org' | 'team' | 'user';
   subject_id: string;
   level: (typeof LEVELS)[number];
   personal: number;
   created_by: string;
   created_at: string;
+  expires_at: string | null;
+  note: string | null;
   team_name: string | null;
+  user_name?: string | null;
+}
+
+/** What a person may grant on one object (docs/prd/access.md §4): the highest level (none: may not grant), and the latest end (null: none). */
+export interface GrantCeiling {
+  max: AccessLevel | null;
+  until: string | null;
+  /** Why not, in words, when `max` is null. */
+  why?: string;
+  reason?: string;
 }
 
 export interface OrgSharingDeps {
@@ -285,30 +307,115 @@ export class OrgSharing {
     return this.#read().prepare(sql).all(...args) as unknown as ShareRow[];
   }
 
-  #view(r: ShareRow): OrgShare {
+  view(r: ShareRow): OrgShare {
     return {
       id: r.id,
       orgId: r.org_id as OrgId,
       target: { type: r.object_type, id: r.object_id },
-      subject: r.subject_kind === 'org' ? { kind: 'org' } : { kind: 'team', teamId: r.subject_id, name: r.team_name ?? 'a removed team' },
+      subject:
+        r.subject_kind === 'org'
+          ? { kind: 'org' }
+          : r.subject_kind === 'user'
+            ? { kind: 'user', userId: r.subject_id as UserId, name: r.user_name ?? r.subject_id }
+            : { kind: 'team', teamId: r.subject_id, name: r.team_name ?? 'a removed team' },
       level: r.level,
       personal: r.personal === 1,
       createdBy: r.created_by as UserId,
       createdAt: r.created_at,
+      expiresAt: r.expires_at ?? null,
+      note: r.note ?? null,
     };
   }
 
-  static #SELECT = "SELECT s.*, t.name AS team_name FROM org_shares s LEFT JOIN teams t ON s.subject_kind = 'team' AND t.id = s.subject_id";
+  static SELECT =
+    "SELECT s.*, t.name AS team_name, u.display_name AS user_name FROM org_shares s LEFT JOIN teams t ON s.subject_kind = 'team' AND t.id = s.subject_id LEFT JOIN users u ON s.subject_kind = 'user' AND u.id = s.subject_id";
+
+  /** The open shares in an org of one object (the Access sheet), oldest first; ended or expired ones are not listed. */
+  sharesOf(orgId: OrgId, ref: ObjectRef): OrgShare[] {
+    return this.#openShares(
+      `${OrgSharing.SELECT} WHERE s.org_id = ? AND s.object_type = ? AND s.object_id = ? AND s.ended_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?) ORDER BY s.created_at, s.id`,
+      orgId,
+      ref.type,
+      ref.id,
+      this.#now().toISOString(),
+    ).map((r) => this.view(r));
+  }
+
+  /** One share by id (open or not), as the API shows it, or null. */
+  shareById(shareId: string): OrgShare | null {
+    const r = this.#read().prepare(`${OrgSharing.SELECT} WHERE s.id = ?`).get(shareId) as ShareRow | undefined;
+    return r ? this.view(r) : null;
+  }
+
+  /** One open share by id in the org, or null. */
+  shareRow(orgId: OrgId, shareId: string): ShareRow | null {
+    return (this.#read().prepare(`${OrgSharing.SELECT} WHERE s.id = ? AND s.org_id = ? AND s.ended_at IS NULL`).get(shareId, orgId) as ShareRow | undefined) ?? null;
+  }
+
+  /** The org's policy `adminsMayShare` (default on). */
+  #adminsMayShare(orgId: OrgId): boolean {
+    return this.#orgs.policiesOf(orgId).adminsMayShare;
+  }
+
+  /**
+   * What `actor` may grant on a resolved object in `orgId` (docs/prd/access.md §4). Needs manage on it (read through the seam, so a suspended
+   * org, SSO or a token's cap count), never above that level, never past the end of the access it comes from. A person only; a guest never.
+   */
+  ceiling(actor: Actor, orgId: OrgId, role: OrgRole, found: ResolvedObject): GrantCeiling {
+    const userId = actorUserId(actor);
+    if (actor.kind !== 'user' || !userId) return { max: null, until: null, why: 'A person grants access, not a token or an agent.' };
+    if (role === 'guest') return { max: null, until: null, why: 'A guest can’t share.' };
+    const owner = found.owner;
+    if (owner?.kind === 'org' && owner.id !== orgId) return { max: null, until: null, why: 'An organization’s object is shared only inside its organization.' };
+    const mine = levelOf(actor, found.ref);
+    if (mine !== 'manage') return { max: null, until: null, why: 'Only who manages it can share it.' };
+    const sources = this.#grants.sourcesFor(found.ref, userId, found).filter((g) => g.level === 'manage');
+    // The end of the delegated access: the latest end among the grants that give manage (none of them ends: no limit).
+    const delegatedUntil = sources.length === 0 ? null : sources.some((g) => !g.expiresAt) ? null : sources.map((g) => g.expiresAt!).sort().at(-1)!;
+    if (owner?.kind === 'user' && owner.id === userId) return { max: 'manage', until: null };
+    if (owner?.kind === 'org') {
+      if (role === 'owner') return { max: 'manage', until: null };
+      if (role === 'admin' && this.#adminsMayShare(orgId)) return { max: 'manage', until: null };
+      if (sources.length) return { max: 'manage', until: delegatedUntil };
+      return { max: null, until: null, why: 'The organization’s owners share its objects.', reason: ORGS_ERROR_CODES.ACCESS_SHARING_OWNERS_ONLY };
+    }
+    // Someone else's personal object they manage through a grant (a manage share to them or their team): up to manage, until that ends.
+    if (sources.length) return { max: 'manage', until: delegatedUntil };
+    return { max: null, until: null, why: 'Only who manages it can share it.' };
+  }
+
+  /** An end as given: null for none; else an ISO time at least a minute ahead and at most ACCESS_LIMITS.maxDays out. */
+  #until(raw: unknown): string | null {
+    if (raw === undefined || raw === null || raw === '') return null;
+    const t = typeof raw === 'string' ? Date.parse(raw) : Number.NaN;
+    const now = this.#now().getTime();
+    if (!Number.isFinite(t) || t < now + ACCESS_LIMITS.minAheadMs || t > now + ACCESS_LIMITS.maxDays * 86_400_000)
+      throw new AppError('VALIDATION_FAILED', `Choose an end between a minute and ${ACCESS_LIMITS.maxDays} days from now.`, { details: { expiresAt: 'Out of range.' } });
+    return new Date(t).toISOString();
+  }
+
+  /** A note as given: null for none; control characters folded, at most ACCESS_LIMITS.noteMax characters. */
+  note(raw: unknown): string | null {
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'string') throw new AppError('VALIDATION_FAILED', 'A note is text.', { details: { note: 'Text.' } });
+    const v = clean(raw);
+    if (v.length > ACCESS_LIMITS.noteMax) throw new AppError('VALIDATION_FAILED', `Keep the note under ${ACCESS_LIMITS.noteMax} characters.`, { details: { note: 'Too long.' } });
+    return v || null;
+  }
 
   /** Members and up: the org's open shares whose object they may view; owners and admins: every one (to revoke). A guest: none. */
   shares(actor: Actor, orgId: OrgId): OrgShare[] {
     const { role } = this.#role(actor, orgId);
     if (role === 'guest') return [];
-    const rows = this.#openShares(`${OrgSharing.#SELECT} WHERE s.org_id = ? AND s.ended_at IS NULL ORDER BY s.created_at, s.id`, orgId);
-    return rows.filter((r) => isManager(role) || can(actor, 'view', objectRef(r.object_type, r.object_id)).allow).map((r) => this.#view(r));
+    const rows = this.#openShares(
+      `${OrgSharing.SELECT} WHERE s.org_id = ? AND s.ended_at IS NULL AND (s.expires_at IS NULL OR s.expires_at > ?) ORDER BY s.created_at, s.id`,
+      orgId,
+      this.#now().toISOString(),
+    );
+    return rows.filter((r) => isManager(role) || can(actor, 'view', objectRef(r.object_type, r.object_id)).allow).map((r) => this.view(r));
   }
 
-  share(actor: Actor, orgId: OrgId, req: Partial<CreateOrgShareRequest>): OrgShare {
+  share(actor: Actor, orgId: OrgId, req: Partial<CreateOrgShareRequest>, opts: { audit?: Record<string, unknown> } = {}): OrgShare {
     this.#person(actor);
     const { userId, role } = this.#role(actor, orgId);
     if (role === 'guest') throw new AppError('FORBIDDEN', 'A guest can’t share to the organization.');
@@ -325,6 +432,14 @@ export class OrgSharing {
     const owner = found.owner;
     if (owner?.kind === 'org' && owner.id !== orgId) throw new AppError('FORBIDDEN', 'An organization’s object is shared only inside its organization.');
     const personal = owner?.kind !== 'org';
+    const expiresAt = this.#until(req.expiresAt);
+    const note = this.note(req.note);
+
+    // The ceiling (docs/prd/access.md §4): who may grant here, up to which level and until when.
+    const cap = this.ceiling(actor, orgId, role, found);
+    if (!cap.max) throw new AppError('FORBIDDEN', cap.why ?? 'You can’t share this.', cap.reason ? { details: { reason: cap.reason } } : undefined);
+    if (LEVEL_RANK[level] > LEVEL_RANK[cap.max] || (cap.until && (!expiresAt || expiresAt > cap.until)))
+      throw new AppError('FORBIDDEN', 'You can’t give more than you have.', { details: { reason: ORGS_ERROR_CODES.ACCESS_ABOVE_OWN, max: cap.max, maxUntil: cap.until } });
 
     const subject = req.subject;
     let subjectId: string;
@@ -335,11 +450,12 @@ export class OrgSharing {
     } else if (subject?.kind === 'team' && typeof subject.teamId === 'string') {
       teamName = this.#teamRow(orgId, subject.teamId).name;
       subjectId = subject.teamId;
-      if (level === 'manage') {
-        const owns = owner?.kind === 'user' ? owner.id === userId : owner?.kind === 'org' && isManager(role);
-        if (!owns) throw new AppError('FORBIDDEN', 'Only its owner gives manage.');
-      }
-    } else throw new AppError('VALIDATION_FAILED', 'Share to the organization or one of its teams.', { details: { subject: 'org or team' } });
+    } else if (subject?.kind === 'user' && typeof subject.userId === 'string') {
+      // One person: an active member of the org (a guest too); never yourself (you hold what you hold).
+      if (!isUserId(subject.userId) || !this.#orgs.roleOf(orgId, subject.userId)) throw new AppError('VALIDATION_FAILED', 'Share with a member of the organization.', { details: { subject: 'Not a member.' } });
+      if (subject.userId === userId) throw new AppError('VALIDATION_FAILED', 'You already hold your own access.', { details: { subject: 'Yourself.' } });
+      subjectId = subject.userId;
+    } else throw new AppError('VALIDATION_FAILED', 'Share to the organization, one of its teams or one of its members.', { details: { subject: 'org, team or user' } });
 
     // The consent rule (Sharing D19, §6.4 "credentials off by default"): operating a workspace reads the credential sets delivered into it.
     if (kind === 'workspace' && level !== 'view' && this.#credentials && req.acknowledgeExposure !== true) {
@@ -359,32 +475,45 @@ export class OrgSharing {
       if (!uid) throw notFound();
     }
     const existing = db
-      .prepare('SELECT id, level FROM org_shares WHERE object_type = ? AND object_id = ? AND subject_kind = ? AND subject_id = ? AND ended_at IS NULL')
-      .get(kind, ref.id, subject.kind, subjectId) as { id: string; level: string } | undefined;
+      .prepare('SELECT id, level, expires_at FROM org_shares WHERE object_type = ? AND object_id = ? AND subject_kind = ? AND subject_id = ? AND ended_at IS NULL')
+      .get(kind, ref.id, subject.kind, subjectId) as { id: string; level: string; expires_at: string | null } | undefined;
     const id = existing?.id ?? `osh_${randomBytes(9).toString('base64url')}`;
+    const grantSubject = subject.kind === 'org' ? ({ kind: 'org', id: orgId } as const) : subject.kind === 'team' ? ({ kind: 'team', id: subjectId } as const) : ({ kind: 'user', id: subjectId as UserId } as const);
     db.exec('BEGIN IMMEDIATE');
     try {
-      if (existing) db.prepare('UPDATE org_shares SET level = ? WHERE id = ?').run(level, id);
+      if (existing) db.prepare('UPDATE org_shares SET level = ?, expires_at = ?, note = ? WHERE id = ?').run(level, expiresAt, note, id);
       else
         db.prepare(
-          'INSERT INTO org_shares (id, org_id, object_type, object_id, subject_kind, subject_id, level, personal, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).run(id, orgId, kind, ref.id, subject.kind, subjectId, level, personal ? 1 : 0, userId, at);
-      this.#grants.add(db, { ref, uid, subject: subject.kind === 'org' ? { kind: 'org', id: orgId } : { kind: 'team', id: subjectId }, level, shareId: id, by });
+          'INSERT INTO org_shares (id, org_id, object_type, object_id, subject_kind, subject_id, level, personal, created_by, created_at, expires_at, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(id, orgId, kind, ref.id, subject.kind, subjectId, level, personal ? 1 : 0, userId, at, expiresAt, note);
+      this.#grants.add(db, { ref, uid, subject: grantSubject, level, shareId: id, by, expiresAt });
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');
       throw e;
     }
-    this.#record('org.share_created', actor, orgId, `${kind}:${ref.id}`, { shareId: id, subject: subject.kind, subjectId, level, personal, changedFrom: existing?.level ?? null });
-    // A lowered level takes effect on the next call; open sockets re-check now.
-    if (existing && existing.level !== level) for (const u of this.#receivers(orgId, subject.kind, subjectId)) emitAccessChange({ userId: u, ref, why: 'share_ended' });
-    const row = db.prepare(`${OrgSharing.#SELECT} WHERE s.id = ?`).get(id) as unknown as ShareRow;
-    return this.#view({ ...row, team_name: row.team_name ?? teamName });
+    this.#record('org.share_created', actor, orgId, `${kind}:${ref.id}`, {
+      shareId: id,
+      subject: subject.kind,
+      subjectId,
+      level,
+      personal,
+      changedFrom: existing?.level ?? null,
+      expiresAt,
+      ...(note ? { note } : {}),
+      ...opts.audit,
+    });
+    // A lowered level or an earlier end takes effect on the next call; open sockets re-check now.
+    const narrowed = existing && (LEVEL_RANK[level] < LEVEL_RANK[existing.level as AccessLevel] || (expiresAt !== null && (existing.expires_at === null || expiresAt < existing.expires_at)));
+    if (narrowed) for (const u of this.#receivers(orgId, subject.kind, subjectId)) emitAccessChange({ userId: u, ref, why: 'share_ended' });
+    const row = db.prepare(`${OrgSharing.SELECT} WHERE s.id = ?`).get(id) as unknown as ShareRow;
+    return this.view({ ...row, team_name: row.team_name ?? teamName });
   }
 
-  /** Who held a share: the org's active members that are not guests, or the team's members. */
-  #receivers(orgId: OrgId, kind: 'org' | 'team', subjectId: string): UserId[] {
+  /** Who held a share: the org's active members that are not guests, the team's members, or the one person. */
+  #receivers(orgId: OrgId, kind: 'org' | 'team' | 'user', subjectId: string): UserId[] {
     if (kind === 'team') return this.#teamMemberIds(subjectId);
+    if (kind === 'user') return isUserId(subjectId) ? [subjectId] : [];
     return (this.#read().prepare("SELECT user_id FROM org_members WHERE org_id = ? AND state = 'active' AND role != 'guest'").all(orgId) as { user_id: UserId }[]).map((r) => r.user_id);
   }
 
@@ -408,6 +537,42 @@ export class OrgSharing {
     }
     this.#record('org.share_ended', actor, orgId, `${r.object_type}:${r.object_id}`, { shareId, subject: r.subject_kind, subjectId: r.subject_id, level: r.level });
     for (const u of receivers) emitAccessChange({ userId: u, ref, why: 'share_ended' });
+  }
+
+  /**
+   * Closes the shares whose end has come (docs/prd/access.md §5). Access already stopped at that instant (every decision reads the grant's
+   * `expires_at`); this deletes the grants, ends the record as 'expired', writes `org.share_expired` and tells the receivers' sockets.
+   * Returns how many it closed. The portal runs it every minute.
+   */
+  sweepExpired(): number {
+    const db = this.#w();
+    if (!db) return 0;
+    const now = this.#now().toISOString();
+    const due = db.prepare('SELECT * FROM org_shares WHERE ended_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?').all(now) as unknown as ShareRow[];
+    for (const r of due) {
+      const ref = objectRef(r.object_type, r.object_id);
+      const receivers = this.#receivers(r.org_id as OrgId, r.subject_kind, r.subject_id);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        this.#grants.removeFor(db, ref, r.id);
+        db.prepare("UPDATE org_shares SET ended_at = ?, ended_by = 'system:access-expiry', end_reason = 'expired' WHERE id = ? AND ended_at IS NULL").run(now, r.id);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+      this.#audit({
+        kind: 'org.share_expired',
+        severity: 'info',
+        actor: 'system:access-expiry',
+        userId: null,
+        subject: `${r.object_type}:${r.object_id}`,
+        orgId: r.org_id,
+        detail: { orgId: r.org_id, shareId: r.id, subject: r.subject_kind, subjectId: r.subject_id, level: r.level, expiresAt: r.expires_at },
+      });
+      for (const u of receivers) emitAccessChange({ userId: u, ref, why: 'share_ended' });
+    }
+    return due.length;
   }
 
   /* ---------- Transcript reads (OD-3) ---------- */

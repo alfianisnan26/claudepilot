@@ -15,7 +15,6 @@ import {
   type OrgInvitationRole,
   type OrgMember,
   type OrgRole,
-  type OrgShare,
   type OrgTeamRole,
   type OrgTransferKind,
   type PlatformAuditEntry,
@@ -94,6 +93,11 @@ export function orgErrorText(e: unknown, fallback: string): string {
   if (reason === ORGS_ERROR_CODES.ORG_SUSPENDED_BY_PLATFORM) return 'The portal’s admin suspended it. Ask them to resume it.';
   if (reason === ORGS_ERROR_CODES.ORG_ALREADY_OWNER) return 'The organization already owns it.';
   if (reason === ORGS_ERROR_CODES.TEAM_NOT_ORG_MEMBER) return 'Only members of the organization can be in its teams.';
+  if (reason === ORGS_ERROR_CODES.ACCESS_ABOVE_OWN) return 'You can’t give more than you have: a lower level or an earlier end.';
+  if (reason === ORGS_ERROR_CODES.ACCESS_SHARING_OWNERS_ONLY) return 'Only the owners share here (a policy).';
+  if (reason === ORGS_ERROR_CODES.ACCESS_ALREADY_HELD) return 'You already have that.';
+  if (reason === ORGS_ERROR_CODES.ACCESS_REQUEST_OPEN) return 'You already asked. Cancel that request to ask again.';
+  if (reason === ORGS_ERROR_CODES.SHARE_EXPOSES_CREDENTIALS) return 'Confirm the credentials warning first.';
   return e instanceof Error && e.message ? e.message : fallback;
 }
 
@@ -144,7 +148,7 @@ export function slugFrom(name: string): string {
 
 /* ---------- Org settings sections (owner request 2026-11-01) ---------- */
 
-export type OrgSection = 'general' | 'members' | 'teams' | 'invitations' | 'objects' | 'sharing' | 'sign-in' | 'policies' | 'audit' | 'danger';
+export type OrgSection = 'general' | 'members' | 'teams' | 'invitations' | 'objects' | 'access' | 'sign-in' | 'policies' | 'audit' | 'danger';
 
 export const SECTION_LABEL: Record<OrgSection, string> = {
   general: 'General',
@@ -152,7 +156,7 @@ export const SECTION_LABEL: Record<OrgSection, string> = {
   teams: 'Teams',
   invitations: 'Invitations',
   objects: 'Objects',
-  sharing: 'Sharing',
+  access: 'Access',
   'sign-in': 'Sign-in',
   policies: 'Policies',
   audit: 'Audit',
@@ -171,7 +175,8 @@ export function orgSections(org: Pick<Org, 'myRole' | 'state' | 'may'>): OrgSect
   out.push('teams');
   if (canManageOrg(role) || org.may?.invite) out.push('invitations');
   out.push('objects');
-  if (role !== 'guest') out.push('sharing');
+  // Fine-grained access (docs/prd/access.md): replaces Sharing. Members and up (a guest has no catalog and no directory).
+  if (role !== 'guest') out.push('access');
   if (canSeeSignIn(role)) out.push('sign-in');
   if (role === 'owner') out.push('policies');
   if (canManageOrg(role)) out.push('audit');
@@ -187,9 +192,6 @@ export const canCreateTeam = (org: Pick<Org, 'myRole' | 'may'>) => (org.may ? or
 
 /** Add or remove people, or delete the team: an org owner or admin, or an owner of the team (OrgSharing.#requireTeamManager). */
 export const canManageTeam = (role: OrgRole, teamRole: OrgTeamRole | undefined) => canManageOrg(role) || teamRole === 'owner';
-
-/** Revoke a share: an org owner or admin, or who shared it (a manager of the object may too; the page does not know that, so it does not offer it). */
-export const canRevokeShare = (role: OrgRole, share: Pick<OrgShare, 'createdBy'>, meId: string | null) => canManageOrg(role) || (!!meId && share.createdBy === meId);
 
 /** Move to organization: a member or up (and manage on the object, which the server checks). */
 export const canMoveHere = (role: OrgRole) => role !== 'guest';
@@ -215,6 +217,7 @@ export const AUDIT_FILTERS: readonly { kind: string; label: string }[] = [
   { kind: 'org.member', label: 'Members' },
   { kind: 'org.team', label: 'Teams' },
   { kind: 'org.share', label: 'Sharing' },
+  { kind: 'org.access', label: 'Requests' },
   { kind: 'org.invitation', label: 'Invitations' },
   { kind: 'object.transferred', label: 'Moves' },
   { kind: 'org.domain', label: 'Domains' },
