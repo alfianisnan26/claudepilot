@@ -55,6 +55,18 @@ export const ORG_ROUTE_POLICIES: RoutePolicies = {
   'GET /api/orgs/break-glass': { kind: 'self' },
   'GET /api/orgs/:id/break-glass': org('manage'),
   'POST /api/orgs/:id/break-glass/:entryId/end': { ...org('manage'), audit: 'org.break_glass_ended' },
+  // Slice 7 (./sharing.ts): view on the org (members and guests); the service asks the role on top (who may create or change a team, share,
+  // revoke), and a share's object (`manage` on it, asked through can()). Transcript reads are the org OWNERS' (manage declared, owner checked).
+  'GET /api/orgs/:id/teams': org('view'),
+  'POST /api/orgs/:id/teams': { ...org('view'), audit: 'org.team_created' },
+  'DELETE /api/orgs/:id/teams/:teamId': { ...org('view'), audit: 'org.team_removed' },
+  'GET /api/orgs/:id/teams/:teamId/members': org('view'),
+  'PUT /api/orgs/:id/teams/:teamId/members/:uid': { ...org('view'), audit: 'org.team_member_set' },
+  'DELETE /api/orgs/:id/teams/:teamId/members/:uid': { ...org('view'), audit: 'org.team_member_removed' },
+  'GET /api/orgs/:id/shares': org('view'),
+  'POST /api/orgs/:id/shares': { ...org('view'), audit: 'org.share_created' },
+  'DELETE /api/orgs/:id/shares/:shareId': { ...org('view'), audit: 'org.share_ended' },
+  'GET /api/orgs/:id/transcript-views': org('manage'),
 };
 
 /**

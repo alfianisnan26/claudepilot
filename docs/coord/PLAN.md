@@ -152,7 +152,7 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
    The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-903 used, 2026-10-31: 902 is reporter_ip, 903 the annotations).
    Organizations (docs/prd/organizations.md §8) have their own block, 460-479 (2026-10-31: 460 founder account and password_set, 461 token owners, 462 token accounts and session starters,
    slice 0; 463 orgs, org_members and the keep-an-owner triggers, 464 user_abilities, slice 3; 465 ticket_buckets.owner_kind, 466 grants, 467 org_break_glass, slice 5 (org-owned objects, break-glass); 468-469 held; 470 admin_sessions,
-   slice 4 (the Admin console), 471-474 held for slice 4 follow-ups; 475-479 for later slices); identity and the multi-user retrofit keep 400-459,
+   slice 4 (the Admin console), 471-474 held for slice 4 follow-ups; 475 teams.org_id and the team triggers, 476 org_shares and the end-on-leave trigger, 477 held, slice 7 (org and team sharing, OD-3 transcript reads); 478-479 for later slices); identity and the multi-user retrofit keep 400-459,
    usage per user 480-499. Organizations slices built in parallel took sub-blocks: slice 1 410-419 (410 owner columns, workspace_owners; P3),
    slice 2 420-429 (420 sso_providers.admin_ack_at/by).
 6. Dependencies: run `npm install` only under `flock COORD/npm.lock npm install ...`, then re-run the typecheck. Prefer no new dependencies; say in your

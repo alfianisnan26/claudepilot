@@ -7463,6 +7463,11 @@ export class ChatController {
    * What the authorization layer needs of a session (chat/authz.ts): its current id (a folded session's old id followed), its workspace, and who
    * created it (null until sessions record an owner: the founding user). null when there is no such session.
    */
+  /** Organizations slice 0 (review M2): the email account that started a session, or null (the server code, a ticket or trigger, or before). */
+  startedByAccount(id: string): string | null {
+    return this.#chat.startedByAccount(id);
+  }
+
   sessionFacts(id: string): { id: string; workspaceId: string; ownerId: string | null } | null {
     const row = this.#chat.row(id);
     return row ? { id: row.id, workspaceId: row.workspace_id, ownerId: null } : null;

@@ -4,10 +4,20 @@
 
 import { AppError, success } from '@isnanme/core';
 import { Hono } from 'hono';
-import type { ChangeOrgMemberRoleRequest, CreateOrgRequest, MoveToOrgRequest, OrgId, OrgTransferKind, UpdateOrgRequest } from '@portal/contracts';
+import type {
+  ChangeOrgMemberRoleRequest,
+  CreateOrgRequest,
+  CreateOrgShareRequest,
+  CreateOrgTeamRequest,
+  MoveToOrgRequest,
+  OrgId,
+  OrgTransferKind,
+  UpdateOrgRequest,
+} from '@portal/contracts';
 import { actorOf } from '../authz/seam.js';
 import type { BreakGlassService } from './breakGlass.js';
 import type { OrgsService } from './service.js';
+import type { OrgSharing } from './sharing.js';
 import type { OrgTransfers } from './transfer.js';
 
 async function body(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown>> {
@@ -19,7 +29,7 @@ async function body(c: { req: { json: () => Promise<unknown> } }): Promise<Recor
   }
 }
 
-export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService): Hono {
+export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService, sharing?: OrgSharing): Hono {
   const r = new Hono();
 
   // Slice 5: before `/:id`, so the banner's path is never read as an org id. Always registered (the route table does not depend on the
@@ -53,6 +63,33 @@ export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassServic
 
   r.get('/:id/break-glass', (c) => c.json(success(bg().forOrg(actorOf(c), c.req.param('id') as OrgId))));
   r.post('/:id/break-glass/:entryId/end', (c) => c.json(success(bg().endByOrgOwner(actorOf(c), c.req.param('id') as OrgId, c.req.param('entryId')))));
+
+  // Slice 7: teams of the org, shares to the org or its teams, transcript reads (./sharing.ts). Always registered; 404 without the service.
+  const sh = (): OrgSharing => {
+    if (!sharing) throw new AppError('NOT_FOUND', 'Not found.');
+    return sharing;
+  };
+  r.get('/:id/teams', (c) => c.json(success(sh().teams(actorOf(c), c.req.param('id') as OrgId))));
+  r.post('/:id/teams', async (c) => c.json(success(sh().createTeam(actorOf(c), c.req.param('id') as OrgId, (await body(c)) as Partial<CreateOrgTeamRequest>)), 201));
+  r.delete('/:id/teams/:teamId', (c) => {
+    sh().removeTeam(actorOf(c), c.req.param('id') as OrgId, c.req.param('teamId'));
+    return c.json(success({ removed: true }));
+  });
+  r.get('/:id/teams/:teamId/members', (c) => c.json(success(sh().teamMembers(actorOf(c), c.req.param('id') as OrgId, c.req.param('teamId')))));
+  r.put('/:id/teams/:teamId/members/:uid', async (c) =>
+    c.json(success(sh().setTeamMember(actorOf(c), c.req.param('id') as OrgId, c.req.param('teamId'), c.req.param('uid'), (await body(c)).role))),
+  );
+  r.delete('/:id/teams/:teamId/members/:uid', (c) => {
+    sh().removeTeamMember(actorOf(c), c.req.param('id') as OrgId, c.req.param('teamId'), c.req.param('uid'));
+    return c.json(success({ removed: true }));
+  });
+  r.get('/:id/shares', (c) => c.json(success(sh().shares(actorOf(c), c.req.param('id') as OrgId))));
+  r.post('/:id/shares', async (c) => c.json(success(sh().share(actorOf(c), c.req.param('id') as OrgId, (await body(c)) as Partial<CreateOrgShareRequest>)), 201));
+  r.delete('/:id/shares/:shareId', (c) => {
+    sh().revoke(actorOf(c), c.req.param('id') as OrgId, c.req.param('shareId'));
+    return c.json(success({ revoked: true }));
+  });
+  r.get('/:id/transcript-views', (c) => c.json(success(sh().transcriptViews(actorOf(c), c.req.param('id') as OrgId))));
 
   return r;
 }

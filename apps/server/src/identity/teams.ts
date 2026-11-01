@@ -95,7 +95,7 @@ export class PortalTeams {
     const description = this.#description(req.description);
     const db = this.#w();
     if ((db.prepare('SELECT count(*) AS n FROM teams').get() as { n: number }).n >= PORTAL_TEAM_LIMITS.maxTeams) throw new AppError('CONFLICT', 'There are as many teams as the portal allows.');
-    if (db.prepare('SELECT 1 FROM teams WHERE name_key = ?').get(name.toLowerCase())) throw new AppError('CONFLICT', 'A team with that name exists.', { details: { name: 'Already used.' } });
+    if (db.prepare('SELECT 1 FROM teams WHERE name_key = ? AND org_id IS NULL').get(name.toLowerCase())) throw new AppError('CONFLICT', 'A team with that name exists.', { details: { name: 'Already used.' } });
     const id = `tm_${randomBytes(9).toString('base64url')}`;
     const at = this.now().toISOString();
     db.exec('BEGIN');
@@ -115,7 +115,8 @@ export class PortalTeams {
     const db = this.#w();
     if (req.name !== undefined) {
       const name = this.#name(req.name);
-      const other = db.prepare('SELECT id FROM teams WHERE name_key = ?').get(name.toLowerCase()) as { id: string } | undefined;
+      const self = db.prepare('SELECT id, org_id FROM teams WHERE id = ?').get(id) as { org_id: string | null } | undefined;
+      const other = db.prepare("SELECT id FROM teams WHERE name_key = ? AND coalesce(org_id, '') = coalesce(?, '')").get(name.toLowerCase(), self?.org_id ?? null) as { id: string } | undefined;
       if (other && other.id !== id) throw new AppError('CONFLICT', 'A team with that name exists.', { details: { name: 'Already used.' } });
       db.prepare('UPDATE teams SET name = ?, name_key = ? WHERE id = ?').run(name, name.toLowerCase(), id);
     }

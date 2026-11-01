@@ -1,10 +1,11 @@
 // Grants (docs/prd/authorization.md §10, §13; organizations §6.5; migration 466): one table for every share, built once. A grant gives a
-// user, a team or an org a level on one object. Organizations slice 5 writes only the CREATOR grant of an org-owned object (`share_id =
-// 'creator'`, §6.1); Sharing (slice 7) writes shares through `add` with its own share id.
+// user, a team or an org a level on one object. Organizations slice 5 writes the CREATOR grant of an org-owned object (`share_id =
+// 'creator'`, §6.1); slice 7 writes shares to an org or its teams (orgs/sharing.ts, `share_id` = the `org_shares` row).
 //
 // `levelFor` is the one query of Authorization §10 for the grant arms, with the org arm of §6.5:
 //   - to the user (a creator grant only while the user is an ACTIVE member of the org that owns the object: leaving ends it, §6.9);
-//   - to a team the user is in;
+//   - to a team the user is in; a team of an org only while the user is an ACTIVE member of that ACTIVE org (§6.5 invariant 7, a join and not
+//     only the trigger of migration 475);
 //   - to an org the user is an active member of, not as a guest, while that org is active;
 //   - not expired; a workspace grant only for the workspace it was made for (`object_uid`, FR10a);
 //   - none at all on an object whose owning org is not active (a suspended org gives nothing, §6.5).
@@ -50,7 +51,10 @@ export class Grants {
              UNION ALL
              SELECT CASE g.level WHEN 'manage' THEN 3 WHEN 'operate' THEN 2 ELSE 1 END FROM grants g
                JOIN team_members t ON g.subject_kind = 'team' AND g.subject_id = t.team_id AND t.user_id = ?3
-               WHERE g.object_type = ?1 AND g.object_id = ?2 AND (g.expires_at IS NULL OR g.expires_at > ?4) AND (g.object_uid IS NULL OR g.object_uid = ?6)
+               JOIN teams tt ON tt.id = t.team_id
+               WHERE (tt.org_id IS NULL OR EXISTS (SELECT 1 FROM org_members tm JOIN orgs tor ON tor.id = tm.org_id AND tor.state = 'active'
+                                                   WHERE tm.org_id = tt.org_id AND tm.user_id = ?3 AND tm.state = 'active'))
+                 AND g.object_type = ?1 AND g.object_id = ?2 AND (g.expires_at IS NULL OR g.expires_at > ?4) AND (g.object_uid IS NULL OR g.object_uid = ?6)
              UNION ALL
              SELECT CASE g.level WHEN 'operate' THEN 2 ELSE 1 END FROM grants g
                JOIN org_members m ON g.subject_kind = 'org' AND g.subject_id = m.org_id AND m.user_id = ?3 AND m.state = 'active' AND m.role != 'guest'

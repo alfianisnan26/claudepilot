@@ -1,7 +1,8 @@
 // Organizations (docs/prd/organizations.md). Slice 3, the core: `createOrgs` declares the routes, makes the abilities and the org service
 // (which registers the `org` resolver with the seam) and writes their audit rows to the platform audit. Slice 5: org-owned objects (the
 // seam's `OrgAuthority`: roles, grants, break-glass), Move to organization and break-glass. app.ts mounts `createOrgRoutes` at /api/orgs
-// and the move routes on the workspaces, tickets and knowledge routers.
+// and the move routes on the workspaces, tickets and knowledge routers. Slice 7: teams of an org, shares to an org or its teams, and the
+// audit of org owners and admins reading members' sessions (./sharing.ts).
 
 import type { UserId } from '@portal/contracts';
 import { Grants } from '../authz/grants.js';
@@ -13,6 +14,7 @@ import { orgAuthority } from './authority.js';
 import { declareOrgPolicies } from './authz.js';
 import { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
 import { OrgsService } from './service.js';
+import { OrgSharing } from './sharing.js';
 import { OrgTransfers, type WorkspaceCredentials } from './transfer.js';
 
 export { UserAbilities, requireInstanceAdmin } from './abilities.js';
@@ -20,6 +22,7 @@ export { ORG_ROUTE_POLICIES, ORG_TRANSFER_POLICIES, orgLevel, orgResolver } from
 export { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
 export { createMoveToOrgRoute, createOrgRoutes } from './routes.js';
 export { OrgsService } from './service.js';
+export { OrgSharing } from './sharing.js';
 export { OrgTransfers, type WorkspaceCredentials } from './transfer.js';
 
 export interface OrgsModule {
@@ -28,6 +31,7 @@ export interface OrgsModule {
   grants: Grants;
   breakGlass: BreakGlassService;
   transfers: OrgTransfers;
+  sharing: OrgSharing;
 }
 
 export function createOrgs(deps: {
@@ -53,6 +57,7 @@ export function createOrgs(deps: {
   };
   const transfers = new OrgTransfers({ db, writable, orgs, grants, audit: record, credentials, now: deps.now });
   // The seam decides org-owned objects, grants and break-glass through this, read on every call (§6.5).
-  useOrgAuthority(orgAuthority({ db, orgs, grants, breakGlass }));
-  return { orgs, abilities, grants, breakGlass, transfers };
+  const sharing = new OrgSharing({ db, writable, orgs, grants, audit: record, credentials, now: deps.now });
+  useOrgAuthority(orgAuthority({ db, orgs, grants, breakGlass, sharing }));
+  return { orgs, abilities, grants, breakGlass, transfers, sharing };
 }
