@@ -1,10 +1,11 @@
 import { Button, Dialog, useToast } from '@isnanme/ui';
 import type { MoveToOrgCredential, Org, OrgTransferKind } from '@portal/contracts';
-import { ArrowRightToLine, BookOpen, Box, ChevronRight, Ticket } from 'lucide-react';
+import { ArrowRightToLine, BookOpen, Box, ChevronRight, KeyRound, Ticket } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
 import { api } from '@/lib/api';
+import { AccessSheet } from './AccessSheet';
 import { useOrgs } from './OrgsProvider';
 import { canMoveHere, consentCredentials, KIND_LABEL, objectRows, orgErrorText, type OrgObjectRow } from './rules';
 import { Alert, SectionTitle } from './settingsUi';
@@ -15,9 +16,10 @@ const ICON: Record<OrgTransferKind, typeof Box> = { workspace: Box, ticket_bucke
  * Objects: what the org owns (workspaces, ticket buckets, vaults, through the lists' `?org=<id>`), each opening in the org's context, and
  * Move here (members and up) for a personal object the person manages, with the credentials consent step for a workspace (slice 5).
  */
-export function ObjectsSection({ org, rows, onMoved }: { org: Org; rows: OrgObjectRow[] | null; onMoved: () => Promise<void> }) {
+export function ObjectsSection({ org, rows, meId, onMoved }: { org: Org; rows: OrgObjectRow[] | null; meId: string | null; onMoved: () => Promise<void> }) {
   const { setContext } = useOrgs();
   const [moving, setMoving] = useState(false);
+  const [access, setAccess] = useState<OrgObjectRow | null>(null);
 
   return (
     <section aria-labelledby="org-objects" data-org-objects="">
@@ -41,11 +43,11 @@ export function ObjectsSection({ org, rows, onMoved }: { org: Org; rows: OrgObje
             {rows.map((r) => {
               const Icon = ICON[r.kind];
               return (
-                <li key={`${r.kind}:${r.id}`} data-org-object={`${r.kind}:${r.id}`}>
+                <li key={`${r.kind}:${r.id}`} data-org-object={`${r.kind}:${r.id}`} className="flex items-center pr-2 sm:pr-3">
                   <Link
                     to={r.href}
                     onClick={() => setContext({ kind: 'org', id: org.id })}
-                    className="press flex min-h-14 items-center gap-3 px-4 py-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent sm:px-5"
+                    className="press flex min-h-14 min-w-0 flex-1 items-center gap-3 px-4 py-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent sm:px-5"
                   >
                     <Icon className="size-[18px] shrink-0 text-muted" aria-hidden />
                     <span className="min-w-0 flex-1">
@@ -54,12 +56,16 @@ export function ObjectsSection({ org, rows, onMoved }: { org: Org; rows: OrgObje
                     </span>
                     <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden />
                   </Link>
+                  <Button variant="ghost" size="icon" aria-label={`Access of ${r.name}`} onClick={() => setAccess(r)} data-org-object-access="">
+                    <KeyRound className="size-[18px]" />
+                  </Button>
                 </li>
               );
             })}
           </ul>
         )}
       </Card>
+      {access && <AccessSheet org={org} target={{ type: access.kind, id: access.id }} name={access.name} meId={meId} open={!!access} onClose={() => setAccess(null)} />}
       {canMoveHere(org.myRole) && <MoveDialog open={moving} org={org} onClose={() => setMoving(false)} onMoved={onMoved} />}
     </section>
   );

@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from 'react-router';
 import { Card } from '@/components/Card';
 import { PageHeader } from '@/components/PageHeader';
 import { api } from '@/lib/api';
+import { AccessSection } from './AccessSection';
 import { AuditSection } from './AuditSection';
 import { DangerSection } from './DangerSection';
 import { GeneralSection } from './GeneralSection';
@@ -16,7 +17,6 @@ import { useOrgs } from './OrgsProvider';
 import { PoliciesSection } from './PoliciesSection';
 import { canSeeMembers, objectRows, orgSections, SECTION_LABEL, type OrgObjectRow, type OrgSection } from './rules';
 import { SectionTitle } from './settingsUi';
-import { SharingSection } from './SharingSection';
 import { TeamsSection } from './TeamsSection';
 
 const anchor = (s: OrgSection) => `org-s-${s}`;
@@ -24,9 +24,9 @@ const anchor = (s: OrgSection) => `org-s-${s}`;
 /**
  * Org settings (docs/prd/organizations.md §7, §13.9; owner request 2026-11-01): one scrolling page of sections, with a side list on wide
  * screens and a sticky section picker on phones. Which sections show is `orgSections` (rules.ts): owners everything; admins no Policies or
- * Danger zone; members General, Members, Teams, Objects, Sharing (and Invitations when the org lets them invite); guests General, Teams,
+ * Danger zone; members General, Members, Teams, Objects, Access (and Invitations when the org lets them invite); guests General, Teams,
  * Objects. A suspended org shows its owners General and Danger zone. The server decides every change. `?tab=sign-in` (where an SSO
- * step-up returns) opens at Sign-in.
+ * step-up returns) opens at Sign-in, `?tab=access` (an access request's notification) at Access.
  */
 export function OrgSettingsPage() {
   const { id = '' } = useParams();
@@ -74,12 +74,13 @@ export function OrgSettingsPage() {
     el?.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
   }, []);
 
-  // An SSO step-up returns to `?tab=sign-in`: open there once the sections are on the page.
+  // An SSO step-up returns to `?tab=sign-in`, an access request's notification to `?tab=access`: open there once the sections are on the page.
   const opened = useRef(false);
   useEffect(() => {
-    if (opened.current || !sections.includes('sign-in') || search.get('tab') !== 'sign-in') return;
+    const tab = search.get('tab') as OrgSection | null;
+    if (opened.current || !tab || (tab !== 'sign-in' && tab !== 'access') || !sections.includes(tab)) return;
     opened.current = true;
-    requestAnimationFrame(() => go('sign-in'));
+    requestAnimationFrame(() => go(tab));
   }, [sections, search, go]);
 
   // The side list and the picker follow the section in view.
@@ -135,9 +136,9 @@ export function OrgSettingsPage() {
       case 'invitations':
         return <InvitationsSection org={org} />;
       case 'objects':
-        return <ObjectsSection org={org} rows={rows} onMoved={loadObjects} />;
-      case 'sharing':
-        return <SharingSection org={org} meId={meId} rows={rows ?? []} />;
+        return <ObjectsSection org={org} rows={rows} meId={meId} onMoved={loadObjects} />;
+      case 'access':
+        return <AccessSection org={org} members={members} meId={meId} />;
       case 'sign-in':
         return (
           <section aria-labelledby="org-signin-title">
