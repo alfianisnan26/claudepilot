@@ -70,7 +70,7 @@ export type AccessReason =
   | { kind: 'share'; level: AccessLevel; share: OrgShare; revocable: boolean };
 
 /** One subject that can reach an object, and why (the object's side). */
-export interface AccessEntry {
+export interface ObjectAccessEntry {
   subject: { kind: 'org'; id: OrgId; name: string } | { kind: 'team'; id: string; name: string } | { kind: 'user'; id: UserId; name: string } | { kind: 'org_managers'; id: OrgId; name: string };
   level: AccessLevel;
   reason: AccessReason;
@@ -87,7 +87,7 @@ export interface ObjectAccess {
   /** The latest end the caller may give (their own access ends then); null: no limit. */
   maxUntil: string | null;
   /** Everyone who can reach it, highest first. Only for a caller who may grant or an org owner or admin; else just the caller's own reasons. */
-  entries: AccessEntry[];
+  entries: ObjectAccessEntry[];
   /** The caller's own reasons. */
   mine: AccessReason[];
   /** A workspace's credential sets (operate exposes them); only for a caller who may grant. */

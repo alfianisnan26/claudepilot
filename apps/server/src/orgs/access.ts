@@ -33,7 +33,7 @@ import {
   objectRef,
   orgRef,
   type AccessCatalogItem,
-  type AccessEntry,
+  type ObjectAccessEntry,
   type AccessLevel,
   type AccessObjectType,
   type AccessReason,
@@ -284,7 +284,7 @@ export class OrgAccess {
     const full = mayGrant.length > 0 || isManager(role);
     const viewer = { actor, role };
 
-    const entries: AccessEntry[] = [];
+    const entries: ObjectAccessEntry[] = [];
     if (full) {
       if (owner.kind === 'org')
         entries.push({ subject: { kind: 'org_managers', id: orgId, name: 'Owners and admins' }, level: 'manage', reason: { kind: 'org_role', level: 'manage', role: 'admin' } });
@@ -293,7 +293,7 @@ export class OrgAccess {
         if (g.shareId === CREATOR_SHARE && g.subjectKind === 'user' && isUserId(g.subjectId) && owner.kind === 'org' && this.#orgs.roleOf(orgId, g.subjectId))
           entries.push({ subject: { kind: 'user', id: g.subjectId, name: this.#userName(g.subjectId) }, level: 'manage', reason: { kind: 'creator', level: 'manage' } });
       for (const s of this.#sharing.sharesOf(orgId, ref)) {
-        const subject: AccessEntry['subject'] =
+        const subject: ObjectAccessEntry['subject'] =
           s.subject.kind === 'org'
             ? { kind: 'org', id: orgId, name: 'Everyone' }
             : s.subject.kind === 'team'

@@ -359,7 +359,7 @@ test('the routes: declared; an outsider gets the same 404 as a missing org; a me
     'POST /api/orgs/:id/access/requests/:requestId/deny',
     'DELETE /api/orgs/:id/access/requests/:requestId',
   ])
-    assert.ok(ORG_ROUTE_POLICIES[key], `${key} declared`);
+    assert.ok(ORG_ROUTE_POLICIES[key as keyof typeof ORG_ROUTE_POLICIES], `${key} declared`);
   const app = new Hono();
   let actor: Actor = person(EVE);
   app.use('*', async (c, next) => {
