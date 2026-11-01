@@ -362,6 +362,12 @@ try {
       const inFrame = (sel) => `${frame}.querySelector(${JSON.stringify(sel)})`;
       const clickIn = (sel) => b.eval(`${inFrame(sel)}.click()`);
       const clickTextIn = (re) => b.eval(`[...${frame}.querySelectorAll('button')].find((x) => ${re}.test(x.textContent)).click()`);
+      /** After a capture the editor opens by itself (owner, 2026-11-01); Done with no marks goes on to the form. */
+      const skipEditor = async () => {
+        await b.waitFor(`!!${inFrame('[data-annotator]')}`, 10000, 'the editor opening by itself after the capture');
+        await b.eval(`[...${frame}.querySelectorAll('[data-annotator] button')].find((x) => /Done/.test(x.textContent)).click()`);
+        await b.waitFor(`!${inFrame('[data-annotator]')}`, 8000, 'Done closing the editor');
+      };
       await b.goto(`${base}/__qa-host`, 2500);
       await b.eval(`${frame}.defaultView.localStorage.setItem('pilot-reporter:token:KONF:' + location.origin, JSON.stringify({ token: '${token}', expiresAt: new Date(Date.now() + 36e5).toISOString(), actorLabel: 'Owner', bucketKey: 'KONF' }))`);
       await b.goto(`${base}/__qa-host`, 3000);
@@ -369,6 +375,7 @@ try {
       await clickIn('[role=tab][aria-label=Report]');
       await sleep(400);
       await clickTextIn('/^Screen$/');
+      await skipEditor();
       await b.waitFor(`${frame}.body.innerText.includes('File ticket') && ${frame}.body.innerText.includes('Looks like KONF-12')`, 10000, 'the report form with the capture and a duplicate');
       await sleep(500);
       check(`framed ${label} report form`, await b.eval(AUDIT.replaceAll('document.', `${frame}.`)));
@@ -407,6 +414,7 @@ try {
       await clickIn('[role=tab][aria-label=Report]');
       await sleep(300);
       await clickTextIn('/^Screen$/');
+      await skipEditor();
       await b.waitFor(`${frame}.body.innerText.includes('Ask lead now')`, 10000, 'the report form again');
       await sleep(300);
       await b.eval(`[...${frame}.querySelectorAll('[role=radio]')].find((x) => x.textContent === 'Queue').click()`);

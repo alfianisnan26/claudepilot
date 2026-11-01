@@ -246,6 +246,8 @@ try {
       await sleep(400);
       await b.eval(`[...${F}.querySelectorAll('button')].find((x) => /^Screen$/.test(x.textContent)).click()`);
       await b.waitFor(`!!${q('[aria-label="Annotate shot 1"]')}`, 10000, 'the report form with the shot');
+      // Straight to annotate (owner, 2026-11-01): the editor opens by itself on the new shot.
+      await b.waitFor(`!!${q('[data-annotator]')}`, 8000, 'the editor opening by itself after the capture');
       await sleep(300);
       check(`${label} form`, await b.eval(AUDIT(F)));
 

@@ -25,14 +25,14 @@ export function RuntimeSheet({ runtime, status, onClose }: { runtime: ReporterCh
   const rows = runtimeRows(runtime, status);
   return (
     <div className="fixed inset-0 z-40 flex flex-col justify-end">
-      <button type="button" aria-label="Close" tabIndex={-1} onClick={onClose} className="absolute inset-0 bg-black/30" />
+      <button type="button" aria-label="Close" tabIndex={-1} onClick={onClose} className="anim-fade absolute inset-0 bg-black/30" />
       <div
         ref={ref}
         role="dialog"
         aria-modal="true"
         aria-label="Session"
         tabIndex={-1}
-        className="relative max-h-[80%] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] shadow-lg focus:outline-hidden"
+        className="anim-sheet relative max-h-[80%] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] shadow-lg focus:outline-hidden"
       >
         <div className="flex min-h-11 items-center gap-1 pr-1 pl-4">
           <h2 className="flex-1 text-[15px] font-bold">Session</h2>

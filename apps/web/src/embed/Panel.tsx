@@ -33,6 +33,7 @@ import { ContextSheet } from './ContextSheet';
 import { revokeShot, withAnnotations } from './annotate';
 import { PanelContext, newId, type Capture, type ChatOpen, type PanelState, type Tab } from './context';
 import { choiceKey, parseChoice } from './formModel';
+import { parsePrefs, prefsKey, withPref, type JourneyPrefs } from './journey';
 import { Icon, type IconName } from './icons';
 import { buildCallouts, closesPanel, isChangeEvent, parseHotkeys, pickTarget, targetNotice, type Hotkeys } from './model';
 import { KnowledgeTab, SessionsTab, SettingsTab } from './OtherTabs';
@@ -127,6 +128,26 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   });
   const [hotkeys, setHotkeysState] = useState<Hotkeys>(() => parseHotkeys(readPref('hotkeys')));
   const calloutsVisible = calloutsPref ?? status?.calloutsDefault ?? true;
+  const [prefs, setPrefs] = useState<JourneyPrefs>(() => {
+    try {
+      return parsePrefs(kv.getItem(prefsKey(bucket)), coarse);
+    } catch {
+      return parsePrefs(null, coarse);
+    }
+  });
+  const setPref = useCallback(
+    <K extends keyof JourneyPrefs>(key: K, value: JourneyPrefs[K]) =>
+      setPrefs((old) => {
+        const next = withPref(old, key, value);
+        try {
+          kv.setItem(prefsKey(bucket), JSON.stringify(next));
+        } catch {
+          // per-viewer convenience only
+        }
+        return next;
+      }),
+    [kv, bucket],
+  );
 
   const connected = !!token && !!status?.enabled;
 
@@ -351,11 +372,12 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
   const requestCapture = useCallback(
     (mode: ReporterCaptureMode, precise = false, append = false) => {
       const requestId = newId();
+      setPref('mode', mode);
       appendNext.current = append;
       setPending(requestId);
       post(captureRequest(requestId, mode, precise, choiceRef.current));
     },
-    [post],
+    [post, setPref],
   );
   const openChat = useCallback((c: ChatOpen | null) => {
     setChat(c);
@@ -512,6 +534,8 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
           setHotkeysState(h);
           writePref('hotkeys', JSON.stringify(h));
         },
+        prefs,
+        setPref,
       }
     : null;
 
@@ -565,23 +589,26 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
                   {!!t.badge && (
                     <span className="absolute top-1.5 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-accent px-1 text-center text-[10.5px] leading-4 font-bold text-primary-ink tabular-nums">{t.badge}</span>
                   )}
-                  {tab === t.id && <span aria-hidden="true" className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-ink" />}
+                  {tab === t.id && <span aria-hidden="true" className="anim-grow-x absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-ink" />}
                 </button>
               ))}
             </nav>
             )}
             <main id="panel-main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-              {tab === 'tickets' && <TicketsTab />}
-              {tab === 'report' && <ReportTab />}
-              {tab === 'sessions' && (chat ? <ChatView key={chat.sessionId} open={chat} onBack={() => setChat(null)} /> : <SessionsTab />)}
-              {tab === 'knowledge' && <KnowledgeTab />}
-              {tab === 'settings' && <SettingsTab />}
+              {/* A short fade when the tab changes (keyed by the tab, so nothing replays while a tab re-renders). */}
+              <div key={tab} className="anim-fade h-full">
+                {tab === 'tickets' && <TicketsTab />}
+                {tab === 'report' && <ReportTab />}
+                {tab === 'sessions' && (chat ? <ChatView key={chat.sessionId} open={chat} onBack={() => setChat(null)} /> : <SessionsTab />)}
+                {tab === 'knowledge' && <KnowledgeTab />}
+                {tab === 'settings' && <SettingsTab />}
+              </div>
             </main>
           </>
         )}
         {contextOpen && connected && <ContextSheet section={contextOpen} onClose={() => setContextOpen(null)} />}
         {toast && (
-          <div className="pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50" key={toast.id}>
+          <div className="anim-in pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50" key={toast.id}>
             <Notice tone={toast.tone}>{toast.text}</Notice>
           </div>
         )}
@@ -754,6 +781,8 @@ export function Connect({
 export function TitleRow({ name, env, where, onContext, divided = false }: { name: string; env: string | null; where: string; onContext: (() => void) | null; divided?: boolean }) {
   return (
     <header className={`flex min-h-11 shrink-0 items-center gap-1.5 pr-14 pl-3 ${divided ? 'border-b border-line' : ''}`}>
+      {/* The pilot mark, as on the page's button: the same brand on both sides of the frame. */}
+      <LogoMark className="size-5 shrink-0" />
       <h1 data-testid="bucket-name" className="min-w-0 truncate text-[15px] font-semibold" title={name}>
         {name}
       </h1>

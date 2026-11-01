@@ -15,6 +15,7 @@ import type {
 } from '@portal/contracts';
 import { createContext, useContext } from 'react';
 import type { ReporterClient } from './api';
+import type { JourneyPrefs } from './journey';
 
 /** A capture the SDK sent back: screenshot bytes, evidence and an object URL for the preview. */
 export interface Capture {
@@ -104,6 +105,9 @@ export interface PanelState {
   setCalloutsVisible(v: boolean): void;
   hotkeys: Record<'report' | 'crop' | 'callouts' | 'panel', string>;
   setHotkeys(h: Record<'report' | 'crop' | 'callouts' | 'panel', string>): void;
+  /** The last capture mode, priority and annotation tool (per bucket, this browser only): the next report starts on them. */
+  prefs: JourneyPrefs;
+  setPref<K extends keyof JourneyPrefs>(key: K, value: JourneyPrefs[K]): void;
 }
 
 /** The chat the panel opens: a session, and when a direct ask led there, the ticket it filed and whether delivery failed. */

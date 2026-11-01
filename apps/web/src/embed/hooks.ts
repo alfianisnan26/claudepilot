@@ -1,4 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { freshKeys } from './journey';
+
+/** The keys that appeared since the list was first shown (journey.ts freshKeys): their rows animate in once. */
+export function useFreshKeys(keys: readonly string[] | null): ReadonlySet<string> {
+  const known = useRef<Set<string> | null>(null);
+  const fresh = useMemo(() => (keys ? freshKeys(known.current, keys) : new Set<string>()), [keys]);
+  useEffect(() => {
+    if (!keys) return;
+    known.current ??= new Set();
+    for (const k of keys) known.current.add(k);
+  }, [keys]);
+  return fresh;
+}
 
 /**
  * A list that reads bottom-up (chat, a thread): it stays at the newest while the person is there, holds still when they scrolled up (a

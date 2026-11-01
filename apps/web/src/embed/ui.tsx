@@ -1,14 +1,20 @@
-import type { ReporterDeploymentState, ReporterWorkPhase } from '@portal/contracts';
+import type { ReporterWorkPhase } from '@portal/contracts';
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
-import { PHASE_LABEL, PHASE_TONE, deployMark, deploymentText } from '@/features/reporter/shared';
+import { PHASE_LABEL, PHASE_TONE } from '@/features/reporter/shared';
 import type { ReporterClient } from './api';
 import { Icon, type IconName } from './icons';
 
 /* The panel's own small kit: 44 px targets, token colours (light and dark follow the system), no app shell. */
 
-type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'primary' | 'secondary' | 'ghost' | 'danger'; icon?: IconName; busy?: boolean };
+type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  tone?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  icon?: IconName;
+  busy?: boolean;
+  /** What the button says while busy ("Uploading 2/5"); its own words when not given. A spinner replaces the icon. */
+  busyText?: string | null;
+};
 
-export function Btn({ tone = 'secondary', icon, busy, className = '', children, disabled, ...rest }: BtnProps) {
+export function Btn({ tone = 'secondary', icon, busy, busyText, className = '', children, disabled, ...rest }: BtnProps) {
   const look = {
     primary: 'bg-primary text-primary-ink',
     secondary: 'bg-surface-2 text-ink',
@@ -19,11 +25,19 @@ export function Btn({ tone = 'secondary', icon, busy, className = '', children, 
     <button
       type="button"
       disabled={disabled || busy}
-      className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl px-3 text-[14px] font-semibold transition-opacity focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-50 ${look} ${className}`}
+      className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl px-3 text-[14px] font-semibold transition-[opacity,transform] duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-50 ${look} ${className}`}
       {...rest}
     >
-      {icon && <Icon name={icon} className="size-[18px]" />}
-      {busy ? <span aria-live="polite">…</span> : children}
+      {icon && !busy && <Icon name={icon} className="size-[18px]" />}
+      {busy && <span aria-hidden="true" className="spinner" />}
+      {/* Busy keeps the words (no width jump): the spinner takes the icon's place, a progress line ("Uploading 2/5") the words' place. */}
+      {busy && busyText ? (
+        <span aria-live="polite" className="truncate tabular-nums">
+          {busyText}
+        </span>
+      ) : (
+        children
+      )}
     </button>
   );
 }
@@ -49,7 +63,7 @@ export function Chip({ on, onClick, children, count }: { on: boolean; onClick: (
       type="button"
       aria-pressed={on}
       onClick={onClick}
-      className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-full border px-3 text-[13px] font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${on ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong text-ink'}`}
+      className={`inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-full border px-3 text-[13px] font-medium transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden ${on ? 'border-primary bg-primary text-primary-ink' : 'border-line-strong text-ink'}`}
     >
       {children}
       {count !== undefined && <span className={`tabular-nums ${on ? 'opacity-80' : 'text-muted'}`}>{count}</span>}
@@ -70,11 +84,41 @@ export function Seg<T extends string>({ value, options, onChange, label }: { val
           disabled={o.disabled}
           title={o.hint}
           onClick={() => onChange(o.value)}
-          className={`min-h-11 flex-1 rounded-[10px] px-2 text-[13px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-40 ${value === o.value ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'}`}
+          className={`min-h-11 flex-1 rounded-[10px] px-2 text-[13px] font-semibold transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-40 ${value === o.value ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'}`}
         >
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * A question before something is thrown away, inline where it was asked (no modal): the danger action and Keep, Keep focused so Enter or
+ * a second tap never destroys by accident. Esc answers Keep and stops there (it never also closes the panel: the topmost layer only).
+ */
+export function ConfirmBar({ text, confirm, onConfirm, onKeep, busy }: { text: string; confirm: string; onConfirm: () => void; onKeep: () => void; busy?: boolean }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onKeep();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onKeep]);
+  return (
+    <div role="alertdialog" aria-label={text} data-confirm className="anim-in flex flex-wrap items-center gap-2 rounded-2xl bg-danger-soft py-0.5 pr-0.5 pl-3">
+      <p className="min-w-0 flex-1 text-[13.5px] font-semibold break-words text-danger">{text}</p>
+      <div className="flex gap-1.5">
+        <Btn autoFocus onClick={onKeep}>
+          Keep
+        </Btn>
+        <Btn tone="danger" busy={busy} onClick={onConfirm}>
+          {confirm}
+        </Btn>
+      </div>
     </div>
   );
 }
@@ -91,24 +135,6 @@ export function Notice({ tone = 'info', children }: { tone?: 'info' | 'error' | 
 export function PhaseChip({ phase, pending }: { phase: ReporterWorkPhase; pending?: boolean }) {
   if (pending) return <span className="rounded-full border border-dashed border-line-strong px-2 py-0.5 text-[12.5px] font-semibold text-muted">Pending</span>;
   return <span className={`rounded-full px-2 py-0.5 text-[12.5px] leading-4 font-semibold whitespace-nowrap ${PHASE_TONE[phase]}`}>{PHASE_LABEL[phase]}</span>;
-}
-
-/** "stg ✓ · uat – · prod ?", each environment with its reason as a tooltip and for screen readers. */
-export function EnvStrip({ deployments, current }: { deployments: ReporterDeploymentState[]; current?: string | null }) {
-  if (!deployments.length) return null;
-  return (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5 text-[12px] tabular-nums">
-      {deployments.map((d, i) => (
-        <span key={d.environment} title={deploymentText(d)} className={d.environment === current ? 'font-semibold' : ''}>
-          {i > 0 && <span aria-hidden="true" className="mr-1.5 text-muted">·</span>}
-          <span className="sr-only">{deploymentText(d)}</span>
-          <span aria-hidden="true" className={d.status === 'deployed' ? 'text-accent' : d.status === 'not-deployed' ? 'text-danger' : 'text-muted'}>
-            {d.environment} {deployMark(d)}
-          </span>
-        </span>
-      ))}
-    </span>
-  );
 }
 
 /* Images the API serves need the bearer token: fetched once, kept as object URLs (a small cache, oldest revoked first). */
