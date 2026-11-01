@@ -132,7 +132,8 @@ export class OrgSharing {
   }
 
   #record(kind: string, actor: Actor, orgId: OrgId, subject: string, detail: Record<string, unknown>, severity: AuditInput['severity'] = 'info'): void {
-    this.#audit({ kind, severity, actor: actorString(actor), userId: actorUserId(actor), subject, detail: { orgId, ...detail } });
+    // `orgId`: the row is the org's (its Audit section reads rows by org_id; the subject here is a team or an object, not the org).
+    this.#audit({ kind, severity, actor: actorString(actor), userId: actorUserId(actor), subject, orgId, detail: { orgId, ...detail } });
   }
 
   /* ---------- Teams ---------- */

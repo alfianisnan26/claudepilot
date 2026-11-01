@@ -156,6 +156,21 @@ test('audit: `kind` filters by kind or prefix; a bad kind is refused; members ne
   assert.throws(() => m.orgs.audit(person(EVE), org), code('NOT_FOUND'), 'an outsider');
 });
 
+test('audit: team and move rows are the org’s (org_id), so the Audit section lists them (the browser check found them missing)', () => {
+  const org = freshOrg();
+  m.sharing.createTeam(person(BOB), org, { name: 'Platform' });
+  const now = new Date().toISOString();
+  store.db!.prepare('INSERT INTO kg_vaults (id, name, kind, root, read_only, created_at, updated_at, owner_kind, owner_id) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)').run('v_settings', 'Notes', 'vault', '/v_settings', now, now, 'user', CAROL);
+  m.transfers.moveToOrg(person(CAROL), 'vault', 'v_settings', { orgId: org });
+  assert.deepEqual(
+    m.orgs.audit(person(ALICE), org, { kind: 'org.team' }).map((r) => r.kind),
+    ['org.team_created'],
+  );
+  const moved = m.orgs.audit(person(ALICE), org, { kind: 'object.transferred' });
+  assert.equal(moved.length, 1);
+  assert.equal(moved[0]!.subject, 'vault:v_settings', 'the subject is still the object');
+});
+
 test('the routes: PATCH policies and GET audit?kind over HTTP, centrally checked', async () => {
   const org = freshOrg();
   const app = new Hono();

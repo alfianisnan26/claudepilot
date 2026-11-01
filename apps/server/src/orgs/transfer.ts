@@ -154,6 +154,8 @@ export class OrgTransfers {
       actor: by,
       userId,
       subject: `${kind}:${ref.id}`,
+      // The org's row too (its Audit section reads rows by org_id; the subject is the object).
+      orgId,
       detail: { orgId, type: kind, id: ref.id, from: ownerString(from), creatorGrant: grantee, credentialsKept: kept, credentialsRemoved: removed },
     });
     if (from?.kind === 'user') emitAccessChange({ userId: from.id, ref, why: 'owner_changed' });
