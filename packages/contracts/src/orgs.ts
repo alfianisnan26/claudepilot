@@ -1,7 +1,7 @@
 // Organizations (docs/prd/organizations.md): a tenant above teams. Slice 3 (§13.2 row 3) is the core: the organization, its memberships and
 // roles, the "always one active owner" invariant (service and trigger), and the per-user ABILITY `orgs.create` an instance admin grants
-// (off by default, OD-2). Slice 5: org-owned objects, Move to organization, break-glass (below). Invitations, teams in orgs, sharing to an
-// org and SSO come in later slices.
+// (off by default, OD-2). Slice 5: org-owned objects, Move to organization, break-glass. Slice 8: invitations, suspension, deletion and
+// the org's audit (below). Teams in orgs, sharing to an org and SSO come in later slices.
 //
 // Rights (authz.ts, object type `org`): owner and admin hold `manage` on the org, member and guest `view`, anyone else nothing, answered as a
 // missing org (404). Owner-only acts (changing owners, deleting) are checked by role in the service. Membership is read on every decision.
@@ -189,6 +189,67 @@ export interface OrgBreakGlassView {
   access: BreakGlassAccessRow[];
 }
 
+/* ---------- Invitations, suspension, deletion, the org's audit (slice 8, §6.8-§6.10) ---------- */
+
+export const ORG_INVITATION_LIMITS = {
+  /** An invitation is good for 7 days, once. */
+  ttlMs: 7 * 24 * 60 * 60_000,
+  /** Accept attempts per person per window (`auth_throttle` scope `invitation`); a wrong code counts like a right one. */
+  acceptPerWindow: 10,
+  acceptWindowMs: 15 * 60_000,
+  /** Pending invitations one org may hold at once. */
+  pendingMax: 200,
+  /** The code's length bounds (it is 43 base64url characters; anything else is not a code). */
+  codeMin: 20,
+  codeMax: 100,
+} as const;
+
+/** An org that is deleted stays `deleting` this long (it can be seen by nobody), then it is purged. */
+export const ORG_DELETE_GRACE_MS = 30 * 24 * 60 * 60_000;
+
+/** The web page that accepts an invitation; the code is in the link's FRAGMENT (`/org-invite#<code>`), so it is never sent in a request line. */
+export const ORG_INVITE_PATH = '/org-invite';
+
+/** Never `owner`: ownership is transferred, not invited (§6.8). */
+export type OrgInvitationRole = Exclude<OrgRole, 'owner'>;
+export type OrgInvitationState = 'pending' | 'expired';
+
+export interface CreateOrgInvitationRequest {
+  email: string;
+  role: OrgInvitationRole;
+}
+
+/** A pending (or expired, not yet used or revoked) invitation as the org's owners and admins see it. Never the code. */
+export interface OrgInvitation {
+  id: string;
+  /** Normalized (lower case). */
+  email: string;
+  role: OrgInvitationRole;
+  invitedBy: string;
+  createdAt: string;
+  expiresAt: string;
+  state: OrgInvitationState;
+}
+
+/** The answer to creating one: the code, shown ONCE (only its hash is kept). The inviter copies the link `ORG_INVITE_PATH#code`. */
+export interface CreatedOrgInvitation extends OrgInvitation {
+  code: string;
+}
+
+export interface AcceptOrgInvitationRequest {
+  code: string;
+}
+
+export interface AcceptedOrgInvitation {
+  orgId: OrgId;
+  orgName: string;
+  role: OrgInvitationRole;
+}
+
+export interface SuspendOrgRequest {
+  reason?: string;
+}
+
 /** `GET /api/orgs/abilities`: the abilities the signed-in person may use (an instance admin: every one; a token or an agent: none). */
 export interface MyAbilities {
   abilities: Ability[];
@@ -217,6 +278,18 @@ export const ORGS_API = {
   moveWorkspace: (ref: string) => `/api/workspaces/${encodeURIComponent(ref)}/move-to-org`,
   moveBucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/move-to-org`,
   moveVault: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/move-to-org`,
+  /** Slice 8. GET (manage) -> OrgInvitation[]; POST CreateOrgInvitationRequest -> CreatedOrgInvitation (owners, admins; members when membersMayInvite). */
+  invitations: (id: OrgId) => `/api/orgs/${id}/invitations`,
+  /** Slice 8. DELETE (manage): revoke a pending invitation at once. */
+  invitation: (id: OrgId, invitationId: string) => `/api/orgs/${id}/invitations/${encodeURIComponent(invitationId)}`,
+  /** Slice 8. POST AcceptOrgInvitationRequest -> AcceptedOrgInvitation: a signed-in person whose email is the invitation's; throttled. */
+  acceptInvitation: '/api/orgs/invitations/accept',
+  /** Slice 8. POST SuspendOrgRequest: an owner suspends the org (every right that comes from it is none until resumed). */
+  suspend: (id: OrgId) => `/api/orgs/${id}/suspend`,
+  /** Slice 8. POST: an owner resumes an org THEY suspended (one the platform admin suspended is resumed in the Admin console). */
+  resume: (id: OrgId) => `/api/orgs/${id}/resume`,
+  /** Slice 8. GET ?before&limit (manage) -> PlatformAuditEntry[]: the org's audit rows, newest first. */
+  audit: (id: OrgId) => `/api/orgs/${id}/audit`,
 } as const;
 
 export const ORGS_ERROR_CODES = {
@@ -232,5 +305,19 @@ export const ORGS_ERROR_CODES = {
   ORG_ALREADY_OWNER: 'ORG_ALREADY_OWNER',
   /** Break-glass: a reason of at least 10 characters is required (422). */
   BREAK_GLASS_REASON: 'BREAK_GLASS_REASON',
+  /** Slice 8. No such invitation, or it was used or revoked, or its org is gone or suspended (404). */
+  INVITATION_INVALID: 'INVITATION_INVALID',
+  /** Slice 8. The invitation is past its 7 days (409). */
+  INVITATION_EXPIRED: 'INVITATION_EXPIRED',
+  /** Slice 8. The signed-in account's email is not the invitation's (403). */
+  INVITATION_EMAIL_MISMATCH: 'INVITATION_EMAIL_MISMATCH',
+  /** Slice 8. The email is on a domain another org has verified: that org's IdP vouches for it (409). */
+  INVITATION_OTHER_ORG_DOMAIN: 'INVITATION_OTHER_ORG_DOMAIN',
+  /** Slice 8. The person is already an active member (409). */
+  ALREADY_MEMBER: 'ALREADY_MEMBER',
+  /** Slice 8. The org still owns objects: move them out first (409, details.owned). */
+  ORG_OWNS_OBJECTS: 'ORG_OWNS_OBJECTS',
+  /** Slice 8. The platform admin suspended it: only the Admin console resumes it (403). */
+  ORG_SUSPENDED_BY_PLATFORM: 'ORG_SUSPENDED_BY_PLATFORM',
 } as const;
 export type OrgsErrorCode = (typeof ORGS_ERROR_CODES)[keyof typeof ORGS_ERROR_CODES];

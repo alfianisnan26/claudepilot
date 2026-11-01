@@ -34,6 +34,9 @@ export const ADMIN_ROUTE_POLICIES: RoutePolicies = {
   'DELETE /admin-api/users/:id/abilities/:ability': users('manage', { reauth: true, audit: 'ability.revoked' }),
   'GET /admin-api/orgs': users('view'),
   'POST /admin-api/orgs/:id/recover-owner': users('manage', { reauth: true, audit: 'org.ownership_recovered' }),
+  // Slice 8 (§6.9): suspending and resuming an org, step-up like every console write (resume restores access, so the same bar).
+  'POST /admin-api/orgs/:id/suspend': users('manage', { reauth: true, audit: 'org.suspended' }),
+  'POST /admin-api/orgs/:id/resume': users('manage', { reauth: true, audit: 'org.resumed' }),
   // Slice 5 (§6.7, OD-4): break-glass. Like every write of the console, opening one and ending your own need the step-up.
   'POST /admin-api/orgs/:id/break-glass': users('manage', { reauth: true, audit: 'org.break_glass_started' }),
   'DELETE /admin-api/orgs/:id/break-glass': users('manage', { reauth: true, audit: 'org.break_glass_ended' }),

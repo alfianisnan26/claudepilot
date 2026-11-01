@@ -511,6 +511,16 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     d.orgs.recoverOwner(c.get('actor'), param(c, 'id') as OrgId, userId as UserId, typeof b.reason === 'string' ? b.reason : '');
     return c.json(success({ recovered: true }));
   });
+  // Slice 8 (§6.9): suspend and resume (step-up, declared). An org the console suspended is resumed only here, never by its owners.
+  on('POST', '/admin-api/orgs/:id/suspend', async (c) => {
+    const b = await body(c);
+    d.orgs.suspend(c.get('actor'), param(c, 'id') as OrgId, { by: 'platform', reason: b.reason });
+    return c.json(success({ suspended: true }));
+  });
+  on('POST', '/admin-api/orgs/:id/resume', (c) => {
+    d.orgs.resume(c.get('actor'), param(c, 'id') as OrgId, { by: 'platform' });
+    return c.json(success({ resumed: true }));
+  });
 
   // ---------- Break-glass (slice 5, §6.7) ----------
   const breakGlass = () => {

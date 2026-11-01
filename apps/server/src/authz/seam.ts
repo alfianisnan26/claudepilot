@@ -244,7 +244,7 @@ export function requireToolPolicy(actor: Actor, name: string, args: Record<strin
 export interface AccessChange {
   userId: UserId;
   ref: ObjectRef | null;
-  why: 'share_ended' | 'membership_ended' | 'user_disabled' | 'signed_out' | 'owner_changed';
+  why: 'share_ended' | 'membership_ended' | 'user_disabled' | 'signed_out' | 'owner_changed' | 'org_membership_ended' | 'org_suspended';
 }
 const listeners = new Set<(c: AccessChange) => void>();
 export const onAccessChange = (cb: (c: AccessChange) => void): (() => void) => {

@@ -10,7 +10,11 @@
 //   tool creates orgs). The creator becomes the first owner.
 // - The platform admin's list (`listAll`) and owner recovery (`recoverOwner`) are service functions for the Admin console (slice 4, its own
 //   host, session and step-up). They read names, counts and owners, never content; a platform admin holds no right on an org by being one.
-// Every change writes a platform audit row (`org.*`, subject `org:<id>`, the actor as `actorString`).
+// - Slice 8 (§6.9): leaving or removal ends the grants the person made of their personal objects to the org and their creator grants on the
+//   org's objects, in the same transaction as the membership; suspension (an owner, or the platform admin from the Admin console, which only
+//   it can undo) makes every right from the org none (the resolver and the seam read the state); deletion needs an org that owns nothing,
+//   leaves it `deleting` for 30 days (nobody sees it) and `purgeDeleted` then removes it with its memberships, invitations and grants.
+// Every change writes a platform audit row (`org.*`, subject `org:<id>`, the actor as `actorString`; `platform_audit.org_id` from the subject).
 
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
@@ -18,6 +22,7 @@ import { AppError } from '@isnanme/core';
 import {
   ABILITIES,
   FOUNDING_USER_ID,
+  ORG_DELETE_GRACE_MS,
   ORG_LIMITS,
   ORG_POLICY_DEFAULTS,
   ORG_SLUG_PATTERN,
@@ -31,6 +36,7 @@ import {
   type Actor,
   type AdminOrgSummary,
   type MyAbilities,
+  type ObjectRef,
   type Org,
   type OrgId,
   type OrgMember,
@@ -38,11 +44,13 @@ import {
   type OrgPolicies,
   type OrgRole,
   type OrgState,
+  type PlatformAuditEntry,
   type UserId,
 } from '@portal/contracts';
-import { emitAccessChange, isPlatformAdmin, requireCan, visible } from '../authz/seam.js';
+import { emitAccessChange, isPlatformAdmin, requireCan, resolve, visible } from '../authz/seam.js';
 import type { AuditInput } from '../platform/audit.js';
 import { requireInstanceAdmin, type UserAbilities } from './abilities.js';
+import { OWNED_TABLES } from './authority.js';
 import { registerOrgResolver } from './authz.js';
 
 export interface OrgsDeps {
@@ -153,6 +161,12 @@ export class OrgsService {
       else if (typeof v === 'boolean') out[k] = v;
     }
     return out;
+  }
+
+  /** The org's policies (§6.6), defaults for a missing key; defaults when there is no such org. */
+  policiesOf(id: string): OrgPolicies {
+    const raw = (this.#read().prepare('SELECT policies FROM orgs WHERE id = ?').get(id) as { policies: string } | undefined)?.policies;
+    return this.#policies(raw ?? '{}');
   }
 
   #activeMembers(id: string): number {
@@ -342,16 +356,175 @@ export class OrgsService {
 
   #end(id: OrgId, userId: UserId): void {
     const db = this.#write();
+    // §6.9: the grants that relied on the membership go in the same transaction: what they shared of their PERSONAL objects to this org,
+    // and their creator grants on this org's objects (the objects stay the org's). Decided before the write, through the resolvers.
+    const ended = this.#grantsEndingWith(id, userId);
     this.#keepingAnOwner(db, id, userId, () => {
       db.prepare("UPDATE org_members SET state = 'removed', ended_at = ? WHERE org_id = ? AND user_id = ? AND state = 'active'").run(this.#now().toISOString(), id, userId);
+      const del = db.prepare('DELETE FROM grants WHERE id = ?');
+      for (const g of ended) del.run(g);
     });
-    // Rights are read on every call; this tells open sockets, terminals and sessions that relied on the membership (§6.9, slice 8 adds more).
-    emitAccessChange({ userId, ref: orgRef(id), why: 'membership_ended' });
+    // Rights are read on every call; this tells open sockets, terminals and sessions that relied on the membership (§6.9).
+    emitAccessChange({ userId, ref: orgRef(id), why: 'org_membership_ended' });
+  }
+
+  /** The ids of the grants that end when `userId` leaves org `id` (§6.9). None when the table cannot be read (the membership still ends). */
+  #grantsEndingWith(id: OrgId, userId: UserId): string[] {
+    let rows: { id: string; object_type: string; object_id: string; subject_kind: string }[] = [];
+    try {
+      rows = this.#read()
+        .prepare(
+          `SELECT id, object_type, object_id, subject_kind FROM grants
+           WHERE (subject_kind = 'org' AND subject_id = ? AND granted_by = ? AND share_id != 'creator')
+              OR (subject_kind = 'user' AND subject_id = ? AND share_id = 'creator')`,
+        )
+        .all(id, `user:${userId}`, userId) as typeof rows;
+    } catch {
+      return [];
+    }
+    const out: string[] = [];
+    for (const g of rows) {
+      const owner = resolve({ type: g.object_type, id: g.object_id } as ObjectRef)?.owner;
+      const ends = g.subject_kind === 'org' ? owner?.kind === 'user' && owner.id === userId : owner?.kind === 'org' && owner.id === id;
+      if (ends) out.push(g.id);
+    }
+    return out;
+  }
+
+  /* ---------- Suspension and deletion (slice 8, §6.9) ---------- */
+
+  /** Every active member is told of the org's state change (sockets and sessions reconsider; rights are read on every call anyway). */
+  #tellMembers(id: OrgId, why: 'org_suspended' | 'org_membership_ended'): void {
+    const rows = this.#read().prepare("SELECT user_id FROM org_members WHERE org_id = ? AND state = 'active'").all(id) as { user_id: string }[];
+    for (const r of rows) if (isUserId(r.user_id)) emitAccessChange({ userId: r.user_id, ref: orgRef(id), why });
+  }
+
+  /** An owner of the org, as a person (suspend, resume, delete). Anyone else: the org's 404, or 403 for a member who sees it. */
+  #requireOwner(actor: Actor, id: OrgId): void {
+    if (actor.kind !== 'user') throw notFound();
+    requireCan(actor, 'view', orgRef(id));
+    if (this.#myRole(actor, id) !== 'owner') throw new AppError('FORBIDDEN', 'Only an owner does that.');
+  }
+
+  #requirePlatform(actor: Actor, id: OrgId): void {
+    requireInstanceAdmin(actor);
+    const state = this.stateOf(id);
+    if (!state || state === 'deleting') throw notFound();
+  }
+
+  /**
+   * Suspends an org: every right that comes from it is none (the org resolver, org-owned objects and org grants read the state on every
+   * call); its owners still see it, to resume or delete. `by: 'platform'` is the Admin console (an instance admin as a person); only the
+   * console resumes what it suspended.
+   */
+  suspend(actor: Actor, id: OrgId, opts: { by: 'owner' | 'platform'; reason?: unknown }): void {
+    if (opts.by === 'platform') this.#requirePlatform(actor, id);
+    else this.#requireOwner(actor, id);
+    const reason = typeof opts.reason === 'string' ? clean(opts.reason).slice(0, 300) : '';
+    const r = this.#write().prepare("UPDATE orgs SET state = 'suspended', suspended_by = ? WHERE id = ? AND state = 'active'").run(opts.by, id);
+    if (Number(r.changes) === 0) throw new AppError('CONFLICT', 'The organization is not active.');
+    this.#record('org.suspended', actor, id, actorUserId(actor), { by: opts.by, ...(reason ? { reason } : {}) }, 'medium');
+    this.#tellMembers(id, 'org_suspended');
+  }
+
+  /** Resumes a suspended org. An owner resumes only what an owner suspended; the platform admin resumes either. */
+  resume(actor: Actor, id: OrgId, opts: { by: 'owner' | 'platform' }): void {
+    if (opts.by === 'platform') this.#requirePlatform(actor, id);
+    else this.#requireOwner(actor, id);
+    const row = this.#read().prepare('SELECT state, suspended_by FROM orgs WHERE id = ?').get(id) as { state: OrgState; suspended_by: string | null } | undefined;
+    if (row?.state !== 'suspended') throw new AppError('CONFLICT', 'The organization is not suspended.');
+    if (opts.by === 'owner' && row.suspended_by === 'platform')
+      throw new AppError('FORBIDDEN', 'The portal’s admin suspended this organization. Ask them to resume it.', { details: { reason: ORGS_ERROR_CODES.ORG_SUSPENDED_BY_PLATFORM } });
+    this.#write().prepare("UPDATE orgs SET state = 'active', suspended_by = NULL WHERE id = ? AND state = 'suspended'").run(id);
+    this.#record('org.resumed', actor, id, actorUserId(actor), { by: opts.by }, 'medium');
+  }
+
+  /** How many objects the org still owns (deleting is refused while any). */
+  ownedCount(id: OrgId): number {
+    const db = this.#read();
+    let n = 0;
+    for (const t of OWNED_TABLES) n += (db.prepare(`SELECT count(*) AS n FROM ${t} WHERE owner_kind = 'org' AND owner_id = ?`).get(id) as { n: number }).n;
+    return n;
+  }
+
+  /**
+   * Deletes an org (an owner, as a person): only when it owns nothing (moving every object out first is §6.9's explicit transfer). It is
+   * `deleting` at once (nobody sees it, every right from it is none, pending invitations are revoked) and purged after 30 days.
+   */
+  delete(actor: Actor, id: OrgId): void {
+    this.#requireOwner(actor, id);
+    const owned = this.ownedCount(id);
+    if (owned > 0) throw new AppError('CONFLICT', 'The organization still owns things. Move them out first.', { details: { reason: ORGS_ERROR_CODES.ORG_OWNS_OBJECTS, owned } });
+    const db = this.#write();
+    const at = this.#now().toISOString();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare("UPDATE orgs SET state = 'deleting', deleted_at = ?, suspended_by = NULL WHERE id = ? AND state IN ('active', 'suspended')").run(at, id);
+      db.prepare('UPDATE org_invitations SET revoked_at = ? WHERE org_id = ? AND used_at IS NULL AND revoked_at IS NULL').run(at, id);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    this.#record('org.deleted', actor, id, actorUserId(actor), { purgeAfter: new Date(this.#now().getTime() + ORG_DELETE_GRACE_MS).toISOString() }, 'medium');
+    this.#tellMembers(id, 'org_membership_ended');
+  }
+
+  /** Purges orgs deleted more than 30 days ago: the org (memberships, invitations, break-glass entries cascade) and the grants to it. */
+  purgeDeleted(): number {
+    const db = this.#w();
+    if (!db) return 0;
+    const cutoff = new Date(this.#now().getTime() - ORG_DELETE_GRACE_MS).toISOString();
+    const ids = (db.prepare("SELECT id FROM orgs WHERE state = 'deleting' AND deleted_at IS NOT NULL AND deleted_at <= ?").all(cutoff) as { id: string }[]).map((r) => r.id);
+    let purged = 0;
+    for (const id of ids) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        // Children first and by name (not only through the cascade), so the purge does not depend on the foreign-key pragma.
+        for (const sql of [
+          "DELETE FROM grants WHERE subject_kind = 'org' AND subject_id = ?",
+          'DELETE FROM org_invitations WHERE org_id = ?',
+          'DELETE FROM org_break_glass WHERE org_id = ?',
+          'DELETE FROM org_members WHERE org_id = ?',
+          'DELETE FROM orgs WHERE id = ?',
+        ])
+          db.prepare(sql).run(id);
+        db.exec('COMMIT');
+        purged++;
+      } catch (e) {
+        db.exec('ROLLBACK');
+        console.error(`[orgs] purging a deleted organization failed: ${(e as Error).message}`);
+        continue;
+      }
+      this.#audit({ kind: 'org.purged', severity: 'info', actor: 'system:orgs-purge', userId: null, subject: `org:${id}`, detail: { orgId: id } });
+    }
+    return purged;
+  }
+
+  /** The org's audit rows (§6.10): owners and admins (manage), newest first. */
+  audit(actor: Actor, id: OrgId, q: { before?: unknown; limit?: unknown } = {}): PlatformAuditEntry[] {
+    requireCan(actor, 'manage', orgRef(id));
+    const before = Number(q.before);
+    const paged = Number.isInteger(before) && before > 0;
+    const limit = Math.max(1, Math.min(200, Math.floor(Number(q.limit) || 100)));
+    const rows = this.#read()
+      .prepare(`SELECT id, at, severity, kind, actor, user_id, subject, detail FROM platform_audit WHERE org_id = ? ${paged ? 'AND id < ?' : ''} ORDER BY id DESC LIMIT ${limit}`)
+      .all(...(paged ? [id, before] : [id])) as {
+      id: number;
+      at: string;
+      severity: PlatformAuditEntry['severity'];
+      kind: string;
+      actor: string;
+      user_id: string | null;
+      subject: string | null;
+      detail: string;
+    }[];
+    return rows.map((r) => ({ id: r.id, at: r.at, severity: r.severity, kind: r.kind, actor: r.actor, userId: r.user_id, subject: r.subject, detail: JSON.parse(r.detail) as Record<string, unknown> }));
   }
 
   /**
    * Puts a person in an org with a role, or brings a removed member back. NO authorization here: the caller has already decided (an accepted
-   * invitation, the three-org migration, SSO JIT; slices 6, 8 and 10). No route calls it in slice 3. The account must exist and be active.
+   * invitation (./invitations.ts), the three-org migration, SSO JIT; slices 6, 8 and 10). The account must exist and be active.
    */
   admit(orgId: OrgId, userId: UserId, role: OrgRole, via: Exclude<OrgMembershipVia, 'recovered'>, by: string): void {
     if (!isOrgRole(role)) throw new AppError('VALIDATION_FAILED', 'Unknown role.');

@@ -55,6 +55,18 @@ export const ORG_ROUTE_POLICIES: RoutePolicies = {
   'GET /api/orgs/break-glass': { kind: 'self' },
   'GET /api/orgs/:id/break-glass': org('manage'),
   'POST /api/orgs/:id/break-glass/:entryId/end': { ...org('manage'), audit: 'org.break_glass_ended' },
+  // Slice 8 (§6.8-§6.10). Accepting names no org in the path: a signed-in person, the code and an email match, throttled (the service).
+  'POST /api/orgs/invitations/accept': { kind: 'signed-in', audit: 'org.member_joined' },
+  'GET /api/orgs/:id/invitations': org('manage'),
+  // view: a member may invite when the org's `membersMayInvite` is on; the service checks the role, the policy and the role ceiling.
+  'POST /api/orgs/:id/invitations': { ...org('view'), audit: 'org.member_invited' },
+  'DELETE /api/orgs/:id/invitations/:invitationId': { ...org('manage'), audit: 'org.invitation_revoked' },
+  // Owner-only acts, by role in the service on top of the declared level. Resume and delete are `view`: in a SUSPENDED org its owners hold
+  // only view (§6.9: they still see it, to resume or delete). Deleting is soft for 30 days (nobody sees the org meanwhile).
+  'POST /api/orgs/:id/suspend': { ...org('manage'), audit: 'org.suspended' },
+  'POST /api/orgs/:id/resume': { ...org('view'), audit: 'org.resumed' },
+  'DELETE /api/orgs/:id': { ...org('view'), audit: 'org.deleted' },
+  'GET /api/orgs/:id/audit': org('manage'),
 };
 
 /**

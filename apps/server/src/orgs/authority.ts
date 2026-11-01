@@ -11,7 +11,7 @@ import type { BreakGlassService } from './breakGlass.js';
 import type { OrgsService } from './service.js';
 
 /** The tables whose rows an org may own (slice 5 moves workspaces, buckets and vaults; sets, accounts and endpoints already take 'org'). */
-const OWNED_TABLES = ['workspace_owners', 'ticket_buckets', 'kg_vaults', 'pools', 'accounts', 'endpoints'] as const;
+export const OWNED_TABLES =['workspace_owners', 'ticket_buckets', 'kg_vaults', 'pools', 'accounts', 'endpoints'] as const;
 
 export function orgAuthority(deps: { db: () => DatabaseSync | null; orgs: OrgsService; grants: Grants; breakGlass: BreakGlassService }): OrgAuthority {
   return {

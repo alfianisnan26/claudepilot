@@ -905,6 +905,8 @@ export function createApp(
     const sweep = setInterval(() => {
       try {
         orgsModule.breakGlass.sweep();
+        // Slice 8: orgs deleted 30 days ago are purged (memberships, invitations and grants with them).
+        orgsModule.orgs.purgeDeleted();
       } catch (e) {
         console.error(`[orgs] the break-glass sweep failed: ${(e as Error).message}`);
       }
@@ -1437,7 +1439,7 @@ export function createApp(
   {
     const og = new Hono<Env>();
     og.use(requireSession);
-    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass));
+    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass, orgsModule.invitations));
     app.route('/api/orgs', og);
   }
   // Organizations slice 4 (§6.11): the Admin console, answered only on the admin host (the middleware at the top hands it those requests).
