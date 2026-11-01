@@ -94,7 +94,7 @@ export function ReportTab() {
   );
 }
 
-/** After filing to the queue: the key (copy), View, Report another. No full-screen confirmation; the callout is on the page already. */
+/** After filing to the queue: the key (copy), View, Another (report another). One row at 390 px. No full-screen confirmation; the callout is on the page already. */
 export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => void }) {
   const { select, setTab, notify } = usePanel();
   return (
@@ -130,8 +130,8 @@ export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => 
       >
         View
       </Btn>
-      <Btn tone="ghost" onClick={onDone}>
-        Report another
+      <Btn tone="ghost" onClick={onDone} title="Report another">
+        Another
       </Btn>
     </div>
   );
