@@ -27,13 +27,13 @@ export function GraphPage() {
   );
   return (
     <div className="fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-bg text-ink" style={pinnedToViewport(viewport)}>
-      <header className="flex h-12 shrink-0 items-center gap-1 px-1.5 pt-[env(safe-area-inset-top)] sm:px-3">
+      <header className="flex h-12 shrink-0 items-center gap-1 px-1.5 pt-[var(--safe-top)] sm:px-3">
         <Link to="/admin/knowledge" aria-label="Knowledge" title="Knowledge" className="press inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface-2 hover:text-ink">
           <ArrowLeft className="size-[18px]" />
         </Link>
         <h1 className="min-w-0 flex-1 truncate px-1 text-[15.5px] font-semibold">Graph</h1>
       </header>
-      <div className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
+      <div className="min-h-0 flex-1 pb-[var(--safe-bottom)]">
         <GraphPane
           vault={null}
           vaults={vaults.data ?? []}

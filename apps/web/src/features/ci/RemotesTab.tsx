@@ -12,7 +12,7 @@ import { MONO, StatusIcon } from './parts';
 import { AutoApproveDialog, ConnectDialog, MergeDialog, NewRemoteDialog, PipelineDialog, ProtectedDialog, RunDialog } from './RemoteDialogs';
 
 /** The remotes workspaces host: their branches with where the checks stand, and the pipelines in them (local-git-ci PRD §15). */
-export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boolean; onCloseCreate: () => void; onNew: () => void }) {
+export function RemotesTab({ creating, onCloseCreate }: { creating: boolean; onCloseCreate: () => void }) {
   const toast = useToast();
   const [repos, setRepos] = useState<CiRepo[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -59,7 +59,7 @@ export function RemotesTab({ creating, onCloseCreate, onNew }: { creating: boole
       {!repos && !failed && <RowsSkeleton rows={2} lines={1} icon="rounded-2xl" />}
       {repos &&
         (repos.length === 0 ? (
-          <EmptyState icon={<GitBranch className="size-6" />} title="No remotes" action={<Button icon={<Plus className="size-4" />} onClick={onNew}>New remote</Button>} />
+          <EmptyState icon={<GitBranch className="size-6" />} title="No remotes" />
         ) : (
           <ul className="flex flex-col gap-2">
             {repos.map((r) => (

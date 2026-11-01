@@ -77,7 +77,7 @@ export function AccessPage() {
 
   return (
     <>
-      <PageHeader title="Access" />
+      <PageHeader title="Access" description="How people and agents get in: the server code, sign-in, where you are signed in, and the portal’s MCP endpoint with its tokens." />
 
       {/* Two tabs (Portal MCP PRD §15), each its own path: today's sign-in sections (/admin/access), and the MCP endpoint's tokens and activity (/admin/access/mcp). */}
       <RoutedTabs

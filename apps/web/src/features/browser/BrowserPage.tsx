@@ -191,10 +191,10 @@ export function BrowserPage() {
 
   return (
     <div
-      className="fixed inset-x-0 top-0 flex h-dvh flex-col bg-[#0b0b0c] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] text-[#e6e6e6]"
+      className="fixed inset-x-0 top-0 flex h-dvh flex-col bg-[#0b0b0c] pr-[var(--safe-right)] pl-[var(--safe-left)] text-[#e6e6e6]"
       style={pinnedToViewport(viewport)}
     >
-      <header className="z-10 flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b border-white/10 px-2 pt-[env(safe-area-inset-top)] sm:px-3">
+      <header className="z-10 flex h-[calc(3rem+var(--safe-top))] shrink-0 items-center gap-2 border-b border-white/10 px-2 pt-[var(--safe-top)] sm:px-3">
         <Link to="/admin/workspaces" aria-label="Back" className="flex size-9 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white">
           <ArrowLeft className="size-[18px]" />
         </Link>
@@ -308,7 +308,7 @@ export function BrowserPage() {
           mods={mods}
           onKey={sendKey}
           onModifier={(m) => setMods({ ...modsRef.current, [m]: NEXT_MOD[modsRef.current[m]] })}
-          className="pb-[max(0.375rem,env(safe-area-inset-bottom))]"
+          className="pb-[max(0.375rem,var(--safe-bottom))]"
         />
       )}
 
@@ -398,7 +398,7 @@ function Dock({
     setText('');
   };
 
-  const bar = 'flex shrink-0 items-center gap-2 border-t border-white/10 bg-[#141416] px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]';
+  const bar = 'flex shrink-0 items-center gap-2 border-t border-white/10 bg-[#141416] px-3 py-2 pb-[max(0.5rem,var(--safe-bottom))]';
 
   if (waiting && !mine)
     return (

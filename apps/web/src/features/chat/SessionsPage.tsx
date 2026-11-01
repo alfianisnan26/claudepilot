@@ -313,7 +313,7 @@ export function SessionsPage() {
                 title="No agents yet"
                 action={
                   <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)}>
-                    New session
+                    New agent
                   </Button>
                 }
               >
