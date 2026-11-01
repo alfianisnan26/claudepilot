@@ -1,5 +1,6 @@
 // Reading a windowed full-page list in a harness (components/WindowedList.tsx; docs/coord/UI-STANDARD.md §4): only the rows in view (and a
-// few more) are in the page, so a harness that counts or reads "every row" sweeps the list instead: from the top, a screen at a time, to the
+// few more) are in the page, so a harness that counts or reads "every row" sweeps the list instead: first to the end until every page is in
+// (late pages regroup the list), then from the top, a screen at a time, to the
 // end (which also loads the next pages), reading the rows drawn at each stop and merging them by key, first seen wins. The list scrolls inside
 // itself on a desktop and with the document on a phone; both are handled.
 import { sleep } from './lib.mjs';
@@ -24,6 +25,17 @@ const scrollTo = (top) => `(() => {
  * @param {import('./browser.mjs').Browser} b
  */
 export async function sweepRows(b, rowsExpr, { key = (r) => r.id, settle = 250, maxSteps = 400 } = {}) {
+  // First every page: rows that arrive late regroup the list (a worker on an older page joins its lead's crew), so reading while pages
+  // still arrive would keep a reading of the moment. Scroll to the end until the list stops growing, then read on a second pass.
+  let last = -1;
+  for (let i = 0, still = 0; i < maxSteps && still < 3; i++) {
+    const v = await b.eval(VIEW);
+    await b.eval(scrollTo(v.max));
+    await sleep(settle * 2);
+    const now = (await b.eval(VIEW)).max;
+    still = now === last ? still + 1 : 0;
+    last = now;
+  }
   const seen = new Map();
   const take = async () => {
     for (const r of await b.eval(rowsExpr)) {
