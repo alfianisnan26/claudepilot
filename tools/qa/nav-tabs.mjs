@@ -74,6 +74,11 @@ try {
       await b.waitFor(`document.querySelectorAll('[role=tablist] [role=tab]').length === 6 && !!document.querySelector('[data-settings-group]')`, 15_000, 'settings').catch(() => {});
       let f = await b.eval(FRAME);
       check(`${t}: Settings has its six tabs`, JSON.stringify(f.tabs) === JSON.stringify(SETTINGS), JSON.stringify(f.tabs));
+      if (!f.tabs.length) {
+        console.log('  page errors:', JSON.stringify(b.errors.slice(-3)));
+        console.log('  console:', JSON.stringify(b.console.filter((c) => /error/.test(c.type)).slice(-5)));
+        throw new Error('the page did not render');
+      }
       check(`${t}: tabs are 44 px`, f.small.length === 0, JSON.stringify(f.small));
       check(`${t}: no sideways scroll`, f.docScroll <= f.docClient + 1, `${f.docScroll}/${f.docClient}`);
       if (size.mobile) check(`${t}: a phone scrolls the document, not a pane`, !f.paneScrolls);
