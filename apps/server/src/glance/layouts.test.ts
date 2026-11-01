@@ -8,7 +8,7 @@ import { clearResolvers, policyFor, useAccountRoles, useOrgAuthority, type Accou
 import { createOrgs } from '../orgs/index.js';
 import { Store } from '../store/store.js';
 import { tempDirectory } from '../store/testTmp.js';
-import { createLayoutRoutes, LayoutStore } from './layouts.js';
+import { createLayoutRoutes, declareLayoutPolicies, LayoutStore } from './layouts.js';
 
 const ANA = 'u_Ana00000666' as UserId;
 const BEN = 'u_Ben00000666' as UserId;
@@ -42,6 +42,7 @@ before(async () => {
       .run(id, `${id}@example.test`, `${id.toLowerCase()}@example.test`, id, role, 'active', 'not-a-hash', at, at, 'ui');
   restoreRoles = useAccountRoles((id) => (store.db!.prepare('SELECT role FROM users WHERE id = ?').get(id) as { role: 'admin' | 'member' } | undefined)?.role ?? null);
   const m = createOrgs({ store });
+  declareLayoutPolicies();
   orgId = m.orgs.create(person(FOUNDING_USER_ID), { name: 'Acme', slug: 'acme' }).id;
   m.orgs.admit(orgId, ANA, 'member', 'invite', 'test');
 });

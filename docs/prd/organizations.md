@@ -640,7 +640,7 @@ only narrows (`?org=`, §13.6, §13.6a): Personal lists what no org owns, an org
 | VS Code tokens | personal (a `pmcp_tokens` row) | the person, approved in the portal | none | n/a | ✅ its lists keep viewable rows (`vscode/routes.ts`). ⚠️ they take no `?org=` |
 | App ports | personal, in memory (`appports/grants.ts`) | `operate` on the workspace | none | n/a | ✅ |
 | Glance widgets, Home layout | personal (intended) | n/a | n/a | the numbers are scoped (§13.6a) | ✅ server. ✅ D6 (D-111): per person and org context on the server (`glance/layouts.ts`, migration 910) |
-| Connect targets | instance (org targets: slice 11) | an instance admin | none | n/a | ✅ platform-owned resolver (`connect/authz.ts:12-22`); `connect_targets.owner_id` is written and never read |
+| Connect targets | instance, or an org's (D-111: a PORTAL_K8S_TARGETS entry's `org`) | an instance admin | none | `?org=` on the lists | ✅ resolver `connect/authz.ts` (`targetLevel`); enrolled targets stay the platform's; `connect_targets.owner_id` is written and never read |
 | Templates | not built (no table) | n/a | n/a | n/a | ✅ fails closed (required, no resolver: `authz/owners.ts`) |
 | Settings | instance (`portal_meta` `setting:*`); org (`orgs.policies`); personal (notification prefs; the org context, per device) | instance: admins; org: owners | n/a | n/a | ✅ `settings/authz.ts`; org policies owners only (§13.9) |
 | Audit | instance (`platform_audit`); an org's rows by `org_id` (migration 469) | the services | an org's owners and admins read its rows; a person reads rows about themselves | n/a | ✅ the org audit (`orgs/service.ts`), `platform/audit.ts:81` |
@@ -687,6 +687,14 @@ branch `feat/org-decisions-d111`:
   when people bring their own logins into an org workspace.
 - **D4, later (recorded).** Portal MCP tokens narrowed to one org (`org_id`, §6.5 invariant 5) come with member tokens.
 - **D5, recorded.** Accounts, endpoints and account pools stay instance-wide (platform) until an org needs its own API keys.
+- **Targets: org-ownable (owner 2026-11-01, "target should also be per org"; a change of D5 for targets).** A PORTAL_K8S_TARGETS entry
+  names its org (`org`, an id or a slug; `workspaces/kubeTargets.ts`; set in `deploy/k3s/portal.yaml` for isnan, konfersi and kohilabs, so it
+  survives redeploys). The `target` resolver (`connect/authz.ts` `targetLevel`) gives the org's owners and admins `manage`, a member `view`
+  (`operate` while `membersCreateWorkspaces`), a guest or an outsider nothing; the instance's admins keep `manage` on every target (the
+  Admin console runs them all, `/admin-api/targets` unchanged). An org that does not resolve leaves the target the platform's. Lists:
+  `GET /api/workspaces/targets?org=` and `GET /api/connect/targets?org=` keep the context's targets (an org's own; Personal the instance's,
+  which only admins see). The Targets page and the Workspaces page (New workspace) ask in the context. Tests: `orgs/orgDecisions.test.ts`,
+  `workspaces/kubeTargets.test.ts`.
 - **D6, built.** The Home and Glance layouts are saved per person and org context on the server (`/api/layouts`, migration 910,
   `glance/layouts.ts`); the device's layout is copied up once on first load (docs/prd/glance-widgets.md §7). The btw panel's width stays a
   device preference (per person).

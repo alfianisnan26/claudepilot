@@ -284,6 +284,8 @@ export const api = {
   },
   workspaces: {
     targets: (fresh = false) => request<WorkspaceTarget[]>('GET', WORKSPACE_API.targets + (fresh ? '?fresh=1' : '')),
+    /** The targets of the app's context (D-111): what the Workspaces page and New workspace offer. */
+    targetsScoped: () => scopedList<WorkspaceTarget[]>(WORKSPACE_API.targets, (p) => request<WorkspaceTarget[]>('GET', p)),
     // Every list teaches the labels (T-42), so places that only hold a workspace id name it by its label.
     list: () =>
       scopedList<Workspace[]>(WORKSPACE_API.list, (p) => request<Workspace[]>('GET', p)).then((list) => (rememberWorkspaceLabels(list), list)),

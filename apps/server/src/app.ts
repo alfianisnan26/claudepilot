@@ -1071,7 +1071,13 @@ export function createApp(
   useWorkspaceAlias(refOf);
   const refToView = workspaceRefGuard('view', refOf);
   const refToOperate = workspaceRefGuard('operate', refOf);
-  ws.get('/targets', async (c) => c.json(success(visible(actorOf(c), 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id))));
+  // `?org=` (D-111): an org's targets in its context; Personal the instance's (admins see them); none is wider than `visible`.
+  ws.get('/targets', async (c) => {
+    const actor = actorOf(c);
+    const seen = visible(actor, 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id);
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    return c.json(success(inScope ? seen.filter((t) => inScope({ type: 'target', id: t.id })) : seen));
+  });
   ws.get('/usage', async (c) => c.json(success(visible(actorOf(c), 'workspace', await workspaces.usage(), (u) => u.id))));
   // The labels of renamed workspaces (T-42), from the records only: the app learns them once, so every place that holds an id shows the label.
   ws.get('/labels', (c) => {

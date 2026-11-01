@@ -98,7 +98,7 @@ export function WorkspacesPage() {
   const load = useCallback(async () => {
     setLoadFailed(false);
     try {
-      const [t] = await Promise.all([api.workspaces.targets(), loadList()]);
+      const [t] = await Promise.all([api.workspaces.targetsScoped(), loadList()]);
       setTargets(t);
     } catch {
       setLoadFailed(true);

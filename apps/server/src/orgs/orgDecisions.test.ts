@@ -10,6 +10,9 @@ import { Hono } from 'hono';
 import { registerOwnerResolvers } from '../authz/owners.js';
 import { can, clearResolvers, useAccountRoles, useOrgAuthority, type AccountRoleOf } from '../authz/seam.js';
 import type { JsonFile } from '../jsonFile.js';
+import { orgScopeFilter } from '../authz/orgScope.js';
+import { registerConnectResolvers } from '../connect/authz.js';
+import type { Registry } from '../connect/registry.js';
 import { scopeSets, workspaceScope } from '../pools/scope.js';
 import { createSchedulesRoutes } from '../schedules/routes.js';
 import { Store } from '../store/store.js';
@@ -24,6 +27,7 @@ const ADA = 'u_Ada00000111' as UserId; // org admin, an admin account
 const MEL = 'u_Mel00000111' as UserId; // org member
 const GUS = 'u_Gus00000111' as UserId; // org guest
 const OUT = 'u_Out00000111' as UserId; // not in the org
+const BOB = 'u_Bob00000111' as UserId; // org admin, a member account (no instance rights)
 
 let store: Store;
 let m: OrgsModule;
@@ -67,7 +71,7 @@ before(async () => {
   const db = store.db!;
   addUser(OWNER, 'admin');
   addUser(ADA, 'admin');
-  for (const u of [MEL, GUS, OUT]) addUser(u, 'member');
+  for (const u of [MEL, GUS, OUT, BOB]) addUser(u, 'member');
   restoreRoles = useAccountRoles((id) => {
     const r = db.prepare('SELECT role, state FROM users WHERE id = ?').get(id) as { role: 'admin' | 'member'; state: string } | undefined;
     return r ? (r.state === 'active' ? r.role : 'disabled') : null;
@@ -85,6 +89,7 @@ before(async () => {
   m.orgs.admit(orgId, ADA, 'admin', 'invite', 'test');
   m.orgs.admit(orgId, MEL, 'member', 'invite', 'test');
   m.orgs.admit(orgId, GUS, 'guest', 'invite', 'test');
+  m.orgs.admit(orgId, BOB, 'admin', 'invite', 'test');
   // Another org: Out owns it, the founding user is not in it.
   otherOrg = m.orgs.create(person(OWNER), { name: 'Other', slug: 'other' }).id;
   m.orgs.admit(otherOrg, OUT, 'owner', 'invite', 'test');
@@ -239,4 +244,36 @@ test('Schedules: a trigger follows its workspace’s org; the portal’s own loo
   assert.deepEqual(await get(`?org=${orgId}`), ['trigger:a']);
   assert.deepEqual(await get('?org=personal'), ['loop:tickets', 'trigger:b', 'helper:x']);
   assert.deepEqual(await get(`?org=${otherOrg}`), [], 'an org the caller is not in: empty');
+});
+
+test('targets per org (owner 2026-11-01): an org’s target is managed by its owners and admins, viewed by members (operated under the policy); the instance’s are admins’; lists follow the context', () => {
+  let membersCreate = false;
+  registerConnectResolvers({
+    registry: { target: () => undefined } as unknown as Registry,
+    scannedIds: () => ['docker', 'acme-k8s', 'typo-k8s'],
+    targetOrg: (id) => (id === 'acme-k8s' ? 'acme' : id === 'typo-k8s' ? 'nosuchorg' : null),
+    membersCreate: () => membersCreate,
+  });
+  const ACME = objectRef('target', 'acme-k8s');
+  const DOCKER = objectRef('target', 'docker');
+  assert.equal(level(BOB, ACME), 'manage', 'the org’s admin (a slug names the org)');
+  assert.equal(level(BOB, DOCKER), 'none', 'the instance’s target: admins only');
+  assert.equal(level(MEL, ACME), 'view', 'a member sees it, read-only');
+  membersCreate = true;
+  assert.equal(level(MEL, ACME), 'operate', 'and creates there under the policy');
+  membersCreate = false;
+  assert.equal(level(GUS, ACME), 'none');
+  assert.equal(level(OUT, ACME), 'none');
+  assert.equal(level(OWNER, ACME), 'manage');
+  assert.equal(level(ADA, DOCKER), 'manage', 'an instance admin keeps every target (the Admin console runs them all)');
+  assert.equal(level(BOB, objectRef('target', 'typo-k8s')), 'none', 'an org that does not resolve: the platform’s, never wider');
+  const keep = (who: UserId, scope: Parameters<typeof orgScopeFilter>[1]) => {
+    const f = orgScopeFilter(person(who), scope)!;
+    return ['docker', 'acme-k8s', 'typo-k8s'].filter((id) => can(person(who), 'view', objectRef('target', id)).allow && f(objectRef('target', id)));
+  };
+  assert.deepEqual(keep(OWNER, { kind: 'org', id: orgId }), ['acme-k8s'], 'an org’s context: its targets only');
+  assert.deepEqual(keep(OWNER, { kind: 'personal' }), ['docker', 'typo-k8s'], 'Personal: the instance’s, for an admin');
+  assert.deepEqual(keep(MEL, { kind: 'org', id: orgId }), ['acme-k8s']);
+  assert.deepEqual(keep(MEL, { kind: 'personal' }), [], 'a member never sees the instance’s');
+  assert.deepEqual(keep(OUT, { kind: 'org', id: orgId }), []);
 });

@@ -11,10 +11,12 @@
 // of a `kubernetes.io/hostname` in nodeSelector), cpus, memoryMb (the limits a create that names none gets, and the dialog's preset),
 // cpuRequest, memoryRequest (what a pod reserves, at most its limits; replace PORTAL_K8S_CPU_REQUEST / PORTAL_K8S_MEMORY_REQUEST), storage,
 // storageClass, image (an image reference; replaces PORTAL_K8S_IMAGE for this target), imagePullSecret (a Secret name in the target's
-// namespace; replaces PORTAL_K8S_IMAGE_PULL_SECRET). Anything else is refused, like a malformed value: the portal stops at start with the reason
+// namespace; replaces PORTAL_K8S_IMAGE_PULL_SECRET), org (D-111, owner 2026-11-01 "target should also be per org": the organization that owns the
+// target, by its id `org_…` or its slug; its owners and admins manage it, the Targets page lists it in that org's context; read through the
+// `target` resolver, connect/authz.ts). Anything else is refused, like a malformed value: the portal stops at start with the reason
 // (as PORTAL_K8S_NODE_SELECTOR does), so a typo never silently drops an org's workspaces.
 
-import { connectTargetIdProblem } from '@portal/contracts';
+import { connectTargetIdProblem, isOrgId, ORG_SLUG_PATTERN } from '@portal/contracts';
 import { PLAIN_NAME } from '../names.js';
 import type { KubernetesOptions } from './kubernetes.js';
 import { parseNodeSelector } from './nodeSelector.js';
@@ -38,9 +40,13 @@ export interface KubeTargetSpec {
   image?: string;
   /** The pull Secret for it, in the target's namespace; absent: PORTAL_K8S_IMAGE_PULL_SECRET. */
   imagePullSecret?: string;
+  /** The organization that owns it (an org id or slug, D-111); absent: the instance's (admins). */
+  org?: string;
 }
 
-const KEYS = new Set(['id', 'namespace', 'label', 'nodeSelector', 'preferredNodes', 'cpus', 'memoryMb', 'cpuRequest', 'memoryRequest', 'storage', 'storageClass', 'image', 'imagePullSecret']);
+const KEYS = new Set(['id', 'namespace', 'label', 'nodeSelector', 'preferredNodes', 'cpus', 'memoryMb', 'cpuRequest', 'memoryRequest', 'storage', 'storageClass', 'image', 'imagePullSecret', 'org']);
+/** An org id or an org slug. */
+const isOrgRef = (v: unknown): boolean => typeof v === 'string' && (isOrgId(v) || ORG_SLUG_PATTERN.test(v));
 /** A namespace or a storage class: a DNS label, as the API server wants. */
 const DNS_LABEL = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 /** A Secret name: a DNS subdomain. */
@@ -153,6 +159,10 @@ export function parseKubeTargets(text: string | undefined, taken: { namespaces?:
     if (e.imagePullSecret !== undefined) {
       if (typeof e.imagePullSecret !== 'string' || !DNS_SUBDOMAIN.test(e.imagePullSecret)) fail(`${named}: "imagePullSecret" is a Secret name.`);
       spec.imagePullSecret = e.imagePullSecret as string;
+    }
+    if (e.org !== undefined) {
+      if (!isOrgRef(e.org)) fail(`${named}: "org" is an organization's id (org_…) or slug.`);
+      spec.org = e.org as string;
     }
     return spec;
   });
