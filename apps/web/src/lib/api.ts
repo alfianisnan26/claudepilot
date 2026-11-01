@@ -8,6 +8,11 @@ import {
   API,
   VSCODE_API,
   type VscodePending,
+  type AcceptedOrgInvitation,
+  type AcceptOrgInvitationRequest,
+  type CreatedOrgInvitation,
+  type CreateOrgInvitationRequest,
+  type OrgInvitation,
   POOLS_API,
   WORKSPACE_API,
   type AssignPoolResult,
@@ -281,6 +286,11 @@ export const api = {
     setRole: (id: string, userId: string, body: ChangeOrgMemberRoleRequest) => request<OrgMember[]>('PATCH', ORGS_API.member(id, userId), body),
     remove: (id: string, userId: string) => request<{ removed: true }>('DELETE', ORGS_API.member(id, userId)),
     leave: (id: string) => request<{ left: true }>('POST', ORGS_API.leave(id)),
+    /** Slice 8: invitations (the code is answered once, on create), accepting one, suspension and deletion. */
+    invitations: (id: string) => request<OrgInvitation[]>('GET', ORGS_API.invitations(id)),
+    invite: (id: string, body: CreateOrgInvitationRequest) => request<CreatedOrgInvitation>('POST', ORGS_API.invitations(id), body),
+    revokeInvitation: (id: string, invitationId: string) => request<{ revoked: true }>('DELETE', ORGS_API.invitation(id, invitationId)),
+    acceptInvitation: (body: AcceptOrgInvitationRequest) => request<AcceptedOrgInvitation>('POST', ORGS_API.acceptInvitation, body),
   },
   /** Multi-assignment pools (secrets & env, skillsets, MCP sets): one API for every type. */
   pools: {

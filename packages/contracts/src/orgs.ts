@@ -207,8 +207,8 @@ export const ORG_INVITATION_LIMITS = {
 /** An org that is deleted stays `deleting` this long (it can be seen by nobody), then it is purged. */
 export const ORG_DELETE_GRACE_MS = 30 * 24 * 60 * 60_000;
 
-/** The web page that accepts an invitation; the code is in the link's FRAGMENT (`/org-invite#<code>`), so it is never sent in a request line. */
-export const ORG_INVITE_PATH = '/org-invite';
+/** The web page that accepts an invitation; the code is in the link's FRAGMENT (`/admin/org-invite#<code>`), so it is never sent in a request line. */
+export const ORG_INVITE_PATH = '/admin/org-invite';
 
 /** Never `owner`: ownership is transferred, not invited (§6.8). */
 export type OrgInvitationRole = Exclude<OrgRole, 'owner'>;

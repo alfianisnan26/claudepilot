@@ -1,7 +1,7 @@
 // Organizations slice 8: invitations (docs/prd/organizations.md §6.8, §13.2 row 8). Read this header before calling it.
 //
 // - An invitation names an email (normalized) and a role (never `owner`: ownership is transferred, not invited). No mail is sent: the
-//   inviter copies a link whose FRAGMENT carries the code (`/org-invite#<code>`, Identity D7), so the code never travels in a request line or
+//   inviter copies a link whose FRAGMENT carries the code (`/admin/org-invite#<code>`, Identity D7), so the code never travels in a request line or
 //   a log. Only the code's sha256 is stored; the code is answered once, on create.
 // - Who invites: the org's owners and admins (manage), and members when the policy `membersMayInvite` is on; never a guest, never a token
 //   or an agent, never into a suspended org. Nobody invites to a role above their own.
