@@ -312,7 +312,8 @@ export class OrgsService {
         db.exec('ROLLBACK');
         throw e;
       }
-      this.#record('org.updated', actor, id, actorUserId(actor), { policies: policyChange });
+      // Flat (the audit keeps one level): which keys changed, and each new value.
+      this.#record('org.updated', actor, id, actorUserId(actor), { policies: Object.keys(policyChange), ...policyChange });
     }
     return this.get(actor, id);
   }

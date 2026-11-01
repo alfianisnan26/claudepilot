@@ -85,8 +85,11 @@ test('policies: an owner sets the three keys; they merge into what is stored (re
   assert.equal(stored(org).membersMayInvite, true, 'the earlier change stays');
   const rows = m.orgs.audit(person(ALICE), org, { kind: 'org.updated' });
   assert.deepEqual(
-    rows.map((r) => r.detail.policies),
-    [{ membersCreateTeams: false }, { membersMayInvite: true, externalShares: true }],
+    rows.map((r) => [r.detail.policies, r.detail.membersMayInvite, r.detail.membersCreateTeams, r.detail.externalShares]),
+    [
+      [['membersCreateTeams'], undefined, false, undefined],
+      [['membersMayInvite', 'externalShares'], true, undefined, true],
+    ],
     'one row per change, newest first, naming only what changed',
   );
 });
