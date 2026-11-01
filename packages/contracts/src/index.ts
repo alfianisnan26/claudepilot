@@ -47,6 +47,7 @@ export * from './authz.js';
 export * from './identity.js';
 export * from './sharing.js';
 export * from './teams.js';
+export * from './orgs.js';
 export * from './codespaces.js';
 export * from './schedules.js';
 export * from './vscode.js';

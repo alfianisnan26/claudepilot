@@ -123,6 +123,7 @@ import { createAttentionRoutes, type AttentionRegistry } from './attention/index
 import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
+import { createOrgRoutes, createOrgs } from './orgs/index.js';
 import type { Platform } from './platform/index.js';
 import { declareAllPolicies } from './authz/declarations.js';
 import { enforceRoutePolicy, useWorkspaceAlias } from './authz/routeGuard.js';
@@ -1387,6 +1388,15 @@ export function createApp(
     cs.use(requireSession);
     cs.route('/', createCodespacesRoutes(codespaces));
     app.route('/api/codespaces', cs);
+  }
+
+  // Organizations slice 3 (docs/prd/organizations.md §10): my orgs, create (the ability orgs.create or an instance admin), members and roles.
+  // The org service registers the `org` resolver: every right on an org is membership, read on every call; a non-member gets the same 404.
+  {
+    const og = new Hono<Env>();
+    og.use(requireSession);
+    og.route('/', createOrgRoutes(createOrgs({ store }).orgs));
+    app.route('/api/orgs', og);
   }
 
   // Claude usage: the plan limits of each Claude, read from Claude Code itself (docs/prd/claude-usage.md).

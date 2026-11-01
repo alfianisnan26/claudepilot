@@ -91,6 +91,12 @@ export interface ObjectResolver {
   resolve(id: string, poolType?: ObjectRef['poolType']): ResolvedObject | null;
   /** The ids of this type a user owns: for off-boarding, counts and "nothing left unowned" checks. */
   ownedBy?(userId: UserId): string[];
+  /**
+   * Organizations slice 3: for a type whose level comes from MEMBERSHIP, not from an owner (an `org`: owner and admin manage, member and guest
+   * view). Given, it alone decides what the user holds on a resolved object: no owner rule, no founding-user rights for an admin account, no
+   * public level. Read on every decision, never cached across calls (organizations §6.5, invariant 6).
+   */
+  levelFor?(found: ResolvedObject, userId: UserId): Level;
 }
 
 const resolvers = new Map<ObjectType, ObjectResolver>();
@@ -99,7 +105,7 @@ const resolvers = new Map<ObjectType, ObjectResolver>();
  * instead of the single-owner fallback that gives the founding user everything: a ticket bucket another person owns must never open to the
  * owner because the resolver was not registered yet (fail closed). The tickets service registers its own when it is made.
  */
-const RESOLVER_REQUIRED = new Set<ObjectType>(['ticket_bucket']);
+const RESOLVER_REQUIRED = new Set<ObjectType>(['ticket_bucket', 'org']);
 /**
  * Organizations slice 1 (P3): the owner resolvers (authz/owners.ts) mark their types required when they are registered at start-up, so from then
  * on a type whose resolver is missing refuses (not found) instead of answering the founding user. Only ever adds; `clearResolvers` keeps the
@@ -285,7 +291,7 @@ export const singleOwner: Authz = {
       cap = 'operate';
       if (object.type === 'session' && object.id !== actor.sessionId) return deny('agent_box');
       if (object.type === 'workspace' && object.id !== actor.workspaceId) return deny('agent_box');
-      if (['platform', 'user', 'team', 'personal', 'target'].includes(object.type)) return deny('agent_box');
+      if (['platform', 'user', 'team', 'org', 'personal', 'target'].includes(object.type)) return deny('agent_box');
     }
 
     // What the user holds: by ownership where the type has a resolver, else everything for the one owner. An active admin account also holds
@@ -298,10 +304,13 @@ export const singleOwner: Authz = {
     else {
       const found = resolver.resolve(object.id, object.poolType);
       if (!found) return deny('not_found');
-      if (found.owner === null) return deny('unowned');
-      const holds = (u: UserId) => (found.owner?.kind === 'user' && found.owner.id === u) || (found.owner?.kind === 'platform' && u === FOUNDING_USER_ID);
-      const own = holds(userId) || (founderToo && holds(FOUNDING_USER_ID));
-      held = maxLevel(own ? 'manage' : 'none', found.publicLevel ?? 'none');
+      if (resolver.levelFor) held = resolver.levelFor(found, userId);
+      else if (found.owner === null) return deny('unowned');
+      else {
+        const holds = (u: UserId) => (found.owner?.kind === 'user' && found.owner.id === u) || (found.owner?.kind === 'platform' && u === FOUNDING_USER_ID);
+        const own = holds(userId) || (founderToo && holds(FOUNDING_USER_ID));
+        held = maxLevel(own ? 'manage' : 'none', found.publicLevel ?? 'none');
+      }
     }
 
     const level = minLevel(held, cap);
@@ -391,7 +400,8 @@ export function visible<T>(actor: Actor, type: ObjectType, rows: readonly T[], i
  * It does NOT ask the type's resolver, unlike `visible()` (which only takes its fast path when no resolver is registered for the type). It is
  * sound because a resolver's owner defaults to the founding user, who is then the platform admin and holds `manage`. A resolver that denies
  * the founding user would make the SQL count wrong: ci/runsPage.test.ts ("seesEverything agrees with visible()") fails then, and this
- * function must take the resolver into account before the change lands.
+ * function must take the resolver into account before the change lands. An `org` is such a type (its level is membership only), so an org
+ * list never uses this.
  */
 export function seesEverything(actor: Actor): boolean {
   if (actor.kind === 'system') return true;
