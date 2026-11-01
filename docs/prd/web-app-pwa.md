@@ -561,7 +561,15 @@ Lab budgets, as the portal has no field data: Lighthouse's mobile profile, an em
 | Lighthouse accessibility | ≥ 0.95 on every route | Lighthouse | Fails the build |
 | JS heap | ≤ 150 MB | CDP after replaying an hour of Monitor and a streaming session at 10× speed | Warns |
 
-Today: 241 KB gzip in one chunk (xterm about 88 KB), CSS 12 KB, the Latin font 27 KB. Code splitting
+**Measured 2026-11-01 (owner request, performance; `node tools/qa/perf-web.mjs`, browser runs at 1280 px, 4x CPU, median of 5):**
+every page of the app frame but Home now loads on first use (`apps/web/src/app/lazyPage.tsx`, a pool type's own pages through
+`features/pools/PoolRoutes.tsx`), and the other pages' chunks are fetched while the browser is idle after the first page, so a tap
+still opens a page at once (`tools/qa/lazy-pages.mjs` opens every page). Initial scripts 1,708 KB (516 KB gzip) to 724 KB (234 KB
+gzip); the main chunk 1,259 KB (372 KB gzip) to 278 KB (91 KB gzip); first Home card 869 to 735 ms unthrottled and 1,920 to 1,227 ms
+on `--net 4g`; first contentful paint 1,388 to 844 ms on 4g. Still over the 170 KB Home budget: React 69, Motion 42 and the
+router with icons 30 KB gzip load first, and the glance roots (84 KB of the main chunk) mount on every page.
+
+Before that: 241 KB gzip in one chunk (xterm about 88 KB), CSS 12 KB, the Latin font 27 KB. Code splitting
 keeps xterm, markdown, highlighting and charts on their routes. Motion's `m` with `LazyMotion`, features
 loaded after first paint (the nav pill's `layoutId` needs `domMax`), keeps about 29 KB out of the first load ([Motion](https://motion.dev/docs/react-reduce-bundle-size)).
 Hidden tabs don't poll; Chat owns streaming budgets; Playwright tests install, as Lighthouse [dropped its PWA category](https://github.com/GoogleChrome/lighthouse/releases/tag/v12.0.0).

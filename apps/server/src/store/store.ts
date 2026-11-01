@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, constants as fsConstants, copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
+import { Worker } from 'node:worker_threads';
 import { ENCRYPTED_COLUMNS, MIGRATIONS, type EncryptedColumn, type Migration } from './migrations.js';
 
 /** portal_meta key holding the versions of every migration applied, as a JSON array. */
@@ -82,6 +83,38 @@ export interface StoreOptions {
   migrations?: Migration[];
   encryptedColumns?: EncryptedColumn[];
   now?: () => Date;
+  /**
+   * The portal's boot (owner request 2026-11-01, performance): after a clean shutdown the full integrity check (it reads the whole
+   * database, minutes on a busy disk) is left to `checkIntegrity()`, which the portal runs off the main thread once it listens; it
+   * freezes the store the same way if the check fails. After an unclean one (a write-ahead log left behind: a crash, an OOM kill, a
+   * SIGKILL) the check still runs before anything else, as without this option.
+   */
+  deferIntegrityCheck?: boolean;
+}
+
+/** The integrity check in a worker thread: its own read-only connection (WAL readers do not block the portal's writes). */
+const INTEGRITY_WORKER = `
+const { parentPort, workerData } = require('node:worker_threads');
+const { DatabaseSync } = require('node:sqlite');
+let db;
+try {
+  db = new DatabaseSync(workerData.path, { readOnly: true, timeout: 5000 });
+  const rows = db.prepare('PRAGMA quick_check').all();
+  parentPort.postMessage(rows.length === 1 ? String(Object.values(rows[0])[0]) : rows.map((r) => String(Object.values(r)[0])).slice(0, 5).join('; '));
+} catch (e) {
+  parentPort.postMessage('unreadable: ' + (e && e.message));
+} finally {
+  try { db && db.close(); } catch {}
+}
+`;
+
+/** A write-ahead log with content beside the database: the last process to use it did not close it (SQLite removes it on a clean close). */
+function uncleanShutdown(path: string): boolean {
+  try {
+    return statSync(`${path}-wal`).size > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -100,6 +133,10 @@ export class Store {
   #portalId: string | null = null;
   #schemaVersion: number | null = null;
   #keySource: KeySource | null = null;
+  /** The integrity check: run at open (`ok`), left to `checkIntegrity()` (`deferred`), or not run (no database). */
+  #integrity: 'none' | 'deferred' | 'ok' = 'none';
+  /** What the open did and how long each slow step took (the boot timeline logs it). */
+  #openSteps: string[] = [];
 
   private constructor(
     readonly dataDir: string,
@@ -114,6 +151,7 @@ export class Store {
       migrations: options.migrations ?? MIGRATIONS,
       encryptedColumns: options.encryptedColumns ?? ENCRYPTED_COLUMNS,
       now: options.now ?? (() => new Date()),
+      deferIntegrityCheck: options.deferIntegrityCheck ?? false,
     });
     await store.#open(options.secretKey, options.keyError);
     if (store.#secrets) store.#keySource = options.keySource ?? 'env';
@@ -237,16 +275,28 @@ export class Store {
     ensurePrivateDir(this.dataDir);
     ensurePrivateDir(this.backupsDir);
     const existed = existsSync(this.path) && statSync(this.path).size > 0;
+    // Checked before the open, which replays (and may then remove) a log that was left behind.
+    const deferCheck = this.opts.deferIntegrityCheck && existed && !uncleanShutdown(this.path);
 
     let db: DatabaseSync | undefined;
     try {
       db = new DatabaseSync(this.path, { enableForeignKeyConstraints: true, timeout: 5000 });
       if (!existed) chmodSync(this.path, 0o600);
-      const check = db.prepare('PRAGMA quick_check').all();
-      const result = check.length === 1 ? Object.values(check[0]!)[0] : undefined;
-      if (result !== 'ok') {
-        db.close();
-        return this.#freeze('db-corrupt', `The database failed its integrity check (${String(result ?? 'no result')}).`);
+      if (deferCheck) {
+        // Still refuse what is plainly not a readable database before migrating it: the schema must parse.
+        db.prepare('SELECT count(*) FROM sqlite_master').get();
+        this.#integrity = 'deferred';
+        this.#openSteps.push('integrity check after listen');
+      } else {
+        const t = performance.now();
+        const check = db.prepare('PRAGMA quick_check').all();
+        this.#openSteps.push(`integrity check ${Math.round(performance.now() - t)} ms`);
+        const result = check.length === 1 ? Object.values(check[0]!)[0] : undefined;
+        if (result !== 'ok') {
+          db.close();
+          return this.#freeze('db-corrupt', `The database failed its integrity check (${String(result ?? 'no result')}).`);
+        }
+        this.#integrity = 'ok';
       }
       // WAL with synchronous NORMAL (T-365): a commit no longer waits for an fsync, only a checkpoint does. The database shares its ext4
       // journal with the workspace pods on the same node (one local-path disk), and with FULL every commit waited on their writes: the
@@ -282,7 +332,14 @@ export class Store {
     const pending = [...this.opts.migrations].sort((a, b) => a.version - b.version).filter((m) => !applied.has(m.version));
     if (pending.length) {
       try {
-        if (existed && version > 0) await this.backup('pre-migrate');
+        let t = performance.now();
+        if (existed && version > 0) {
+          await this.backup('pre-migrate');
+          this.#openSteps.push(`pre-migrate backup ${Math.round(performance.now() - t)} ms`);
+          t = performance.now();
+        }
+        this.#openSteps.push(`${pending.length} migration${pending.length === 1 ? '' : 's'}`);
+        const migrationsStep = this.#openSteps.length - 1;
         let high = version;
         for (const m of pending) {
           db.exec('BEGIN IMMEDIATE');
@@ -303,6 +360,7 @@ export class Store {
             throw new Error(`migration ${m.version} (${m.name}): ${(e as Error).message}`);
           }
         }
+        this.#openSteps[migrationsStep] += ` ${Math.round(performance.now() - t)} ms`;
       } catch (e) {
         this.#schemaVersion = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
         this.#portalId = this.#metaGet('portal_id');
@@ -416,14 +474,67 @@ export class Store {
     return this.deliveryAllowed;
   }
 
-  /** A consistent copy through SQLite's backup API, named `portal-<UTC stamp>-<kind>.db`, mode 0600. */
+  /** The open's slow steps and their times, e.g. `integrity check after listen, pre-migrate backup 812 ms, 1 migration 3 ms`. */
+  get openSteps(): string {
+    return this.#openSteps.join(', ');
+  }
+
+  /** Whether the integrity check was left for later (`deferIntegrityCheck` after a clean shutdown) and has not run yet. */
+  get integrityDeferred(): boolean {
+    return this.#integrity === 'deferred';
+  }
+
+  /**
+   * The integrity check left for later by `deferIntegrityCheck`: `PRAGMA quick_check` on its own read-only connection in a worker
+   * thread, so the event loop keeps answering while it reads the whole database. A failure freezes the store (`db-corrupt`) exactly as
+   * the check at open does. Resolves with SQLite's answer (`ok`, or what it found); does nothing when the check already ran.
+   */
+  async checkIntegrity(): Promise<string> {
+    if (this.#integrity !== 'deferred') return this.#integrity === 'ok' ? 'ok' : 'not checked';
+    const result = await new Promise<string>((resolve) => {
+      const worker = new Worker(INTEGRITY_WORKER, { eval: true, workerData: { path: this.path } });
+      let answered = false;
+      worker.once('message', (m: unknown) => {
+        answered = true;
+        resolve(String(m));
+      });
+      worker.once('error', (e) => !answered && resolve(`unreadable: ${e.message}`));
+      worker.once('exit', () => !answered && resolve('unreadable: the check stopped without an answer'));
+    });
+    this.#integrity = 'ok';
+    if (result !== 'ok') this.#freeze('db-corrupt', `The database failed its integrity check (${result}).`);
+    return result;
+  }
+
+  /**
+   * A consistent copy, named `portal-<UTC stamp>-<kind>.db`, mode 0600. The pre-migrate copy is taken while the store opens, before
+   * anything else uses the database (one portal per data dir holds the lock): the log is checkpointed into the file and the file copied
+   * by the kernel (a clone where the filesystem has one), about three times faster than the page-by-page backup API on a large
+   * database (scripts/perf-boot.mjs). If the checkpoint cannot finish (another process reading), it falls back to the backup API, which
+   * every other backup uses because it never blocks the portal's writes.
+   */
   async backup(kind: BackupKind): Promise<string> {
     if (!this.#db) throw new Error('The database is not open.');
     const file = join(this.backupsDir, `portal-${stamp(this.opts.now())}-${kind}.db`);
-    await backup(this.#db, file);
+    if (!(kind === 'pre-migrate' && this.#copyCheckpointed(file))) await backup(this.#db, file);
     finishBackup(file);
     this.#prune(kind);
     return file;
+  }
+
+  /** The checkpointed file copy behind the pre-migrate backup; false (nothing written) when the log could not be emptied into the file. */
+  #copyCheckpointed(file: string): boolean {
+    const row = this.#db!.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number } | undefined;
+    if (!row || row.busy !== 0 || row.log !== row.checkpointed) return false;
+    const part = `${file}.part`;
+    try {
+      copyFileSync(this.path, part, fsConstants.COPYFILE_FICLONE);
+      renameSync(part, file);
+      return true;
+    } catch {
+      rmSync(part, { force: true });
+      return false;
+    }
   }
 
   /** Takes the daily backup if the last one is a day old. */

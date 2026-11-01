@@ -54,10 +54,21 @@ the parts they share, so each pool PRD only describes its own content:
   experimental warning is silenced.
 - **Startup checks:** `PRAGMA quick_check`, a schema version no newer than the code, and the key
   check (§4.1). Any failure freezes delivery (§6.5). The store never falls back to empty on a read
-  error the way `JsonFile` does.
-- **Backups:** SQLite's backup API, before each migration (keep 3) and daily (keep 7), plus
-  `portal backup` / `portal restore` (§6.5). Backups contain secret columns still encrypted, so a
-  restore needs the key the backup was made with.
+  error the way `JsonFile` does. **Boot time (owner request 2026-11-01, performance):** `quick_check`
+  reads the whole database, so after a clean shutdown (no write-ahead log left beside `portal.db`, which
+  is what a release's SIGTERM leaves) the portal checks only that the schema reads, listens, and then
+  runs `quick_check` in a worker thread on its own read-only connection (`Store.checkIntegrity`); a
+  failure freezes delivery (`db-corrupt`) exactly as at open. After an unclean shutdown (a crash, an OOM
+  kill: the log is still there) the check runs before anything else, as before. The log line
+  `[boot] listening after N ms (cpu M ms)` and the `[store] ready (…)` steps give each boot's timeline;
+  `scripts/perf-boot.mjs` measures boot to listen on a large seeded database (budget 10 s).
+- **Backups:** before each migration (keep 3) and daily (keep 7), plus `portal backup` / `portal
+  restore` (§6.5). The pre-migrate copy is taken while the store opens, alone on the database: the log
+  is checkpointed into the file (`wal_checkpoint(TRUNCATE)`) and the file copied by the kernel (about
+  three times faster than the page-by-page backup API); when the checkpoint cannot finish (another
+  process reading) it uses SQLite's backup API, which every other backup uses. The first daily check
+  waits 5 minutes after a start, so a restarted portal is not copying the whole database while it starts.
+  Backups contain secret columns still encrypted, so a restore needs the key the backup was made with.
 - **Data dir:** `PORTAL_DATA_DIR` (exists today, default `<repo>/.data`). Created with mode `0700`, and
   files written with fsync then rename.
 - **The existing JSON file** for pending workspace creates stays as it is. Secrets and assignments
