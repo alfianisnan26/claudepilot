@@ -4,6 +4,7 @@
 // bump, which sessions can take it, the limits).
 
 import { objectRef, type RoutePolicies, type RoutePolicy, type ToolPolicies } from '@portal/contracts';
+import { ownerFromColumns } from '../authz/owners.js';
 import { declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
 
 const ticket = (verb: 'view' | 'operate') => ({ type: 'ticket' as const, verb, from: 'path' as const, param: 'id' });
@@ -92,18 +93,19 @@ export const TICKET_BUCKET_TOOL_POLICIES = {
 } satisfies ToolPolicies;
 
 /** The seam's resolver for `ticket_bucket`: its owner, read now (a removed bucket is not found). */
-export function registerTicketBucketAuthz(tickets: { bucketOwner(key: string): string | null }): void {
+export function registerTicketBucketAuthz(tickets: { bucketOwner(key: string): string | null; bucketOwnerOf?(key: string): { kind: string; id: string } | null }): void {
   registerResolver({
     type: 'ticket_bucket',
     resolve(id) {
       const key = id.trim().toUpperCase();
-      let owner: string | null;
+      let owner: { kind: string; id: string } | null;
       try {
-        owner = tickets.bucketOwner(key);
+        // Organizations slice 5: a bucket may be an org's (owner_kind, migration 465); an owner the seam cannot read is unowned (404).
+        owner = tickets.bucketOwnerOf ? tickets.bucketOwnerOf(key) : ((id: string | null) => (id ? { kind: 'user', id } : null))(tickets.bucketOwner(key));
       } catch {
         return null; // no database: nothing to decide on, the same not found
       }
-      return owner ? { ref: objectRef('ticket_bucket', key), owner: { kind: 'user', id: owner } } : null;
+      return owner ? { ref: objectRef('ticket_bucket', key), owner: ownerFromColumns(owner.kind, owner.id) } : null;
     },
   });
 }

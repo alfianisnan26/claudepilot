@@ -476,6 +476,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/workspaces/:ref/resources` | obj(workspace view path ref) | CPU and memory of a Kubernetes workspace (T-98) |
 | `GET /api/workspaces/:target/:name/resources` | obj(workspace view path target+name) |  |
 | `PATCH /api/workspaces/:ref/resources` | obj(workspace operate path ref) | never an agent's (the manager refuses it: a restart ends its session); audited |
+| `POST /api/workspaces/:ref/move-to-org` | obj(workspace manage path ref) | Move to organization (organizations slice 5): the service also needs member or up in the org of the body (else the org's 404) and re-consents the credential sets; audit object.transferred |
 | `PATCH /api/workspaces/:target/:name/resources` | obj(workspace operate path target+name) |  |
 | `GET /api/workspaces/:target/:name/claude-version` | obj(workspace view path target+name) | claude-version-pinning PRD §17 |
 | `GET /api/workspaces/:target/:name/claude-version/history` | obj(workspace view path target+name) |  |

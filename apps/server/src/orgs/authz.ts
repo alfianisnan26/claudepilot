@@ -48,8 +48,25 @@ export const ORG_ROUTE_POLICIES: RoutePolicies = {
   'PATCH /api/orgs/:id/members/:uid': { ...org('manage'), audit: 'org.member_role_changed' },
   'DELETE /api/orgs/:id/members/:uid': { ...org('manage'), audit: 'org.member_removed' },
   'POST /api/orgs/:id/leave': { ...org('view'), audit: 'org.member_left' },
+  // Slice 5, break-glass (§6.7): the banner reads the signed-in person's own open entries (none for anyone but an instance admin); the org's
+  // entries and access rows, and ending one early, are its OWNERS' (the service checks the role on top of the declared manage).
+  'GET /api/orgs/break-glass': { kind: 'self' },
+  'GET /api/orgs/:id/break-glass': org('manage'),
+  'POST /api/orgs/:id/break-glass/:entryId/end': { ...org('manage'), audit: 'org.break_glass_ended' },
+};
+
+/**
+ * Slice 5, Move to organization (§6.4): `manage` on the object, declared here and asked again by the service, which also needs an active
+ * role of member or up in the org named in the body (not declared: the body's org is a service check, so a missing org and one the person
+ * is not in answer the same 404). Each route is mounted on its object's router (workspaces, tickets, knowledge) by app.ts.
+ */
+export const ORG_TRANSFER_POLICIES: RoutePolicies = {
+  'POST /api/workspaces/:ref/move-to-org': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'ref' }], audit: 'object.transferred' },
+  'POST /api/tickets/buckets/:key/move-to-org': { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'manage', from: 'path', param: 'key' }], audit: 'object.transferred' },
+  'POST /api/knowledge/vaults/:id/move-to-org': { kind: 'objects', checks: [{ type: 'vault', verb: 'manage', from: 'path', param: 'id' }], audit: 'object.transferred' },
 };
 
 export function declareOrgPolicies(): void {
   declarePolicies('orgs', ORG_ROUTE_POLICIES);
+  declarePolicies('orgs', ORG_TRANSFER_POLICIES);
 }

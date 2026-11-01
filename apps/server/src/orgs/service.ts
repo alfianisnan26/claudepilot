@@ -117,6 +117,18 @@ export class OrgsService {
     }
   }
 
+  /** The org's ACTIVE owners (who is told about its objects and a break-glass entry); empty when unreadable. */
+  activeOwners(id: string): UserId[] {
+    if (!isOrgId(id)) return [];
+    try {
+      return ((this.#db()?.prepare("SELECT user_id FROM org_members WHERE org_id = ? AND role = 'owner' AND state = 'active' ORDER BY added_at, user_id").all(id) ?? []) as { user_id: unknown }[])
+        .map((r) => r.user_id)
+        .filter((u): u is UserId => isUserId(u));
+    } catch {
+      return [];
+    }
+  }
+
   /* ---------- A member's view ---------- */
 
   #row(id: string): OrgRow | null {

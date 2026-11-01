@@ -45,6 +45,13 @@ export const ADMIN_API = {
   orgs: '/admin-api/orgs',
   /** POST `AdminRecoverOwnerRequest` (step-up): makes an active account the owner of an org that has none. */
   recoverOwner: (id: OrgId) => `/admin-api/orgs/${u(id)}/recover-owner`,
+  /**
+   * Slice 5 (§6.7, OD-4). POST `StartBreakGlassRequest` (step-up) -> `BreakGlassEntry`: one hour of `manage` on the org's content in the main
+   * portal, never on personal objects; notifies the org's owners. DELETE: ends the caller's open entry on that org early.
+   */
+  breakGlass: (id: OrgId) => `/admin-api/orgs/${u(id)}/break-glass`,
+  /** GET -> `BreakGlassEntry[]`: every entry, newest first. */
+  breakGlassList: '/admin-api/break-glass',
   /** GET -> `SsoProvider[]` (read only; no secret). */
   sso: '/admin-api/sso',
   /** GET ?kind&severity&subject&before&limit -> `PlatformAuditEntry[]` (newest first). */

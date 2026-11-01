@@ -124,7 +124,7 @@ import { createAttentionRoutes, type AttentionRegistry } from './attention/index
 import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
-import { createOrgRoutes, createOrgs } from './orgs/index.js';
+import { createMoveToOrgRoute, createOrgRoutes, createOrgs } from './orgs/index.js';
 import { AdminHostGate, adminHostMiddleware, createAdminApp, type ConsoleApp } from './admin/index.js';
 import type { Platform } from './platform/index.js';
 import { declareAllPolicies } from './authz/declarations.js';
@@ -884,6 +884,34 @@ export function createApp(
   });
   app.route('/api/admin', admin);
 
+  // Organizations (docs/prd/organizations.md): made before the routers that carry its routes (Move to organization, slice 5). The org service
+  // registers the `org` resolver and installs the seam's OrgAuthority (org-owned objects, grants, break-glass), read on every call.
+  const orgsModule = createOrgs({
+    store,
+    // The consent screen of Move to organization: a workspace's credential sets (Secrets & env), and unassigning the ones not kept.
+    credentials: () => ({
+      list: (key) => poolService.assignmentsFor(key).filter((a) => a.type === 'secrets' && a.state === 'assigned').map((a) => ({ poolId: a.poolId, name: a.poolName })),
+      remove: (key, ids) => {
+        const keep = poolService.assignmentsFor(key).filter((a) => a.type === 'secrets' && a.state === 'assigned' && !ids.includes(a.poolId));
+        poolService.setAssignments(key, 'secrets', keep.map((a) => ({ poolId: a.poolId })));
+      },
+    }),
+    // A break-glass entry started: the org's owners hear of it (a 'security' notification; delivery checks each recipient again).
+    notifyBreakGlass: (owners, n) =>
+      void platform?.bus.emit({ kind: 'security', subject: { type: 'portal', id: `break-glass:${n.entryId}` }, facts: { org: n.orgName, admin: n.admin, until: n.expiresAt }, audience: owners }),
+  });
+  {
+    // Closes break-glass entries past their hour with their audit row (decisions never wait for it: they read the clock).
+    const sweep = setInterval(() => {
+      try {
+        orgsModule.breakGlass.sweep();
+      } catch (e) {
+        console.error(`[orgs] the break-glass sweep failed: ${(e as Error).message}`);
+      }
+    }, 60_000);
+    sweep.unref?.();
+  }
+
   declareWorkspacePolicies();
   const ws = new Hono<Env>();
   ws.use(requireSession);
@@ -1150,6 +1178,8 @@ export function createApp(
   if (claudeVersions) ws.route('/', createWorkspaceClaudeVersionRoutes(claudeVersions));
   // Relocation, the bulk form: a plan of sessions moves off this workspace (the platform admin; chat/relocateRoutes.ts).
   ws.route('/', createSessionRelocateRoutes(chatController));
+  // Organizations slice 5: Move to organization (manage on the workspace, member or up in the org).
+  ws.route('/', createMoveToOrgRoute(orgsModule.transfers, 'workspace', '/:ref/move-to-org', 'ref'));
   app.route('/api/workspaces', ws);
 
   const acc = new Hono<Env>();
@@ -1254,6 +1284,7 @@ export function createApp(
   if (knowledge) {
     const kg = new Hono<Env>();
     kg.use(requireSession);
+    kg.route('/', createMoveToOrgRoute(orgsModule.transfers, 'vault', '/vaults/:id/move-to-org', 'id'));
     kg.route('/', createKnowledgeRoutes(knowledge));
     app.route('/api/knowledge', kg);
   }
@@ -1338,6 +1369,7 @@ export function createApp(
   if (tickets) {
     const tk = new Hono<Env>();
     tk.use(requireSession);
+    tk.route('/', createMoveToOrgRoute(orgsModule.transfers, 'ticket_bucket', '/buckets/:key/move-to-org', 'key'));
     tk.route('/', createTicketRoutes(tickets));
     app.route('/api/tickets', tk);
   }
@@ -1402,11 +1434,10 @@ export function createApp(
 
   // Organizations slice 3 (docs/prd/organizations.md §10): my orgs, create (the ability orgs.create or an instance admin), members and roles.
   // The org service registers the `org` resolver: every right on an org is membership, read on every call; a non-member gets the same 404.
-  const orgsModule = createOrgs({ store });
   {
     const og = new Hono<Env>();
     og.use(requireSession);
-    og.route('/', createOrgRoutes(orgsModule.orgs));
+    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass));
     app.route('/api/orgs', og);
   }
   // Organizations slice 4 (§6.11): the Admin console, answered only on the admin host (the middleware at the top hands it those requests).
@@ -1419,6 +1450,7 @@ export function createApp(
       revokePortalSessions: (id) => portal.revokeUser(id),
       orgs: orgsModule.orgs,
       abilities: orgsModule.abilities,
+      breakGlass: orgsModule.breakGlass,
       sso,
       ssoRedirectUri: ssoOrigin ? `${ssoOrigin.replace(/\/+$/, '')}${SSO_API.callback}` : '',
       clientKey: (c) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy),

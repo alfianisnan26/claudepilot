@@ -2,11 +2,13 @@
 // middleware here: app.ts mounts this under `requireSession` at /api/orgs. Who is asking comes from the seam (`actorOf`) once per request;
 // the service decides every right (the org resolver through `can()`, the owner-only rules, the ability to create).
 
-import { success } from '@isnanme/core';
+import { AppError, success } from '@isnanme/core';
 import { Hono } from 'hono';
-import type { ChangeOrgMemberRoleRequest, CreateOrgRequest, UpdateOrgRequest } from '@portal/contracts';
+import type { ChangeOrgMemberRoleRequest, CreateOrgRequest, MoveToOrgRequest, OrgId, OrgTransferKind, UpdateOrgRequest } from '@portal/contracts';
 import { actorOf } from '../authz/seam.js';
+import type { BreakGlassService } from './breakGlass.js';
 import type { OrgsService } from './service.js';
+import type { OrgTransfers } from './transfer.js';
 
 async function body(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown>> {
   try {
@@ -17,8 +19,16 @@ async function body(c: { req: { json: () => Promise<unknown> } }): Promise<Recor
   }
 }
 
-export function createOrgRoutes(orgs: OrgsService): Hono {
+export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService): Hono {
   const r = new Hono();
+
+  // Slice 5: before `/:id`, so the banner's path is never read as an org id. Always registered (the route table does not depend on the
+  // wiring); without the service they answer 404.
+  const bg = (): BreakGlassService => {
+    if (!breakGlass) throw new AppError('NOT_FOUND', 'Not found.');
+    return breakGlass;
+  };
+  r.get('/break-glass', (c) => c.json(success(bg().mine(actorOf(c)))));
 
   r.get('/', (c) => c.json(success(orgs.mine(actorOf(c)))));
   r.post('/', async (c) => c.json(success(orgs.create(actorOf(c), (await body(c)) as Partial<CreateOrgRequest>)), 201));
@@ -39,5 +49,18 @@ export function createOrgRoutes(orgs: OrgsService): Hono {
     return c.json(success({ left: true }));
   });
 
+  r.get('/:id/break-glass', (c) => c.json(success(bg().forOrg(actorOf(c), c.req.param('id') as OrgId))));
+  r.post('/:id/break-glass/:entryId/end', (c) => c.json(success(bg().endByOrgOwner(actorOf(c), c.req.param('id') as OrgId, c.req.param('entryId')))));
+
+  return r;
+}
+
+/**
+ * Slice 5, Move to organization: `POST <path>/move-to-org` on the object's own router (app.ts mounts it on the workspaces router as
+ * `/:ref/move-to-org`, on the tickets router as `/buckets/:key/move-to-org`, on the knowledge router as `/vaults/:id/move-to-org`).
+ */
+export function createMoveToOrgRoute(transfers: OrgTransfers, kind: OrgTransferKind, path: string, param: string): Hono {
+  const r = new Hono();
+  r.post(path, async (c) => c.json(success(transfers.moveToOrg(actorOf(c), kind, c.req.param(param) ?? '', (await body(c)) as Partial<MoveToOrgRequest>))));
   return r;
 }

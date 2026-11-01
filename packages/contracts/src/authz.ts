@@ -47,8 +47,9 @@ export const levelAtLeast = (have: Level, need: Verb): boolean => LEVEL_RANK[hav
 export const maxLevel = (...levels: Level[]): Level => levels.reduce<Level>((a, b) => (LEVEL_RANK[b] > LEVEL_RANK[a] ? b : a), 'none');
 export const minLevel = (a: Level, b: Level): Level => (LEVEL_RANK[a] <= LEVEL_RANK[b] ? a : b);
 
-export type OwnerKind = 'user' | 'team' | 'platform';
-export type Owner = { kind: 'user'; id: UserId } | { kind: 'team'; id: TeamId } | { kind: 'platform' };
+/** Organizations slice 5 (docs/prd/organizations.md §6.3, §6.5): an org owns objects too; its owners and admins manage them, members hold only grants. */
+export type OwnerKind = 'user' | 'team' | 'org' | 'platform';
+export type Owner = { kind: 'user'; id: UserId } | { kind: 'team'; id: TeamId } | { kind: 'org'; id: OrgId } | { kind: 'platform' };
 
 /** A user's role on the platform. `admin` administers the platform; it grants no right on other users' objects (see the header). */
 export type UserRole = 'admin' | 'member';
@@ -121,29 +122,29 @@ export const OBJECT_TYPES: Record<ObjectType, ObjectTypeInfo> = {
   /** A place workspaces can run (Connect, Docker, This machine). Platform-owned; `operate` = place a workspace there. */
   target: { label: 'Target', owners: ['platform'], grants: true, inherit: 'none', id: 'the target id (docker, docker-host, local, …)' },
 
-  workspace: { label: 'Workspace', owners: ['user', 'team'], grants: true, inherit: 'none', id: '<target>/<name>' },
+  workspace: { label: 'Workspace', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: '<target>/<name>' },
   /** A Claude on a workspace: its Claude Code sign-in belongs to whoever signed it in. Using it needs `operate` on the workspace too. */
   claude: { label: 'Claude', owners: ['user'], grants: true, parent: 'workspace', inherit: 'guard', guard: 'operate', id: 'the workspace Claude id' },
   /** A chat session: private to its creator unless shared. Starting one needs `operate` on its workspace; the guard keeps it from outliving that right. */
   session: { label: 'Session', owners: ['user'], grants: true, parent: 'workspace', inherit: 'guard', guard: 'operate', id: 'the portal session id (an alias of a folded session resolves to it first)' },
   /** What lives in a workspace and is read through it (repositories, worktrees, CI runs and logs, the browser, terminals): the workspace's level. */
-  repo: { label: 'Repository', owners: ['user', 'team'], grants: false, parent: 'workspace', inherit: 'same', id: 'a repository id of the workspace' },
-  ci_repo: { label: 'CI remote', owners: ['user', 'team'], grants: false, parent: 'workspace', inherit: 'same', id: 'a CI repo id of the workspace' },
-  ci_run: { label: 'CI run', owners: ['user', 'team'], grants: false, parent: 'workspace', inherit: 'same', id: 'a CI run id of the workspace' },
+  repo: { label: 'Repository', owners: ['user', 'team', 'org'], grants: false, parent: 'workspace', inherit: 'same', id: 'a repository id of the workspace' },
+  ci_repo: { label: 'CI remote', owners: ['user', 'team', 'org'], grants: false, parent: 'workspace', inherit: 'same', id: 'a CI repo id of the workspace' },
+  ci_run: { label: 'CI run', owners: ['user', 'team', 'org'], grants: false, parent: 'workspace', inherit: 'same', id: 'a CI run id of the workspace' },
   terminal: { label: 'Terminal', owners: ['user'], grants: false, parent: 'workspace', inherit: 'guard', guard: 'operate', id: '<target>/<name>/<term>' },
-  browser: { label: 'Browser', owners: ['user', 'team'], grants: false, parent: 'workspace', inherit: 'same', id: '<target>/<name>' },
+  browser: { label: 'Browser', owners: ['user', 'team', 'org'], grants: false, parent: 'workspace', inherit: 'same', id: '<target>/<name>' },
 
-  ticket: { label: 'Ticket', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'T-<number>' },
+  ticket: { label: 'Ticket', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: 'T-<number>' },
   /** A bucket of tickets (T-1098): a project with its own id prefix. view = see it and its tickets; operate = file tickets in it; manage = change it. */
-  ticket_bucket: { label: 'Ticket bucket', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the bucket key (KONF)' },
+  ticket_bucket: { label: 'Ticket bucket', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: 'the bucket key (KONF)' },
   /** A set of any pool type (secrets, skillset, mcpset, persona, context, browser): `poolType` on the ref. `operate` = assign it to a workspace you manage. */
-  pool: { label: 'Set', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the pool id' },
+  pool: { label: 'Set', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: 'the pool id' },
   /** A Claude API key or a custom endpoint, and the account pools that group keys (Account Pool PRD). Using one delivers its key into workspaces. */
-  account: { label: 'Account', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the account id' },
-  endpoint: { label: 'Endpoint', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the endpoint id' },
-  account_pool: { label: 'Account pool', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the account pool id' },
+  account: { label: 'Account', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: 'the account id' },
+  endpoint: { label: 'Endpoint', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: 'the endpoint id' },
+  account_pool: { label: 'Account pool', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: 'the account pool id' },
   /** A knowledge vault. Its notes, history, graph and files take its level. */
-  vault: { label: 'Vault', owners: ['user', 'team'], grants: true, inherit: 'none', id: 'the vault id' },
+  vault: { label: 'Vault', owners: ['user', 'team', 'org'], grants: true, inherit: 'none', id: 'the vault id' },
 
   /** The reviewed library: MCP catalog entries and skills. Platform-owned and reviewed by admins; every active user may use what is approved. */
   mcp_entry: { label: 'MCP entry', owners: ['platform', 'user'], grants: false, inherit: 'none', public: 'operate', id: 'the catalog entry id' },
@@ -157,7 +158,7 @@ export const OBJECT_TYPES: Record<ObjectType, ObjectTypeInfo> = {
   /** A usage budget: its workspace's managers manage a workspace budget; admins manage the rest. */
   budget: { label: 'Budget', owners: ['user', 'platform'], grants: false, inherit: 'none', id: 'the budget id' },
   /** A workspace template (workspace-templates PRD): image tag, persona, sets, repos, settings, limits. Created from by anyone who holds `operate` on it AND on every set it names. */
-  template: { label: 'Template', owners: ['user', 'team', 'platform'], grants: true, inherit: 'none', id: 'the template id' },
+  template: { label: 'Template', owners: ['user', 'team', 'org', 'platform'], grants: true, inherit: 'none', id: 'the template id' },
   /** One person's own: a Portal MCP token, a sign-in on a device, a notification destination, preferences, an answer token. Owner only, never shared. */
   personal: { label: 'Personal', owners: ['user'], grants: false, inherit: 'none', id: '<kind>:<id>' },
 };
