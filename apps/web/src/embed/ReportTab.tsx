@@ -420,8 +420,9 @@ export function Destination({ value, onChange }: { value: ReporterReportTarget; 
 /** Type and priority as one row of chips (Bug, Normal by default); a direct ask is always urgent, so priority hides then. */
 function TypePriority({ type, setType, priority, setPriority, urgent }: { type: TicketType; setType: (t: TicketType) => void; priority: TicketPriority; setPriority: (p: TicketPriority) => void; urgent: boolean }) {
   return (
-    <div className="-mx-3 flex items-center gap-1.5 overflow-x-auto px-3 pb-0.5">
-      <div role="group" aria-label="Type" className="flex shrink-0 gap-1.5">
+    // Wraps instead of scrolling sideways: at 390 px the priority control was cut off at the edge (audit 2026-11-01).
+    <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
+      <div role="group" aria-label="Type" className="flex flex-wrap gap-1.5">
         {TYPES.map((t) => (
           <Chip key={t} on={type === t} onClick={() => setType(t)}>
             {TICKET_TYPE_LABEL[t]}
@@ -430,7 +431,6 @@ function TypePriority({ type, setType, priority, setPriority, urgent }: { type: 
       </div>
       {!urgent && (
         <>
-          <span aria-hidden="true" className="mx-0.5 h-6 w-px shrink-0 bg-line" />
           {/* Priority as one compact control (UX review): Normal unless changed. */}
           <label className={`relative inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full border px-3 text-[13px] font-medium ${priority === 'normal' ? 'border-line-strong text-ink' : 'border-primary bg-primary text-primary-ink'}`}>
             <Icon name="flag" className="size-3.5" />

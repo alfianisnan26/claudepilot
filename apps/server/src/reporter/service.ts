@@ -782,7 +782,11 @@ export class ReporterService {
    * (bucket or path, text, mine), before the status, type, priority and tag filters.
    */
   listTickets(ctx: ReporterTokenCtx, q: ReporterTicketQuery, base: string): ReporterTicketList {
-    const scope: string[] = ['t.bucket_key = ?'];
+    // Only tickets that came through the reporter (its evidence, or a capture added to them from a page): an agent's internal tickets in
+    // the same bucket stay in the portal (audit 2026-11-01). A token is only ever valid for a person who may operate the bucket, so this is
+    // not about what the person may see (the portal shows them everything): the token sits in someone else's page, and the panel is about
+    // that site's reports. A ticket opened by its key (a link in a chat) still opens.
+    const scope: string[] = ['t.bucket_key = ?', '(e.ticket_number IS NOT NULL OR EXISTS (SELECT 1 FROM reporter_ticket_captures rc WHERE rc.ticket_number = t.number))'];
     const args: (string | number)[] = [ctx.bucketKey];
     const path = q.path ? pathOnly(cleanPath(q.path)) : null;
     if (path) {

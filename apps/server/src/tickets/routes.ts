@@ -287,9 +287,12 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     const inline =
       (TICKET_ATTACHMENT_INLINE_TYPES as readonly string[]).includes(attachment.mediaType) && c.req.query('download') === undefined;
     const ascii = attachment.name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+    // A download keeps a type no browser renders as a page (JSON: the reporter's evidence, audit 2026-11-01); anything else, HTML above
+    // all, goes as octet-stream. Always a download (attachment) with nosniff and a sandbox.
+    const typed = inline || attachment.mediaType === 'application/json';
     return new Response(new Uint8Array(bytes), {
       headers: {
-        'Content-Type': inline ? attachment.mediaType : 'application/octet-stream',
+        'Content-Type': typed ? attachment.mediaType : 'application/octet-stream',
         'Content-Length': String(bytes.length),
         'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
         'X-Content-Type-Options': 'nosniff',

@@ -35,7 +35,8 @@ export function effectiveOrgScope(actor: Actor, scope: OrgScope | null): OrgScop
   const userId = actorUserId(actor);
   // An org's slug (`?org=konfersi`, what a person types; audit 2026-11-01) means that org's id, under the same role check: a slug of an org
   // the caller is not in, or of none, is the one empty scope like a forged id (never an error, never a hint that the org exists).
-  const id = isOrgId(scope.id) ? scope.id : ORG_SLUG_PATTERN.test(scope.id.toLowerCase()) ? orgIdBySlug(scope.id.toLowerCase()) : null;
+  const slug = scope.id.toLowerCase();
+  const id = isOrgId(scope.id) ? scope.id : ORG_SLUG_PATTERN.test(slug) ? orgIdBySlug(slug) : null;
   return id && userId && orgRoleIn(id, userId) ? (id === scope.id ? scope : { kind: 'org', id }) : NO_ORG;
 }
 

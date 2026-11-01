@@ -258,7 +258,13 @@ export function samePageHref(origin: string, path: string): string | null {
 
 /** Proposed summary for a submitted review: its title, else the first comment's first line. */
 export function proposedSummary(r: ReporterReview): string {
-  return (r.title.trim() || r.comments[0]?.body.split('\n')[0] || 'UI review').slice(0, 200);
+  const title = r.title.trim();
+  if (title) return title.slice(0, 200);
+  const first = r.comments[0]?.body.split('\n')[0]?.trim();
+  // One comment names the ticket; several are a review of their pages, not of the first comment (audit 2026-11-01).
+  if (r.comments.length <= 1) return (first || 'UI review').slice(0, 200);
+  const pages = [...new Set(r.comments.map((c) => pathnameOf(c.anchor.path)))];
+  return `UI review of ${pages.length === 1 ? pages[0] : `${pages.length} pages`} (${r.comments.length} comments)`.slice(0, 200);
 }
 
 /** How many tickets a submit mode makes (shown on the button). */
