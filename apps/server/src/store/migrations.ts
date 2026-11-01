@@ -4293,6 +4293,72 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 465,
+    name: 'organizations slice 5: a ticket bucket records the KIND of its owner (an org may own one)',
+    up(db) {
+      // docs/prd/organizations.md §6.3: a ticket bucket is owned by a user, a team or an org (its tickets follow it). `owner_id` exists since
+      // migration 47; `owner_kind` joins it like the owners of migration 410. Every bucket that exists is a person's: 'user'.
+      db.exec(`
+        ALTER TABLE ticket_buckets ADD COLUMN owner_kind TEXT NOT NULL DEFAULT 'user' CHECK (owner_kind IN ('user', 'team', 'org', 'platform'));
+        CREATE INDEX ticket_buckets_owner ON ticket_buckets (owner_kind, owner_id);
+      `);
+    },
+  },
+  {
+    version: 466,
+    name: 'organizations slice 5: grants (one table for every share, built once; the creator grant of an org-owned object first)',
+    up(db) {
+      // docs/prd/authorization.md §13 `grants`, with the subject kind 'org' of organizations §6.5 (built once, for org objects now and for
+      // Sharing later). A grant gives a user, a team or an org (its active members that are not guests) a level on one object. `share_id`
+      // names what made it: 'creator' is the automatic manage grant of an org-owned object's creator (§6.1), which counts only while that
+      // person is an active member of the owning org; a share (Sharing, slice 7) writes its own id. `object_uid` pins a workspace grant to
+      // the workspace it was made for (FR10a): a grant with another uid is ignored.
+      db.exec(`
+        CREATE TABLE grants (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'gr_?*'),
+          object_type TEXT NOT NULL,
+          object_id TEXT NOT NULL,
+          object_uid TEXT,
+          subject_kind TEXT NOT NULL CHECK (subject_kind IN ('user', 'team', 'org')),
+          subject_id TEXT NOT NULL,
+          level TEXT NOT NULL CHECK (level IN ('view', 'operate', 'manage')),
+          share_id TEXT NOT NULL,
+          granted_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT,
+          CHECK (subject_kind != 'org' OR level != 'manage')
+        ) STRICT;
+        CREATE UNIQUE INDEX grants_unique ON grants (object_type, object_id, subject_kind, subject_id, share_id);
+        CREATE INDEX grants_object ON grants (object_type, object_id);
+        CREATE INDEX grants_subject ON grants (subject_kind, subject_id);
+        CREATE INDEX grants_share ON grants (share_id);
+      `);
+    },
+  },
+  {
+    version: 467,
+    name: 'organizations slice 5: break-glass entries (the instance owner’s recorded, one-hour access to an org’s content)',
+    up(db) {
+      // docs/prd/organizations.md §6.7, OD-4. One row per entry: who, which org, why (at least 10 characters), when it started and when it
+      // ends (one hour later; renewable only by a new entry). `ended_at` with `end_kind`: ended early (the admin or an org owner), expired, or
+      // replaced by a new entry of the same admin. The audit rows (`org.break_glass_*`) are the platform audit's.
+      db.exec(`
+        CREATE TABLE org_break_glass (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'bg_?*'),
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          admin_user_id TEXT NOT NULL CHECK (admin_user_id GLOB 'u_?*'),
+          reason TEXT NOT NULL CHECK (length(reason) BETWEEN 10 AND 500),
+          started_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          ended_at TEXT,
+          ended_by TEXT,
+          end_kind TEXT CHECK (end_kind IS NULL OR end_kind IN ('ended', 'expired', 'replaced'))
+        ) STRICT;
+        CREATE INDEX org_break_glass_open ON org_break_glass (org_id, admin_user_id) WHERE ended_at IS NULL;
+      `);
+    },
+  },
+  {
     version: 470,
     name: 'organizations slice 4: the Admin console’s own sessions',
     up(db) {

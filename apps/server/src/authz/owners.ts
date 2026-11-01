@@ -6,15 +6,15 @@
 // Fail closed, three ways:
 //   - `registerOwnerResolvers` also marks every type it registers as RESOLVER_REQUIRED (seam.ts `requireResolvers`), so once the portal has
 //     started, a type whose resolver went missing refuses (not found) instead of falling back to the founding user;
-//   - an owner the seam cannot read yet (`owner_kind = 'org'` before organizations land, a user id that is not one) is UNOWNED: the same 404
-//     as a missing object, for everyone, the founding user too;
+//   - an owner the seam cannot read (a user id that is not one, an org id that is not one) is UNOWNED: the same 404 as a missing object,
+//     for everyone, the founding user too. An org owner (slice 5) is decided by the org's roles and grants (seam.ts);
 //   - a database that cannot be read resolves nothing (not found).
 // A workspace is the exception that keeps today's portal working: one found in a runtime with no `workspace_owners` row (or a row made for an
 // earlier workspace of the same name, another `uid`) is UNCLAIMED, owned by the platform: the founding user and the admin accounts that hold
 // its rights (D-82) keep it, nobody else sees it (Authorization §11, Identity FR6 "Unclaimed (admins only)").
 
 import type { DatabaseSync } from 'node:sqlite';
-import { isUserId, objectRef, workspaceRef, type ObjectType, type Owner } from '@portal/contracts';
+import { isOrgId, isUserId, objectRef, workspaceRef, type ObjectType, type Owner } from '@portal/contracts';
 import { WORKSPACE_ID } from '../names.js';
 import { registerResolver, requireResolvers, type ResolvedObject } from './seam.js';
 
@@ -28,7 +28,9 @@ export function ownerFromColumns(kind: unknown, id: unknown): Owner | null {
   if (kind === 'platform') return { kind: 'platform' };
   if (kind === 'user' && isUserId(id)) return { kind: 'user', id };
   if (kind === 'team' && typeof id === 'string' && id.startsWith('tm_')) return { kind: 'team', id };
-  return null; // 'org' (organizations slice 3), or a value that is not an owner
+  // Organizations slice 5: an org owns it; the seam decides by the org's roles, grants and break-glass (seam.ts, orgs/authority.ts).
+  if (kind === 'org' && isOrgId(id)) return { kind: 'org', id };
+  return null; // a value that is not an owner
 }
 
 export interface OwnerResolverDeps {
@@ -75,7 +77,7 @@ export function workspaceOwnerResolver(deps: OwnerResolverDeps) {
       const ref = workspaceRef(key);
       const row = read<OwnerRow & { uid: string }>(deps, 'SELECT uid, owner_kind, owner_id FROM workspace_owners WHERE workspace_id = ?', key);
       if (row === 'error') return null;
-      if (row && known && row.uid === known.id) return { ref, owner: ownerFromColumns(row.owner_kind, row.owner_id), attrs: { claimed: true } };
+      if (row && known && row.uid === known.id) return { ref, owner: ownerFromColumns(row.owner_kind, row.owner_id), attrs: { claimed: true, uid: row.uid } };
       return { ref, owner: { kind: 'platform' }, attrs: { claimed: false } };
     },
   };

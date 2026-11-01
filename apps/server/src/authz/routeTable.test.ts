@@ -224,9 +224,11 @@ test('P3: vault, set, account pool, account and endpoint: the owner manages, ano
   // A set reached under another type is not found; an account pool is not a set.
   assert.equal(can(userActor(U_A), 'view', objectRef('pool', 'p1', 'skillset')).allow, false);
   assert.equal(can(userActor(U_A), 'view', objectRef('pool', 'ap1')).allow, false);
-  // Unowned (an org owner before organizations land): nobody, the founding user too; the answer is 404 like a missing one.
+  // Owned by an org the founding user is not in (organizations slice 5: decided by the org's roles; unowned when the orgs module is not
+  // installed): nobody, the founding user too; the answer is 404 like a missing one.
   const unowned = can(userActor(FOUNDING_USER_ID), 'view', objectRef('pool', 'p_org', 'skillset'));
-  assert.equal(unowned.allow === false && unowned.reason, 'unowned');
+  assert.equal(unowned.allow, false);
+  assert.ok(unowned.allow === false && (unowned.reason === 'unowned' || unowned.reason === 'not_found'), 'the 404 reasons');
 });
 
 test('P3: workspaces: the owner row counts only for the workspace it was made for (uid); a workspace with no row is unclaimed, the platform’s', async () => {

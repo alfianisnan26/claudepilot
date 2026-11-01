@@ -39,7 +39,7 @@ import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { revokeAccountTokens } from '../identity/accountGate.js';
-import type { OrgsService, UserAbilities } from '../orgs/index.js';
+import type { BreakGlassService, OrgsService, UserAbilities } from '../orgs/index.js';
 import { requireInstanceAdmin } from '../orgs/index.js';
 import { PlatformAudit, type AuditInput } from '../platform/audit.js';
 import type { Store } from '../store/store.js';
@@ -68,6 +68,8 @@ export interface AdminConsoleDeps {
   revokePortalSessions: (accountId: string) => void;
   orgs: OrgsService;
   abilities: UserAbilities;
+  /** Slice 5: break-glass (§6.7). Missing: its routes answer 404. */
+  breakGlass?: BreakGlassService | null;
   sso: { list(redirectUri: string): SsoProvider[] };
   /** The SSO callback URL shown with each provider (PORTAL_SSO_ORIGIN's), or ''. */
   ssoRedirectUri: string;
@@ -414,6 +416,18 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     d.orgs.recoverOwner(c.get('actor'), param(c, 'id') as OrgId, userId as UserId, typeof b.reason === 'string' ? b.reason : '');
     return c.json(success({ recovered: true }));
   });
+
+  // ---------- Break-glass (slice 5, §6.7) ----------
+  const breakGlass = () => {
+    if (!d.breakGlass) throw new AppError('NOT_FOUND');
+    return d.breakGlass;
+  };
+  on('POST', '/admin-api/orgs/:id/break-glass', async (c) => {
+    const b = await body(c);
+    return c.json(success(breakGlass().start(c.get('actor'), param(c, 'id') as OrgId, b.reason)), 201);
+  });
+  on('DELETE', '/admin-api/orgs/:id/break-glass', (c) => c.json(success(breakGlass().endByAdmin(c.get('actor'), param(c, 'id') as OrgId))));
+  on('GET', '/admin-api/break-glass', (c) => c.json(success(breakGlass().listAll(c.get('actor')))));
 
   // ---------- SSO (read only) and the audit ----------
   on('GET', '/admin-api/sso', (c) => c.json(success(d.sso.list(d.ssoRedirectUri))));

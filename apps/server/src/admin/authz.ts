@@ -24,6 +24,10 @@ export const ADMIN_ROUTE_POLICIES: RoutePolicies = {
   'DELETE /admin-api/users/:id/abilities/:ability': users('manage', { reauth: true, audit: 'ability.revoked' }),
   'GET /admin-api/orgs': users('view'),
   'POST /admin-api/orgs/:id/recover-owner': users('manage', { reauth: true, audit: 'org.ownership_recovered' }),
+  // Slice 5 (§6.7, OD-4): break-glass. Opening one needs the step-up; ending your own early does not (it only takes access away).
+  'POST /admin-api/orgs/:id/break-glass': users('manage', { reauth: true, audit: 'org.break_glass_started' }),
+  'DELETE /admin-api/orgs/:id/break-glass': users('manage', { audit: 'org.break_glass_ended' }),
+  'GET /admin-api/break-glass': users('view'),
   'GET /admin-api/sso': users('view'),
   'GET /admin-api/audit': users('view'),
 };

@@ -2311,8 +2311,15 @@ export class Tickets {
 
   /** The owner of a bucket, for the authorization seam's resolver; null when there is none. */
   bucketOwner(key: string): string | null {
-    const r = this.#db.prepare('SELECT owner_id FROM ticket_buckets WHERE key = ?').get(String(key).trim().toUpperCase()) as { owner_id: string } | undefined;
-    return r ? r.owner_id : null;
+    return this.bucketOwnerOf(key)?.id ?? null;
+  }
+
+  /** The owner of a bucket with its kind (a user, or an org since organizations slice 5, migration 465); null when there is none. */
+  bucketOwnerOf(key: string): { kind: string; id: string } | null {
+    const r = this.#db.prepare('SELECT owner_kind, owner_id FROM ticket_buckets WHERE key = ?').get(String(key).trim().toUpperCase()) as
+      | { owner_kind: string; owner_id: string }
+      | undefined;
+    return r ? { kind: r.owner_kind, id: r.owner_id } : null;
   }
 
   /** Making and changing buckets: a person or an admin token, never an agent (its tickets would pick their own project). */

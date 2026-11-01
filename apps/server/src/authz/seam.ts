@@ -16,6 +16,11 @@
 // ORGANIZATIONS SLICE 1 (P3, P4): workspaces, vaults, sets, account pools, accounts and endpoints have owners and resolvers (authz/owners.ts,
 // registered at start-up, which also marks them required: `requireResolvers`); every route's declared policy is enforced centrally by the
 // session middleware (authz/routeGuard.ts) and an undeclared route or tool is refused (NO_POLICY).
+// ORGANIZATIONS SLICE 5 (§6.3-§6.5, §6.7): an object may be owned by an org (`owner.kind = 'org'`): the org's active owners and admins
+// manage it, members and guests hold only grants, an admin account holds nothing there by being one, and a suspended org gives nothing.
+// Grants (table `grants`, subject user, team or org) count on every resolved object; the creator grant of an org object counts while its
+// holder is a member. An instance admin with an open break-glass entry on the org holds `manage` on its objects (never on personal ones);
+// each mutation that needed the entry is recorded. All of it comes from `useOrgAuthority` (orgs/authority.ts); without it an org object is unowned.
 // There are no grants, teams, roles or per-user sign-in here: the real layer (apps/server/src/authz/index.ts, work package A1) replaces the
 // implementation with `useAuthz()` and every call site keeps working, because it only ever calls what is exported below.
 //
@@ -49,6 +54,7 @@ import {
   type MemberScope,
   type MemberScopeSubject,
   type ObjectRef,
+  type OrgRole,
   type ObjectType,
   type Owner,
   type RoutePolicies,
@@ -122,6 +128,45 @@ export const clearResolvers = (): void => resolvers.clear();
 
 /** `resolve` for code that needs the object itself (not a decision): same lookup, same null. */
 export const resolve = (r: ObjectRef): ResolvedObject | null => resolvers.get(r.type)?.resolve(r.id, r.poolType) ?? null;
+
+/* ---------- Org-owned objects, grants and break-glass (organizations slice 5) ---------- */
+
+/**
+ * What the seam asks about organizations, installed once by the orgs module (`useOrgAuthority`). Every answer is read on every decision
+ * (§6.5 invariant 6) and fails closed: a database that cannot be read answers no role, no grant, no entry.
+ */
+export interface OrgAuthority {
+  /** The user's ACTIVE role in an org that is ACTIVE; null otherwise (a suspended or deleting org gives nothing through ownership, §6.5). */
+  roleIn(orgId: string, userId: UserId): OrgRole | null;
+  /** The org's active owners (who hears about an org-owned object). */
+  ownersOf(orgId: string): UserId[];
+  /** The highest level the user's grants give on the object (to them, to their teams, to their orgs unless a guest); `none` when none. */
+  grantLevel(object: ObjectRef, userId: UserId, found: ResolvedObject): Level;
+  /** The id of the user's OPEN break-glass entry on the org (not ended, not past its hour), else null. The caller checks the instance admin. */
+  breakGlass(orgId: string, userId: UserId): string | null;
+  /** A decision needed the break-glass entry for a verb above `view`: one access row (the service de-duplicates bursts). */
+  onBreakGlassUse?(entryId: string, userId: UserId, orgId: string, verb: Verb, object: ObjectRef): void;
+  /** Whether any object is owned by an org: `seesEverything`'s fast path is only sound without one (the founding user holds nothing there). */
+  anyOrgOwned(): boolean;
+}
+let orgAuthority: OrgAuthority | null = null;
+/** The orgs module installs it at start-up; returns the one before (tests restore it). Null: org-owned objects are unowned (404 for all). */
+export const useOrgAuthority = (a: OrgAuthority | null): OrgAuthority | null => {
+  const was = orgAuthority;
+  orgAuthority = a;
+  return was;
+};
+
+/** The grants' level on a resolved object; `none` without the orgs module or when it cannot be read. */
+function grantsOf(userId: UserId, found: ResolvedObject): Level {
+  if (!orgAuthority) return 'none';
+  try {
+    const l = orgAuthority.grantLevel(found.ref, userId, found);
+    return l === 'view' || l === 'operate' || l === 'manage' ? l : 'none';
+  } catch {
+    return 'none';
+  }
+}
 
 /* ---------- Route declarations ---------- */
 
@@ -306,10 +351,26 @@ export const singleOwner: Authz = {
       if (!found) return deny('not_found');
       if (resolver.levelFor) held = resolver.levelFor(found, userId);
       else if (found.owner === null) return deny('unowned');
-      else {
+      else if (found.owner.kind === 'org') {
+        // Organizations slice 5 (§6.5): an org-owned object. Its owners and admins manage it, a member or a guest holds only grants, and an
+        // admin account holds NOTHING by being one (no founding-user rights here). The one exception is a person who is an instance admin
+        // with an open break-glass entry on that org (§6.7, OD-4): manage, and every mutation under it is recorded.
+        if (!orgAuthority) return deny('unowned');
+        const role = orgAuthority.roleIn(found.owner.id, userId);
+        const fromRole: Level = role === 'owner' || role === 'admin' ? 'manage' : 'none';
+        held = maxLevel(fromRole, grantsOf(userId, found), found.publicLevel ?? 'none');
+        if (held !== 'manage' && actor.kind === 'user' && holdsFounderRights(userId)) {
+          const entry = orgAuthority.breakGlass(found.owner.id, userId);
+          if (entry) {
+            const level = minLevel('manage', cap);
+            if (verb !== 'view' && !levelAtLeast(held, verb)) orgAuthority.onBreakGlassUse?.(entry, userId, found.owner.id, verb, object);
+            return levelAtLeast(level, verb) ? { allow: true, level } : deny('scope', level);
+          }
+        }
+      } else {
         const holds = (u: UserId) => (found.owner?.kind === 'user' && found.owner.id === u) || (found.owner?.kind === 'platform' && u === FOUNDING_USER_ID);
         const own = holds(userId) || (founderToo && holds(FOUNDING_USER_ID));
-        held = maxLevel(own ? 'manage' : 'none', found.publicLevel ?? 'none');
+        held = maxLevel(own ? 'manage' : 'none', grantsOf(userId, found), found.publicLevel ?? 'none');
       }
     }
 
@@ -332,6 +393,8 @@ export const singleOwner: Authz = {
     // not exist; never the founding user. Both answers are the same (nobody), so neither tells which.
     if (!found && RESOLVER_REQUIRED.has(object.type)) return [];
     if (found?.owner?.kind === 'user') return [found.owner.id];
+    // An org-owned object: the org's active owners hear about it (organizations slice 5); none when the orgs module is not there.
+    if (found?.owner?.kind === 'org') return orgAuthority?.ownersOf(found.owner.id) ?? [];
     // A platform-owned object (an unclaimed workspace, organizations slice 1) is the founding user's to hear about, as it was before.
     if (found?.owner?.kind === 'platform') return [FOUNDING_USER_ID];
     return found?.owner ? [] : [FOUNDING_USER_ID];
@@ -405,7 +468,7 @@ export function visible<T>(actor: Actor, type: ObjectType, rows: readonly T[], i
  */
 export function seesEverything(actor: Actor): boolean {
   if (actor.kind === 'system') return true;
-  return current.mode === 'single-owner' && actor.kind === 'user' && holdsFounderRights(actorUserId(actor));
+  return current.mode === 'single-owner' && actor.kind === 'user' && holdsFounderRights(actorUserId(actor)) && !orgAuthority?.anyOrgOwned();
 }
 
 /** The founding user, or an account that holds what the founding user holds (D-82): the single-owner fast paths' test. */
