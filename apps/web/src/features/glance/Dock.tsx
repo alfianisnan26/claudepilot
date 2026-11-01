@@ -34,6 +34,7 @@ export function GlanceDock() {
   const [shown, setShown] = useState(false);
   // How it was opened: by hover it closes when the pointer leaves; by a tap or the keyboard it stays until a tap outside, Esc or Close.
   const byHover = useRef(false);
+  const returning = useRef(false);
   const timer = useRef<number | undefined>(undefined);
   const panel = useRef<HTMLElement>(null);
   const handle = useRef<HTMLButtonElement>(null);
@@ -48,7 +49,8 @@ export function GlanceDock() {
   const close = useCallback((refocus = false) => {
     window.clearTimeout(timer.current);
     setShown(false);
-    if (refocus) requestAnimationFrame(() => handle.current?.focus());
+    // Focus goes back to the handle, which must not take that focus as a request to open again.
+    if (refocus) requestAnimationFrame(() => ((returning.current = true), handle.current?.focus(), (returning.current = false)));
   }, []);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   // The pointer on the edge, the handle or the panel: open after a short delay (or stay open). Off them: a hover-opened panel closes after
@@ -138,7 +140,7 @@ export function GlanceDock() {
         aria-controls="glance-dock"
         title="Dock"
         onClick={() => (form === 'overlay' ? close() : open(false))}
-        onFocus={(e) => e.currentTarget.matches(':focus-visible') && form === 'handle' && open(false)}
+        onFocus={(e) => !returning.current && e.currentTarget.matches(':focus-visible') && form === 'handle' && open(false)}
         onPointerEnter={(e) => e.pointerType === 'mouse' && enterEdge()}
         onPointerLeave={(e) => e.pointerType === 'mouse' && leaveEdge()}
         className="press fixed top-1/2 right-0 z-30 flex h-14 w-5 -translate-y-1/2 items-center justify-center rounded-l-xl border border-r-0 border-line bg-surface text-muted shadow-card outline-hidden hover:text-ink focus-visible:ring-2 focus-visible:ring-accent tap:w-11"
