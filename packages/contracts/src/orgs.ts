@@ -1,7 +1,7 @@
 // Organizations (docs/prd/organizations.md): a tenant above teams. Slice 3 (§13.2 row 3) is the core: the organization, its memberships and
 // roles, the "always one active owner" invariant (service and trigger), and the per-user ABILITY `orgs.create` an instance admin grants
-// (off by default, OD-2). Slice 5: org-owned objects, Move to organization, break-glass (below). Invitations, teams in orgs, sharing to an
-// org and SSO come in later slices.
+// (off by default, OD-2). Slice 5: org-owned objects, Move to organization, break-glass (below). Slice 7: teams in orgs, shares to an org or
+// its teams, org owners and admins reading members' sessions in org workspaces (OD-3). Invitations and SSO come in later slices.
 //
 // Rights (authz.ts, object type `org`): owner and admin hold `manage` on the org, member and guest `view`, anyone else nothing, answered as a
 // missing org (404). Owner-only acts (changing owners, deleting) are checked by role in the service. Membership is read on every decision.
@@ -194,6 +194,74 @@ export interface MyAbilities {
   abilities: Ability[];
 }
 
+/* ---------- Teams in an org, shares to an org or its teams, transcript reads (slice 7, §6.1, §6.4, §6.5 invariant 2) ---------- */
+
+export type OrgTeamRole = 'owner' | 'member';
+
+/** A team of an org (`teams.org_id`): names unique per org; only active members of the org may be in it. */
+export interface OrgTeam {
+  id: string;
+  orgId: OrgId;
+  name: string;
+  description: string | null;
+  members: number;
+  /** The signed-in person's role in the team, when they are in it. */
+  myRole?: OrgTeamRole;
+  createdAt: string;
+}
+
+export interface OrgTeamMember {
+  userId: UserId;
+  displayName: string;
+  role: OrgTeamRole;
+  addedAt: string;
+}
+
+export interface CreateOrgTeamRequest {
+  name: string;
+  description?: string | null;
+}
+
+export interface SetOrgTeamMemberRequest {
+  role: OrgTeamRole;
+}
+
+/** Who an org share goes to: the whole org (its active members that are not guests) or one of its teams. */
+export type OrgShareSubject = { kind: 'org' } | { kind: 'team'; teamId: string };
+
+export interface CreateOrgShareRequest {
+  target: { type: OrgTransferKind; id: string };
+  subject: OrgShareSubject;
+  /** view or operate to the org; view, operate or manage to a team (manage only by the object's owner, or an org owner or admin for an org object). */
+  level: 'view' | 'operate' | 'manage';
+  /**
+   * The person saw that a workspace shared at operate exposes the credential sets assigned to it (anyone who can operate it can read them).
+   * Required when it has any: else 409 SHARE_EXPOSES_CREDENTIALS lists them in `details.credentials`.
+   */
+  acknowledgeExposure?: boolean;
+}
+
+export interface OrgShare {
+  id: string;
+  orgId: OrgId;
+  target: { type: OrgTransferKind; id: string };
+  subject: { kind: 'org' } | { kind: 'team'; teamId: string; name: string };
+  level: 'view' | 'operate' | 'manage';
+  /** A share of the sharer's own object: it ends when the sharer leaves the org. */
+  personal: boolean;
+  createdBy: UserId;
+  createdAt: string;
+}
+
+/** One read of a member's session by an org owner or admin (OD-3): `GET /api/orgs/:id/transcript-views` (org owners); the member reads their own rows at `GET /api/platform/audit?kind=org.transcript_viewed`. */
+export interface OrgTranscriptView {
+  at: string;
+  viewer: UserId;
+  member: UserId;
+  sessionId: string;
+  workspaceId: string | null;
+}
+
 export const ORGS_API = {
   /** GET: my organizations; POST: CreateOrgRequest -> Org (needs the ability `orgs.create` or an instance admin; the creator is its first owner). */
   orgs: '/api/orgs',
@@ -217,6 +285,20 @@ export const ORGS_API = {
   moveWorkspace: (ref: string) => `/api/workspaces/${ref.split('/').map(encodeURIComponent).join('/')}/move-to-org`,
   moveBucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/move-to-org`,
   moveVault: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/move-to-org`,
+  /** Slice 7. GET -> OrgTeam[] (members and up: every team; a guest: the teams they are in); POST CreateOrgTeamRequest -> OrgTeam. */
+  teams: (id: OrgId) => `/api/orgs/${id}/teams`,
+  /** Slice 7. DELETE: an org owner or admin, or a team owner (its shares end). */
+  team: (id: OrgId, teamId: string) => `/api/orgs/${id}/teams/${encodeURIComponent(teamId)}`,
+  /** Slice 7. GET -> OrgTeamMember[]. */
+  teamMembers: (id: OrgId, teamId: string) => `/api/orgs/${id}/teams/${encodeURIComponent(teamId)}/members`,
+  /** Slice 7. PUT SetOrgTeamMemberRequest (an active member of the org only); DELETE. */
+  teamMember: (id: OrgId, teamId: string, userId: UserId) => `/api/orgs/${id}/teams/${encodeURIComponent(teamId)}/members/${userId}`,
+  /** Slice 7. GET -> OrgShare[]; POST CreateOrgShareRequest -> OrgShare. */
+  shares: (id: OrgId) => `/api/orgs/${id}/shares`,
+  /** Slice 7. DELETE: revoke (the sharer, a manager of the object, or an org owner or admin). */
+  share: (id: OrgId, shareId: string) => `/api/orgs/${id}/shares/${encodeURIComponent(shareId)}`,
+  /** Slice 7. GET -> OrgTranscriptView[] (org owners). */
+  transcriptViews: (id: OrgId) => `/api/orgs/${id}/transcript-views`,
 } as const;
 
 export const ORGS_ERROR_CODES = {
@@ -232,5 +314,9 @@ export const ORGS_ERROR_CODES = {
   ORG_ALREADY_OWNER: 'ORG_ALREADY_OWNER',
   /** Break-glass: a reason of at least 10 characters is required (422). */
   BREAK_GLASS_REASON: 'BREAK_GLASS_REASON',
+  /** Org share: an operate share of a workspace with credential sets assigned, without `acknowledgeExposure` (409, details.credentials). */
+  SHARE_EXPOSES_CREDENTIALS: 'SHARE_EXPOSES_CREDENTIALS',
+  /** Org teams: only an active member of the org may be in its teams (422). */
+  TEAM_NOT_ORG_MEMBER: 'TEAM_NOT_ORG_MEMBER',
 } as const;
 export type OrgsErrorCode = (typeof ORGS_ERROR_CODES)[keyof typeof ORGS_ERROR_CODES];

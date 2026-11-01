@@ -21,6 +21,8 @@
 // Grants (table `grants`, subject user, team or org) count on every resolved object; the creator grant of an org object counts while its
 // holder is a member. An instance admin with an open break-glass entry on the org holds `manage` on its objects (never on personal ones);
 // each mutation that needed the entry is recorded. All of it comes from `useOrgAuthority` (orgs/authority.ts); without it an org object is unowned.
+// ORGANIZATIONS SLICE 7 (OD-3): in an ORG-OWNED workspace the org's owners and admins hold `view` on members' sessions (never operate: no
+// send), each read audited for the member (`orgReadOfSession`); team grants count only while the user is in the team's org (grants.ts).
 // There are no grants, teams, roles or per-user sign-in here: the real layer (apps/server/src/authz/index.ts, work package A1) replaces the
 // implementation with `useAuthz()` and every call site keeps working, because it only ever calls what is exported below.
 //
@@ -148,6 +150,11 @@ export interface OrgAuthority {
   onBreakGlassUse?(entryId: string, userId: UserId, orgId: string, verb: Verb, object: ObjectRef): void;
   /** Whether any object is owned by an org: `seesEverything`'s fast path is only sound without one (the founding user holds nothing there). */
   anyOrgOwned(): boolean;
+  /**
+   * Organizations slice 7 (OD-3, §6.5 invariant 2): a person read a member's session in an org-owned workspace through their org role
+   * (owner or admin). One audit row the member can read (the service de-duplicates bursts). Never called for a list's filter.
+   */
+  onTranscriptRead?(orgId: string, viewerId: UserId, sessionId: string, ownerId: UserId): void;
 }
 let orgAuthority: OrgAuthority | null = null;
 /** The orgs module installs it at start-up; returns the one before (tests restore it). Null: org-owned objects are unowned (404 for all). */
@@ -167,6 +174,31 @@ function grantsOf(userId: UserId, found: ResolvedObject): Level {
     return 'none';
   }
 }
+
+/**
+ * Organizations slice 7 (OD-3, §6.5 invariant 2): what a PERSON holds on a session they do not own because its workspace is ORG-OWNED: the
+ * org's owners and admins `view` (read the transcript, the metadata), never `operate` (no send, no terminal) or `manage`; an instance admin
+ * with an open break-glass entry on that org the same `view` (recorded as break-glass access). Nothing for a session in a workspace an org
+ * does not own (personal, team, or shared to the org), nothing for a token or an agent, nothing without the orgs module.
+ */
+function orgReadOfSession(userId: UserId, found: ResolvedObject): { orgId: string; entry: string | null } | null {
+  if (!orgAuthority) return null;
+  const workspaceId = found.attrs?.workspaceId;
+  if (typeof workspaceId !== 'string' || !workspaceId) return null;
+  const ws = resolvers.get('workspace')?.resolve(workspaceId);
+  if (ws?.owner?.kind !== 'org') return null;
+  const orgId = ws.owner.id;
+  const role = orgAuthority.roleIn(orgId, userId);
+  if (role === 'owner' || role === 'admin') return { orgId, entry: null };
+  if (holdsFounderRights(userId)) {
+    const entry = orgAuthority.breakGlass(orgId, userId);
+    if (entry) return { orgId, entry };
+  }
+  return null;
+}
+
+/** Inside `visible()`: a list's filter is not a read of the transcript, so it writes no transcript audit row. */
+let listing = 0;
 
 /* ---------- Route declarations ---------- */
 
@@ -371,6 +403,18 @@ export const singleOwner: Authz = {
         const holds = (u: UserId) => (found.owner?.kind === 'user' && found.owner.id === u) || (found.owner?.kind === 'platform' && u === FOUNDING_USER_ID);
         const own = holds(userId) || (founderToo && holds(FOUNDING_USER_ID));
         held = maxLevel(own ? 'manage' : 'none', grantsOf(userId, found), found.publicLevel ?? 'none');
+        // OD-3: an org owner or admin reads (only reads) a member's session in an org-owned workspace; each read is audited for the member.
+        if (held === 'none' && object.type === 'session' && actor.kind === 'user' && found.owner?.kind === 'user') {
+          const read = orgReadOfSession(userId, found);
+          if (read) {
+            if (verb !== 'view') return deny('no_right', 'view');
+            if (!listing) {
+              if (read.entry) orgAuthority?.onBreakGlassUse?.(read.entry, userId, read.orgId, 'view', found.ref);
+              else orgAuthority?.onTranscriptRead?.(read.orgId, userId, found.ref.id, found.owner.id);
+            }
+            return { allow: true, level: 'view' };
+          }
+        }
       }
     }
 
@@ -454,7 +498,12 @@ export function requireCan(actor: Actor, verb: Verb, object: ObjectRef): void {
 export function visible<T>(actor: Actor, type: ObjectType, rows: readonly T[], idOf: (row: T) => string, poolType?: ObjectRef['poolType']): T[] {
   if (actor.kind === 'system') return [...rows];
   if (current.mode === 'single-owner' && !resolvers.has(type) && !RESOLVER_REQUIRED.has(type) && actor.kind !== 'agent' && holdsFounderRights(actorUserId(actor))) return [...rows];
-  return rows.filter((row) => current.can(actor, 'view', poolType ? { type, id: idOf(row), poolType } : { type, id: idOf(row) }).allow);
+  listing++;
+  try {
+    return rows.filter((row) => current.can(actor, 'view', poolType ? { type, id: idOf(row), poolType } : { type, id: idOf(row) }).allow);
+  } finally {
+    listing--;
+  }
 }
 
 /**

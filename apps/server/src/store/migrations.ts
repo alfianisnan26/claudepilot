@@ -4383,6 +4383,100 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 475,
+    name: 'organizations slice 7: teams belong to an organization (teams.org_id), names unique per org, only org members in its teams',
+    up(db) {
+      // docs/prd/organizations.md §6.1, §6.5 invariant 7, §8. A team may belong to one org (`org_id`; NULL for the portal-wide teams that exist
+      // today, until the three-org migration of slice 6 moves them). The name is unique per org (the old index was portal-wide). Triggers: only
+      // an ACTIVE member of the team's org may be put in it; a member who leaves or is removed (or whose row is deleted) leaves the org's
+      // teams; a team never changes org. The grants query also joins the membership (authz/grants.ts), so the trigger is the second line.
+      db.exec(`
+        ALTER TABLE teams ADD COLUMN org_id TEXT REFERENCES orgs (id) ON DELETE CASCADE;
+        DROP INDEX teams_name_key;
+        CREATE UNIQUE INDEX teams_name_key ON teams (coalesce(org_id, ''), name_key);
+        CREATE INDEX teams_org ON teams (org_id) WHERE org_id IS NOT NULL;
+        CREATE TRIGGER team_members_org_only_insert BEFORE INSERT ON team_members
+          WHEN (SELECT t.org_id FROM teams t WHERE t.id = NEW.team_id) IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM teams t JOIN org_members m ON m.org_id = t.org_id
+                            WHERE t.id = NEW.team_id AND m.user_id = NEW.user_id AND m.state = 'active')
+        BEGIN
+          SELECT RAISE(ABORT, 'TEAM_NOT_ORG_MEMBER: only members of the organization may be in its teams');
+        END;
+        CREATE TRIGGER team_members_org_only_update BEFORE UPDATE OF team_id, user_id ON team_members
+          WHEN (SELECT t.org_id FROM teams t WHERE t.id = NEW.team_id) IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM teams t JOIN org_members m ON m.org_id = t.org_id
+                            WHERE t.id = NEW.team_id AND m.user_id = NEW.user_id AND m.state = 'active')
+        BEGIN
+          SELECT RAISE(ABORT, 'TEAM_NOT_ORG_MEMBER: only members of the organization may be in its teams');
+        END;
+        CREATE TRIGGER teams_org_fixed BEFORE UPDATE OF org_id ON teams
+          WHEN OLD.org_id IS NOT NULL AND (NEW.org_id IS NULL OR NEW.org_id != OLD.org_id)
+        BEGIN
+          SELECT RAISE(ABORT, 'TEAM_ORG_FIXED: a team stays in its organization');
+        END;
+        CREATE TRIGGER org_members_leave_teams AFTER UPDATE OF state ON org_members
+          WHEN OLD.state = 'active' AND NEW.state != 'active'
+        BEGIN
+          DELETE FROM team_members WHERE user_id = NEW.user_id AND team_id IN (SELECT id FROM teams WHERE org_id = NEW.org_id);
+        END;
+        CREATE TRIGGER org_members_leave_teams_delete AFTER DELETE ON org_members
+        BEGIN
+          DELETE FROM team_members WHERE user_id = OLD.user_id AND team_id IN (SELECT id FROM teams WHERE org_id = OLD.org_id);
+        END;
+      `);
+    },
+  },
+  {
+    version: 476,
+    name: 'organizations slice 7: shares to an organization or its teams (org_shares), ended when the sharer leaves or the team goes',
+    up(db) {
+      // docs/prd/organizations.md §6.4, §6.9. One row per share of an object (workspace, bucket, vault) to an org (its active members that
+      // are not guests) or to one of its teams; the grant itself is a `grants` row whose `share_id` is this id (authz/grants.ts reads only
+      // grants). `personal` marks a share of the sharer's OWN object: when the sharer stops being an active member of the org, those shares
+      // end (grants deleted, row ended `member_left`); an org-owned object's shares stay the org's. A deleted team ends its shares. Ended
+      // rows are kept for the record. Manage to a whole org is refused here too.
+      db.exec(`
+        CREATE TABLE org_shares (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'osh_?*'),
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          object_type TEXT NOT NULL CHECK (object_type IN ('workspace', 'ticket_bucket', 'vault')),
+          object_id TEXT NOT NULL,
+          subject_kind TEXT NOT NULL CHECK (subject_kind IN ('org', 'team')),
+          subject_id TEXT NOT NULL,
+          level TEXT NOT NULL CHECK (level IN ('view', 'operate', 'manage')),
+          personal INTEGER NOT NULL CHECK (personal IN (0, 1)),
+          created_by TEXT NOT NULL CHECK (created_by GLOB 'u_?*'),
+          created_at TEXT NOT NULL,
+          ended_at TEXT,
+          ended_by TEXT,
+          end_reason TEXT CHECK (end_reason IS NULL OR end_reason IN ('revoked', 'member_left', 'team_removed')),
+          CHECK (subject_kind != 'org' OR level != 'manage')
+        ) STRICT;
+        CREATE INDEX org_shares_org ON org_shares (org_id) WHERE ended_at IS NULL;
+        CREATE UNIQUE INDEX org_shares_open ON org_shares (object_type, object_id, subject_kind, subject_id) WHERE ended_at IS NULL;
+        CREATE TRIGGER org_members_end_shares AFTER UPDATE OF state ON org_members
+          WHEN OLD.state = 'active' AND NEW.state != 'active'
+        BEGIN
+          DELETE FROM grants WHERE share_id IN (SELECT id FROM org_shares WHERE org_id = NEW.org_id AND created_by = NEW.user_id AND personal = 1 AND ended_at IS NULL);
+          UPDATE org_shares SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_by = 'system:org-membership', end_reason = 'member_left'
+            WHERE org_id = NEW.org_id AND created_by = NEW.user_id AND personal = 1 AND ended_at IS NULL;
+        END;
+        CREATE TRIGGER org_members_end_shares_delete AFTER DELETE ON org_members
+        BEGIN
+          DELETE FROM grants WHERE share_id IN (SELECT id FROM org_shares WHERE org_id = OLD.org_id AND created_by = OLD.user_id AND personal = 1 AND ended_at IS NULL);
+          UPDATE org_shares SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_by = 'system:org-membership', end_reason = 'member_left'
+            WHERE org_id = OLD.org_id AND created_by = OLD.user_id AND personal = 1 AND ended_at IS NULL;
+        END;
+        CREATE TRIGGER teams_end_shares AFTER DELETE ON teams
+        BEGIN
+          DELETE FROM grants WHERE subject_kind = 'team' AND subject_id = OLD.id;
+          UPDATE org_shares SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ended_by = 'system:team-removed', end_reason = 'team_removed'
+            WHERE subject_kind = 'team' AND subject_id = OLD.id AND ended_at IS NULL;
+        END;
+      `);
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {

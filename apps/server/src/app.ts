@@ -1437,7 +1437,7 @@ export function createApp(
   {
     const og = new Hono<Env>();
     og.use(requireSession);
-    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass));
+    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass, orgsModule.sharing));
     app.route('/api/orgs', og);
   }
   // Organizations slice 4 (§6.11): the Admin console, answered only on the admin host (the middleware at the top hands it those requests).
