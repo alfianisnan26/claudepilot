@@ -1,10 +1,9 @@
 // The context the app works in (docs/prd/organizations.md §7, slice 9): Personal, or one organization the person is in. It is kept per device
 // (`claudepilot.context.<userId>` in local storage, every access in try/catch: a private window or blocked storage just means Personal) and
-// every LIST call goes through `scopedList`, the one place that adds `?org=`.
-//
-// Until the server scopes lists by org (slices 5 and 6: org-owned objects and the migration), `ORG_SCOPED_LISTS_LIVE` is false: in an org
-// context a list answers empty without asking, so an org context never shows personal objects as if they were the org's. Turning it on is
-// one line here; the server must then read `?org=` and never widen a list by it (its API test, slice 5).
+// every LIST call goes through `scopedList`, the one place that adds `?org=`: `org=personal` in Personal (what no org owns), `org=<id>` in
+// an org (what that org owns). The server (apps/server/src/authz/orgScope.ts) only narrows what the caller may already see; an org the caller
+// is not in answers an empty list. With `ORG_SCOPED_LISTS_LIVE` off (a server that does not read `?org=`), Personal asks as before and an org
+// context answers empty without a request, so it never shows personal objects as the org's.
 
 import { isOrgId } from '@portal/contracts';
 
@@ -13,8 +12,11 @@ export type AppContext = { kind: 'personal' } | { kind: 'org'; id: string };
 
 export const PERSONAL: AppContext = { kind: 'personal' };
 
-/** Flip when the server reads `?org=` on its lists (slice 5/6). While off, an org context's lists are empty. */
-export const ORG_SCOPED_LISTS_LIVE = false;
+/** The server reads `?org=` on its lists (owner request 2026-11-01). Off: Personal sends nothing and an org context's lists are empty. */
+export const ORG_SCOPED_LISTS_LIVE = true;
+
+/** The `?org=` value Personal sends: only what no org owns. */
+export const PERSONAL_ORG_PARAM = 'personal';
 
 export const contextKey = (userId: string) => `claudepilot.context.${userId}`;
 
@@ -81,13 +83,12 @@ export function subscribeContext(fn: () => void): () => void {
 }
 
 /**
- * THE helper every list call goes through. Personal: the path as it is. An org: `?org=<id>` added, or, while the server does not scope lists
- * yet (`live` false), the list's empty value without a request.
+ * THE helper every list call goes through. Personal: `?org=personal` added; an org: `?org=<id>` added. With `live` false (a server that does
+ * not scope lists): Personal the path as it is, an org the list's empty value without a request.
  */
 export function scopedList<T>(path: string, run: (path: string) => Promise<T>, empty: () => T, ctx: AppContext = current, live = ORG_SCOPED_LISTS_LIVE): Promise<T> {
-  if (ctx.kind === 'personal') return run(path);
-  if (!live) return Promise.resolve(empty());
-  return run(withOrg(path, ctx.id));
+  if (!live) return ctx.kind === 'personal' ? run(path) : Promise.resolve(empty());
+  return run(withOrg(path, ctx.kind === 'org' ? ctx.id : PERSONAL_ORG_PARAM));
 }
 
 /** The browser's local storage, or null where it cannot be reached. */

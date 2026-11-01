@@ -27,6 +27,7 @@ import {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, can, requireCan, seesEverything, visible } from '../authz/seam.js';
+import { orgScopeFilter, orgScopeOf, parentAnchor } from '../authz/orgScope.js';
 import { declareCiPolicies, registerCiAuthz, requireVaultWrite } from './authz.js';
 import type { CiDecider, CiService } from './service.js';
 
@@ -76,7 +77,10 @@ export function createCiRoutes(ci: CiService): Hono {
     // A caller no policy can hide a run from (the founding user) gets no `keep`: the counts come from SQL. Anyone else is checked run by run, and
     // the counts of page 1 then come from a bounded scan (exact when the list fits in it, else null: unavailable).
     const check = (r: { id: string }) => visible(actor, 'ci_run', [r], (x) => x.id).length > 0;
-    const keep = seesEverything(actor) ? undefined : check;
+    // `?org=` (organizations §7): a run belongs to its workspace's org; it only narrows, after `view`, and binds the cursor to the scope.
+    const scope = orgScopeOf(c);
+    const inScope = orgScopeFilter(actor, scope);
+    const keep = inScope ? (r: { id: string }) => check(r) && inScope(parentAnchor('ci_run', r.id)) : seesEverything(actor) ? undefined : check;
     return c.json(
       success(
         ci.listPage(
@@ -89,7 +93,7 @@ export function createCiRoutes(ci: CiService): Hono {
             ticket: q.ticket || undefined,
             session: q.session || undefined,
           },
-          { caller: actorString(actor), cursor: q.cursor || undefined, limit: q.limit, keep },
+          { caller: scope ? `${actorString(actor)}|org:${scope.kind === 'org' ? scope.id : 'personal'}` : actorString(actor), cursor: q.cursor || undefined, limit: q.limit, keep },
         ),
       ),
     );
@@ -131,8 +135,10 @@ export function createCiRoutes(ci: CiService): Hono {
   }
 
   app.get('/repos', async (c) => {
-    const repos = await ci.repos(c.req.query('workspace') || undefined);
-    return c.json(success(visible(actorOf(c), 'ci_repo', repos, (r) => r.id)));
+    const actor = actorOf(c);
+    const inScope = orgScopeFilter(actor, orgScopeOf(c));
+    const seen = visible(actor, 'ci_repo', await ci.repos(c.req.query('workspace') || undefined), (r) => r.id);
+    return c.json(success(inScope ? seen.filter((r) => inScope(workspaceRef(r.workspaceId))) : seen));
   });
   app.post('/repos', async (c) => {
     const req = await body<CreateCiRepoRequest>(c);
