@@ -313,7 +313,8 @@ export function statusForDeny(reason: DenyReason): 401 | 403 | 404 {
 
 /* ---------- Route declarations (default deny) ---------- */
 
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'ALL';
+// HEAD and OPTIONS: routes registered for them on their own (a webhook receiver, a CORS preflight; organizations slice 1 enumerates every route).
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS' | 'ALL';
 /** `METHOD /full/path/with/:params`, exactly as the router lists it (`app.routes`). */
 export type PolicyKey = `${HttpMethod} ${string}`;
 
