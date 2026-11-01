@@ -3,6 +3,7 @@ import type { MoveToOrgCredential, Org, OrgTransferKind } from '@portal/contract
 import { ArrowRightToLine, BookOpen, Box, ChevronRight, KeyRound, Ticket } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
+import { BoundedBody } from '@/components/BoundedBody';
 import { Card } from '@/components/Card';
 import { api } from '@/lib/api';
 import { AccessSheet } from './AccessSheet';
@@ -39,7 +40,7 @@ export function ObjectsSection({ org, rows, meId, onMoved }: { org: Org; rows: O
         ) : rows.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted sm:px-5">Nothing yet.</p>
         ) : (
-          <ul className="divide-y divide-line">
+          <BoundedBody><ul className="divide-y divide-line">
             {rows.map((r) => {
               const Icon = ICON[r.kind];
               return (
@@ -62,7 +63,7 @@ export function ObjectsSection({ org, rows, meId, onMoved }: { org: Org; rows: O
                 </li>
               );
             })}
-          </ul>
+          </ul></BoundedBody>
         )}
       </Card>
       {access && <AccessSheet org={org} target={{ type: access.kind, id: access.id }} name={access.name} meId={meId} open={!!access} onClose={() => setAccess(null)} />}

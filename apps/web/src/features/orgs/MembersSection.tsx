@@ -2,6 +2,7 @@ import { Button, ConfirmDialog, useToast } from '@isnanme/ui';
 import type { Org, OrgMember, OrgRole } from '@portal/contracts';
 import { UserMinus, UserPlus } from 'lucide-react';
 import { useState } from 'react';
+import { BoundedBody } from '@/components/BoundedBody';
 import { Card } from '@/components/Card';
 import { api } from '@/lib/api';
 import { canManageOrg, canRemoveMember, orgErrorText, ROLE_LABEL, roleChoices } from './rules';
@@ -79,7 +80,7 @@ export function MembersSection({
         {members === null ? (
           <div className="skeleton m-4 h-10 rounded-xl" />
         ) : (
-          <ul className="divide-y divide-line">
+          <BoundedBody><ul className="divide-y divide-line">
             {members.map((m) => {
               const self = m.userId === meId;
               const choices = roleChoices(org.myRole, m.role);
@@ -116,7 +117,7 @@ export function MembersSection({
                 </li>
               );
             })}
-          </ul>
+          </ul></BoundedBody>
         )}
       </Card>
       <ConfirmDialog

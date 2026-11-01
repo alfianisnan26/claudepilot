@@ -1,6 +1,7 @@
 import { Badge, Button, ConfirmDialog, useToast } from '@isnanme/ui';
 import type { BreakGlassEntry, Org, OrgBreakGlassView, OrgTranscriptView, PlatformAuditEntry } from '@portal/contracts';
 import { useCallback, useEffect, useState } from 'react';
+import { BoundedBody } from '@/components/BoundedBody';
 import { Card } from '@/components/Card';
 import { api } from '@/lib/api';
 import { AUDIT_FILTERS, auditActorText, auditKindText, canSeeOwnerAudit, orgErrorText } from './rules';
@@ -59,7 +60,7 @@ export function AuditSection({ org, names }: { org: Org; names: ReadonlyMap<stri
         ) : rows.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted sm:px-5">Nothing yet.</p>
         ) : (
-          <ul className="divide-y divide-line">
+          <BoundedBody><ul className="divide-y divide-line">
             {rows.map((r) => (
               <li key={r.id} data-org-audit-row={r.id} className="flex flex-col gap-0.5 px-4 py-2.5 sm:px-5">
                 <span className="flex flex-wrap items-center gap-2">
@@ -72,7 +73,7 @@ export function AuditSection({ org, names }: { org: Org; names: ReadonlyMap<stri
                 </span>
               </li>
             ))}
-          </ul>
+          </ul></BoundedBody>
         )}
       </Card>
       {more && rows && (

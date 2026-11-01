@@ -1,10 +1,10 @@
 // Org settings (owner request 2026-11-01, docs/prd/organizations.md §13.9): every section an owner sees, at 390 px (touch, safe areas) then
 // 1280 px, light and dark, against a scratch portal. The server-code sign-in (the founding user, an instance admin) creates an org over the
 // API, a member is seeded into it, and a team and an invitation are made over the API. It screenshots and asserts (QA-STANDARDS A1-A9):
-//   - the owner sees all ten sections; the phone has the section picker (no side list), 1280 the side list (no picker);
+//   - the owner gets all ten sections as tabs (docs/prd/ui-layout.md §2), one at a time, each its own path; no side list or picker;
 //   - A5: every control in the page is at least 44 px at 390 px (a FAIL; a checkbox counts by its label row); at 1280 px only a note;
 //   - A2: no horizontal scroll on the page, with the Move here dialog open, and with the Delete dialog open;
-//   - the picker scrolls to the section it names; the Policies switches are there; the audit filter answers;
+//   - Back returns to the previous tab, a legacy ?tab=access moves to /access; the Policies switches are there; the audit filter answers;
 //   - Delete stays disabled until the slug is typed exactly.
 // usage: tools/qa/with-portal.sh 3473 env QA_SHOTS=job-out/org-settings node tools/qa/org-settings.mjs
 //   scripts/job-run.sh --ref <commit> --artifacts job-out/org-settings --out job-out/org-settings-art/ -- 'tools/qa/with-portal.sh 3473 env QA_SHOTS=job-out/org-settings node tools/qa/org-settings.mjs; exit $?'
@@ -67,37 +67,55 @@ try {
       await b.setViewport(size.w, size.h, size.mobile);
       await b.send('Emulation.setSafeAreaInsetsOverride', { insets: size.insets }).catch(() => {});
       await b.media({ dark });
-      await b.goto(`/admin/orgs/${org.id}`, 2500);
-      await b.waitFor(`document.querySelectorAll('[data-org-section]').length >= 10 && document.querySelectorAll('[data-org-member]').length >= 2 && !!document.querySelector('[data-org-team]')`, 20_000, 'the sections').catch(() => {});
-      await sleep(600);
-      const shown = await b.eval(`[...document.querySelectorAll('[data-org-section]')].map((e) => e.getAttribute('data-org-section'))`);
-      check(`${t}: the owner sees every section`, JSON.stringify(shown) === JSON.stringify(ALL), JSON.stringify(shown));
-      const picker = await b.eval(`(() => { const e = document.querySelector('[data-org-picker]'); return !!e && e.getBoundingClientRect().height > 0; })()`);
-      const nav = await b.eval(`(() => { const e = document.querySelector('[data-org-nav]'); return !!e && e.getBoundingClientRect().height > 0; })()`);
-      check(`${t}: ${size.mobile ? 'the picker, no side list' : 'the side list, no picker'}`, size.mobile ? picker && !nav : nav && !picker, `picker=${picker} nav=${nav}`);
+      const base = `/admin/orgs/${org.id}`;
+      await b.goto(base, 2500);
+      await b.waitFor(`document.querySelectorAll('[role=tablist] [role=tab]').length >= 10`, 20_000, 'the tabs').catch(() => {});
+      await sleep(400);
 
+      // The tab bar (docs/prd/ui-layout.md §2): every section an owner may use, one shown at a time; no side list, no picker.
+      const tabs = await b.eval(`[...document.querySelectorAll('[role=tablist] [role=tab]')].map((e) => e.getAttribute('data-tab'))`);
+      check(`${t}: the owner gets every section as a tab`, JSON.stringify(tabs) === JSON.stringify(ALL), JSON.stringify(tabs));
+      check(`${t}: one section at a time, no side list or picker`, await b.eval(`document.querySelectorAll('[data-org-section]').length === 1 && !document.querySelector('[data-org-picker], [data-org-nav]')`));
       let s = await b.eval(MEASURE('main'));
-      check(`${t}: members, the team, the invitation and the policies are listed`, /Quinn Member/.test(s.text) && /Platform engineering/.test(s.text) && /someone@example\.test/.test(s.text) && /Members invite/.test(s.text), JSON.stringify(s.text.slice(0, 160)));
-      sizes(`${t}: controls >= 44 px`, size.mobile, s.small.filter((x) => !/About/.test(x)));
-      check(`${t}: no sideways scroll`, s.docScroll <= s.docClient + 1, `${s.docScroll}/${s.docClient}`);
-      await b.shot(`org-settings-${t}`, { full: true });
+      sizes(`${t}: General: controls >= 44 px`, size.mobile, s.small.filter((x) => !/About/.test(x)));
+      check(`${t}: General: no sideways scroll`, s.docScroll <= s.docClient + 1, `${s.docScroll}/${s.docClient}`);
+      await b.shot(`org-settings-${t}`);
 
-      // Jump to Audit (the picker on a phone, the side list at 1280): the section comes to the top of what is visible.
-      if (size.mobile)
-        await b.eval(`(() => { const sel = document.querySelector('[data-org-picker]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, 'audit'); sel.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-      else await b.clickSel('[data-org-nav="audit"]');
-      await sleep(1200);
-      const top = await b.eval(`Math.round(document.getElementById('org-s-audit').getBoundingClientRect().top)`);
-      check(`${t}: the jump brings Audit to the top`, top >= 0 && top < 220, `top=${top}`);
+      // Every tab: its own path, its content, 44 px controls, no sideways scroll.
+      const want = { members: /Quinn Member/, teams: /Platform engineering/, invitations: /someone@example\.test/, policies: /Members invite/ };
+      for (const id of ALL.slice(1)) {
+        await b.clickSel(`[role=tab][data-tab="${id}"]`);
+        await b.waitFor(`location.pathname === ${JSON.stringify(`${base}/${id}`)} && !!document.querySelector('[data-org-section="${id}"]')`, 10_000, id).catch(() => {});
+        await sleep(id === 'members' || id === 'teams' || id === 'invitations' ? 1200 : 500);
+        s = await b.eval(MEASURE('main'));
+        check(`${t}: ${id}: its own path and section`, await b.eval(`location.pathname === ${JSON.stringify(`${base}/${id}`)} && document.querySelector('[data-org-section]')?.getAttribute('data-org-section') === ${JSON.stringify(id)}`));
+        if (want[id]) check(`${t}: ${id}: lists what was seeded`, want[id].test(s.text), JSON.stringify(s.text.slice(0, 160)));
+        sizes(`${t}: ${id}: controls >= 44 px`, size.mobile, s.small.filter((x) => !/About/.test(x)));
+        check(`${t}: ${id}: no sideways scroll`, s.docScroll <= s.docClient + 1, `${s.docScroll}/${s.docClient}`);
+        if (id === 'members' || id === 'audit' || id === 'danger') await b.shot(`org-settings-${id}-${t}`);
+      }
+
+      // Back goes to the previous tab; a legacy ?tab=access link moves to the Access tab's path.
+      await b.eval('history.back()');
+      await sleep(800);
+      check(`${t}: Back returns to the previous tab`, await b.eval(`location.pathname === ${JSON.stringify(`${base}/audit`)}`), await b.eval('location.pathname'));
+      await b.goto(`${base}?tab=access`, 2000);
+      check(`${t}: ?tab=access moves to /access`, await b.eval(`location.pathname === ${JSON.stringify(`${base}/access`)} && !location.search`), await b.eval('location.href'));
+
+      // Audit: rows, and the kind filter answers.
+      await b.goto(`${base}/audit`, 2000);
+      await b.waitFor(`document.querySelectorAll('[data-org-audit-row]').length >= 3`, 10_000, 'audit rows').catch(() => {});
       const rows = await b.eval(`document.querySelectorAll('[data-org-audit-row]').length`);
       check(`${t}: the audit lists rows`, rows >= 3, `rows=${rows}`);
       await b.eval(`(() => { const sel = document.querySelector('[data-org-audit-filter]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, 'org.team'); sel.dispatchEvent(new Event('change', { bubbles: true })); })()`);
       await sleep(1200);
       const teamRows = await b.eval(`[...document.querySelectorAll('[data-org-audit-row]')].map((e) => e.innerText.split('\\n')[0])`);
       check(`${t}: the Teams filter shows team rows only`, teamRows.length >= 1 && teamRows.every((x) => /^Team/.test(x)), JSON.stringify(teamRows));
-      await b.shot(`org-settings-audit-${t}`);
+      await b.shot(`org-settings-audit-filter-${t}`);
 
-      // Move here: the dialog lists the person's own things (or says there are none); no sideways scroll.
+      // Move here (Objects): the dialog lists the person's own things (or says there are none); no sideways scroll.
+      await b.goto(`${base}/objects`, 2000);
+      await b.waitFor(`!!document.querySelector('[data-org-move-open]')`, 10_000, 'Move here').catch(() => {});
       await b.clickSel('[data-org-move-open]');
       await b.waitFor(`!!document.querySelector('[role=dialog]')`, 5000, 'the move dialog').catch(() => {});
       await sleep(900);
@@ -109,7 +127,9 @@ try {
       await b.key('Escape');
       await sleep(600);
 
-      // Delete: disabled until the slug is typed exactly; never confirmed here.
+      // Delete (Danger zone): disabled until the slug is typed exactly; never confirmed here.
+      await b.goto(`${base}/danger`, 2000);
+      await b.waitFor(`!!document.querySelector('[data-org-delete]')`, 10_000, 'Delete').catch(() => {});
       await b.clickSel('[data-org-delete]');
       await b.waitFor(`!!document.querySelector('[data-org-delete-input]')`, 5000, 'the delete dialog').catch(() => {});
       await sleep(500);

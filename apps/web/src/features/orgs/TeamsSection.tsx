@@ -2,6 +2,7 @@ import { Button, ConfirmDialog, useToast } from '@isnanme/ui';
 import type { Org, OrgMember, OrgTeam, OrgTeamMember, OrgTeamRole } from '@portal/contracts';
 import { ChevronDown, Plus, Trash2, UserMinus } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { BoundedBody } from '@/components/BoundedBody';
 import { Card } from '@/components/Card';
 import { api } from '@/lib/api';
 import { orgField } from './NewOrgDialog';
@@ -89,7 +90,7 @@ export function TeamsSection({ org, members, meId }: { org: Org; members: OrgMem
         ) : teams.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted sm:px-5">No teams yet.</p>
         ) : (
-          <ul className="divide-y divide-line">
+          <BoundedBody><ul className="divide-y divide-line">
             {teams.map((t) => (
               <li key={t.id} data-org-team={t.id}>
                 <div className="flex min-h-14 items-center gap-2 px-2 sm:px-3">
@@ -117,7 +118,7 @@ export function TeamsSection({ org, members, meId }: { org: Org; members: OrgMem
                 {open === t.id && <TeamMembers org={org} team={t} members={members} meId={meId} onChanged={load} />}
               </li>
             ))}
-          </ul>
+          </ul></BoundedBody>
         )}
       </Card>
       <ConfirmDialog

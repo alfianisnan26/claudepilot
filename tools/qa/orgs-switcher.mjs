@@ -1,10 +1,11 @@
 // Organizations slice 9 (docs/prd/organizations.md §7): the context switcher and Org settings, at 390 px (touch, safe areas) then 1280 px,
 // light and dark, against a scratch portal. The server-code sign-in (the founding user, an instance admin) creates two orgs over the API
 // (one with a long name) and a member is seeded into the first. It screenshots and asserts (QA-STANDARDS A1-A9, measured):
-//   - the switcher closed and open (side bar top-left at 1280, the icon button and its sheet at 390): Personal, both orgs, New organization;
+//   - the switcher closed and open (the side bar's foot, above the account, at 1280; the account menu's Context row and its sheet at 390):
+//     Personal, both orgs, New organization; pilot's logo stays on top (owner, 2026-11-01, second pass);
 //   - A5: every row of the list and every control of Org settings is at least 44 px at 390 px (a FAIL); at 1280 px only a note;
 //   - A2: no horizontal scroll on the page, with the list open, and on Org settings;
-//   - picking an org stores `claudepilot.context.<userId>` = org:<id> and shows the "nothing here yet" note; Personal clears it;
+//   - picking an org stores `claudepilot.context.<userId>` = org:<id> and no page repeats the org's name above its title; Personal clears it;
 //   - Org settings lists the members with role pickers, and demoting the last owner shows the plain "needs an owner" error.
 // usage: tools/qa/with-portal.sh 3472 env QA_SHOTS=job-out/orgs node tools/qa/orgs-switcher.mjs
 //   scripts/job-run.sh --ref <commit> --artifacts job-out/orgs --out job-out/orgs-art/ -- 'tools/qa/with-portal.sh 3472 env QA_SHOTS=job-out/orgs node tools/qa/orgs-switcher.mjs; exit $?'
@@ -70,7 +71,15 @@ try {
       await b.goto('/admin/home', 500);
       await b.eval(`(() => { try { localStorage.removeItem(${JSON.stringify(storageKey)}); } catch {} })()`);
       await b.goto('/admin/home', 2500);
-      const trigger = size.mobile ? '[data-context-switcher="icon"]' : '[data-context-switcher="sidebar"]';
+      // On a phone the switcher is a row of the account menu (it opens a sheet); on a desktop a row at the foot of the side bar.
+      const trigger = size.mobile ? 'header [aria-label="Account menu"]' : '[data-context-switcher="sidebar"]';
+      const openSwitcher = async () => {
+        await b.clickSel(trigger);
+        if (size.mobile) {
+          await b.waitFor(`!!document.querySelector('[data-context-switcher="menu"]')`, 5000, 'the Context row').catch(() => {});
+          await b.clickSel('[data-context-switcher="menu"]');
+        }
+      };
       await b.waitFor(`!!document.querySelector('${trigger}')`, 20_000, 'the switcher').catch(() => {});
       check(`${t}: the switcher is shown`, await b.eval(`!!document.querySelector('${trigger}')`));
       if (!size.mobile) check(`${t}: closed, it reads Personal`, (await b.eval(`document.querySelector('${trigger}').innerText`)).includes('Personal'));
@@ -83,7 +92,7 @@ try {
       }
       await b.shot(`orgs-switcher-closed-${t}`);
 
-      await b.clickSel(trigger);
+      await openSwitcher();
       await b.waitFor(`!!document.querySelector('[data-context-list]')`, 5000, 'the list').catch(() => {});
       await sleep(400);
       let s = await b.eval(MEASURE('[data-context-list]'));
@@ -95,10 +104,12 @@ try {
       await b.clickText('Acme', { selector: '[data-context-list] button' });
       await sleep(1200);
       check(`${t}: picking Acme stores org:<id> for this user`, (await stored(b)) === `org:${acme.id}`, String(await stored(b)));
-      check(`${t}: the org's note names it above its lists`, await b.eval(`!!document.querySelector('[data-org-scope-note]')`));
+      check(`${t}: no org label above the page's title`, await b.eval(`!document.querySelector('[data-org-scope-note]')`));
+      if (!size.mobile) check(`${t}: the switcher row names Acme`, (await b.eval(`document.querySelector('[data-context-switcher="sidebar"]').innerText`)).includes('Acme'));
+      check(`${t}: pilot's logo is on top`, await b.eval(`[...document.querySelectorAll('a[aria-label="pilot"]')].some((e) => e.offsetParent)`));
       await b.shot(`orgs-context-acme-${t}`);
 
-      await b.goto(`/admin/orgs/${acme.id}`, 2500);
+      await b.goto(`/admin/orgs/${acme.id}/members`, 2500);
       await b.waitFor(`document.querySelectorAll('[data-org-member]').length >= 2`, 15_000, 'members').catch(() => {});
       s = await b.eval(MEASURE('main'));
       check(`${t}: Org settings lists the owner and the member`, /Quinn Member/.test(s.text) && /\(you\)/.test(s.text), JSON.stringify(s.text.slice(0, 160)));
@@ -117,7 +128,7 @@ try {
       await b.shot(`orgs-settings-last-owner-${t}`);
 
       // Back to Personal through the switcher.
-      await b.clickSel(trigger);
+      await openSwitcher();
       await sleep(400);
       await b.clickText('Personal', { selector: '[data-context-list] button', exact: true });
       await sleep(800);
