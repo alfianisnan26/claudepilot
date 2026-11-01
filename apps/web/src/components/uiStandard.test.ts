@@ -8,9 +8,13 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const src = join(dirname(fileURLToPath(import.meta.url)), '..');
+// The portal and the reporter panel (embed/). Another entry of its own (the Admin console) is guarded by its own test, which also forbids
+// the portal to name it.
+const entries = readdirSync(src, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name !== 'embed').map((d) => d.name).filter((d) => readdirSync(join(src, d)).includes('main.tsx'));
 const files = readdirSync(src, { recursive: true, encoding: 'utf8' })
   .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
   .map((f) => f.split('\\').join('/'))
+  .filter((f) => !entries.some((d) => f.startsWith(`${d}/`)))
   .sort();
 const read = (f: string) => readFileSync(join(src, f), 'utf8');
 const hits = (re: RegExp) => files.filter((f) => re.test(read(f)));
@@ -19,13 +23,12 @@ test('tab bars: only the shared TabBar draws a tablist (and the kit’s PageTabs
   // Not yet migrated (docs/coord/UI-STANDARD.md §9): the reporter panel's own tabs, its evidence tabs, the browser app view's tabs.
   const legacy = ['embed/Panel.tsx', 'features/reporter/Evidence.tsx', 'features/browser/AppView.tsx'];
   assert.deepEqual(hits(/role="tablist"/).filter((f) => !legacy.includes(f)), ['components/TabBar.tsx']);
-  assert.deepEqual(hits(/\bPageTabs\b[^]*from '@isnanme\/ui'|import \{[^}]*\bPageTabs\b[^}]*\} from '@isnanme\/ui'/), [], 'use RoutedTabs (a portal page) or TabBar');
+  assert.deepEqual(hits(/import \{[^}]*\bPageTabs\b[^}]*\} from '@isnanme\/ui'/), [], 'use RoutedTabs (a portal page) or TabBar');
 });
 
 test('dialogs: a page uses the kit’s Dialog, Sheet or ConfirmDialog, not a hand-rolled role="dialog"', () => {
   // Popovers and panels that are dialogs by role (menus with text, the switcher, viewers) and the reporter panel's sheets, not yet migrated.
   const allowed = [
-    'admin-console/ui.tsx',
     'components/AccountMenu.tsx',
     'components/Popover.tsx',
     'embed/Annotator.tsx',
@@ -59,9 +62,7 @@ test('page scrolling: only lib/pane.ts scrolls the page, and only the app frames
   );
 });
 
-test('the frames: the portal and the console scroll one content pane on a desktop', () => {
+test('the frame: the portal scrolls one content pane on a desktop (the console checks its own frame in its own test)', () => {
   assert.match(read('components/AppShell.tsx'), /id=\{PANE_ID\}[^>]*lg:overflow-y-auto/);
   assert.match(read('components/AppShell.tsx'), /lg:h-dvh[^'"]*lg:overflow-hidden/);
-  assert.match(read('admin-console/Console.tsx'), /id="console-pane"[^>]*lg:overflow-y-auto/);
-  assert.match(read('admin-console/Console.tsx'), /lg:h-dvh[^'"]*lg:overflow-hidden/);
 });

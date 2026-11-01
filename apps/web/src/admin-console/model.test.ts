@@ -108,3 +108,11 @@ test('Users tabs: All, Admins, Members, Disabled; a disabled admin shows under D
   assert.deepEqual(under('members'), [1]);
   assert.deepEqual(under('disabled'), [2, 3]);
 });
+
+test('the console follows the UI standard: on a desktop only the content pane scrolls, and it draws the shared TabBar (owner, 2026-11-01)', () => {
+  const consoleSrc = readFileSync(join(src, 'admin-console', 'Console.tsx'), 'utf8');
+  assert.match(consoleSrc, /id="console-pane"[^>]*lg:overflow-y-auto/);
+  assert.match(consoleSrc, /lg:h-dvh[^'"]*lg:overflow-hidden/);
+  assert.match(readFileSync(join(src, 'admin-console', 'UsersView.tsx'), 'utf8'), /from '\.\.\/components\/TabBar'/);
+  assert.match(readFileSync(join(src, 'admin-console', 'console.css'), 'utf8'), /@source '\.\.\/components\/TabBar\.tsx'/);
+});
