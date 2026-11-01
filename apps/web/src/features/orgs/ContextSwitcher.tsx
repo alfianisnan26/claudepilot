@@ -103,9 +103,13 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
           title={label}
           data-context-switcher="icon"
           onClick={() => setOpen(true)}
-          className="press inline-flex size-11 items-center justify-center rounded-full hover:bg-surface-2"
+          // Where the logo was (it takes no more room): 44 px to tap, the mark aligned with the page's gutter.
+          className="press -ml-2 inline-flex size-11 shrink-0 items-center justify-center rounded-xl hover:bg-surface-2"
         >
-          {currentOrg ? <OrgMark org={currentOrg} className="size-8 text-[15px]" /> : <UserRound className="size-[22px] text-ink-soft" />}
+          <span className="relative">
+            <LogoMark className="size-7" />
+            {currentOrg && <OrgMark org={currentOrg} className="absolute -right-1.5 -bottom-1.5 size-[18px] text-[9px] ring-2 ring-bg" />}
+          </span>
         </button>
         <Dialog open={open} onClose={() => setOpen(false)} title="Context" size="sm">
           {list}

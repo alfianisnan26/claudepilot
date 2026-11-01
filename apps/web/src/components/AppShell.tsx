@@ -3,20 +3,19 @@ import { motion } from 'motion/react';
 import { Ellipsis } from 'lucide-react';
 import { Fragment, Suspense, useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router';
-import { BAR_ITEMS, HOME, MORE_ITEMS, NAV, NAV_GROUPS, type NavItem } from '@/app/nav';
+import { BAR_ITEMS, MORE_ITEMS, NAV, NAV_GROUPS, type NavItem } from '@/app/nav';
 import { GlanceDock } from '@/features/glance/Dock';
 import { NavBadge } from '@/features/notify/NavBadge';
 import { AttentionBadge, AttentionRoot } from '@/features/attention/Root';
 import { ContextSwitcher, OrgMark } from '@/features/orgs/ContextSwitcher';
 import { OrgsProvider, useOrgs } from '@/features/orgs/OrgsProvider';
-import { GlanceStrip, useHasStrip } from '@/features/glance/Strip';
+import { GlanceStrip } from '@/features/glance/Strip';
 import { api } from '@/lib/api';
 import { ORG_SCOPED_LISTS_LIVE, serializeContext } from '@/lib/orgContext';
 import { workbenchPage } from '@/lib/panels';
 import { useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
 import { InfoTip } from './InfoTip';
-import { Logo } from './Logo';
 
 /** A phone tab bar only earns its place with two or more sections. */
 const showTabBar = NAV.length > 1;
@@ -42,8 +41,6 @@ function Shell() {
   // A Workbench page (T-158) gets the whole width (no centred column), less padding under it (it ends at the window's bottom), and
   // stays mounted across its own sub-paths: opening a ticket beside the board must not remount (and refetch) the board.
   const workbench = workbenchPage(pathname);
-  // The glance strip takes the phone bar's room, so the logo keeps to its mark while it shows.
-  const glance = useHasStrip('header');
   // The labels of renamed workspaces (T-42), once: every place that only holds a workspace id names it by its label.
   useEffect(() => void api.workspaces.labels().catch(() => undefined), []);
 
@@ -60,10 +57,10 @@ function Shell() {
 
       <header className="sticky top-0 z-40 border-b border-line bg-bg/80 pt-[var(--safe-top)] backdrop-blur-md sm:hidden">
         <div className="mx-auto flex h-16 max-w-4xl items-center gap-6 px-4">
-          <Logo to={HOME} label={!glance} />
+          {/* The context switcher in place of the logo, icon only (organizations §7; the side bar does the same on wider screens). */}
+          <ContextSwitcher variant="icon" />
           <div className="ml-auto flex items-center gap-1.5">
             <GlanceStrip placement="header" />
-            <ContextSwitcher variant="icon" />
             <AccountMenu onLogout={() => void logout()} />
           </div>
         </div>

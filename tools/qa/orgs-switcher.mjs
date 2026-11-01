@@ -85,7 +85,7 @@ try {
       check(`${t}: open: no sideways scroll`, s.docScroll <= s.docClient + 1, `${s.docScroll}/${s.docClient}`);
       await b.shot(`orgs-switcher-open-${t}`);
 
-      await b.clickText('Acme', { selector: '[data-context-list] button', exact: true });
+      await b.clickText('Acme', { selector: '[data-context-list] button' });
       await sleep(1200);
       check(`${t}: picking Acme stores org:<id> for this user`, (await stored(b)) === `org:${acme.id}`, String(await stored(b)));
       check(`${t}: the org's note says its lists are empty for now`, await b.eval(`!!document.querySelector('[data-org-scope-note]')`));
