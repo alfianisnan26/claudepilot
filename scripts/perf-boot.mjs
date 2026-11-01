@@ -7,8 +7,8 @@
 // with chat events, audits, usage samples, CI logs and tickets (about 1.5 KB per --rows row; 300000 is about 0.6 GB). Later runs
 // reuse it while the row count matches. Each run starts the portal from a clean environment (Kubernetes, Docker and Connect off,
 // NODE_ENV=production, no credentials of the caller), times the first 200 from /healthz, prints the timeline of its log lines, and
-// stops it. --pending makes every run a release with one light migration still to apply (the latest one is marked unapplied and its
-// effect undone), so the pre-migrate safety copy is measured too. --entry dist (default) runs the esbuild bundle a release runs
+// stops it. --pending makes every run a release with one light migration still to apply (migration 910 is marked unapplied and its
+// table dropped), so the pre-migrate safety copy is measured too. --entry dist (default) runs the esbuild bundle a release runs
 // (apps/server/dist, built when missing); tsx runs the sources; a path to a .js bundle runs that one (another commit's build, to
 // compare before and after on the same database and machine). After the first 200 it keeps asking /healthz for --settle-ms (default
 // 5000) and reports the slowest answer: work moved after listen must not stall the event loop. Exit 1 when the median is over --budget-ms.
@@ -68,7 +68,8 @@ async function boot(which = entry.split(',')[0]) {
     PORTAL_DOCKER_SOCKET: join(dir, 'no-docker.sock'),
     PORTAL_BOOT_TIMING: '1',
   };
-  const cmd = which === 'dist' ? ['node', ['dist/index.js']] : which === 'tsx' ? ['npx', ['tsx', 'src/index.ts']] : ['node', [resolve(which)]];
+  const cmd =
+    which === 'dist' ? ['node', ['dist/index.js']] : which === 'tsx' ? ['npx', ['tsx', 'src/index.ts']] : ['node', [resolve(which)]];
   const t0 = performance.now();
   const child = spawn(cmd[0], cmd[1], { cwd: server, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];
@@ -153,53 +154,94 @@ function seed(n) {
     log(`  seeded ${label}: ${count} rows in ${Math.round(performance.now() - t)} ms`);
   };
   const ws = (i) => `docker/ws${i % 30}`;
-  tx('chat_sessions', s.sessions,
+  tx(
+    'chat_sessions',
+    s.sessions,
     `INSERT INTO chat_sessions (id, workspace_id, title, state, state_since, process, created_at, last_activity_at, archived_at, ended_reason)
      VALUES (?, ?, ?, 'ended', ?, 'gone', ?, ?, ?, 'seed')`,
-    (i) => [`s${i}`, ws(i), `Session ${i}`, iso(i, s.sessions), iso(i, s.sessions), iso(i, s.sessions), i % 3 ? iso(i, s.sessions) : null]);
+    (i) => [`s${i}`, ws(i), `Session ${i}`, iso(i, s.sessions), iso(i, s.sessions), iso(i, s.sessions), i % 3 ? iso(i, s.sessions) : null],
+  );
   tx('chat_events', s.events, `INSERT INTO chat_events (session_id, seq, at, kind, uuid, payload) VALUES (?, ?, ?, ?, ?, ?)`, (i) => [
-    `s${i % s.sessions}`, Math.floor(i / s.sessions) + 1, iso(i, s.events), i % 4 ? 'assistant' : 'tool_result', `u${i}`,
+    `s${i % s.sessions}`,
+    Math.floor(i / s.sessions) + 1,
+    iso(i, s.events),
+    i % 4 ? 'assistant' : 'tool_result',
+    `u${i}`,
     JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: pad(600) }] } }),
   ]);
-  tx('chat_audit', s.chatAudit, `INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, 'info', 'turn', ?, ?, 'ui', ?)`,
-    (i) => [iso(i, s.chatAudit), `s${i % s.sessions}`, ws(i), JSON.stringify({ note: pad(150) })]);
-  tx('platform_audit', s.platformAudit, `INSERT INTO platform_audit (at, kind, actor, user_id, subject, detail) VALUES (?, ?, 'ui', 'u_owner', ?, ?)`,
-    (i) => [iso(i, s.platformAudit), `kind.${i % 20}`, `subj${i % 500}`, JSON.stringify({ note: pad(150) })]);
-  tx('pmcp_audit', s.pmcpAudit, `INSERT INTO pmcp_audit (at, request_id, token_id, method, tool, args, outcome) VALUES (?, ?, ?, 'tools/call', ?, ?, 'ok')`,
-    (i) => [iso(i, s.pmcpAudit), `r${i}`, `t${i % 10}`, `tool_${i % 40}`, JSON.stringify({ q: pad(100) })]);
-  tx('claude_usage_samples', s.usageSamples,
+  tx(
+    'chat_audit',
+    s.chatAudit,
+    `INSERT INTO chat_audit (at, severity, kind, session_id, workspace_id, actor, detail) VALUES (?, 'info', 'turn', ?, ?, 'ui', ?)`,
+    (i) => [iso(i, s.chatAudit), `s${i % s.sessions}`, ws(i), JSON.stringify({ note: pad(150) })],
+  );
+  tx(
+    'platform_audit',
+    s.platformAudit,
+    `INSERT INTO platform_audit (at, kind, actor, user_id, subject, detail) VALUES (?, ?, 'ui', 'u_owner', ?, ?)`,
+    (i) => [iso(i, s.platformAudit), `kind.${i % 20}`, `subj${i % 500}`, JSON.stringify({ note: pad(150) })],
+  );
+  tx(
+    'pmcp_audit',
+    s.pmcpAudit,
+    `INSERT INTO pmcp_audit (at, request_id, token_id, method, tool, args, outcome) VALUES (?, ?, ?, 'tools/call', ?, ?, 'ok')`,
+    (i) => [iso(i, s.pmcpAudit), `r${i}`, `t${i % 10}`, `tool_${i % 40}`, JSON.stringify({ q: pad(100) })],
+  );
+  tx(
+    'claude_usage_samples',
+    s.usageSamples,
     `INSERT INTO claude_usage_samples (at_ms, claude_id, workspace_id, win, used_pct, resets_at_ms, level, source) VALUES (?, ?, ?, 'five_hour', ?, ?, 'ok', 'probe')`,
-    (i) => [Date.now() - (s.usageSamples - i) * 30_000, `c${i % 8}`, ws(i), i % 100, Date.now() + 3_600_000]);
-  tx('chat_usage', s.chatUsage,
+    (i) => [Date.now() - (s.usageSamples - i) * 30_000, `c${i % 8}`, ws(i), i % 100, Date.now() + 3_600_000],
+  );
+  tx(
+    'chat_usage',
+    s.chatUsage,
     `INSERT INTO chat_usage (at, at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cost_usd, requests) VALUES (?, ?, ?, ?, ?, 'claude-opus', 1000, 500, 0.01, 1)`,
-    (i) => [iso(i, s.chatUsage), Date.now() - (s.chatUsage - i) * 60_000, `s${i % s.sessions}`, ws(i), `c${i % 8}`]);
-  tx('tickets', s.tickets,
+    (i) => [iso(i, s.chatUsage), Date.now() - (s.chatUsage - i) * 60_000, `s${i % s.sessions}`, ws(i), `c${i % 8}`],
+  );
+  tx(
+    'tickets',
+    s.tickets,
     `INSERT INTO tickets (type, priority, priority_rank, status, summary, description, source, reporter_kind, reporter_label, workspace_id, created_at, updated_at, bucket_key, bucket_number)
      VALUES ('task', 'normal', 2, ?, ?, ?, 'human', 'ui', 'owner', ?, ?, ?, 'PILOT', ?)`,
-    (i) => [i % 5 ? 'done' : 'open', `Ticket ${i}`, pad(400), ws(i), iso(i, s.tickets), iso(i, s.tickets), i + 1]);
-  tx('ticket_events', s.ticketEvents, `INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body) VALUES (?, ?, 'comment', 'ui', 'owner', ?)`,
-    (i) => [(i % s.tickets) + 1, iso(i, s.ticketEvents), pad(300)]);
-  tx('ci_runs', s.ciRuns,
+    (i) => [i % 5 ? 'done' : 'open', `Ticket ${i}`, pad(400), ws(i), iso(i, s.tickets), iso(i, s.tickets), i + 1],
+  );
+  tx(
+    'ticket_events',
+    s.ticketEvents,
+    `INSERT INTO ticket_events (ticket_number, at, kind, actor, actor_label, body) VALUES (?, ?, 'comment', 'ui', 'owner', ?)`,
+    (i) => [(i % s.tickets) + 1, iso(i, s.ticketEvents), pad(300)],
+  );
+  tx(
+    'ci_runs',
+    s.ciRuns,
     `INSERT INTO ci_runs (id, number, workspace_id, repo_id, repo, pipeline, trigger, ref, sha, status, actor, created_at) VALUES (?, ?, ?, 'r1', 'repo', 'gate', 'push', 'main', ?, 'passed', 'ui', ?)`,
-    (i) => [`run${i}`, i + 1, ws(i), randomBytes(20).toString('hex'), iso(i, s.ciRuns)]);
-  tx('ci_logs', s.ciLogs, `INSERT INTO ci_logs (run_id, job, step, bytes, text) VALUES (?, 'gate', ?, 6000, ?)`,
-    (i) => [`run${i % s.ciRuns}`, Math.floor(i / s.ciRuns), pad(4500)]);
-  db.prepare("INSERT INTO portal_meta (key, value) VALUES ('perf_seed_rows', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(n));
+    (i) => [`run${i}`, i + 1, ws(i), randomBytes(20).toString('hex'), iso(i, s.ciRuns)],
+  );
+  tx('ci_logs', s.ciLogs, `INSERT INTO ci_logs (run_id, job, step, bytes, text) VALUES (?, 'gate', ?, 6000, ?)`, (i) => [
+    `run${i % s.ciRuns}`,
+    Math.floor(i / s.ciRuns),
+    pad(4500),
+  ]);
+  db.prepare("INSERT INTO portal_meta (key, value) VALUES ('perf_seed_rows', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+    String(n),
+  );
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   db.close();
 }
 
-/** A release with one light migration to apply: the latest (a new table) is marked unapplied and its table dropped. */
+/**
+ * A release with one light migration to apply: migration 910 (a new table, user_layouts) is taken out of the applied set and its table
+ * dropped, so the next start runs it again (migrations run by set, not only by number) after the pre-migrate copy.
+ */
 function markLatestPending() {
   const db = new DatabaseSync(join(data, 'portal.db'));
   const applied = JSON.parse(db.prepare("SELECT value FROM portal_meta WHERE key = 'migrations_applied'").get().value);
-  const latest = Math.max(...applied);
   const created = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_layouts'").get();
-  if (latest !== 910 || !created) throw new Error(`--pending knows migration 910 (user_layouts); the latest applied is ${latest}: update markLatestPending`);
+  if (!applied.includes(910) || !created)
+    throw new Error('--pending re-runs migration 910 (user_layouts), which this database does not have: update markLatestPending');
   db.exec('DROP TABLE user_layouts');
-  const rest = applied.filter((v) => v !== latest);
-  db.prepare("UPDATE portal_meta SET value = ? WHERE key = 'migrations_applied'").run(JSON.stringify(rest));
-  db.exec(`PRAGMA user_version = ${Math.max(...rest)}`);
+  db.prepare("UPDATE portal_meta SET value = ? WHERE key = 'migrations_applied'").run(JSON.stringify(applied.filter((v) => v !== 910)));
   db.close();
 }
 
@@ -243,11 +285,14 @@ for (const [e, rs] of results) {
   summary.push({ entry: e, runs: rs.map((r) => r.ms), median, slowestAfterListen: med(rs.map((r) => r.slowest)) });
   if (!json) {
     console.log(`\n${e}: timeline of the median run (ms since spawn):`);
-    for (const [t, line] of rs.find((r) => r.ms === median).lines.slice(0, 60)) console.log(`  ${String(t).padStart(6)}  ${line.slice(0, 140)}`);
+    for (const [t, line] of rs.find((r) => r.ms === median).lines.slice(0, 60))
+      console.log(`  ${String(t).padStart(6)}  ${line.slice(0, 140)}`);
   }
 }
 if (json) console.log(JSON.stringify({ dbBytes, pending, budget, summary }));
 else
   for (const s of summary)
-    console.log(`boot to listen (${s.entry}): median ${s.median} ms (runs ${s.runs.join(', ')}), slowest /healthz after listen (median) ${s.slowestAfterListen} ms, budget ${budget} ms, database ${(dbBytes / 1e6).toFixed(0)} MB`);
+    console.log(
+      `boot to listen (${s.entry}): median ${s.median} ms (runs ${s.runs.join(', ')}), slowest /healthz after listen (median) ${s.slowestAfterListen} ms, budget ${budget} ms, database ${(dbBytes / 1e6).toFixed(0)} MB`,
+    );
 process.exit(over ? 1 : 0);

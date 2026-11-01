@@ -19,6 +19,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { isOrgId, isUserId, objectRef, workspaceRef, type ObjectType, type Owner } from '@portal/contracts';
 import { WORKSPACE_ID } from '../names.js';
+import { cachedStatement } from '../store/stmtCache.js';
 import { registerResolver, requireResolvers, type ResolvedObject } from './seam.js';
 
 /** The types this file resolves; `template` is required with no resolver (no table yet). */
@@ -49,7 +50,7 @@ function read<T>(deps: OwnerResolverDeps, sql: string, ...args: string[]): T | n
   const db = deps.db();
   if (!db) return 'error';
   try {
-    return (db.prepare(sql).get(...args) as T | undefined) ?? null;
+    return (cachedStatement(db, sql).get(...args) as T | undefined) ?? null;
   } catch {
     return 'error';
   }

@@ -30,7 +30,12 @@ export function preloadPages(): void {
     'requestIdleCallback' in window ? window.requestIdleCallback(fn, { timeout: 4000 }) : setTimeout(fn, 1500);
   const next = (i: number) => {
     if (i >= loaders.length) return;
-    idle(() => void loaders[i]!().catch(() => undefined).finally(() => next(i + 1)));
+    idle(
+      () =>
+        void loaders[i]!()
+          .catch(() => undefined)
+          .finally(() => next(i + 1)),
+    );
   };
   next(0);
 }

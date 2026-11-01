@@ -13,8 +13,22 @@ const check = (ok, what) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`);
 };
 const PAGES = [
-  '/admin/attention', '/admin/workspaces', '/admin/sessions', '/admin/tickets', '/admin/ci', '/admin/knowledge', '/admin/pools', '/admin/pools/skills',
-  '/admin/pools/skills/library', '/admin/targets', '/admin/access', '/admin/notifications', '/admin/settings', '/admin/profile', '/admin/usage', '/admin/shared',
+  '/admin/attention',
+  '/admin/workspaces',
+  '/admin/sessions',
+  '/admin/tickets',
+  '/admin/ci',
+  '/admin/knowledge',
+  '/admin/pools',
+  '/admin/pools/skills',
+  '/admin/pools/skills/library',
+  '/admin/targets',
+  '/admin/access',
+  '/admin/notifications',
+  '/admin/settings',
+  '/admin/profile',
+  '/admin/usage',
+  '/admin/shared',
 ];
 for (const width of [390, 1280]) {
   const b = await Browser.launch({ width, height: width < 600 ? 844 : 800 });
@@ -30,10 +44,16 @@ for (const width of [390, 1280]) {
       await b.goto(path, 0);
       const ok = await b
         .waitFor(`!document.querySelector('[aria-busy="true"]') && document.body.innerText.trim().length > 40`, 15_000, `${path} drawn`)
-        .then(() => true, () => false);
+        .then(
+          () => true,
+          () => false,
+        );
       const text = await b.eval(`document.body.innerText`);
       const where = await b.eval('location.pathname');
-      check(ok && !/Something went wrong|Could not show this|Reload/.test(text.slice(0, 2000)) && b.errors.length === errors, `${width}: ${path} opens (${where})`);
+      check(
+        ok && !/Something went wrong|Could not show this|Reload/.test(text.slice(0, 2000)) && b.errors.length === errors,
+        `${width}: ${path} opens (${where})`,
+      );
     }
     await b.goto('/admin/pools/skills/no-such-page', 0);
     await b.waitFor(`location.pathname === '/admin/home'`, 10_000, 'Home').then(

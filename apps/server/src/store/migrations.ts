@@ -4746,6 +4746,23 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 920,
+    name: 'performance: indexes for the scorecard continuation walk and the unfiltered CI runs list',
+    up(db) {
+      // Owner request 2026-11-01 (performance; the performance block: 920-929, docs/coord/PLAN.md), measured with scripts/perf-api.mjs on a
+      // seeded database. The scorecard (lab/scorecardData.ts) looks up continuations by `json_extract(detail, '$.from')` of
+      // `session.continued` audit rows: without an index every chunk of 400 ids read all of chat_audit (/api/lab/scorecard 466 ms p50 at
+      // 100k audit rows); its other lookup (`kind = 'session.continued' AND session_id IN (…)`) read every audit row of each session through
+      // chat_audit_session, so (session_id, kind) answers both terms. The runs list without a workspace filter orders all of ci_runs by
+      // (created_at, id): an index reads the newest page instead of sorting the table. Indexes only: no row is written.
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS chat_audit_continued_from ON chat_audit (json_extract(detail, '$.from')) WHERE kind = 'session.continued';
+        CREATE INDEX IF NOT EXISTS chat_audit_session_kind ON chat_audit (session_id, kind);
+        CREATE INDEX IF NOT EXISTS ci_runs_newest ON ci_runs (created_at, id);
+      `);
+    },
+  },
 ];
 
 /**

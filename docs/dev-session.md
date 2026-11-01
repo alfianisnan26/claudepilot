@@ -48,7 +48,13 @@ scripts/typecheck-worktree.sh <worktree>          # the gate's typecheck (contra
 scripts/worktree-new.sh T-<n> <slug>              # branch ticket/T-<n>-<slug> from origin/integration under ~/work/claudepilot.worktrees, deps linked; refuses an existing branch or folder, a bad slug (leading dash, glob characters); no path flags outside tests
 scripts/k3s-status.sh                             # Argo CD, pods, node load, warnings, the portal log
 kubectl -n isnan-claudepilot logs deploy/claudepilot-portal --tail=50
+node scripts/perf-boot.mjs --dir D [--pending]    # boot to listen on a seeded ~0.5 GB database (median of 5, budget 10 s); --entry a.js,b.js compares two builds
+node scripts/perf-api.mjs --dir D                 # p50/p95 of the hot API routes on that database
+node tools/qa/perf-web.mjs [--browser]            # the built web app's first-load scripts (gzip) and, against a SCRATCH_PRODUCTION portal, Home's paint times
 ```
+
+Every boot logs `[boot] listening after N ms (cpu M ms)` and the store's slow steps in `[store] ready (…)`: wall time far above CPU time
+means the boot waited (the disk, a starved CPU share).
 
 ## Releasing to the cluster
 

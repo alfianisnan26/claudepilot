@@ -61,7 +61,13 @@ if (flag('browser')) {
       await b.send('Network.setCacheDisabled', { cacheDisabled: true });
       if (cpu > 1) await b.send('Emulation.setCPUThrottlingRate', { rate: cpu });
       // --net 4g: a phone on a mobile network (100 ms round trip, 9 Mbit/s down, 2 up).
-      if (net === '4g') await b.send('Network.emulateNetworkConditions', { offline: false, latency: 100, downloadThroughput: 1_125_000, uploadThroughput: 250_000 });
+      if (net === '4g')
+        await b.send('Network.emulateNetworkConditions', {
+          offline: false,
+          latency: 100,
+          downloadThroughput: 1_125_000,
+          uploadThroughput: 250_000,
+        });
       await b.goto('/admin/home', 0);
       await b.waitFor(`document.querySelectorAll('[data-home-card]').length > 0`, 60_000, 'a Home card');
       const t = await b.eval(`(() => {
@@ -79,7 +85,9 @@ if (flag('browser')) {
     }
   }
   const med = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
-  Object.assign(report, { browser: { width, cpu, net, runs, fcpMs: med(fcp), homeCardMs: med(home), scriptsKbByHome: med(jsKb), fcpRuns: fcp, homeRuns: home } });
+  Object.assign(report, {
+    browser: { width, cpu, net, runs, fcpMs: med(fcp), homeCardMs: med(home), scriptsKbByHome: med(jsKb), fcpRuns: fcp, homeRuns: home },
+  });
 }
 
 if (flag('json')) console.log(JSON.stringify(report));

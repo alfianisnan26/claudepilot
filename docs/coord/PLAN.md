@@ -151,6 +151,7 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
    T-975's on its branch): take the next free number there after checking integration and the open branches.
    The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-903 used, 2026-10-31: 902 is reporter_ip, 903 the annotations).
    Glance (docs/prd/glance-widgets.md) has its own block, 910-919 (910 user_layouts: the Home and Glance layouts per person and org context, D-111 D6, 2026-11-01).
+   Performance (indexes measured with scripts/perf-api.mjs) has its own block, 920-929 (920 chat_audit_continued_from, chat_audit_session_kind, ci_runs_newest, 2026-11-01, branch perf/local-wins).
    Organizations (docs/prd/organizations.md §8) have their own block, 460-479 (2026-10-31: 460 founder account and password_set, 461 token owners, 462 token accounts and session starters,
    slice 0; 463 orgs, org_members and the keep-an-owner triggers, 464 user_abilities, slice 3; 465 ticket_buckets.owner_kind, 466 grants, 467 org_break_glass, slice 5 (org-owned objects, break-glass); 468 org_invitations, 469 orgs.suspended_by and platform_audit.org_id, slice 8 (2026-11-01); 470 admin_sessions,
    slice 4 (the Admin console); 471 org_domains, 472 sso_providers.org_id/groups_claim/group_rules, 473 org_sso_sessions and org_sso_signins, 474 org_sso_exceptions,

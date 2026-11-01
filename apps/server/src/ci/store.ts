@@ -3,6 +3,7 @@
 import { AppError } from '@isnanme/core';
 import { CURSOR_MAX_LIMIT } from '@portal/contracts';
 import { clampLimit, cursorAfter, keysetPage, SCAN_FACTOR } from '../store/keyset.js';
+import { cachedStatement } from '../store/stmtCache.js';
 import type { Store } from '../store/store.js';
 
 export interface RepoRow {
@@ -363,7 +364,8 @@ export class CiStore {
   }
 
   run(id: string): RunRow | undefined {
-    return this.#db.prepare('SELECT * FROM ci_runs WHERE id = ?').get(id) as unknown as RunRow | undefined;
+    // Asked once per row by the runs list's authorization: prepared once (stmtCache.ts).
+    return cachedStatement(this.#db, 'SELECT * FROM ci_runs WHERE id = ?').get(id) as unknown as RunRow | undefined;
   }
 
   updateRun(id: string, patch: RunPatch): void {
