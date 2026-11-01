@@ -30,6 +30,7 @@ import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { VscodePage } from '@/features/vscode/VscodePage';
 import { useAppUpdate } from '@/lib/appUpdate';
 import { MemberPage } from '@/features/auth/MemberPage';
+import { ProfilePage } from '@/features/profile/ProfilePage';
 import { AuthProvider, isAdminState, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
 import { HOME, isAdminOnlyPath } from './nav';
@@ -143,6 +144,8 @@ function Pages() {
         <Route path="access" element={<AccessPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        {/* The person's own account (owner request 2026-11-01), from the account menu; members and admins alike. */}
+        <Route path="profile" element={<ProfilePage />} />
         {/* Org settings (organizations §7): its own page per org, reached from the context switcher. */}
         <Route path="orgs/:id" element={<OrgSettingsPage />} />
         {/* Accepting an organization invitation (slice 8): the code is in the link's fragment. */}
@@ -214,6 +217,7 @@ function Pages() {
           </SignedInOnly>
         }
       />
+      <Route path="/profile" element={<Navigate to="/admin/profile" replace />} />
       <Route path="*" element={<Navigate to={HOME} replace />} />
     </Routes>
   );

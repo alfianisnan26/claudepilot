@@ -133,7 +133,7 @@ export class Personas {
 }
 
 /** A request body, at most `max` bytes: refused at the declared length, and again while reading. */
-async function readCapped(req: Request, max: number): Promise<Buffer> {
+export async function readCapped(req: Request, max: number): Promise<Buffer> {
   const tooBig = () => new AppError('PAYLOAD_TOO_LARGE', `The image is larger than ${max / 1024 / 1024} MB.`);
   if (Number(req.headers.get('content-length') ?? 0) > max) throw tooBig();
   const reader = req.body?.getReader();

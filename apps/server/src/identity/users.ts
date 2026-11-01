@@ -96,8 +96,11 @@ export class PortalUsers {
     const at = this.now().toISOString();
     try {
       this.#w()
-        .prepare('INSERT INTO users (id, email, email_key, display_name, role, state, password_hash, password_changed_at, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, email, email, displayName, role, 'active', hash, at, at, by);
+        .prepare(
+          'INSERT INTO users (id, email, email_key, display_name, role, state, password_hash, password_changed_at, created_at, created_by, name_locked) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        // Migration 407: a name given at creation is kept; one made from the email may be filled by a later SSO sign-in.
+        .run(id, email, email, displayName, role, 'active', hash, at, at, by, typeof req.displayName === 'string' && req.displayName.trim() ? 1 : 0);
     } catch (e) {
       // Review #9: two creates of one email at once: the unique index refuses the second; answer 409, not 500.
       if (/UNIQUE/i.test(String((e as Error).message))) throw new AppError('CONFLICT', 'An account with that email exists.', { details: { email: 'Already used.' } });
@@ -116,7 +119,9 @@ export class PortalUsers {
     db.exec('BEGIN');
     try {
       if (req.role === 'admin' || req.role === 'member') db.prepare('UPDATE users SET role = ? WHERE id = ?').run(req.role, id);
-      if (typeof req.displayName === 'string' && req.displayName.trim()) db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(req.displayName.trim().slice(0, 60), id);
+      // Migration 407: a name a person (or an admin) gave is never overwritten by an SSO sign-in's claims (identity/profile.ts).
+      if (typeof req.displayName === 'string' && req.displayName.trim())
+        db.prepare('UPDATE users SET display_name = ?, name_locked = 1 WHERE id = ?').run(req.displayName.trim().slice(0, 60), id);
       if (req.state === 'active' || req.state === 'disabled') db.prepare('UPDATE users SET state = ?, disabled_at = ? WHERE id = ?').run(req.state, req.state === 'disabled' ? at : null, id);
       if (hash) db.prepare('UPDATE users SET password_hash = ?, password_changed_at = ?, password_set = 1 WHERE id = ?').run(hash, at, id);
       db.exec('COMMIT');

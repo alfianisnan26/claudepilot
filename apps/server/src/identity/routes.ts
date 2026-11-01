@@ -30,7 +30,9 @@ import type { Context, Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { Portal } from '../portal.js';
 import { RateLimiter } from '../rateLimit.js';
+import { deviceLabel } from './device.js';
 import type { SessionGrants } from './grants.js';
+import type { PortalProfiles } from './profile.js';
 import { SsoError, type SsoProviders } from './sso.js';
 import type { PortalTeams } from './teams.js';
 import type { PortalUsers } from './users.js';
@@ -60,6 +62,8 @@ export interface IdentityRouteDeps {
    * last sign-in (orgs/sso.ts). `userId` is the user the account acts as.
    */
   orgSignIn?: (e: { orgId: string; providerId: string; userId: string; groups: string[] | null; created: boolean; sessionHash: string | null }) => void;
+  /** Owner request 2026-11-01: an SSO sign-in fills the profile from the provider's claims (never what the person set). */
+  profiles?: PortalProfiles;
 }
 
 export const SSO_COOKIE = 'portal_sso';
@@ -324,10 +328,13 @@ export function identityRoutes(d: IdentityRouteDeps) {
           // The callback is a cross-site navigation, so the Strict session cookie is not here: the session was recorded at the start, in
           // this browser (the binding cookie proves it).
           if (r.orgId) d.orgSignIn?.({ orgId: r.orgId, providerId: r.providerId, userId: principal(r.user.id), groups: r.groups, created: false, sessionHash: r.stepUpSession });
+          void d.profiles?.adoptClaims(r.user.id, r.profile).catch(() => undefined);
           audit('sso.step_up', r.user.id, { providerId: r.providerId, orgId: r.orgId, linked: r.linked }, r.linked ? 'medium' : 'info', r.user.id);
           return c.redirect(r.returnTo, 302);
         }
-        const token = portal.openSession(r.user.id);
+        const token = portal.openSession(r.user.id, { device: deviceLabel(c.req.header('user-agent')), method: `sso:${r.providerId}` });
+        // Not awaited: a picture fetch never holds the redirect; it lands for the next page load.
+        void d.profiles?.adoptClaims(r.user.id, r.profile).catch(() => undefined);
         setCookie(c, d.cookie, token, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: Math.floor(d.ttlMs / 1000) });
         if (r.orgId) {
           try {

@@ -24,6 +24,7 @@ import {
 } from '@portal/contracts';
 import type { SecretBox } from '../store/secretBox.js';
 import { normalizeIssuer, OidcClient, randomToken, type IdTokenClaims } from './oidc.js';
+import type { IdpClaims } from './profile.js';
 import type { PortalTeams } from './teams.js';
 import type { PortalUsers } from './users.js';
 
@@ -77,6 +78,8 @@ export interface SsoResult {
   /** The groups claim's values (at most 200, strings only), or null when the provider reads none. Never stored. */
   groups: string[] | null;
   stepUp: boolean;
+  /** Owner request 2026-11-01: what the ID token says about the person, for the profile (identity/profile.ts adopts what is not set). */
+  profile: IdpClaims;
   /** A step-up: the web session (by its hash) to mark. */
   stepUpSession: string | null;
   returnTo: string;
@@ -584,7 +587,9 @@ export class SsoProviders {
       throw new SsoError('token', e instanceof Error ? e.message : 'The provider’s answer did not check out.');
     }
     const out = pending.stepUpAccount ? this.#stepUp(r, claims, pending.stepUpAccount) : await this.#account(r, claims);
-    return { ...out, orgId: r.org_id ?? null, groups: r.org_id ? this.#groups(r, claims) : null, returnTo: pending.returnTo, stepUpSession: pending.stepUpSession ?? null };
+    const str = (v: unknown) => (typeof v === 'string' ? v.slice(0, 2048) : null);
+    const profile: IdpClaims = { name: str(claims.name), preferredUsername: str(claims.preferred_username), picture: str(claims.picture), allowPrivate: this.#privateOk(r) };
+    return { ...out, profile, orgId: r.org_id ?? null, groups: r.org_id ? this.#groups(r, claims) : null, returnTo: pending.returnTo, stepUpSession: pending.stepUpSession ?? null };
   }
 
   #orgActive(orgId: string): boolean {
@@ -630,7 +635,7 @@ export class SsoProviders {
    * A step-up (slice 10, §9.4 "links from Profile", §9.5): the signed-in account adds the org's provider to its session. The identity must be
    * this account's already, or free and carrying this account's own (verified) email on a verified domain: then it is linked. Nothing else.
    */
-  #stepUp(r: Row, claims: IdTokenClaims, accountId: string): Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession'> {
+  #stepUp(r: Row, claims: IdTokenClaims, accountId: string): Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession' | 'profile'> {
     const { email } = this.#email(r, claims);
     const domain = this.#domainOf(r, email);
     let user: PortalUser;
@@ -658,7 +663,7 @@ export class SsoProviders {
     return { user, providerId: r.id, created: false, linked: newLink, guarded: false, stepUp: true };
   }
 
-  async #account(r: Row, claims: IdTokenClaims): Promise<Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession'>> {
+  async #account(r: Row, claims: IdTokenClaims): Promise<Omit<SsoResult, 'orgId' | 'groups' | 'returnTo' | 'stepUpSession' | 'profile'>> {
     const { email, verified } = this.#email(r, claims);
     const domain = this.#domainOf(r, email);
     const db = this.#w();

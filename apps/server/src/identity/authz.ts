@@ -12,6 +12,7 @@ const DELEGATE: RoutePolicy = {
   kind: 'handler',
   checks: ['any signed-in account (portal.anySession), member included: only sessions a grant names to this account (identity/grants.ts) at the level it gives'],
 };
+const SELF_DOOR: RoutePolicy = { kind: 'handler', checks: ['any signed-in account (portal.anySession), member included: its own profile row only (identity/profile.ts); the server code is refused'] };
 const TEAM_DOOR: RoutePolicy = { kind: 'handler', checks: ['any signed-in account (portal.anySession): the team must be one the account is in; changing members needs its owner role (identity/teams.ts)'] };
 
 export const IDENTITY_POLICIES: RoutePolicies = {
@@ -26,6 +27,13 @@ export const IDENTITY_POLICIES: RoutePolicies = {
   // The person's own account.
   'POST /api/me/password': { kind: 'handler', checks: ['the signed-in account’s own current password (identity/users.ts), throttled'] },
   'GET /api/me': DELEGATE,
+  // Owner request 2026-11-01, the Profile: only the signed-in account's own row, by the session's id (never one from the request).
+  'PATCH /api/me': SELF_DOOR,
+  'POST /api/me/avatar': SELF_DOOR,
+  'DELETE /api/me/avatar': SELF_DOOR,
+  'GET /api/me/devices': SELF_DOOR,
+  'DELETE /api/me/devices/:id': { kind: 'handler', checks: ['any signed-in account: ends one of ITS OWN web sessions by handle (portal.revokeSessionOf looks only at that account’s sessions)'] },
+  'GET /api/users/avatars/:sha': { kind: 'handler', checks: ['any live session (portal.anySession): a picture by its content hash, no account data'] },
   'GET /api/me/teams': TEAM_DOOR,
   'GET /api/me/sessions': DELEGATE,
   'GET /api/me/sessions/:id': DELEGATE,
