@@ -1659,6 +1659,8 @@ function gitConfigHit(kv, unseen, st) {
 // above removes quotes and backslashes), takes its real path and allows it only below a lane root. Roots: the lane folder, and
 // the lines of a root-owned file (CLAUDEPILOT_GUARD_GITC_ROOTS_FILE, for a test; else /etc/claudepilot/git-c-roots).
 const GITC_DEFAULT_ROOT = '/home/node/work/agentic-worktrees';
+// The calling session's permission mode is Bypass (Claude Code's hook input permission_mode); set per decision in verdictOf.
+let GITC_BYPASS = false;
 const GITC_ROOTS_FILE = process.env.CLAUDEPILOT_GUARD_GITC_ROOTS_FILE || '/etc/claudepilot/git-c-roots';
 
 // PILOT-998: a line "tool <absolute path>" names a read-only tool checkout (the main ClaudePilot folder whose scripts every lane runs).
@@ -1676,7 +1678,9 @@ function gitCRoots() {
   } catch (e) {
     // no file: only the default root
   }
-  return { extra: extra, tools: tools, active: extra.length > 0 || isDir(GITC_DEFAULT_ROOT) };
+  // Owner, 2026-11-01: the lane checks keep dontAsk lanes inside their allow rules (they match the command text). A session in Bypass
+  // has no allow rules to escape, so they are off for it; every other protection of this guard still applies.
+  return { extra: extra, tools: tools, active: !GITC_BYPASS && (extra.length > 0 || isDir(GITC_DEFAULT_ROOT)) };
 }
 
 const GIT_TOOL_FORMS = 'fetch, pull --ff-only, merge --ff-only, log, show, status, rev-parse, diff and branch --contains';
@@ -2542,6 +2546,7 @@ function verdictOf(input) {
   // PILOT-998: HOME_TOUCHED belongs to ONE tool call (every lex of it, bash -c bodies included); a decision starts clean. Today each
   // decision is its own process, so this only matters if the guard ever decides more than one call per process.
   HOME_TOUCHED = false;
+  GITC_BYPASS = input.permission_mode === 'bypassPermissions';
   try {
     return check(tool, ti, cwd);
   } catch (e) {
@@ -2604,7 +2609,7 @@ export const GITC_ROOTS: readonly string[] = [
  * The read-only tool checkouts (PILOT-998), the one list: lanes run their scripts by these absolute paths and may keep them current
  * with `git -C <root>` fetch, pull --ff-only, merge --ff-only, log, show, status, rev-parse, diff and branch --contains, nothing else.
  */
-export const GITC_TOOL_ROOTS: readonly string[] = ['/home/node/work/claudepilot'];
+export const GITC_TOOL_ROOTS: readonly string[] = ['/home/node/work/claudepilot', '/home/node/work/konfersi-universe'];
 
 /**
  * The file's content: one lane root a line, then one `tool <path>` line per tool checkout. Throws for a lane root that is not

@@ -1313,6 +1313,7 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
     '/home/node/work/tradingbot.worktrees',
     '/home/node/work/konfersi-universe.worktrees',
     'tool /home/node/work/claudepilot', // PILOT-998: the read-only tool checkout
+    'tool /home/node/work/konfersi-universe', // 2026-11-01: the Konfersi leads read their main checkout (fetch, log, status, worktree list)
   ]);
   const bundle = compile({
     portalId: 'p',
@@ -1917,4 +1918,14 @@ test('T-713, T-980: own-worktree merge --no-edit, revert --no-edit and checkout 
     if (r.code !== 2 || !r.stderr.startsWith(RULE_GUARD_MESSAGE)) misses.push(`refused: ${what}: ${command} -> ${r.code} ${r.stderr}`);
   }
   assert.equal(misses.join('\n'), '');
+});
+
+test('owner 2026-11-01: a session in Bypass is not held by the lane git -C checks (no allow rules to escape); the other protections stay', () => {
+  const { g, wt, main, env } = gitCRig();
+  const as = (command: string, mode: string) => run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env, mode });
+  refused(as(`git -C ${main} status`, 'default'), 'a lane in default mode: the main checkout stays refused');
+  refused(as('W=' + main + '; git -C $W status', 'dontAsk'), 'a dontAsk lane: a variable after -C stays refused');
+  assert.equal(as(`git -C ${main} status`, 'bypassPermissions').code, 0, 'Bypass: git -C on the main checkout passes');
+  assert.equal(as('for r in a b; do git -C $r status; done', 'bypassPermissions').code, 0, 'Bypass: a loop variable after -C passes');
+  refused(run(g, 'Write', { file_path: join(main, '.claude', 'settings.json'), content: '{}' }, { cwd: wt, env, mode: 'bypassPermissions' }), 'Bypass still cannot write Claude Code settings');
 });
