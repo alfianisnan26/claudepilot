@@ -1,6 +1,7 @@
 // Organizations (docs/prd/organizations.md): a tenant above teams. Slice 3 (§13.2 row 3) is the core: the organization, its memberships and
 // roles, the "always one active owner" invariant (service and trigger), and the per-user ABILITY `orgs.create` an instance admin grants
-// (off by default, OD-2). Invitations, teams in orgs, org-owned objects, sharing to an org, SSO and the Admin console come in later slices.
+// (off by default, OD-2). Slice 5: org-owned objects, Move to organization, break-glass (below). Invitations, teams in orgs, sharing to an
+// org and SSO come in later slices.
 //
 // Rights (authz.ts, object type `org`): owner and admin hold `manage` on the org, member and guest `view`, anyone else nothing, answered as a
 // missing org (404). Owner-only acts (changing owners, deleting) are checked by role in the service. Membership is read on every decision.
