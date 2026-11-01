@@ -103,6 +103,8 @@ export function createChatRoutes(controller: ChatController): Hono {
     // Only the person's own request can ask for Bypass to be allowed later in the session (FR20); the policy decides.
     // Organizations slice 0 (review M2): the account starting it, so its agents act as that account and stop with it.
     const who = actorOf(c);
+    // D-82 S1a: continuing a chat carries its conversation into the new one, so the old one must be the person's to read (the same 404).
+    if (typeof req.continuedFrom === 'string' && req.continuedFrom) requireCan(who, 'view', sessionRef(req.continuedFrom));
     const account = who.kind === 'user' ? (who.accountId ?? null) : undefined;
     return c.json(success(await controller.create(req, { bypassOptIn: req.allowBypass === true, ...(account !== undefined ? { account } : {}) })), 201);
   });

@@ -7468,9 +7468,26 @@ export class ChatController {
     return this.#chat.startedByAccount(id);
   }
 
+  /**
+   * D-82 S1a (member access): the user who owns a session a given email account started, or null for the founding user's. app.ts installs it:
+   * a MEMBER account's sessions are that member's (private to them unless shared); an admin's, the server code's, a ticket's or a trigger's
+   * stay the founding user's (admins hold what the founding user holds, so nothing changes for them). Read on every decision.
+   */
+  sessionOwnerOf: (accountId: string) => string | null = () => null;
+
   sessionFacts(id: string): { id: string; workspaceId: string; ownerId: string | null } | null {
     const row = this.#chat.row(id);
-    return row ? { id: row.id, workspaceId: row.workspace_id, ownerId: null } : null;
+    if (!row) return null;
+    const account = (row as { started_by_account?: string | null }).started_by_account ?? null;
+    let ownerId: string | null = null;
+    if (account) {
+      try {
+        ownerId = this.sessionOwnerOf(account);
+      } catch {
+        ownerId = null;
+      }
+    }
+    return { id: row.id, workspaceId: row.workspace_id, ownerId };
   }
 
   /**

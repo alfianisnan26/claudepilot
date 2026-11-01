@@ -526,6 +526,10 @@ The console becomes the one place where everything instance-wide is controlled. 
 - **Tests:** server `orgs/orgsSettings.test.ts` (policies: who may and which keys, merge, nothing written on refusal; `may` against the services; the kind filter; team and move rows in the org's audit, failing without the fix; the routes over HTTP); web `features/orgs/settingsRules.test.ts`; browser `tools/qa/org-settings.mjs` (390 and 1280, light and dark: every owner section, 44 px at 390, no sideways scroll, the picker and side list, the audit filter, Move here, Delete held until the slug matches).
 - **Not in this slice:** making a share from Org settings (shares are made from the object's Share dialog), `externalShares` in effect, a share's revoke for a manager of the object who is not an org manager (the page does not offer it; the server allows it), team descriptions.
 
+### 13.10 Member access (D-82 S1a, owner request 2026-11-01, branch `feat/member-access-s1a`)
+
+Members (an org's people, signed in through its SSO) pass the session middleware; the route's declared policy and `can()` decide, so an org share or a team share at view or operate is exactly what they reach, and everything else is the same 404. Platform areas stay the admins'. The notes above that say a member account cannot reach the main portal no longer hold. Details: `docs/prd/multi-user.md` §22.
+
 ## 14. Double check: the multi-user approach and its state today
 
 The direction of the existing PRDs is sound: one `can()`, resolvers per type, owners plus grants plus teams, no policy engine, the same 404, tokens capped at use time, shadow then enforce. The organization model above is a small extension of it. What is wrong is the distance between that design and the running code, and that several shortcuts taken "while there is one person" are now load-bearing for real second accounts.

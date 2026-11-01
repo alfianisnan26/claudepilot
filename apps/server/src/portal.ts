@@ -144,13 +144,26 @@ export class Portal {
   }
 
   /**
-   * A FULL session: the server code's, or an admin account's (MU2 S1a). A member's session is NOT one, so every check that asks this (the
-   * HTTP guard, the chat, terminal and browser sockets, re-auth) refuses a member by itself; `anySession` is the member-aware door.
+   * A FULL session: the server code's, or an admin account's (MU2 S1a). A member's session is NOT one. Since D-82 S1a (member access) only
+   * what is the platform admin's asks this: the server code's state (`adminState`), a new code, re-auth for Bypass. Everything a member may
+   * also reach (the HTTP guard, the sockets) asks `personSession` and lets the seam decide.
    */
   session(token: string | undefined): Session | undefined {
     const s = this.anySession(token);
     if (!s || !s.userId) return s;
     return this.roleOf(s.userId) === 'admin' ? s : undefined;
+  }
+
+  /**
+   * D-82 S1a (member access, owner 2026-11-01): a session that acts as a PERSON: the server code's, an active admin's or an active member's.
+   * Not one whose account cannot be read right now ('unavailable': fail closed), is disabled or gone. What such a person may do is the seam's
+   * (`can()`, the route guard's declared policy and its member doors), never this.
+   */
+  personSession(token: string | undefined): Session | undefined {
+    const s = this.anySession(token);
+    if (!s || !s.userId) return s;
+    const role = this.roleOf(s.userId);
+    return role === 'admin' || role === 'member' ? s : undefined;
   }
 
   /** Any live session, a member's included; an account that is gone or disabled ends its sessions here. */

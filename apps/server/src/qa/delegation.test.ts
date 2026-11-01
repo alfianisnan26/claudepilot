@@ -75,7 +75,7 @@ test('a member sees only what is delegated; view reads; operate sends, answers a
     assert.equal((await call('GET', '/api/me/sessions/lead', undefined, m)).status, 404);
     assert.equal((await call('GET', '/api/me/sessions/nope', undefined, m)).status, 404);
     // The grant routes are the owner's: a member is refused.
-    assert.equal((await call('PUT', '/api/admin/session-grants/lead', { userId: u.id, level: 'operate' }, m)).status, 403);
+    assert.equal((await call('PUT', '/api/admin/session-grants/lead', { userId: u.id, level: 'operate' }, m)).status, 404, 'D-82 S1a: an admin route is the same 404 for a member');
 
     // View: list, read; never send, answer or stop.
     assert.equal((await call('PUT', '/api/admin/session-grants/lead', { userId: u.id, level: 'view' }, admin)).status, 200);
@@ -104,7 +104,7 @@ test('a member sees only what is delegated; view reads; operate sends, answers a
     assert.equal((await call('POST', '/api/me/sessions/lead/stop', {}, m)).status, 200);
     assert.equal((await call('POST', '/api/me/sessions/other/send', { text: 'x' }, m)).status, 404, 'operate on one session reaches no other');
     assert.deepEqual(chat.calls, [`send lead please continue account:${u.id}`, `respond lead r1 deny account:${u.id}`, `control lead stop account:${u.id}`]);
-    assert.equal((await call('GET', '/api/workspaces', undefined, m)).status, 403, 'still no admin route');
+    assert.equal((await call('GET', '/api/admin/users', undefined, m)).status, 404, 'still no admin route (D-82 S1a: the same 404)');
 
     // Review m6: operate on a Bypass session needs the owner's acknowledgement; m1: who granted it; m2: no grant to a disabled account.
     assert.equal((await call('PUT', '/api/admin/session-grants/wild', { userId: u.id, level: 'operate' }, admin)).status, 422);

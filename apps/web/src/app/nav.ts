@@ -1,4 +1,4 @@
-import { Bell, Boxes, CalendarClock, ChartColumn, Hand, House, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Ticket, Workflow, type LucideIcon } from 'lucide-react';
+import { Bell, Boxes, CalendarClock, ChartColumn, Hand, House, KeyRound, Layers, Library, MessagesSquare, Server, Settings, Share2, Ticket, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface NavItem {
   id: string;
@@ -9,6 +9,13 @@ export interface NavItem {
   group: 'work' | 'admin';
   /** In the phone bar itself. Pages added later leave it unset: they go in its More sheet. */
   bar?: boolean;
+  /**
+   * D-82 S1a (member access): a platform area (its routes are `platform(*)` on the server, the same 404 for a member). Hidden for a person who
+   * is not an admin; their pages are not reachable either (App.tsx `AdminOnly`).
+   */
+  adminOnly?: true;
+  /** Only for a member account: the sessions shared with them through the delegation door and their teams (the former member page). */
+  memberOnly?: true;
 }
 
 /**
@@ -29,25 +36,44 @@ export const NAV: NavItem[] = [
   { id: 'knowledge', to: '/admin/knowledge', label: 'Knowledge', icon: Library, group: 'work' },
   // A git remote on each workspace and the runs of the pipelines in its repositories (Local git and CI/CD PRD).
   { id: 'ci', to: '/admin/ci', label: 'CI', icon: Workflow, group: 'work' },
-  { id: 'usage', to: '/admin/usage', label: 'Usage', icon: ChartColumn, group: 'admin' },
+  // D-82 S1a: what was shared with a member account directly (agents through the delegation door) and their teams; an admin sees it all already.
+  { id: 'shared', to: '/admin/shared', label: 'Shared', icon: Share2, group: 'work', memberOnly: true },
+  { id: 'usage', to: '/admin/usage', label: 'Usage', icon: ChartColumn, group: 'admin', adminOnly: true },
   // What runs by itself: cron triggers, the portal's loops, the apps open in App mode (owner, 2026-10-18; T-965).
-  { id: 'schedules', to: '/admin/schedules', label: 'Schedules', icon: CalendarClock, group: 'admin' },
+  { id: 'schedules', to: '/admin/schedules', label: 'Schedules', icon: CalendarClock, group: 'admin', adminOnly: true },
   // One hub for every pool type, Accounts first (Skillset PRD §18 A8).
-  { id: 'pools', to: '/admin/pools', label: 'Pools', icon: Layers, group: 'admin' },
+  { id: 'pools', to: '/admin/pools', label: 'Pools', icon: Layers, group: 'admin', adminOnly: true },
   // Where workspaces run, and machines that connect to the portal (Targets and Connect PRD §16).
-  { id: 'targets', to: '/admin/targets', label: 'Targets', icon: Server, group: 'admin' },
-  { id: 'access', to: '/admin/access', label: 'Access', icon: KeyRound, group: 'admin' },
+  { id: 'targets', to: '/admin/targets', label: 'Targets', icon: Server, group: 'admin', adminOnly: true },
+  { id: 'access', to: '/admin/access', label: 'Access', icon: KeyRound, group: 'admin', adminOnly: true },
   // What arrived and where it goes: devices, channels, quiet hours (PWA PRD §11).
   { id: 'notifications', to: '/admin/notifications', label: 'Notifications', icon: Bell, group: 'admin' },
   // Portal-wide switches areas define: MCP lockdown, agents, sessions (Settings PRD).
-  { id: 'settings', to: '/admin/settings', label: 'Settings', icon: Settings, group: 'admin' },
+  { id: 'settings', to: '/admin/settings', label: 'Settings', icon: Settings, group: 'admin', adminOnly: true },
 ];
 
 export const HOME = NAV[0]!.to;
 
-/** The sidebar's lists: work, then admin. Where an item sits in `NAV` does not matter, its group does. */
-export const NAV_GROUPS: NavItem[][] = (['work', 'admin'] as const).map((g) => NAV.filter((i) => i.group === g)).filter((items) => items.length > 0);
+/** What one person's navigation holds: everything for an admin; without the platform areas for a member (D-82 S1a). */
+export interface NavFor {
+  items: NavItem[];
+  /** The sidebar's lists: work, then admin. Where an item sits in `NAV` does not matter, its group does. */
+  groups: NavItem[][];
+  /** What the phone bar shows, and what its More sheet lists. */
+  bar: NavItem[];
+  more: NavItem[];
+}
 
-/** What the phone bar shows, and what its More sheet lists. */
-export const BAR_ITEMS = NAV.filter((i) => i.bar);
-export const MORE_ITEMS = NAV.filter((i) => !i.bar);
+export function navFor(admin: boolean): NavFor {
+  const items = NAV.filter((i) => (admin ? !i.memberOnly : !i.adminOnly));
+  return {
+    items,
+    groups: (['work', 'admin'] as const).map((g) => items.filter((i) => i.group === g)).filter((group) => group.length > 0),
+    bar: items.filter((i) => i.bar),
+    more: items.filter((i) => !i.bar),
+  };
+}
+
+/** A path inside a platform area (a member is sent home from it). */
+export const isAdminOnlyPath = (pathname: string): boolean => NAV.some((i) => i.adminOnly && (pathname === i.to || pathname.startsWith(`${i.to}/`)));
+

@@ -21,6 +21,7 @@ import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { ReposChip, REPOS_CHIP_ATTR, reposLabel, useReposOverview } from '@/features/repos';
 import { api, errorText } from '@/lib/api';
+import { isAdminState, useAuth } from '@/lib/auth';
 import { useLive, useLiveConnected } from '@/lib/live';
 import { formatBytes, formatDateTime, timeAgo } from '@/lib/format';
 import { BulkAssignDialog } from './BulkAssignDialog';
@@ -172,8 +173,10 @@ export function WorkspacesPage() {
 
   const targetLabel = (id: string) => targets?.find((t) => t.id === id)?.label ?? id;
   const anyAvailable = !!targets?.some((t) => t.available);
-  // This machine can't be created, so New only makes sense with another target to create on.
-  const canCreate = !!targets?.some((t) => t.available && t.kind !== 'local');
+  // This machine can't be created, so New only makes sense with another target to create on. D-82 S1a: a member creates none yet (the
+  // server refuses: the targets are the platform's), so the button is the admin's only.
+  const admin = isAdminState(useAuth().state);
+  const canCreate = admin && !!targets?.some((t) => t.available && t.kind !== 'local');
   // Running ones first; otherwise the order the server gives (newest first).
   const ordered = list ? [...list].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running')) : null;
 
@@ -214,12 +217,16 @@ export function WorkspacesPage() {
               icon={<Boxes className="size-6" />}
               title="No workspaces yet"
               action={
-                <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)} disabled={!canCreate}>
-                  New workspace
-                </Button>
+                admin ? (
+                  <Button icon={<Plus className="size-4" />} onClick={() => setCreating(true)} disabled={!canCreate}>
+                    New workspace
+                  </Button>
+                ) : undefined
               }
             >
-              {anyAvailable
+              {!admin
+                ? 'Workspaces your organization shares with you show here.'
+                : anyAvailable
                 ? 'Each one is a container with Claude Code, git and gh, and a home folder that persists.'
                 : 'No target is reachable. Check them on the Targets page.'}
             </EmptyState>

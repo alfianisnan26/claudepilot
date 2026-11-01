@@ -4,6 +4,7 @@ import { isAppError } from '@isnanme/core';
 import type { ShellClientMessage, ShellServerMessage } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from '../config.js';
+import { cutOnLostOperate, workspaceSocketActor } from '../authz/socketAccess.js';
 import type { Portal } from '../portal.js';
 import { runtimeMessage, type Workspaces } from './manager.js';
 import { attachCommand, TERMINAL_ID } from './terminals.js';
@@ -49,9 +50,13 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
     const match = url.pathname.match(SHELL_PATH);
     if (!match) return; // not ours (Vite's HMR socket in dev)
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-    if (!portal.session(cookie(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
+    const authorized = (r: IncomingMessage) => !!portal.personSession(cookie(r, config.session.cookie));
+    if (!authorized(req)) return refuse(socket, 401, 'Unauthorized');
 
     const [, target, name] = match as unknown as [string, string, string];
+    // D-82 S1a: a shell in the workspace is `operate` on it, for the person the cookie signed in as (a member's session reaches here now).
+    const actor = workspaceSocketActor(req, authorized, `${target}/${name}`);
+    if (!actor) return refuse(socket, 404, 'Not Found');
     const size = {
       cols: clamp(Number(url.searchParams.get('cols')), 20, 500),
       rows: clamp(Number(url.searchParams.get('rows')), 5, 200),
@@ -59,7 +64,11 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
     // `?term=claude-1`: attach to that terminal (a tmux session that outlives this socket).
     const term = url.searchParams.get('term');
     if (term !== null && !TERMINAL_ID.test(term)) return refuse(socket, 400, 'Bad Request');
-    wss.handleUpgrade(req, socket, head, (ws) => void run(ws, target, name, size, term ?? undefined));
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const off = cutOnLostOperate(actor, `${target}/${name}`, () => ws.close(4403, 'Access ended.'));
+      ws.on('close', off);
+      void run(ws, target, name, size, term ?? undefined);
+    });
   });
 
   async function run(ws: WebSocket, target: string, name: string, size: { cols: number; rows: number }, term?: string) {

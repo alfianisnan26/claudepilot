@@ -6,6 +6,7 @@ import {
   sessionRef,
   ticketBucketRef,
   ticketRef,
+  workspaceRef,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   TICKET_ATTACHMENT_INLINE_TYPES,
@@ -123,6 +124,16 @@ export function createTicketRoutes(tickets: Tickets): Hono {
    * Who may see a row: a bucket filter the caller may not view is the same 404 as a bucket that does not exist; each row's bucket passes
    * `view` (T-1098, asked once per bucket per request) and the ticket itself passes `view`.
    */
+  /**
+   * D-82 S1a (member access): what a new or changed ticket points at must be the person's to point at: a session it is assigned to needs
+   * operate (the ticket is sent into it), a linked workspace view, a parent ticket view. The same 404 as a missing one otherwise.
+   */
+  const linksAllowed = (actor: ReturnType<typeof actorOf>, req: { assignee?: unknown; workspaceId?: unknown; parent?: unknown }) => {
+    const a = req.assignee as { kind?: unknown; sessionId?: unknown } | null | undefined;
+    if (a && a.kind === 'session' && typeof a.sessionId === 'string' && a.sessionId) requireCan(actor, 'operate', sessionRef(a.sessionId));
+    if (typeof req.workspaceId === 'string' && req.workspaceId) requireCan(actor, 'view', workspaceRef(req.workspaceId));
+    if (typeof req.parent === 'string' && req.parent.trim()) requireCan(actor, 'view', ticketRef(req.parent.trim()));
+  };
   const viewerOf = (actor: ReturnType<typeof actorOf>, filter: TicketFilter) => {
     if (filter.bucket) requireCan(actor, 'view', ticketBucketRef(filter.bucket.toUpperCase()));
     const seen = new Map<string, boolean>();
@@ -150,6 +161,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
   app.post('/', async (c) => {
     const req = await body<CreateTicketRequest>(c);
     if (typeof req.bucket === 'string' && req.bucket.trim()) requireCan(actorOf(c), 'operate', ticketBucketRef(req.bucket.trim().toUpperCase()));
+    linksAllowed(actorOf(c), req);
     // T-1993 (FR39): with the person's actor, so the bucket chosen for them (no bucket named) is one they may file in.
     return c.json(success(tickets.create(viewer(c), req)), 201);
   });
@@ -237,6 +249,7 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     const req = await body<UpdateTicketRequest>(c);
     // T-1967: a move needs operate on the bucket it goes to as well (the guard checked the one it is in).
     if (typeof req.bucket === 'string' && req.bucket.trim()) requireCan(actorOf(c), 'operate', ticketBucketRef(req.bucket.trim().toUpperCase()));
+    linksAllowed(actorOf(c), req);
     return c.json(success(tickets.update(UI, id(c), req)));
   });
   app.delete('/:id', (c) => {
@@ -302,8 +315,9 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     if (typeof req.sessionId === 'string' && req.sessionId.trim()) requireCan(actor, 'operate', sessionRef(req.sessionId.trim()));
     return c.json(success(await tickets.bump(UI, id(c), req)), 201);
   });
+  // D-82 S1a: the workspace it starts in needs operate (declared, tickets/authz.ts); the person's actor goes down so their account is recorded.
   app.post('/:id/session', async (c) =>
-    c.json(success(await tickets.startSession(UI, id(c), await body<StartTicketSessionRequest>(c))), 201),
+    c.json(success(await tickets.startSession(viewer(c), id(c), await body<StartTicketSessionRequest>(c))), 201),
   );
 
   return app;

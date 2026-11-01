@@ -201,11 +201,12 @@ test('authz: a ticket the caller may not view is in no page and no cursor names 
   try {
     for (let i = 0; i < 12; i++) h.tickets.create(UI, { summary: `T ${i}` });
     const mine = new Set(Array.from({ length: 12 }, (_, i) => `T-${i + 1}`).filter((_, i) => i % 2 === 0));
+    const them = app(h, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
+    // After app(): the routes register the real ticket resolver (D-82 S1a: a ticket is decided as its bucket); this test's own replaces it.
     registerResolver({
       type: 'ticket',
       resolve: (id) => ({ ref: ticketRef(id), owner: mine.has(id) ? { kind: 'user', id: 'u_a' } : { kind: 'user', id: 'u_b' } }),
     });
-    const them = app(h, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
     // T-1098: the row's bucket passes view as well (as in the list's test); u_a may view the bucket, not every ticket in it. After app(): the
     // routes register the real bucket resolver.
     registerResolver({ type: 'ticket_bucket', resolve: (id) => ({ ref: objectRef('ticket_bucket', id), owner: { kind: 'user', id: 'u_a' } }) });

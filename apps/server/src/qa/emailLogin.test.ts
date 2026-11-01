@@ -72,7 +72,7 @@ test('code sign-in creates an email account; the email signs in; wrong cases are
   }
 });
 
-test('MU2 S1a: a member account signs in but is refused the admin app (403) and every socket; a role change and a disable apply at once', async () => {
+test('D-82 S1a: a member account signs in and is refused every admin route (the same 404); a role change and a disable apply at once', async () => {
   const { call, cookieOf, done, portal } = await build();
   try {
     const admin = cookieOf(await call('POST', '/api/login', { code: CODE }))!;
@@ -85,15 +85,17 @@ test('MU2 S1a: a member account signs in but is refused the admin app (403) and 
     assert.deepEqual([session.authenticated, session.member], [true, true]);
     const me = ((await (await call('GET', '/api/me', undefined, member)).json()) as { data: { kind: string; user: { email: string } } }).data;
     assert.deepEqual([me.kind, me.user.email], ['account', 'member@example.com']);
-    assert.equal((await call('GET', '/api/admin/state', undefined, member)).status, 403, 'the admin state (it holds the code) is refused');
-    for (const path of ['/api/admin/state', '/api/admin/users', '/api/workspaces', '/api/tickets', '/api/chat/sessions']) {
+    assert.equal((await call('GET', '/api/admin/state', undefined, member)).status, 404, 'the admin state (it holds the code) is refused');
+    // Since D-82 S1a a member passes the session middleware; the declared policy refuses every admin route (authz/memberRoutes.test.ts
+    // enumerates them all).
+    for (const path of ['/api/admin/state', '/api/admin/users', '/api/settings']) {
       const res = await call('GET', path, undefined, member);
-      assert.ok(res.status === 403 || res.status === 404, `${path}: a member gets no admin route (got ${res.status})`);
+      assert.equal(res.status, 404, `${path}: a member gets no admin route (got ${res.status})`);
       assert.doesNotMatch(await res.text(), new RegExp(CODE), `${path}: never the server code`);
     }
     const token = member.split('=')[1]!;
-    assert.equal(portal.session(token), undefined, 'not a full session: the socket checks refuse it');
-    assert.ok(portal.anySession(token), 'but a live session for the member door');
+    assert.equal(portal.session(token), undefined, 'not a full session: the server code’s state and re-auth stay the admin’s');
+    assert.ok(portal.personSession(token), 'a person’s session: the seam decides what it reaches');
 
     assert.equal((await call('PATCH', `/api/admin/users/${m.id}`, { role: 'admin' }, admin)).status, 200);
     assert.ok(portal.session(token), 'promoted: the same session is full at once');

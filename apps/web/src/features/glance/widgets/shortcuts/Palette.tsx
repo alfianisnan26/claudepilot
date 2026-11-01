@@ -3,7 +3,8 @@ import { X } from 'lucide-react';
 import { MotionConfig, motion } from 'motion/react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { NAV } from '@/app/nav';
+import { navFor } from '@/app/nav';
+import { isAdminState, useAuth } from '@/lib/auth';
 import { MODAL_SELECTOR } from '@/lib/scrollGuard';
 import { pinnedToViewport, useVisualViewport } from '@/lib/viewport';
 import { LevelDot } from '../../ui';
@@ -43,17 +44,20 @@ export default function Palette() {
     const hit = data.tickets?.forQuery === q ? data.tickets.items.find((t) => isTicket(t, ref.title)) : undefined;
     return hit ? { ...ticketItems([hit])[0]!, id: ref.id } : ref;
   }, [q, data.tickets]);
+  // D-82 S1a: a member's palette lists only the pages their navigation has.
+  const admin = isAdminState(useAuth().state);
+  const pages = useMemo(() => navFor(admin).items, [admin]);
   const items = useMemo<PaletteItem[]>(
     () => [
       ...actionItems(here),
-      ...pageItems(NAV),
+      ...pageItems(pages),
       ...sessionItems(data.sessions ?? []),
       ...workspaceItems(data.workspaces ?? []),
       ...(byNumber ? [byNumber] : []),
       // The referenced ticket shows once, as the row above.
       ...(data.tickets && data.tickets.forQuery === q ? ticketItems(data.tickets.items.filter((t) => !isTicket(t, ticketByNumber(q)?.title))) : []),
     ],
-    [here, data.sessions, data.workspaces, data.tickets, byNumber, q],
+    [here, pages, data.sessions, data.workspaces, data.tickets, byNumber, q],
   );
   const results = useMemo(() => searchPalette(items, query), [items, query]);
   const current = Math.min(active, Math.max(0, results.length - 1));

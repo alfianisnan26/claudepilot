@@ -39,7 +39,8 @@ export function registerCiAuthz(facts: CiAuthzFacts, ownerOf: (workspaceId: stri
         if (!ws) return null;
         const o = ownerOf(ws);
         const owner: Owner | null = typeof o === 'string' ? { kind: 'user', id: o } : o;
-        return { ref: objectRef(type, id), owner, parent: workspaceRef(ws), attrs: { workspaceId: ws } };
+        // D-82 S1a: a run or a remote is its workspace's (OBJECT_TYPES `same`): the workspace's grants (an org share) count for it too.
+        return { ref: objectRef(type, id), owner, parent: workspaceRef(ws), attrs: { workspaceId: ws }, grantsFrom: workspaceRef(ws) };
       },
     });
   }
