@@ -193,7 +193,9 @@ test('chat sessions: through their workspace’s org', async () => {
   assert.deepEqual(await get('/chat?org=personal'), ['s_own']);
   assert.deepEqual(await get(`/chat?org=${orgB}`), [], 'a session she may see in an org she is not in stays out');
   assert.deepEqual(await get('/chat?org=org_forged000000'), []);
-  assert.deepEqual(await appFor(person(EVE))(`/chat?org=${orgB}`), [], 'the org’s owner gets no one else’s session by naming the org');
+  // Slice 7 (OD-3, D-108): an org's owner reads the sessions in the org's workspaces (read only, audited), so org B's owner sees s_oth there.
+  assert.deepEqual(await appFor(person(EVE))(`/chat?org=${orgB}`), ['s_oth'], 'org B’s owner: the sessions in org B’s workspaces (OD-3)');
+  assert.deepEqual(await appFor(person(EVE))(`/chat?org=${orgA}`), [], 'never another org’s sessions by naming it');
 });
 
 test('tickets and buckets: a ticket through its bucket’s org; a ticket with no bucket is personal', async () => {
