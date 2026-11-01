@@ -254,6 +254,12 @@ export class Portal {
     this.#signedOut(people.filter((u) => !this.signedIn(u)));
   }
 
+  /** The Admin console's view of sign-in with the server code (owner, 2026-11-01): the switch and its age, never the code itself. */
+  summary(): { enabled: boolean; source: CodeSource; codeUpdatedAt: string; sessions: number } {
+    this.#prune();
+    return { enabled: this.#enabled, source: this.#source, codeUpdatedAt: new Date(this.#codeUpdatedAt).toISOString(), sessions: this.#sessions.size };
+  }
+
   adminState(token: string): AdminState {
     this.#prune();
     const s = this.session(token);

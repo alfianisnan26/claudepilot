@@ -11,6 +11,9 @@
 // - Sign-in through the console's OIDC provider (owner, 2026-11-01; ./oidc.ts): only an identity on the allow list that maps to an active admin
 //   account gets the same admin session as the password path, fresh for step-up for 5 minutes; every refusal is an `admin.signin_refused`
 //   row and the same neutral page. The step-up dialog can re-authenticate through it too (an SSO-only admin has no password to enter).
+// - Owner, 2026-11-01 ("the console controls everything", docs/prd/organizations.md §13.7): accounts, orgs, workspaces and targets, sign-in,
+//   settings and the audit's filters, each through the service the main portal uses, with the admin as the actor (a workspace start is the
+//   seam's `operate`: D12 holds). A service the deps leave out answers 404.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -24,19 +27,26 @@ import {
   ADMIN_UI_BASE,
   actorString,
   isAbility,
+  workspaceRef,
   type Actor,
   type AdminAuditQuery,
   type AdminMe,
+  type AdminPasswordResult,
+  type AdminSignInConfig,
   type AdminSignInMethods,
   type AdminUserDetail,
   type AdminUserRow,
   type AdminUserToken,
+  type AdminWorkspaceRow,
   type OrgId,
   type UserId,
   type PlatformAuditEntry,
   type PortalUser,
   type RoutePolicy,
   type SsoProvider,
+  type SsoProviderRequest,
+  type Workspace,
+  type WorkspaceTarget,
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -44,11 +54,16 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { requireCan } from '../authz/seam.js';
+import { oneTimePassword, type AccountAdmin } from '../identity/accountAdmin.js';
 import { revokeAccountTokens } from '../identity/accountGate.js';
 import type { OidcClient } from '../identity/oidc.js';
 import type { BreakGlassService, OrgsService, UserAbilities } from '../orgs/index.js';
 import { requireInstanceAdmin } from '../orgs/index.js';
+import { PlatformOrgs } from '../orgs/platformOrgs.js';
 import { PlatformAudit, type AuditInput } from '../platform/audit.js';
+import type { Portal } from '../portal.js';
+import type { Settings } from '../settings/store.js';
 import type { Store } from '../store/store.js';
 import { contentSecurityPolicy } from '../csp.js';
 import { ADMIN_ROUTE_POLICIES, assertDeclared, declareAdminPolicies } from './authz.js';
@@ -82,9 +97,32 @@ export interface AdminConsoleDeps {
   abilities: UserAbilities;
   /** Slice 5: break-glass (§6.7). Missing: its routes answer 404. */
   breakGlass?: BreakGlassService | null;
-  sso: { list(redirectUri: string): SsoProvider[] };
+  /** The instance's SSO providers (identity/sso.ts). Without `create` and `update` the console only lists them (writes answer 404). */
+  sso: {
+    list(redirectUri: string): SsoProvider[];
+    create?(req: SsoProviderRequest, by: string, redirectUri: string): SsoProvider;
+    update?(id: string, req: SsoProviderRequest, redirectUri: string, by?: string): SsoProvider;
+  };
   /** The SSO callback URL shown with each provider (PORTAL_SSO_ORIGIN's), or ''. */
   ssoRedirectUri: string;
+  /**
+   * Owner, 2026-11-01 ("the console controls everything"): the same services the main portal uses, called with the admin as the actor. Each
+   * one missing: its routes answer 404 (tests pass what they cover).
+   */
+  /** Accounts with their side effects (identity/accountAdmin.ts): create, change, remove. */
+  accounts?: Pick<AccountAdmin, 'create' | 'update' | 'remove'> | null;
+  /** The workspace manager: every workspace and target, start and stop (the seam decides each, as on the main portal). */
+  workspaces?: {
+    list(): Promise<Workspace[]>;
+    targets(fresh?: boolean): Promise<WorkspaceTarget[]>;
+    start(target: string, name: string): Promise<unknown>;
+    stop(target: string, name: string): Promise<unknown>;
+    resolve(ref: string): { id: string } | null;
+  } | null;
+  /** Sign-in with the server code (portal.ts): its switch, its age and a new code. */
+  serverCode?: Pick<Portal, 'summary' | 'setEnabled' | 'rotate' | 'code'> | null;
+  /** The portal-wide settings (settings/store.ts). */
+  settings?: Pick<Settings, 'view' | 'set'> | null;
   /** The client address (rate limits): the socket, or the trusted proxy's X-Forwarded-For entry. */
   clientKey: (c: Context<AdminEnv>) => string;
   /** The built console (apps/web/dist-admin); missing: the UI paths are 404 and the API still answers. */
@@ -221,7 +259,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
 
   type Handler = (c: Context<AdminEnv>) => Response | Promise<Response>;
   /** Registers a route with its declaration, enforced: the session, the instance admin, the step-up. */
-  const on = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, handler: Handler) => {
+  const on = (method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, handler: Handler) => {
     const policy = ADMIN_ROUTE_POLICIES[`${method} ${path}` as keyof typeof ADMIN_ROUTE_POLICIES] as RoutePolicy | undefined;
     if (!policy) throw new Error(`admin route ${method} ${path} is not declared (admin/authz.ts)`);
     app.on(method, path, async (c) => {
@@ -503,6 +541,66 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success(r));
   });
 
+  // ---------- Accounts: create, role and name, one-time password, remove (owner, 2026-11-01) ----------
+  // The same service as the main portal's /api/admin/users (identity/accountAdmin.ts), so the sessions and tokens end the same way.
+  const accounts = () => {
+    if (!d.accounts) throw new AppError('NOT_FOUND');
+    return d.accounts;
+  };
+  // The caller is an active admin and may not demote or remove themself, so another active admin always remains.
+  // The audit keeps one level of plain values (platform/audit.ts cleanDetail): counts and roles go flat.
+  const tokensDetail = (t: { pmcp: number; reporter: number; agent: number } | null) => (t && t.pmcp + t.reporter + t.agent > 0 ? { tokensPmcp: t.pmcp, tokensReporter: t.reporter, agents: t.agent } : {});
+  on('POST', '/admin-api/users', async (c) => {
+    const b = await body(c);
+    const actor = c.get('actor');
+    const password = oneTimePassword();
+    const u = await accounts().create(
+      { email: typeof b.email === 'string' ? b.email : '', displayName: typeof b.displayName === 'string' ? b.displayName : undefined, role: b.role === 'admin' ? 'admin' : 'member', password },
+      actorString(actor),
+    );
+    record(c, 'account.created', u.id, { email: u.email, role: u.role, password: 'one-time' }, u.role === 'admin' ? 'medium' : 'info');
+    return c.json(success<AdminPasswordResult>({ user: row(u, []), password }), 201);
+  });
+  on('PATCH', '/admin-api/users/:id', async (c) => {
+    const u = account(param(c, 'id'));
+    const b = await body(c);
+    const role = b.role === 'admin' || b.role === 'member' ? b.role : undefined;
+    const displayName = typeof b.displayName === 'string' && b.displayName.trim() ? b.displayName : undefined;
+    if (!role && !displayName) throw new AppError('VALIDATION_FAILED', 'Nothing to change.');
+    if (role === 'member' && u.role === 'admin' && u.id === c.get('admin').account.id) throw new AppError('CONFLICT', 'You cannot demote your own account.');
+    const { before, after, tokens } = await accounts().update(u.id, { role, displayName });
+    // A demoted admin's console sessions end now (the next request would refuse them anyway).
+    const adminSessions = before.role === 'admin' && after.role === 'member' ? sessions.endAllFor(u.id, 'account demoted') : 0;
+    record(c, 'account.updated', u.id, {
+      email: u.email,
+      ...(role && role !== before.role ? { roleFrom: before.role, roleTo: after.role } : {}),
+      ...(displayName ? { name: true } : {}),
+      ...(adminSessions ? { adminSessions } : {}),
+      ...tokensDetail(tokens),
+    });
+    return c.json(success(row(after, d.abilities.of(c.get('actor'), u.id).map((a) => a.ability))));
+  });
+  on('POST', '/admin-api/users/:id/password', async (c) => {
+    const u = account(param(c, 'id'));
+    const reason = reasonOf((await body(c)).reason);
+    if (u.id === c.get('admin').account.id) throw new AppError('CONFLICT', 'Change your own password in the portal.');
+    const password = oneTimePassword();
+    const { after } = await accounts().update(u.id, { password });
+    const adminSessions = sessions.endAllFor(u.id, 'password reset');
+    record(c, 'account.password_reset', u.id, { email: u.email, adminSessions, ...(reason ? { reason } : {}) });
+    return c.json(success<AdminPasswordResult>({ user: row(after, []), password }));
+  });
+  on('DELETE', '/admin-api/users/:id', (c) => {
+    const u = account(param(c, 'id'));
+    if (u.id === c.get('admin').account.id) throw new AppError('CONFLICT', 'You cannot remove your own account.');
+    // The founder account is the founding user's data (principalOf): removing it would orphan everything they own.
+    if (d.users.principalOf(u.id) !== u.id) throw new AppError('CONFLICT', 'The founder’s account cannot be removed.');
+    const adminSessions = sessions.endAllFor(u.id, 'account removed');
+    const { tokens } = accounts().remove(u.id);
+    record(c, 'account.removed', u.id, { email: u.email, role: u.role, adminSessions, ...tokensDetail(tokens) });
+    return c.json(success({ removed: true }));
+  });
+
   // ---------- Organizations ----------
   on('GET', '/admin-api/orgs', (c) => c.json(success(d.orgs.listAll(c.get('actor')))));
   on('POST', '/admin-api/orgs/:id/recover-owner', async (c) => {
@@ -521,6 +619,19 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     d.orgs.resume(c.get('actor'), param(c, 'id') as OrgId, { by: 'platform' });
     return c.json(success({ resumed: true }));
   });
+  // Owner, 2026-11-01: create (with the owner the admin picks), the detail view, delete (orgs/platformOrgs.ts; their audit rows are written there).
+  const platformOrgs = new PlatformOrgs({ db, writable, orgs: d.orgs, audit, now: () => new Date(now()) });
+  on('POST', '/admin-api/orgs', async (c) => {
+    const b = await body(c);
+    return c.json(success(platformOrgs.create(c.get('actor'), { name: b.name, slug: b.slug, ownerId: b.ownerId })), 201);
+  });
+  on('GET', '/admin-api/orgs/:id', (c) => c.json(success(platformOrgs.detail(c.get('actor'), param(c, 'id') as OrgId))));
+  on('DELETE', '/admin-api/orgs/:id', async (c) => {
+    // A DELETE may come without a body: the reason is optional.
+    const reason = c.req.header('content-type')?.includes('json') ? (await body(c)).reason : undefined;
+    platformOrgs.delete(c.get('actor'), param(c, 'id') as OrgId, reason);
+    return c.json(success({ deleted: true }));
+  });
 
   // ---------- Break-glass (slice 5, §6.7) ----------
   const breakGlass = () => {
@@ -534,8 +645,132 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
   on('DELETE', '/admin-api/orgs/:id/break-glass', (c) => c.json(success(breakGlass().endByAdmin(c.get('actor'), param(c, 'id') as OrgId))));
   on('GET', '/admin-api/break-glass', (c) => c.json(success(breakGlass().listAll(c.get('actor')))));
 
-  // ---------- SSO (read only) and the audit ----------
+  // ---------- SSO providers: the instance's (identity/sso.ts), as the main portal's Access page changes them ----------
   on('GET', '/admin-api/sso', (c) => c.json(success(d.sso.list(d.ssoRedirectUri))));
+  const ssoBody = async (c: Context<AdminEnv>) => (await body(c)) as SsoProviderRequest;
+  on('POST', '/admin-api/sso', async (c) => {
+    if (!d.sso.create) throw new AppError('NOT_FOUND');
+    const p = d.sso.create(await ssoBody(c), c.get('admin').account.email, d.ssoRedirectUri);
+    audit({ kind: 'sso.provider_created', severity: 'medium', actor: actorString(c.get('actor')), userId: null, subject: null, detail: { providerId: p.id, name: p.name, issuer: p.issuer, domains: p.domains, defaultRole: p.defaultRole } });
+    return c.json(success(p), 201);
+  });
+  on('PATCH', '/admin-api/sso/:id', async (c) => {
+    if (!d.sso.update) throw new AppError('NOT_FOUND');
+    const req = await ssoBody(c);
+    const p = d.sso.update(param(c, 'id'), req, d.ssoRedirectUri, c.get('admin').account.email);
+    // The fields that changed, never the secret's value (only that it changed).
+    const changed = Object.keys(req).filter((k) => k !== 'clientSecret');
+    audit({ kind: 'sso.provider_changed', severity: 'medium', actor: actorString(c.get('actor')), userId: null, subject: null, detail: { providerId: p.id, changed, secretChanged: req.clientSecret !== undefined, domains: p.domains, enabled: p.enabled } });
+    return c.json(success(p));
+  });
+
+  // ---------- Workspaces and targets: names, owners, status, image; start and stop as the main portal does ----------
+  const workspaces = () => {
+    if (!d.workspaces) throw new AppError('NOT_FOUND');
+    return d.workspaces;
+  };
+  /** Who owns each workspace (workspace_owners, by `<target>/<name>`), with a name to show: the account's email, the org's or team's name. */
+  const ownersOf = (): Map<string, AdminWorkspaceRow['owner']> => {
+    const r = db();
+    const out = new Map<string, AdminWorkspaceRow['owner']>();
+    if (!r || !tableExists('workspace_owners')) return out;
+    const rows = r
+      .prepare(
+        `SELECT w.workspace_id, w.owner_kind, w.owner_id,
+           CASE w.owner_kind
+             WHEN 'user' THEN (SELECT email FROM users u WHERE u.id = w.owner_id OR (w.owner_id = 'u_owner' AND u.founder = 1) LIMIT 1)
+             WHEN 'org' THEN (SELECT name FROM orgs o WHERE o.id = w.owner_id)
+             WHEN 'team' THEN (SELECT name FROM teams t WHERE t.id = w.owner_id)
+           END AS name
+         FROM workspace_owners w`,
+      )
+      .all() as { workspace_id: string; owner_kind: AdminWorkspaceRow['owner']['kind']; owner_id: string; name: string | null }[];
+    for (const o of rows) out.set(o.workspace_id, { kind: o.owner_kind, id: o.owner_kind === 'platform' ? null : o.owner_id, name: o.name ?? null });
+    return out;
+  };
+  on('GET', '/admin-api/workspaces', async (c) => {
+    const list = await workspaces().list();
+    const owners = ownersOf();
+    return c.json(
+      success<AdminWorkspaceRow[]>(
+        list.map((w) => ({
+          id: w.id,
+          stableId: w.stableId ?? null,
+          label: w.label ?? w.name,
+          target: w.target,
+          image: w.image,
+          status: w.status,
+          detail: w.detail ?? null,
+          createdAt: w.createdAt,
+          owner: owners.get(w.id) ?? { kind: 'none', id: null, name: null },
+        })),
+      ),
+    );
+  });
+  on('GET', '/admin-api/targets', async (c) => c.json(success<WorkspaceTarget[]>(await workspaces().targets(c.req.query('fresh') === '1'))));
+  const runtimeAction = (verb: 'start' | 'stop') => async (c: Context<AdminEnv>) => {
+    const ws = workspaces();
+    const target = param(c, 'target');
+    const name = param(c, 'name');
+    const id = `${target}/${name}`;
+    // The main portal's check (workspaces/authz.ts workspaceGuard): `operate` on the workspace for this actor. The console adds no right: an
+    // instance admin holds none on another person's workspace (D12), and an org's needs a role there or an open break-glass entry.
+    requireCan(c.get('actor'), 'operate', workspaceRef(id));
+    await (verb === 'start' ? ws.start(target, name) : ws.stop(target, name));
+    const actor = c.get('actor');
+    audit({ kind: `workspace.${verb}`, severity: 'info', actor: actorString(actor), userId: actor.kind === 'user' ? actor.userId : null, subject: ws.resolve(id)?.id ?? id, detail: { workspace: id } });
+    return c.json(success({ ok: true }));
+  };
+  on('POST', '/admin-api/workspaces/:target/:name/start', runtimeAction('start'));
+  on('POST', '/admin-api/workspaces/:target/:name/stop', runtimeAction('stop'));
+
+  // ---------- Sign-in: the server code's switch and a new code; the console's own OIDC allow list (env, read only) ----------
+  const signInConfig = (): AdminSignInConfig => ({
+    serverCode: d.serverCode ? d.serverCode.summary() : null,
+    adminOidc: oidc ? { issuer: oidc.config.issuer, name: oidc.config.name, allow: [...oidc.config.allow] } : null,
+    adminHost: d.gate.host,
+  });
+  const serverCode = () => {
+    if (!d.serverCode) throw new AppError('NOT_FOUND');
+    return d.serverCode;
+  };
+  on('GET', '/admin-api/signin', (c) => c.json(success(signInConfig())));
+  on('PUT', '/admin-api/signin/server-code', async (c) => {
+    const p = serverCode();
+    const { enabled } = await body(c);
+    if (typeof enabled !== 'boolean') throw new AppError('VALIDATION_FAILED', '`enabled` must be true or false.');
+    const was = p.summary().enabled;
+    p.setEnabled(enabled);
+    if (was !== enabled) audit({ kind: 'portal.server_code_switched', severity: 'medium', actor: actorString(c.get('actor')), userId: null, subject: null, detail: { enabled } });
+    return c.json(success(signInConfig()));
+  });
+  on('POST', '/admin-api/signin/server-code/rotate', (c) => {
+    const p = serverCode();
+    // No main-portal session is this request's to keep: every one ends, as a rotation on the main portal ends every other.
+    const before = p.summary().sessions;
+    p.rotate('');
+    audit({ kind: 'portal.server_code_rotated', severity: 'medium', actor: actorString(c.get('actor')), userId: null, subject: null, detail: { sessionsEnded: before } });
+    return c.json(success({ code: p.code, config: signInConfig() }));
+  });
+
+  // ---------- Settings: the portal-wide settings store, the same as the main portal's Settings page ----------
+  const settings = () => {
+    if (!d.settings) throw new AppError('NOT_FOUND');
+    return d.settings;
+  };
+  on('GET', '/admin-api/settings', (c) => c.json(success(settings().view())));
+  on('PUT', '/admin-api/settings/:key', async (c) => {
+    const s = settings();
+    const key = param(c, 'key');
+    const b = await body(c);
+    const old = s.view().settings.find((x) => x.key === key)?.value;
+    // The store checks the value, asks for `confirm` when a protection is switched off (409), and keeps its own trail of the change.
+    const v = s.set(key, b.value, { actor: actorString(c.get('actor')), confirm: b.confirm === true });
+    if (old !== v.value) audit({ kind: 'setting.changed', severity: v.protective !== undefined ? 'medium' : 'info', actor: actorString(c.get('actor')), userId: null, subject: null, detail: { key, from: old ?? null, to: v.value } });
+    return c.json(success(v));
+  });
+
+  // ---------- The audit ----------
   on('GET', '/admin-api/audit', (c) => {
     const q = c.req.query() as Record<keyof AdminAuditQuery, string | undefined>;
     const where: string[] = [];
@@ -551,6 +786,35 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     if (q.subject && q.subject.length <= 200) {
       where.push('subject = ?');
       args.push(q.subject);
+    }
+    // Owner, 2026-11-01: by who acted (exactly, or a prefix ending in ':' such as `system:`), by org, and by date.
+    if (q.actor && q.actor.length <= 200) {
+      if (q.actor.endsWith(':')) {
+        where.push("actor LIKE ? ESCAPE '\\'");
+        args.push(`${q.actor.replace(/[\\%_]/g, (x) => `\\${x}`)}%`);
+      } else {
+        where.push('actor = ?');
+        args.push(q.actor);
+      }
+    }
+    if (q.org && /^org_[A-Za-z0-9_-]{1,60}$/.test(q.org)) {
+      where.push('org_id = ?');
+      args.push(q.org);
+    }
+    const day = (v: string | undefined, end: boolean): string | null => {
+      if (!v || !/^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/.test(v) || !Number.isFinite(Date.parse(v))) return null;
+      // A bare date as `to` counts that whole day: before the next one.
+      return end && v.length === 10 ? new Date(Date.parse(`${v}T00:00:00Z`) + 86_400_000).toISOString() : new Date(Date.parse(v.length === 10 ? `${v}T00:00:00Z` : v)).toISOString();
+    };
+    const from = day(q.from, false);
+    const to = day(q.to, true);
+    if (from) {
+      where.push('at >= ?');
+      args.push(from);
+    }
+    if (to) {
+      where.push('at < ?');
+      args.push(to);
     }
     const before = Number(q.before);
     if (Number.isInteger(before) && before > 0) {
