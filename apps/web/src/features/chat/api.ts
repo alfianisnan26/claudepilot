@@ -84,7 +84,6 @@ export const chatApi = {
     scopedList<CursorPage<ChatSession>>(
       CHAT_API.list + query({ limit: opts.limit ? String(opts.limit) : undefined, cursor: opts.cursor ?? undefined, parentId: opts.parentId }),
       (p) => request<CursorPage<ChatSession>>('GET', p),
-      () => ({ items: [], next: null }),
     ),
   /** Every session, by following the pages (at most `maxPages` of 100): for a caller that needs the whole set (the palette, a picker, a lead's workers). */
   listAll: async (opts: { parentId?: string; maxPages?: number } = {}): Promise<ChatSession[]> => {

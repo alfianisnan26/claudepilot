@@ -2,8 +2,7 @@
 // (`claudepilot.context.<userId>` in local storage, every access in try/catch: a private window or blocked storage just means Personal) and
 // every LIST call goes through `scopedList`, the one place that adds `?org=`: `org=personal` in Personal (what no org owns), `org=<id>` in
 // an org (what that org owns). The server (apps/server/src/authz/orgScope.ts) only narrows what the caller may already see; an org the caller
-// is not in answers an empty list. With `ORG_SCOPED_LISTS_LIVE` off (a server that does not read `?org=`), Personal asks as before and an org
-// context answers empty without a request, so it never shows personal objects as the org's.
+// is not in answers an empty list.
 
 import { isOrgId } from '@portal/contracts';
 
@@ -11,9 +10,6 @@ import { isOrgId } from '@portal/contracts';
 export type AppContext = { kind: 'personal' } | { kind: 'org'; id: string };
 
 export const PERSONAL: AppContext = { kind: 'personal' };
-
-/** The server reads `?org=` on its lists (owner request 2026-11-01). Off: Personal sends nothing and an org context's lists are empty. */
-export const ORG_SCOPED_LISTS_LIVE = true;
 
 /** The `?org=` value Personal sends: only what no org owns. */
 export const PERSONAL_ORG_PARAM = 'personal';
@@ -82,12 +78,8 @@ export function subscribeContext(fn: () => void): () => void {
   return () => void listeners.delete(fn);
 }
 
-/**
- * THE helper every list call goes through. Personal: `?org=personal` added; an org: `?org=<id>` added. With `live` false (a server that does
- * not scope lists): Personal the path as it is, an org the list's empty value without a request.
- */
-export function scopedList<T>(path: string, run: (path: string) => Promise<T>, empty: () => T, ctx: AppContext = current, live = ORG_SCOPED_LISTS_LIVE): Promise<T> {
-  if (!live) return ctx.kind === 'personal' ? run(path) : Promise.resolve(empty());
+/** THE helper every list call goes through. Personal: `?org=personal` added; an org: `?org=<id>` added (the server scopes every list). */
+export function scopedList<T>(path: string, run: (path: string) => Promise<T>, ctx: AppContext = current): Promise<T> {
   return run(scopedPath(path, ctx));
 }
 

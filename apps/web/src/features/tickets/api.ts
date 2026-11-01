@@ -86,7 +86,7 @@ export function timelineQuery(f: TicketFilter, w: { from: string; to: string; gr
 
 export const ticketsApi = {
   /** One page of summary rows (D-58): `next` goes back as `filter.cursor`; `total` and `counts` come with the first page only. */
-  list: (filter: TicketFilter = {}) => scopedList<TicketPage>(`${TICKET_API.list}${query(filter)}`, (p) => request<TicketPage>('GET', p), () => ({ items: [], next: null, total: 0 })),
+  list: (filter: TicketFilter = {}) => scopedList<TicketPage>(`${TICKET_API.list}${query(filter)}`, (p) => request<TicketPage>('GET', p)),
   get: (id: string) => request<TicketDetail>('GET', TICKET_API.one(id)),
   create: (body: CreateTicketRequest) => request<TicketItem>('POST', TICKET_API.list, body),
   update: (id: string, body: UpdateTicketRequest) => request<TicketItem>('PATCH', TICKET_API.one(id), body),
@@ -98,7 +98,7 @@ export const ticketsApi = {
   opening: (id: string) => request<{ text: string }>('GET', TICKET_API.opening(id)),
   tags: () => request<TicketTag[]>('GET', TICKET_API.tags),
   timeline: (f: TicketFilter, w: Parameters<typeof timelineQuery>[1]) => request<TicketTimeline>('GET', `${TICKET_API.timeline}${timelineQuery(f, w)}`),
-  buckets: () => scopedList<TicketBucket[]>(TICKET_API.buckets, (p) => request<TicketBucket[]>('GET', p), () => []),
+  buckets: () => scopedList<TicketBucket[]>(TICKET_API.buckets, (p) => request<TicketBucket[]>('GET', p)),
   createBucket: (body: CreateTicketBucketRequest) => request<TicketBucket>('POST', TICKET_API.buckets, body),
   updateBucket: (key: string, body: UpdateTicketBucketRequest) => request<TicketBucket>('PATCH', TICKET_API.bucket(key), body),
   mergeBucket: (key: string, body: MergeTicketBucketRequest) => request<MergeTicketBucketResult>('POST', TICKET_API.bucketMerge(key), body),

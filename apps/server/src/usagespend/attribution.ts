@@ -13,7 +13,7 @@
 // Open to one more dimension (PLAN-12: `by=user`, usage per user): each flat dimension is one entry of `GROUPERS`, a function of the request and the
 // session that made it, so a new `by` is one entry (the compiler asks for it as soon as the union grows). The roll-up of a child into its parent lives in
 // ONE place, `lineage` (the session, then each parent as far as it is known): a ticket takes the nearest ancestor's, the tree takes the whole chain, and a
-// user will take the creator (`creatorOf`, the owner today) of the ROOT. A fact the portal does not have is an `unattributed` row with a reason code:
+// user will take the creator of the ROOT. A fact the portal does not have is an `unattributed` row with a reason code:
 // the requests keep their real totals and the row says why it cannot be named; the page never shows a 0 for an unknown person, ticket or persona.
 
 import {

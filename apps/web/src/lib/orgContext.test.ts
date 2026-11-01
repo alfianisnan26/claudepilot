@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  ORG_SCOPED_LISTS_LIVE,
   PERSONAL,
   contextKey,
   currentContext,
@@ -65,26 +64,23 @@ test('withOrg adds the parameter after an existing query or as the first, encode
   assert.equal(withOrg('/x', 'org_a&b'), '/x?org=org_a%26b');
 });
 
-test('scopedList: live, Personal sends org=personal and an org its id (after an existing query too); off, Personal asks as before and an org answers empty', async () => {
+test('scopedList: Personal sends org=personal and an org its id (after an existing query too)', async () => {
   const asked: string[] = [];
   const run = async (p: string) => (asked.push(p), ['row']);
-  assert.deepEqual(await scopedList('/api/w', run, () => [], PERSONAL, true), ['row']);
-  assert.deepEqual(await scopedList('/api/ci/runs?limit=5', run, () => [], PERSONAL, true), ['row']);
-  assert.deepEqual(await scopedList('/api/w', run, () => [], { kind: 'org', id: 'org_a' }, true), ['row']);
-  assert.deepEqual(await scopedList('/api/ci/runs?limit=5', run, () => [], { kind: 'org', id: 'org_a' }, true), ['row']);
-  assert.deepEqual(await scopedList('/api/w', run, () => [], PERSONAL, false), ['row']);
-  assert.deepEqual(await scopedList('/api/w', run, () => [], { kind: 'org', id: 'org_a' }, false), [], 'never a personal list shown as the org’s');
-  assert.deepEqual(asked, ['/api/w?org=personal', '/api/ci/runs?limit=5&org=personal', '/api/w?org=org_a', '/api/ci/runs?limit=5&org=org_a', '/api/w']);
+  assert.deepEqual(await scopedList('/api/w', run, PERSONAL), ['row']);
+  assert.deepEqual(await scopedList('/api/ci/runs?limit=5', run, PERSONAL), ['row']);
+  assert.deepEqual(await scopedList('/api/w', run, { kind: 'org', id: 'org_a' }), ['row']);
+  assert.deepEqual(await scopedList('/api/ci/runs?limit=5', run, { kind: 'org', id: 'org_a' }), ['row']);
+  assert.deepEqual(asked, ['/api/w?org=personal', '/api/ci/runs?limit=5&org=personal', '/api/w?org=org_a', '/api/ci/runs?limit=5&org=org_a']);
 });
 
-test('the lists are scoped by the server now: the default context sends the current one', async () => {
-  assert.equal(ORG_SCOPED_LISTS_LIVE, true);
+test('the default context sends the current one', async () => {
   const asked: string[] = [];
   const run = async (p: string) => (asked.push(p), 1);
   setCurrentContext({ kind: 'org', id: 'org_b' });
-  await scopedList('/api/tickets/buckets', run, () => 0);
+  await scopedList('/api/tickets/buckets', run);
   setCurrentContext(PERSONAL);
-  await scopedList('/api/tickets/buckets', run, () => 0);
+  await scopedList('/api/tickets/buckets', run);
   assert.deepEqual(asked, ['/api/tickets/buckets?org=org_b', '/api/tickets/buckets?org=personal']);
 });
 

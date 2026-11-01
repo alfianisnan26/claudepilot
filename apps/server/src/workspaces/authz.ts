@@ -8,7 +8,7 @@
 // actor may not see is the same 404 as one that does not exist (T-531). `routeAuthz.test.ts` walks the app's route table: it fails on a route
 // with no declaration, on a declaration that differs from the PRD's Appendix A row (unless §B.2 names the difference), and on a declared
 // check that is not asked, in order, before the handler.
-// There is no resolver of the `workspace` type yet, so nothing behaves differently: the seam answers the one owner, and an agent only its own.
+// The `workspace` type's resolver is authz/owners.ts (its owner: a person, an org or the platform; organizations slices 1 and 5).
 
 import { AppError } from '@isnanme/core';
 import { isStableWorkspaceId, objectRef, workspaceRef, type ObjectCheck, type RoutePolicies, type ToolPolicies, type Verb } from '@portal/contracts';

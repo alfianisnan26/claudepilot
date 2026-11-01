@@ -41,12 +41,5 @@ export interface Who {
   via: string;
 }
 
-/** The owner at the keyboard: what every route uses until the portal knows who is signed in. */
+/** The owner at the keyboard: the default of the service's methods (module tests and the portal's own calls). */
 export const UI_OWNER: Who = { actorId: OWNER_ACTOR, via: 'ui' };
-
-/**
- * Who created a session (a user id), for usage per user (PLAN-12, after multi-user: `by=user`). The one helper that grouping resolves through, and
- * today the portal has one owner. A child session counts under the creator of its ROOT session (`rootOf` in attribution.ts), so a person is charged for
- * the helpers their session started. The number is an estimate of API-equivalent dollars; a plan's quota belongs to the Claude account, not to a user.
- */
-export const creatorOf = (_session: { sessionId: string } | null | undefined): string => OWNER_ACTOR;

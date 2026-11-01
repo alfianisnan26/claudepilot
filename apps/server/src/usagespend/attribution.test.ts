@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AttributionBy } from '@portal/contracts';
-import { creatorOf, OWNER_ACTOR } from './actor.js';
 import { attribute, chainOf, chainRootOf, lineage, rootOf, shareOf, unattributed, workspaceNameOf, type AttributionInput, type GrouperFactory } from './attribution.js';
 import type { PersonaRecord, SessionInfo, UsageRow } from './model.js';
 
@@ -308,9 +307,6 @@ test('a new dimension plugs in as one grouper: usage per user, children rolled u
   assert.equal(a.coverage.value, 88.24, '7.50 of 8.50');
   // Nobody provided it: the report says so rather than guessing a grouping.
   assert.throws(() => attribute({ ...input('workspace'), by: 'user' as never }), /no way to group by user/);
-  // Today the creator is the one owner, whoever is asked about.
-  assert.equal(creatorOf(sessions.get('G1')), OWNER_ACTOR);
-  assert.equal(creatorOf(undefined), 'u_owner');
 });
 
 // T-312: the chains split on 2026-10-13 (chat/lineage.ts SPLIT_CHAINS_2026_10_13), by hand. Ids are the real prefixes with a made-up tail.
