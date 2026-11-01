@@ -204,7 +204,7 @@ export function OrgSettingsPage() {
             </label>
           )}
           {sections.map((s) => (
-            <div key={s} id={anchor(s)} data-org-section={s} className="scroll-mt-36 lg:scroll-mt-6">
+            <div key={s} id={anchor(s)} data-org-section={s} className="scroll-mt-48 sm:scroll-mt-20 lg:scroll-mt-6">
               {render(s)}
             </div>
           ))}
