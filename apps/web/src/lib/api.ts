@@ -100,7 +100,12 @@ import {
   type CreateOrgRequest,
   type MyAbilities,
   type Org,
+  type OrgDomain,
   type OrgMember,
+  type OrgSignInSettings,
+  type OrgSsoPolicyRequest,
+  type OrgSsoProvider,
+  type OrgSsoProviderRequest,
   type UpdateOrgRequest,
 } from '@portal/contracts';
 import { scopedList } from './orgContext';
@@ -286,6 +291,15 @@ export const api = {
     setRole: (id: string, userId: string, body: ChangeOrgMemberRoleRequest) => request<OrgMember[]>('PATCH', ORGS_API.member(id, userId), body),
     remove: (id: string, userId: string) => request<{ removed: true }>('DELETE', ORGS_API.member(id, userId)),
     leave: (id: string) => request<{ left: true }>('POST', ORGS_API.leave(id)),
+    /** Slice 10: the Sign-in tab (domains, the org's provider, requireSso). */
+    signIn: (id: string) => request<OrgSignInSettings>('GET', ORGS_API.signIn(id)),
+    addDomain: (id: string, domain: string) => request<OrgDomain>('POST', ORGS_API.domains(id), { domain }),
+    removeDomain: (id: string, domain: string) => request<{ removed: true }>('DELETE', ORGS_API.domain(id, domain)),
+    checkDomain: (id: string, domain: string) => request<OrgDomain>('POST', ORGS_API.checkDomain(id, domain)),
+    saveSso: (id: string, body: OrgSsoProviderRequest) => request<OrgSsoProvider>('PUT', ORGS_API.sso(id), body),
+    removeSso: (id: string) => request<{ removed: true }>('DELETE', ORGS_API.sso(id)),
+    testSso: (id: string) => request<{ ok: true; authorizationEndpoint: string }>('POST', ORGS_API.ssoTest(id)),
+    ssoPolicy: (id: string, body: OrgSsoPolicyRequest) => request<OrgSignInSettings>('PUT', ORGS_API.ssoPolicy(id), body),
     /** Slice 8: invitations (the code is answered once, on create), accepting one, suspension and deletion. */
     invitations: (id: string) => request<OrgInvitation[]>('GET', ORGS_API.invitations(id)),
     invite: (id: string, body: CreateOrgInvitationRequest) => request<CreatedOrgInvitation>('POST', ORGS_API.invitations(id), body),

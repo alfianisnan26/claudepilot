@@ -83,7 +83,7 @@ import { runPreflight } from './delivery/preflight.js';
 import type { Reconciler } from './delivery/reconciler.js';
 import { config } from './config.js';
 import { contentSecurityPolicy } from './csp.js';
-import type { Portal } from './portal.js';
+import { sessionTokenHash, type Portal } from './portal.js';
 import { RateLimiter } from './rateLimit.js';
 import { ClaudeLogins } from './workspaces/claudeLogin.js';
 import { Terminals } from './workspaces/terminals.js';
@@ -125,7 +125,7 @@ import { createAttentionRoutes, type AttentionRegistry } from './attention/index
 import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
-import { createMoveToOrgRoute, createOrgRoutes, createOrgs } from './orgs/index.js';
+import { createMoveToOrgRoute, createOrgRoutes, createOrgs, createOrgSsoRoutes } from './orgs/index.js';
 import { AdminHostGate, adminHostMiddleware, adminOidcConfig, createAdminApp, type ConsoleApp } from './admin/index.js';
 import type { Platform } from './platform/index.js';
 import { declareAllPolicies } from './authz/declarations.js';
@@ -345,7 +345,8 @@ export function createApp(
         userId = s.userId; // the database could not be read: the account as itself, never the founder
       }
     }
-    return { kind: 'user', userId, loginSessionId: 'legacy', via: 'ui', ...(s.userId ? { accountId: s.userId } : {}) };
+    // Organizations slice 10: the session is named by the hash it is kept under, so requireSso can ask whether the org's provider marked it.
+    return { kind: 'user', userId, loginSessionId: `ws:${sessionTokenHash(token!)}`, via: 'ui', ...(s.userId ? { accountId: s.userId } : {}) };
   };
   useAccountRoles((id) => portal.roleOf(id));
   useSocketActor((req) => {
@@ -449,7 +450,8 @@ export function createApp(
       // neither counted nor reset here (review #1: an account holder could otherwise reset the code's limiter between guesses).
       // Owner, 2026-10-17: an email on a domain an SSO provider vouches for signs in there, never with a password (the same answer
       // whether the account exists or not).
-      if (typeof email === 'string' && sso.forEmail(email))
+      // Organizations slice 10: an org's verified domain refuses passwords only while that org requires SSO (§9.4, §9.5).
+      if (typeof email === 'string' && sso.passwordRefused(email))
         throw new AppError('FORBIDDEN', 'This email signs in with SSO.', { details: { sso: 'Use the SSO button.' } });
       try {
         const user = await users.verify(email, password, key);
@@ -522,6 +524,9 @@ export function createApp(
     publicUrl: process.env.PORTAL_SSO_ORIGIN?.trim() || null,
     clientKey,
     body,
+    // Organizations slice 10: a sign-in or step-up through an org's provider marks the session and syncs the membership (orgs/sso.ts).
+    sessionHash: sessionTokenHash,
+    orgSignIn: (e) => orgsModule.sso?.onSignIn(e),
   });
   identity.mountPublic(app);
 
@@ -901,7 +906,14 @@ export function createApp(
     // A break-glass entry started: the org's owners hear of it (a 'security' notification; delivery checks each recipient again).
     notifyBreakGlass: (owners, n) =>
       void platform?.bus.emit({ kind: 'security', subject: { type: 'portal', id: `break-glass:${n.entryId}` }, facts: { org: n.orgName, admin: n.admin, until: n.expiresAt }, audience: owners }),
+    // Slice 10: an org's own OIDC provider lives with the instance ones (sso_providers.org_id).
+    ssoProviders: sso,
   });
+  {
+    // Slice 10 (§9.2): every org domain is looked up again once a day (7 failures in a row: lost).
+    const daily = setInterval(() => void orgsModule.sso?.recheckAll().catch((e: unknown) => console.error(`[orgs] the domain check failed: ${(e as Error).message}`)), 24 * 60 * 60_000);
+    daily.unref?.();
+  }
   {
     // Closes break-glass entries past their hour with their audit row (decisions never wait for it: they read the clock).
     const sweep = setInterval(() => {
@@ -1448,6 +1460,8 @@ export function createApp(
     const og = new Hono<Env>();
     og.use(requireSession);
     og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass, orgsModule.sharing, orgsModule.invitations));
+    // Slice 10: the Sign-in tab (domains, the org's provider, requireSso).
+    if (orgsModule.sso) og.route('/', createOrgSsoRoutes(orgsModule.sso, identity.redirectUri));
     app.route('/api/orgs', og);
   }
   // Organizations slice 4 (§6.11): the Admin console, answered only on the admin host (the middleware at the top hands it those requests).

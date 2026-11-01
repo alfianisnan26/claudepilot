@@ -2,7 +2,7 @@ import { Button, ConfirmDialog, useToast } from '@isnanme/ui';
 import { FOUNDING_USER_ID, ORG_LIMITS, type Org, type OrgMember, type OrgRole } from '@portal/contracts';
 import { LogOut, UserMinus } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
@@ -11,16 +11,21 @@ import { HOME } from '@/app/nav';
 import { PERSONAL } from '@/lib/orgContext';
 import { InvitationsSection } from './InvitationsSection';
 import { orgField } from './NewOrgDialog';
+import { OrgSignInTab } from './OrgSignInTab';
 import { useOrgs } from './OrgsProvider';
-import { canManageOrg, canRemoveMember, canSeeMembers, orgErrorText, ROLE_ABOUT, ROLE_LABEL, roleChoices } from './rules';
+import { canManageOrg, canRemoveMember, canSeeMembers, canSeeSignIn, orgErrorText, ROLE_ABOUT, ROLE_LABEL, roleChoices } from './rules';
+
+type Tab = 'general' | 'sign-in';
 
 /**
  * Org settings (docs/prd/organizations.md §7, slice 9): General (name; the slug is fixed) and Members (roles, remove, leave). Owners and
- * admins change things; members read; a guest sees the name and Leave only. Invitations (slice 8) for owners and admins. Teams, domains,
- * sign-in, policies and audit come with their slices (7, 9, 10). The server decides every change; a refusal (the last owner) is shown as it comes.
+ * admins change things; members read; a guest sees the name and Leave only. Invitations (slice 8) for owners and admins. Slice 10 adds the
+ * Sign-in tab (owners and admins; `?tab=sign-in`, where a step-up returns): domains, the org's provider, Require SSO (OrgSignInTab). The
+ * server decides every change; a refusal (the last owner) is shown as it comes.
  */
 export function OrgSettingsPage() {
   const { id = '' } = useParams();
+  const [search, setSearch] = useSearchParams();
   const toast = useToast();
   const navigate = useNavigate();
   const { reload: reloadOrgs, setContext } = useOrgs();
@@ -95,9 +100,43 @@ export function OrgSettingsPage() {
     }
   };
 
+  const tab: Tab = canSeeSignIn(org.myRole) && search.get('tab') === 'sign-in' ? 'sign-in' : 'general';
+  const tabs = canSeeSignIn(org.myRole) && (
+    <div role="tablist" aria-label="Org settings" className="flex gap-1 rounded-full bg-surface-2 p-1 self-start">
+      {(
+        [
+          ['general', 'General'],
+          ['sign-in', 'Sign-in'],
+        ] as const
+      ).map(([key, text]) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={tab === key}
+          data-org-tab={key}
+          onClick={() => setSearch(key === 'general' ? {} : { tab: key }, { replace: true })}
+          className={`press min-h-11 rounded-full px-4 text-sm font-semibold outline-hidden focus-visible:ring-2 focus-visible:ring-accent ${tab === key ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'}`}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (tab === 'sign-in')
+    return (
+      <div data-org-settings="" className="flex flex-col gap-6">
+        <PageHeader title={org.name} description={`Settings of this organization. Your role: ${ROLE_ABOUT[org.myRole]}`} />
+        {tabs}
+        <OrgSignInTab org={org} members={members} />
+      </div>
+    );
+
   return (
     <div data-org-settings="" className="flex flex-col gap-6">
       <PageHeader title={org.name} description={`Settings of this organization. Your role: ${ROLE_ABOUT[org.myRole]}`} />
+      {tabs}
       <General org={org} manage={manage} onSaved={(o) => (setOrg(o), void reloadOrgs())} />
 
       {error && (

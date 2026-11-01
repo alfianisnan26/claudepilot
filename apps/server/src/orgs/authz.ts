@@ -92,7 +92,23 @@ export const ORG_TRANSFER_POLICIES: RoutePolicies = {
   'POST /api/knowledge/vaults/:id/move-to-org': { kind: 'objects', checks: [{ type: 'vault', verb: 'manage', from: 'path', param: 'id' }], audit: 'object.transferred' },
 };
 
+/**
+ * Slice 10, org SSO (§9): owners and admins (`manage`); the service adds owner-only for the policy (requireSso, freshness, exceptions).
+ * app.ts mounts them (orgs/ssoRoutes.ts) on the /api/orgs router.
+ */
+export const ORG_SSO_POLICIES: RoutePolicies = {
+  'GET /api/orgs/:id/sign-in': org('manage'),
+  'POST /api/orgs/:id/domains': { ...org('manage'), audit: 'org.domain_added' },
+  'DELETE /api/orgs/:id/domains/:domain': { ...org('manage'), audit: 'org.domain_removed' },
+  'POST /api/orgs/:id/domains/:domain/check': { ...org('manage'), audit: 'org.domain_verified' },
+  'PUT /api/orgs/:id/sso': { ...org('manage'), audit: 'org.sso_provider_saved' },
+  'DELETE /api/orgs/:id/sso': { ...org('manage'), audit: 'org.sso_provider_removed' },
+  'POST /api/orgs/:id/sso/test': org('manage'),
+  'PUT /api/orgs/:id/sso/policy': { ...org('manage'), audit: 'org.sso_policy_changed' },
+};
+
 export function declareOrgPolicies(): void {
   declarePolicies('orgs', ORG_ROUTE_POLICIES);
   declarePolicies('orgs', ORG_TRANSFER_POLICIES);
+  declarePolicies('orgs', ORG_SSO_POLICIES);
 }

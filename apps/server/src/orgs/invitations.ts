@@ -109,7 +109,7 @@ export class OrgInvitations {
     return (r.founder === 1 ? FOUNDING_USER_ID : r.id) as UserId;
   }
 
-  /** An email on a domain verified by ANOTHER org (slice 10's `org_domains`): refused. No table yet: no verified domain anywhere. */
+  /** An email on a domain verified by ANOTHER org (slice 10's `org_domains`) (migration 471): refused. */
   #otherOrgsDomain(orgId: OrgId, email: string): boolean {
     const domain = email.slice(email.lastIndexOf('@') + 1);
     try {

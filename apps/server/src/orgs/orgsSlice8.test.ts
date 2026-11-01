@@ -191,14 +191,13 @@ test('accept is throttled per person (scope invitation): wrong codes count, the 
 test('an email on a domain ANOTHER org verified is refused (that org’s IdP vouches for it)', () => {
   const org = freshOrg();
   const other = freshOrg();
-  // Slice 10 owns `org_domains`; the rule reads it when it exists. Made here with §8's shape for the test.
-  store.db!.exec("CREATE TABLE IF NOT EXISTS org_domains (org_id TEXT NOT NULL, domain TEXT NOT NULL, state TEXT NOT NULL, challenge TEXT NOT NULL DEFAULT 'x', PRIMARY KEY (org_id, domain))");
-  store.db!.prepare("INSERT INTO org_domains (org_id, domain, state) VALUES (?, 'corp.example', 'verified')").run(other);
+  // Slice 10's `org_domains` (migration 471): a domain the other org verified.
+  store.db!.prepare("INSERT INTO org_domains (org_id, domain, state, challenge, added_by, added_at) VALUES (?, 'corp.example', 'verified', 'x', 'test', 'x')").run(other);
   try {
     assert.throws(() => m.invitations.create(person(ALICE), org, { email: 'kim@corp.example', role: 'member' }), code('CONFLICT', 'INVITATION_OTHER_ORG_DOMAIN'));
     assert.equal(m.invitations.create(person(ALICE), other, { email: 'kim@corp.example', role: 'member' }).state, 'pending', 'its own org may invite');
   } finally {
-    store.db!.exec('DROP TABLE org_domains');
+    store.db!.prepare("DELETE FROM org_domains WHERE domain = 'corp.example'").run();
   }
 });
 

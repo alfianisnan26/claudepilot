@@ -6,6 +6,7 @@
 import type { HttpBindings } from '@hono/node-server';
 import { AppError, success } from '@isnanme/core';
 import {
+  isOrgId,
   levelOfCaps,
   normalizeEmail,
   PORTAL_TEAM_API,
@@ -52,6 +53,13 @@ export interface IdentityRouteDeps {
   publicUrl: string | null;
   clientKey: (c: Context<Env>) => string;
   body: <T>(c: Context<Env>) => Promise<Partial<T>>;
+  /** The hash a web session is kept under (portal.ts), so a sign-in through an org's provider can mark that session (slice 10). */
+  sessionHash?: (token: string) => string;
+  /**
+   * Organizations slice 10: after a sign-in or a step-up through an ORG's provider: membership (JIT), group rules, the session mark and the
+   * last sign-in (orgs/sso.ts). `userId` is the user the account acts as.
+   */
+  orgSignIn?: (e: { orgId: string; providerId: string; userId: string; groups: string[] | null; created: boolean; sessionHash: string | null }) => void;
 }
 
 export const SSO_COOKIE = 'portal_sso';
@@ -248,7 +256,14 @@ export function identityRoutes(d: IdentityRouteDeps) {
       // Only the DOMAIN decides: an email that has no account answers the same as one that has (nothing about accounts is told).
       const hit = typeof email === 'string' ? sso.forEmail(email) : null;
       const out: SignInMethod = hit
-        ? { method: 'sso', provider: hit.id, name: hit.name, start: `${SSO_API.start}?provider=${encodeURIComponent(hit.id)}&email=${encodeURIComponent(normalizeEmail(email!))}` }
+        ? {
+            method: 'sso',
+            provider: hit.id,
+            name: hit.name,
+            start: `${SSO_API.start}?provider=${encodeURIComponent(hit.id)}&email=${encodeURIComponent(normalizeEmail(email!))}`,
+            // Slice 10: an org domain whose org does not require SSO; told by the org's policy only, never by an account.
+            ...(hit.passwordToo ? { passwordToo: true } : {}),
+          }
         : { method: 'password' };
       return c.json(success(out));
     });
@@ -258,12 +273,27 @@ export function identityRoutes(d: IdentityRouteDeps) {
       if (discoverLimiter.blocked(key)) return c.redirect('/login?sso_error=unavailable', 302);
       discoverLimiter.fail(key);
       const email = c.req.query('email') ?? null;
-      // The email's domain names the provider; `provider` is used only for an email on no provider's domain, and even then the callback
-      // signs in only an email on THAT provider's domains (sso.ts), so naming another provider gains nothing.
-      const byDomain = email ? sso.forEmail(email) : null;
-      const providerId = byDomain?.id ?? c.req.query('provider') ?? '';
+      // Slice 10, a step-up (`?org=<id>&for=step-up`): the signed-in ACCOUNT adds its org's provider to this session. A server-code session
+      // (no account) cannot; nothing tells whether the org exists or has a provider (the same redirect).
+      const org = c.req.query('org');
+      const stepUp = c.req.query('for') === 'step-up';
+      let step: { account: string; sessionHash: string; returnTo: string } | undefined;
+      let providerId: string;
+      if (stepUp) {
+        const token = getCookie(c, d.cookie);
+        const account = portal.anySession(token)?.userId;
+        const pid = isOrgId(org) ? sso.orgProviderId(org) : null;
+        if (!token || !account || !pid || !isOrgId(org) || !d.sessionHash) return c.redirect('/login?sso_error=unavailable', 302);
+        step = { account, sessionHash: d.sessionHash(token), returnTo: `/admin/orgs/${org}?tab=sign-in` };
+        providerId = pid;
+      } else {
+        // The email's domain names the provider; `provider` is used only for an email on no provider's domain, and even then the callback
+        // signs in only an email on THAT provider's domains (sso.ts), so naming another provider gains nothing.
+        const byDomain = email ? sso.forEmail(email) : null;
+        providerId = byDomain?.id ?? c.req.query('provider') ?? '';
+      }
       try {
-        const { url, binding } = await sso.begin(providerId, email, redirectUri(c));
+        const { url, binding } = await sso.begin(providerId, email, redirectUri(c), step);
         setCookie(c, SSO_COOKIE, binding, { httpOnly: true, sameSite: 'Lax', path: SSO_API.callback, maxAge: 600, secure: redirectUri(c).startsWith('https:') });
         return c.redirect(url, 302);
       } catch (e) {
@@ -282,8 +312,30 @@ export function identityRoutes(d: IdentityRouteDeps) {
       if (!binding) return c.redirect('/login?sso_error=state', 302);
       try {
         const r = await sso.finish({ code: c.req.query('code'), state: c.req.query('state'), error: c.req.query('error') }, binding);
+        const principal = (id: string) => {
+          try {
+            return users.principalOf(id);
+          } catch {
+            return id;
+          }
+        };
+        if (r.stepUp) {
+          // Slice 10: no new session; the org's provider is added to the session that started it (the identity linked when it was free).
+          // The callback is a cross-site navigation, so the Strict session cookie is not here: the session was recorded at the start, in
+          // this browser (the binding cookie proves it).
+          if (r.orgId) d.orgSignIn?.({ orgId: r.orgId, providerId: r.providerId, userId: principal(r.user.id), groups: r.groups, created: false, sessionHash: r.stepUpSession });
+          audit('sso.step_up', r.user.id, { providerId: r.providerId, orgId: r.orgId, linked: r.linked }, r.linked ? 'medium' : 'info', r.user.id);
+          return c.redirect(r.returnTo, 302);
+        }
         const token = portal.openSession(r.user.id);
         setCookie(c, d.cookie, token, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: Math.floor(d.ttlMs / 1000) });
+        if (r.orgId) {
+          try {
+            d.orgSignIn?.({ orgId: r.orgId, providerId: r.providerId, userId: principal(r.user.id), groups: r.groups, created: r.created, sessionHash: d.sessionHash ? d.sessionHash(token) : null });
+          } catch (e) {
+            console.error(`[portal] after an org sign-in: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
         audit('portal.signin', null, { method: 'sso', providerId: r.providerId, userId: r.user.id, role: r.user.role, created: r.created, linked: r.linked });
         if (r.created) audit('account.created', r.user.id, { email: r.user.email, role: r.user.role, via: `sso:${r.providerId}` }, 'info');
         // Review m2: an SSO link made before slice 0 to an account the linking rule now guards: allowed (refusing could lock its holder out),

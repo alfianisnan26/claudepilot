@@ -40,6 +40,8 @@ export function LoginPage() {
   // Owner, 2026-10-17: the email decides. Its domain on an SSO provider's list goes there; any other email asks for its password.
   const [step, setStep] = useState<'email' | 'password'>('email');
   const [sso, setSso] = useState<string | null>(null);
+  /** Organizations slice 10: an org's domain that still allows a password: both ways are offered. */
+  const [ssoOffer, setSsoOffer] = useState<{ name: string; start: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const input = useRef<{ focus: () => void }>(null);
 
@@ -77,6 +79,12 @@ export function LoginPage() {
     setLoading(true);
     try {
       const m = await api.signInMethod(email.trim());
+      if (m.method === 'sso' && m.passwordToo) {
+        setSsoOffer({ name: m.name, start: m.start });
+        setStep('password');
+        setLoading(false);
+        return;
+      }
       if (m.method === 'sso') {
         setSso(m.name);
         window.location.assign(m.start);
@@ -143,13 +151,18 @@ export function LoginPage() {
                 autoComplete="username"
                 inputMode="email"
                 value={email}
-                onChange={(e) => (setEmail(e.target.value), setError(undefined), step === 'password' && (setStep('email'), setPassword('')))}
+                onChange={(e) => (setEmail(e.target.value), setError(undefined), setSsoOffer(null), step === 'password' && (setStep('email'), setPassword('')))}
                 disabled={!enabled || loading}
                 autoFocus={enabled}
                 className={field}
                 aria-invalid={!!error}
               />
             </label>
+            {step === 'password' && ssoOffer && (
+              <Button type="button" variant="secondary" size="lg" className="w-full" data-sso-offer="" onClick={() => (setSso(ssoOffer.name), window.location.assign(ssoOffer.start))}>
+                Sign in with {ssoOffer.name}
+              </Button>
+            )}
             {step === 'password' && (
               <label className="flex flex-col gap-1.5">
                 <span className="text-sm font-semibold text-ink-soft">Password</span>

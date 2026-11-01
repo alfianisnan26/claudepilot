@@ -37,6 +37,8 @@ export function generateCode(): string {
 const digest = (s: string) => createHash('sha256').update(s).digest();
 /** Sessions are looked up by this, so neither memory nor the database holds a usable token. */
 const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
+/** The hash a web session is kept under (organizations slice 10 marks a session by it: an actor's `loginSessionId` is `ws:<hash>`). */
+export const sessionTokenHash = tokenHash;
 
 /**
  * The portal's state: the server code, whether sign-in is open, and the signed-in sessions. The code

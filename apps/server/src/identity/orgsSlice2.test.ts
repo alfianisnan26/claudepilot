@@ -141,9 +141,11 @@ test('an organization’s provider never makes an instance admin, confirmed or n
   assert.equal(jitRole({ ...base, default_role: 'member' }), 'member');
 });
 
-test('an organization’s provider row (the org column a later slice adds) makes members at sign-in', async () => {
+test('an organization’s provider row (the org column of slice 10, migration 472) makes members at sign-in', async () => {
   const t = rig({ defaultRole: 'admin' });
-  t.db.exec('ALTER TABLE sso_providers ADD COLUMN org_id TEXT');
+  t.db.prepare("INSERT INTO orgs (id, slug, name, created_by, created_at) VALUES ('org_konfersi', 'konfersi', 'Konfersi', 'ui', 'x')").run();
+  // Slice 10: an org's provider signs in only emails on a domain the org verified.
+  t.db.prepare("INSERT INTO org_domains (org_id, domain, state, challenge, added_by, added_at) VALUES ('org_konfersi', 'example.com', 'verified', 'c', 'ui', 'x')").run();
   t.db.prepare("UPDATE sso_providers SET org_id = 'org_konfersi' WHERE id = ?").run(t.p.id);
   const made = await t.outcome(t.signIn({ sub: 's-org', email: 'staff@example.com' }));
   assert.equal(made.result, 'created');

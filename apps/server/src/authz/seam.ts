@@ -151,6 +151,11 @@ export interface OrgAuthority {
   /** Whether any object is owned by an org: `seesEverything`'s fast path is only sound without one (the founding user holds nothing there). */
   anyOrgOwned(): boolean;
   /**
+   * Organizations slice 10 (§9.5): false when the org requires SSO and this actor may not reach its objects now (a web session not marked by
+   * the org's provider, a token without a fresh sign-in). The object is then not found for them: no role, no grant. Absent: no rule.
+   */
+  ssoGate?(orgId: string, actor: Actor): boolean;
+  /**
    * Organizations slice 7 (OD-3, §6.5 invariant 2): a person read a member's session in an org-owned workspace through their org role
    * (owner or admin). One audit row the member can read (the service de-duplicates bursts). Never called for a list's filter.
    */
@@ -190,14 +195,21 @@ function grantsOf(userId: UserId, found: ResolvedObject): Level {
  * with an open break-glass entry on that org the same `view` (recorded as break-glass access). Nothing for a session in a workspace an org
  * does not own (personal, team, or shared to the org), nothing for a token or an agent, nothing without the orgs module.
  */
-function orgReadOfSession(userId: UserId, found: ResolvedObject): { orgId: string; entry: string | null } | null {
+function orgReadOfSession(actor: Actor, userId: UserId, found: ResolvedObject): { orgId: string; entry: string | null } | null {
   if (!orgAuthority) return null;
   const workspaceId = found.attrs?.workspaceId;
   if (typeof workspaceId !== 'string' || !workspaceId) return null;
   const ws = resolvers.get('workspace')?.resolve(workspaceId);
   if (ws?.owner?.kind !== 'org') return null;
   const orgId = ws.owner.id;
-  const role = orgAuthority.roleIn(orgId, userId);
+  // Slice 10: a read through the org role is an access to the org; requireSso applies (fail closed). Break-glass is the platform's path.
+  let ssoOk = true;
+  try {
+    ssoOk = !orgAuthority.ssoGate || orgAuthority.ssoGate(orgId, actor) === true;
+  } catch {
+    ssoOk = false;
+  }
+  const role = ssoOk ? orgAuthority.roleIn(orgId, userId) : null;
   if (role === 'owner' || role === 'admin') return { orgId, entry: null };
   if (holdsFounderRights(userId)) {
     const entry = orgAuthority.breakGlass(orgId, userId);
@@ -397,9 +409,18 @@ export const singleOwner: Authz = {
         // admin account holds NOTHING by being one (no founding-user rights here). The one exception is a person who is an instance admin
         // with an open break-glass entry on that org (§6.7, OD-4): manage, and every mutation under it is recorded.
         if (!orgAuthority) return deny('unowned');
-        const role = orgAuthority.roleIn(found.owner.id, userId);
+        // Slice 10: requireSso. A person it binds, acting from a session or a token it does not accept, holds nothing here (fail closed).
+        let ssoOk = true;
+        if (orgAuthority.ssoGate) {
+          try {
+            ssoOk = orgAuthority.ssoGate(found.owner.id, actor) === true;
+          } catch {
+            ssoOk = false;
+          }
+        }
+        const role = ssoOk ? orgAuthority.roleIn(found.owner.id, userId) : null;
         const fromRole: Level = role === 'owner' || role === 'admin' ? 'manage' : 'none';
-        held = maxLevel(fromRole, grantsOf(userId, found), found.publicLevel ?? 'none');
+        held = ssoOk ? maxLevel(fromRole, grantsOf(userId, found), found.publicLevel ?? 'none') : 'none';
         if (held !== 'manage' && actor.kind === 'user' && holdsFounderRights(userId)) {
           const entry = orgAuthority.breakGlass(found.owner.id, userId);
           if (entry) {
@@ -414,7 +435,7 @@ export const singleOwner: Authz = {
         held = maxLevel(own ? 'manage' : 'none', grantsOf(userId, found), found.publicLevel ?? 'none');
         // OD-3: an org owner or admin reads (only reads) a member's session in an org-owned workspace; each read is audited for the member.
         if (held === 'none' && object.type === 'session' && actor.kind === 'user' && found.owner?.kind === 'user') {
-          const read = orgReadOfSession(userId, found);
+          const read = orgReadOfSession(actor, userId, found);
           if (read) {
             if (verb !== 'view') return deny('no_right', 'view');
             if (!listing) {

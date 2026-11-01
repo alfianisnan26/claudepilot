@@ -4,9 +4,10 @@
 // and the move routes on the workspaces, tickets and knowledge routers. Slice 7: teams of an org, shares to an org or its teams, and the
 // audit of org owners and admins reading members' sessions (./sharing.ts). Slice 8: invitations, suspension, deletion, the org audit.
 
-import type { UserId } from '@portal/contracts';
+import type { Actor, UserId } from '@portal/contracts';
 import { Grants } from '../authz/grants.js';
 import { useOrgAuthority } from '../authz/seam.js';
+import type { SsoProviders } from '../identity/sso.js';
 import { PlatformAudit } from '../platform/audit.js';
 import type { Store } from '../store/store.js';
 import { UserAbilities } from './abilities.js';
@@ -16,8 +17,11 @@ import { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
 import { OrgInvitations } from './invitations.js';
 import { OrgsService } from './service.js';
 import { OrgSharing } from './sharing.js';
+import { OrgSso, type TxtResolver } from './sso.js';
 import { OrgTransfers, type WorkspaceCredentials } from './transfer.js';
 
+export { OrgSso, normalizeOrgDomain, type TxtResolver } from './sso.js';
+export { createOrgSsoRoutes } from './ssoRoutes.js';
 export { UserAbilities, requireInstanceAdmin } from './abilities.js';
 export { ORG_ROUTE_POLICIES, ORG_TRANSFER_POLICIES, orgLevel, orgResolver } from './authz.js';
 export { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
@@ -36,6 +40,8 @@ export interface OrgsModule {
   sharing: OrgSharing;
   /** Slice 8: invitations (§6.8). */
   invitations: OrgInvitations;
+  /** Slice 10: org SSO (domains, the org's provider, requireSso); null without the portal's SSO providers. */
+  sso: OrgSso | null;
 }
 
 export function createOrgs(deps: {
@@ -45,6 +51,10 @@ export function createOrgs(deps: {
   credentials?: () => WorkspaceCredentials | null;
   /** Slice 5: tells an org's owners that a break-glass entry started. */
   notifyBreakGlass?: (owners: UserId[], notice: BreakGlassNotice) => void;
+  /** Slice 10: the portal's SSO providers (an org's own provider lives there with `org_id`). */
+  ssoProviders?: SsoProviders;
+  /** Slice 10: the TXT lookup of domain verification (a test passes a fake; default `node:dns`). */
+  resolveTxt?: TxtResolver;
 }): OrgsModule {
   declareOrgPolicies();
   const audit = new PlatformAudit(deps.store, deps.now);
@@ -60,9 +70,12 @@ export function createOrgs(deps: {
     remove: (key, ids) => deps.credentials?.()?.remove(key, ids),
   };
   const transfers = new OrgTransfers({ db, writable, orgs, grants, audit: record, credentials, now: deps.now });
+  // Slice 10: requireSso caps roles and gates org-owned objects, read on every decision.
+  const sso = deps.ssoProviders ? new OrgSso({ db, writable, orgs, sso: deps.ssoProviders, audit: record, now: deps.now, resolveTxt: deps.resolveTxt }) : null;
+  if (sso) orgs.roleCap = (orgId, userId, role) => sso.effectiveRole(orgId, userId, role);
   // The seam decides org-owned objects, grants and break-glass through this, read on every call (§6.5).
   const sharing = new OrgSharing({ db, writable, orgs, grants, audit: record, credentials, now: deps.now });
-  useOrgAuthority(orgAuthority({ db, orgs, grants, breakGlass, sharing }));
+  useOrgAuthority(orgAuthority({ db, orgs, grants, breakGlass, sharing, ...(sso ? { ssoGate: (orgId: string, actor: Actor) => sso.gate(orgId, actor) } : {}) }));
   const invitations = new OrgInvitations({ db, writable, orgs, audit: record, now: deps.now });
-  return { orgs, abilities, grants, breakGlass, transfers, sharing, invitations };
+  return { orgs, abilities, grants, breakGlass, transfers, sharing, invitations, sso };
 }

@@ -256,6 +256,97 @@ export interface MyAbilities {
   abilities: Ability[];
 }
 
+/* ---------- Organization SSO (slice 10, §9) ---------- */
+
+export type OrgDomainState = 'pending' | 'verified' | 'lost';
+
+/** An email domain of the org (§9.2). The challenge is not a secret: it is what the org publishes in DNS. */
+export interface OrgDomain {
+  domain: string;
+  state: OrgDomainState;
+  /** The TXT record to publish: `name` (`_claudepilot-challenge.example.com`) and `value` (`cp-verify=<challenge>`). */
+  record: { name: string; value: string };
+  verifiedAt: string | null;
+  lastCheckedAt: string | null;
+  /** Failed checks in a row (7 make a verified domain `lost`). */
+  failures: number;
+}
+
+/** One group rule (§9.6): a value of the ID token's groups claim, the org role it gives and/or a team it joins. Never `owner`. */
+export interface OrgGroupRule {
+  group: string;
+  role?: Exclude<OrgRole, 'owner'>;
+  team?: string;
+}
+
+/** The org's OIDC provider as its owners and admins see it (§9.1). It serves every verified domain of the org. No secret, ever. */
+export interface OrgSsoProvider {
+  id: string;
+  name: string;
+  issuer: string;
+  clientId: string;
+  hasClientSecret: boolean;
+  scopes: string;
+  groupsClaim: string | null;
+  groupRules: OrgGroupRule[];
+  /** Make an account at the first sign-in (JIT). */
+  autoCreate: boolean;
+  enabled: boolean;
+  /** What to register at the provider as the redirect URL. */
+  redirectUri: string;
+  updatedAt: string;
+}
+
+export interface OrgSsoProviderRequest {
+  name?: string;
+  issuer?: string;
+  clientId?: string;
+  /** Write-only: a string sets it, null clears it, absent keeps it. */
+  clientSecret?: string | null;
+  scopes?: string;
+  groupsClaim?: string | null;
+  groupRules?: OrgGroupRule[];
+  autoCreate?: boolean;
+  enabled?: boolean;
+}
+
+/** `GET ORGS_API.signIn(id)`: the Sign-in tab (owners and admins). */
+export interface OrgSignInSettings {
+  domains: OrgDomain[];
+  provider: OrgSsoProvider | null;
+  requireSso: boolean;
+  ssoFreshnessDays: number | null;
+  /** Members outside the verified domains an owner keeps above guest while SSO is required. */
+  exceptions: UserId[];
+  /** At least one owner has signed in through the org's provider (needed before requireSso can be turned on). */
+  ownerSignedIn: boolean;
+  /** This browser session went through the org's provider (sign-in or step-up). */
+  thisSession: boolean;
+  /** Where the browser goes for a step-up (adds the org's provider to this session; links the identity to this account when it is free). */
+  stepUp: string | null;
+}
+
+/** `PUT ORGS_API.ssoPolicy(id)`: owners only (they decide who reaches the org). */
+export interface OrgSsoPolicyRequest {
+  requireSso?: boolean;
+  /** Days (1-365) or null (off: a token then needs at least one sign-in through the provider, ever). */
+  ssoFreshnessDays?: number | null;
+  exceptions?: UserId[];
+}
+
+export const ORG_SSO_LIMITS = {
+  domainsPerOrg: 20,
+  groupRulesMax: 50,
+  /** Groups read from the claim at most; the rest are ignored. */
+  groupsRead: 200,
+  /** Failed checks in a row that make a verified domain `lost`. */
+  lostAfter: 7,
+  txtRecords: 20,
+  txtBytes: 1024,
+} as const;
+
+export const ORG_DOMAIN_CHALLENGE_PREFIX = '_claudepilot-challenge.';
+export const ORG_DOMAIN_TXT_PREFIX = 'cp-verify=';
 /* ---------- Teams in an org, shares to an org or its teams, transcript reads (slice 7, §6.1, §6.4, §6.5 invariant 2) ---------- */
 
 export type OrgTeamRole = 'owner' | 'member';
@@ -347,6 +438,20 @@ export const ORGS_API = {
   moveWorkspace: (ref: string) => `/api/workspaces/${ref.split('/').map(encodeURIComponent).join('/')}/move-to-org`,
   moveBucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/move-to-org`,
   moveVault: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/move-to-org`,
+  /** Slice 10. GET -> OrgSignInSettings (manage). */
+  signIn: (id: OrgId) => `/api/orgs/${id}/sign-in`,
+  /** Slice 10. POST { domain } -> OrgDomain (manage). */
+  domains: (id: OrgId) => `/api/orgs/${id}/domains`,
+  /** Slice 10. DELETE (manage). */
+  domain: (id: OrgId, domain: string) => `/api/orgs/${id}/domains/${encodeURIComponent(domain)}`,
+  /** Slice 10. POST: look the TXT record up now (rate limited per org) -> OrgDomain. */
+  checkDomain: (id: OrgId, domain: string) => `/api/orgs/${id}/domains/${encodeURIComponent(domain)}/check`,
+  /** Slice 10. PUT OrgSsoProviderRequest -> OrgSsoProvider (creates or changes the org's provider); DELETE removes it. */
+  sso: (id: OrgId) => `/api/orgs/${id}/sso`,
+  /** Slice 10. POST: read the issuer's discovery document now (rate limited per org). */
+  ssoTest: (id: OrgId) => `/api/orgs/${id}/sso/test`,
+  /** Slice 10. PUT OrgSsoPolicyRequest -> OrgSignInSettings (owners only). */
+  ssoPolicy: (id: OrgId) => `/api/orgs/${id}/sso/policy`,
   /** Slice 7. GET -> OrgTeam[] (members and up: every team; a guest: the teams they are in); POST CreateOrgTeamRequest -> OrgTeam. */
   teams: (id: OrgId) => `/api/orgs/${id}/teams`,
   /** Slice 7. DELETE: an org owner or admin, or a team owner (its shares end). */
@@ -388,6 +493,12 @@ export const ORGS_ERROR_CODES = {
   ORG_ALREADY_OWNER: 'ORG_ALREADY_OWNER',
   /** Break-glass: a reason of at least 10 characters is required (422). */
   BREAK_GLASS_REASON: 'BREAK_GLASS_REASON',
+  /** Slice 10: the domain is verified by another org or served by an instance provider (409). */
+  DOMAIN_TAKEN: 'DOMAIN_TAKEN',
+  /** Slice 10: a public mail or hosting domain, or a public suffix (422). */
+  DOMAIN_REFUSED: 'DOMAIN_REFUSED',
+  /** Slice 10: requireSso needs an owner who has signed in through the org's provider first (409). */
+  SSO_LOCKOUT_GUARD: 'SSO_LOCKOUT_GUARD',
   /** Org share: an operate share of a workspace with credential sets assigned, without `acknowledgeExposure` (409, details.credentials). */
   SHARE_EXPOSES_CREDENTIALS: 'SHARE_EXPOSES_CREDENTIALS',
   /** Org teams: only an active member of the org may be in its teams (422). */
