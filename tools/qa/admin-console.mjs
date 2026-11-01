@@ -7,6 +7,9 @@
 //   - Users and Orgs: master-detail: on a desktop the detail opens beside the list (the list stays), on a phone as a sheet;
 //   - Orgs detail: tabs Overview / Members / Objects / Invitations / Break-glass, one section at a time;
 //   - Audit: tabs All / Refused / Org / Security; windowed; the next page loads at the end of the list (1280);
+//   - owner need 2026-11-01 (feat/admin-member-token): the user's Tokens -> New (no admin scope offered to a member, the secret shown once
+//     with the MCP URL) and the org's Members tab -> Add (roles admin/member/guest, an existing account or a new one), Remove for a member
+//     and not the owner: each sheet fits, 44 px targets, and sends what it says;
 //   - step-up: a write answered REAUTH_REQUIRED opens "Confirm it's you"; the password confirms and the action RUNS BY ITSELF (no second tap);
 //     with the provider configured, a popup's "stepped" message (the BroadcastChannel the popup page uses) resumes it too.
 // usage (after `npm run build -w @portal/web`):
@@ -43,9 +46,19 @@ const STUB = (oidc) => `(() => {
     objects: [{ kind: 'workspace', id: 'w1', name: 'docker/one' }], invitations: [], sso: null, domains: null, breakGlassOpen: [] };
   let fresh = false;
   window.__ended = 0;
+  window.__calls = [];
   const json = (data, status = 200) => new Response(JSON.stringify(status === 200 ? { data } : { error: data }), { status, headers: { 'Content-Type': 'application/json' } });
   window.fetch = async (input, init) => {
     const u = new URL(typeof input === 'string' ? input : input.url, location.href); const p = u.pathname; const m = (init?.method ?? 'GET').toUpperCase();
+    window.__calls.push(m + ' ' + p + (init && init.body ? ' ' + init.body : ''));
+    if (/^\\/admin-api\\/users\\/u_\\d+\\/workspaces$/.test(p)) return json([{ id: 'docker/konf-api', label: 'konf-api' }]);
+    if (/^\\/admin-api\\/users\\/u_\\d+\\/tokens$/.test(p) && m === 'POST') {
+      // The secret is built here at run time: no token-shaped literal in this file.
+      const req = JSON.parse(init.body);
+      return json({ token: { kind: 'pmcp', id: 'ptk_new', label: req.label, createdAt: me.expiresAt, expiresAt: me.expiresAt, lastUsedAt: null, revokedAt: null, scope: req.scope, defaultWorkspaceId: req.defaultWorkspaceId || null },
+        secret: ['cpat', 'Q'.repeat(43)].join('_'), mcpUrl: 'https://pilot.konfersi.example/mcp' });
+    }
+    if (p === '/admin-api/orgs/o_1/members' && m === 'POST') return json(org);
     if (p === '/admin-api/session') return json({ ...me, freshUntil: fresh ? new Date(Date.now() + 300000).toISOString() : null });
     if (p === '/admin-api/session/methods') return json({ password: true, oidc: ${oidc ? "{ name: 'git.isnan.me' }" : 'null'} });
     if (p === '/admin-api/session/step-up' && m === 'POST') { fresh = true; return json(me); }
@@ -174,6 +187,99 @@ try {
       const kinds = await b.eval(`[...document.querySelectorAll('main [data-wl-index] .font-medium')].map((e) => e.textContent)`);
       check(`${t}: Refused shows only refused sign-ins`, kinds.length > 0 && kinds.every((k) => k === 'admin.signin_refused'), JSON.stringify(kinds.slice(0, 3)));
       await b.shot(`admin-audit-refused-${t}`);
+    }
+  }
+
+  // ---------- Owner need 2026-11-01 (feat/admin-member-token): New token (a user's Tokens) and Add member (an org's Members tab) ----------
+  const inDialog = (label) => `[...document.querySelectorAll('[role=dialog]')].find((e) => e.getAttribute('aria-label') === ${JSON.stringify(label)})`;
+  /** A box (a sheet, or the side panel) against the viewport: its controls under 44 px (a visually hidden radio is not a target), sideways scroll, its selects' options. */
+  const boxFacts = (sel) =>
+    b.eval(`(() => { const d = ${sel}; if (!d) return null; const r = d.getBoundingClientRect(); const doc = document.scrollingElement;
+      const small = [...d.querySelectorAll('button, input, select, textarea')].filter((e) => { const x = e.getBoundingClientRect(); return x.width > 2 && x.height > 0 && x.height < 43.5; })
+        .map((e) => (e.getAttribute('aria-label') || e.textContent || e.tagName).trim().slice(0, 30));
+      const options = (i) => [...(d.querySelectorAll('select')[i]?.options ?? [])].map((o) => o.value);
+      return { left: Math.round(r.left), right: Math.round(r.right), vw: innerWidth, small, sideways: doc.scrollWidth > doc.clientWidth + 1 || d.scrollWidth > d.clientWidth + 1, options: [options(0), options(1), options(2)] }; })()`);
+  const pickIn = (label, nth, value) =>
+    b.eval(`(() => { const el = ${inDialog(label)}.querySelectorAll('select')[${nth}];
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('change', { bubbles: true })); return el.value; })()`);
+  const fill = async (selector, text) => {
+    await b.focusSel(selector);
+    await b.type(text);
+  };
+  const fits = (f) => !!f && f.left >= 0 && f.right <= f.vw && !f.sideways && f.small.length === 0;
+  // The detail: the side panel on a desktop, the sheet on a phone.
+  const DETAIL = `(document.querySelector('[data-detail-panel]') ?? [...document.querySelectorAll('[role=dialog]')].at(0))`;
+  const base = URL_.replace(/[?#].*$/, '');
+  for (const size of [
+    { name: '390', w: 390, h: 844, mobile: true },
+    { name: '1280', w: 1280, h: 900, mobile: false },
+  ]) {
+    for (const dark of [false, true]) {
+      const t = `${size.name}-${dark ? 'dark' : 'light'}`;
+      console.log(`${t} sheets`);
+      await b.setViewport(size.w, size.h, size.mobile);
+      await b.media({ dark });
+      await b.goto(`${base}?pass=${t}#users`, 2500);
+      await b.waitFor(`document.querySelectorAll('main [data-wl-index] button').length > 2`, 15_000, 'the users');
+      // Person 1 is an active member.
+      await b.clickSel('main [data-wl-index="1"] button');
+      await b.waitFor(`!!document.querySelector('button[aria-label="New token"]')`, 8000, 'the New token button');
+      await b.clickSel('button[aria-label="New token"]');
+      await b.waitFor(`!!${inDialog('New token')}`, 8000, 'the New token sheet');
+      await sleep(400);
+      let f = await boxFacts(inDialog('New token'));
+      check(`${t}: New token offers read and operate only to a member`, JSON.stringify(f.options[0]) === JSON.stringify(['read', 'operate']), JSON.stringify(f.options[0]));
+      check(`${t}: New token offers 7, 30, 90, 365 days`, JSON.stringify(f.options[1]) === JSON.stringify(['7', '30', '90', '365']));
+      check(`${t}: New token lists the workspaces it may operate`, JSON.stringify(f.options[2]) === JSON.stringify(['', 'docker/konf-api']), JSON.stringify(f.options[2]));
+      check(`${t}: New token fits the width, 44 px targets`, fits(f), JSON.stringify(f));
+      await fill('[role=dialog][aria-label="New token"] input', 'Afgan');
+      await pickIn('New token', 2, 'docker/konf-api');
+      await sleep(200);
+      await b.shot(`admin-token-new-${t}`);
+      await b.eval(`${inDialog('New token')}.querySelector('button[type=submit]').click()`);
+      await b.waitFor(`!!${inDialog('Afgan')}`, 8000, 'the secret sheet');
+      await sleep(400);
+      const sent = await b.eval(`window.__calls.filter((c) => c.startsWith('POST /admin-api/users/u_1/tokens')).at(-1) || ''`);
+      check(
+        `${t}: the request names the label, scope, lifetime and workspace`,
+        sent.includes('"label":"Afgan"') && sent.includes('"scope":"operate"') && sent.includes('"expiresInDays":90') && sent.includes('"defaultWorkspaceId":"docker/konf-api"'),
+        sent,
+      );
+      const shown = await b.eval(`(() => { const d = ${inDialog('Afgan')}; return { token: !!d.querySelector('input[aria-label=Token]')?.value.startsWith('cpat_'), url: d.querySelector('input[aria-label="MCP URL"]')?.value ?? null, once: /shown once/.test(d.textContent) }; })()`);
+      check(`${t}: the secret is shown once with the MCP URL`, shown.token && shown.url === 'https://pilot.konfersi.example/mcp' && shown.once, JSON.stringify(shown));
+      f = await boxFacts(inDialog('Afgan'));
+      check(`${t}: the secret sheet fits, 44 px targets`, fits(f), JSON.stringify(f));
+      await b.shot(`admin-token-secret-${t}`);
+
+      await b.goto(`${base}?pass=${t}-orgs#orgs`, 2500);
+      await b.waitFor(`!!document.querySelector('main [data-wl-index] button')`, 15_000, 'the orgs');
+      await b.clickSel('main [data-wl-index="0"] button');
+      await b.waitFor(`!!document.querySelector('[data-tab="members"]')`, 8000, 'the org tabs');
+      await b.clickSel('[data-tab="members"]');
+      await b.waitFor(`!!document.querySelector('button[aria-label="Add member"]')`, 8000, 'the Add member button');
+      await sleep(300);
+      const removable = await b.eval(`${DETAIL}.querySelectorAll('button[aria-label^="Remove "]').length`);
+      check(`${t}: Remove is offered for the member, not the owner`, removable === 1, String(removable));
+      f = await boxFacts(DETAIL);
+      check(`${t}: the org's Members tab with its buttons fits, 44 px targets`, fits(f), JSON.stringify(f));
+      await b.shot(`admin-org-members-buttons-${t}`);
+      await b.clickSel('button[aria-label="Add member"]');
+      await b.waitFor(`!!${inDialog('Add member')}`, 8000, 'the Add member sheet');
+      await sleep(400);
+      f = await boxFacts(inDialog('Add member'));
+      check(`${t}: Add member roles are admin, member, guest`, JSON.stringify(f.options[1]) === JSON.stringify(['admin', 'member', 'guest']), JSON.stringify(f.options[1]));
+      check(`${t}: Add member offers no current member`, !f.options[0].includes('u_0') && !f.options[0].includes('u_1') && f.options[0].includes('u_2'));
+      check(`${t}: Add member fits the width, 44 px targets`, fits(f), JSON.stringify(f));
+      await b.shot(`admin-member-add-${t}`);
+      await b.eval(`[...${inDialog('Add member')}.querySelectorAll('label')].find((l) => /New account/.test(l.textContent))?.click()`);
+      await sleep(200);
+      await fill('[role=dialog][aria-label="Add member"] input[type=email]', 'afgan.ai@konfersi.example');
+      await b.shot(`admin-member-new-${t}`);
+      await b.eval(`${inDialog('Add member')}.querySelector('button[type=submit]').click()`);
+      await sleep(600);
+      const added = await b.eval(`window.__calls.filter((c) => c.startsWith('POST /admin-api/orgs/o_1/members')).at(-1) || ''`);
+      check(`${t}: Add member sends the new account's email and the member role`, added.includes('"email":"afgan.ai@konfersi.example"') && added.includes('"role":"member"'), added);
+      check(`${t}: the sheet closes after adding`, !(await b.eval(`!!${inDialog('Add member')}`)));
     }
   }
 

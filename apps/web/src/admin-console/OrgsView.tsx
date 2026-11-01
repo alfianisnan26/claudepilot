@@ -1,7 +1,8 @@
-import type { AdminOrg, AdminOrgDetail, AdminOrgObject, OrgId } from '@portal/contracts';
-import { Plus } from 'lucide-react';
+import type { AdminOrg, AdminOrgDetail, AdminOrgObject, OrgId, OrgMember } from '@portal/contracts';
+import { Plus, UserMinus, UserPlus } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from './api';
+import { AddMemberSheet } from './forms';
 import { TabBar } from '../components/TabBar';
 import { WindowedList } from '../components/WindowedList';
 import { ago, ORG_TAB_LABEL, ORG_TABS, slugOf, type OrgTab } from './model';
@@ -160,7 +161,7 @@ function NewOrg({ run, meId, onDone, onClose }: { run: Run; meId: string; onDone
   );
 }
 
-type Ask = 'suspend' | 'resume' | 'delete' | 'breakglass' | 'endglass' | 'recover';
+type Ask = 'suspend' | 'resume' | 'delete' | 'breakglass' | 'endglass' | 'recover' | 'add' | { remove: OrgMember };
 
 function OrgDetail({ id, run, onChanged, onClose }: { id: OrgId; run: Run; onChanged: () => void; onClose: () => void }) {
   const [o, setO] = useState<AdminOrgDetail | null>(null);
@@ -228,11 +229,24 @@ function OrgDetail({ id, run, onChanged, onClose }: { id: OrgId; run: Run; onCha
           </>
         )}
         {tab === 'members' && (
-          <Group title="Members">
+          <Group
+            title="Members"
+            action={
+              <button type="button" className={btnPlain} aria-label="Add member" title="Add member" disabled={o.state === 'deleting'} onClick={() => setAsk('add')}>
+                <UserPlus size={18} aria-hidden />
+                <span className="hidden sm:inline">Add</span>
+              </button>
+            }
+          >
             {o.memberList.map((m) => (
-              <li key={m.userId} className="flex items-center gap-2 px-3 py-2 text-sm">
+              <li key={m.userId} className="flex items-center gap-2 px-3 py-1 text-sm">
                 <span className="break-any min-w-0 flex-1">{m.email || m.displayName}</span>
                 <span className={`${chip} bg-surface-2`}>{m.role}</span>
+                {m.role !== 'owner' && (
+                  <button type="button" className={btnPlain} aria-label={`Remove ${m.email || m.displayName}`} title="Remove" onClick={() => setAsk({ remove: m })}>
+                    <UserMinus size={18} aria-hidden />
+                  </button>
+                )}
               </li>
             ))}
           </Group>
@@ -344,17 +358,46 @@ function OrgDetail({ id, run, onChanged, onClose }: { id: OrgId; run: Run; onCha
         />
       )}
       {ask === 'recover' && <Recover org={o} run={run} onDone={() => (load(), onChanged())} onClose={() => setAsk(null)} />}
+      {ask === 'add' && (
+        <AddMemberSheet
+          org={o}
+          run={run}
+          onDone={(next) => {
+            setO(next);
+            setAsk(null);
+            onChanged();
+          }}
+          onClose={() => setAsk(null)}
+        />
+      )}
+      {typeof ask === 'object' && ask && 'remove' in ask && (
+        <Confirm
+          title="Remove member"
+          body={`${ask.remove.email || ask.remove.displayName} leaves ${o.name}. What they shared with it ends.`}
+          action="Remove"
+          danger
+          onConfirm={async () => {
+            const r = await run(() => api.removeMember(o.id, ask.remove.userId));
+            if (r) (setO(r), onChanged());
+            return !!r;
+          }}
+          onClose={() => setAsk(null)}
+        />
+      )}
     </DetailPanel>
   );
 }
 
-function Group({ title, tip, children }: { title: string; tip?: string; children: ReactNode[] }) {
+function Group({ title, tip, action, children }: { title: string; tip?: string; action?: ReactNode; children: ReactNode[] }) {
   return (
     <div className="flex flex-col gap-2">
-      <h3 className="flex items-center gap-1 text-sm font-semibold">
-        {title}
-        {tip && <InfoTip label={`About ${title}`}>{tip}</InfoTip>}
-      </h3>
+      <div className="flex items-center gap-1">
+        <h3 className="flex min-w-0 flex-1 items-center gap-1 text-sm font-semibold">
+          {title}
+          {tip && <InfoTip label={`About ${title}`}>{tip}</InfoTip>}
+        </h3>
+        {action}
+      </div>
       {children.length === 0 ? <p className="text-sm text-muted">None</p> : <ul className="flex flex-col divide-y divide-line rounded-xl border border-line">{children}</ul>}
     </div>
   );

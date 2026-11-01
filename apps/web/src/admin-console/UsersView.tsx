@@ -1,8 +1,9 @@
-import type { AdminUserDetail, AdminUserRow } from '@portal/contracts';
-import { UserPlus } from 'lucide-react';
+import type { AdminMintedToken, AdminUserDetail, AdminUserRow } from '@portal/contracts';
+import { KeyRound, UserPlus } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from './api';
 import { TabBar } from '../components/TabBar';
+import { NewTokenSheet, TokenSecretSheet } from './forms';
 import { ago, USER_FILTER_LABEL, USER_FILTERS, userShows, type UserFilter } from './model';
 import { WindowedList } from '../components/WindowedList';
 import { btnDanger, btnPlain, btnPrimary, chip, Confirm, CONSOLE_STICKY, DetailPanel, Empty, field, Field, InfoTip, MasterDetail, Secret, Section, Sheet, useList, type Run } from './ui';
@@ -150,11 +151,12 @@ function NewUser({ run, onDone, onClose }: { run: Run; onDone: (email: string, p
   );
 }
 
-type Ask = { kind: 'suspend' | 'remove' | 'reset' | 'sessions' | 'demote' | 'founder' };
+type Ask = { kind: 'suspend' | 'remove' | 'reset' | 'sessions' | 'demote' | 'founder' | 'token' };
 
 function UserDetail({ id, self, run, onSecret, onChanged, onClose }: { id: string; self: boolean; run: Run; onSecret: (s: { title: string; value: string }) => void; onChanged: () => void; onClose: () => void }) {
   const [u, setU] = useState<AdminUserDetail | null>(null);
   const [ask, setAsk] = useState<Ask | null>(null);
+  const [minted, setMinted] = useState<AdminMintedToken | null>(null);
   const load = useCallback(() => void run(() => api.user(id)).then((v) => v && setU(v)), [run, id]);
   useEffect(load, [load]);
   // The panel stays open beside the list: a change shows in both.
@@ -239,7 +241,16 @@ function UserDetail({ id, self, run, onSecret, onChanged, onClose }: { id: strin
         )}
       </div>
       <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-semibold">Tokens</h3>
+        <div className="flex items-center gap-1">
+          <h3 className="flex min-w-0 flex-1 items-center gap-1 text-sm font-semibold">
+            Tokens
+            <InfoTip label="About tokens">Portal MCP tokens act as this account, with its rights and no more. The token is shown once.</InfoTip>
+          </h3>
+          <button type="button" className={btnPlain} aria-label="New token" title="New token" disabled={u.state !== 'active'} onClick={() => setAsk({ kind: 'token' })}>
+            <KeyRound size={18} aria-hidden />
+            <span className="hidden sm:inline">New</span>
+          </button>
+        </div>
         {u.tokens.length === 0 && <p className="text-sm text-muted">None</p>}
         <ul className="flex flex-col divide-y divide-line rounded-xl border border-line">
           {u.tokens.map((t) => (
@@ -247,7 +258,8 @@ function UserDetail({ id, self, run, onSecret, onChanged, onClose }: { id: strin
               <span className="min-w-0 flex-1 text-sm">
                 <span className="break-any block">{t.label}</span>
                 <span className="block text-xs text-muted">
-                  {t.kind} · {t.revokedAt ? 'revoked' : `until ${new Date(t.expiresAt).toLocaleDateString()}`}
+                  {t.scope ? `${t.scope} · ` : `${t.kind} · `}
+                  {t.revokedAt ? 'revoked' : `until ${new Date(t.expiresAt).toLocaleDateString()}`}
                   {t.lastUsedAt ? ` · used ${ago(t.lastUsedAt)}` : ''}
                 </span>
               </span>
@@ -290,6 +302,19 @@ function UserDetail({ id, self, run, onSecret, onChanged, onClose }: { id: strin
           onClose={() => setAsk(null)}
         />
       )}
+      {ask?.kind === 'token' && (
+        <NewTokenSheet
+          user={u}
+          run={run}
+          onDone={(t) => {
+            setAsk(null);
+            setMinted(t);
+            changed();
+          }}
+          onClose={() => setAsk(null)}
+        />
+      )}
+      {minted && <TokenSecretSheet minted={minted} onClose={() => setMinted(null)} />}
       {ask?.kind === 'founder' && <TransferFounder u={u} run={run} onDone={changed} onClose={() => setAsk(null)} />}
       {ask?.kind === 'remove' && (
         <Confirm

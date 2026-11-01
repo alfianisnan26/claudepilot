@@ -1641,6 +1641,9 @@ export function createApp(
       serverCode: portal,
       passwordRefused: (email) => sso.passwordRefused(email),
       settings: settings?.settings ?? null,
+      // Owner need 2026-11-01: a Portal MCP token minted FOR an account (it acts as that account, capped by its scope).
+      pmcp: portalMcp ?? null,
+      mcpUrl: config.portalMcp.url ?? null,
     }).app;
   }
 

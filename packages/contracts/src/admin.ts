@@ -56,14 +56,28 @@ export const ADMIN_API = {
   resume: (id: string) => `/admin-api/users/${u(id)}/resume`,
   /** POST (step-up): ends every portal and admin session of the account. */
   endSessions: (id: string) => `/admin-api/users/${u(id)}/sessions/end`,
-  /** DELETE (step-up): revokes one token the account minted. */
+  /** DELETE (step-up): revokes one token the account minted, or one minted for it. */
   token: (id: string, tokenId: string) => `/admin-api/users/${u(id)}/tokens/${u(tokenId)}`,
+  /**
+   * POST `AdminMintTokenRequest` (step-up) -> `AdminMintedToken` (owner need 2026-11-01): a Portal MCP token that acts as THIS account (its
+   * owner), capped by its scope; admin scope only for an admin account. The secret is in the answer once, never in the audit row.
+   */
+  tokens: (id: string) => `/admin-api/users/${u(id)}/tokens`,
+  /** GET -> `AdminWorkspaceChoice[]`: the workspaces this account may operate (a token's default workspace is picked from these). */
+  userWorkspaces: (id: string) => `/admin-api/users/${u(id)}/workspaces`,
   /** PUT / DELETE (step-up): grants or revokes one ability. */
   ability: (id: string, ability: Ability) => `/admin-api/users/${u(id)}/abilities/${u(ability)}`,
   /** GET -> `AdminOrgSummary[]`; POST `AdminCreateOrgRequest` (step-up) -> `AdminOrgDetail`: an org whose first owner is the account picked. */
   orgs: '/admin-api/orgs',
   /** GET -> `AdminOrgDetail`; DELETE `AdminReasonRequest` (step-up): deletes an org that owns nothing (30 days of grace, then purged). */
   org: (id: OrgId) => `/admin-api/orgs/${u(id)}`,
+  /**
+   * POST `AdminAddMemberRequest` (step-up) -> `AdminOrgDetail` (owner need 2026-11-01): puts an existing account in the org with a role
+   * (admin, member or guest; never owner), or first makes an account with no password (SSO or token only) when `email` is given instead.
+   */
+  orgMembers: (id: OrgId) => `/admin-api/orgs/${u(id)}/members`,
+  /** DELETE (step-up) -> `AdminOrgDetail`: ends a member's membership (never an owner's: owners change in the org, or by Recover owner). */
+  orgMember: (id: OrgId, userId: string) => `/admin-api/orgs/${u(id)}/members/${u(userId)}`,
   /** POST `AdminRecoverOwnerRequest` (step-up): makes an active account the owner of an org that has none. */
   recoverOwner: (id: OrgId) => `/admin-api/orgs/${u(id)}/recover-owner`,
   /** Slice 8. POST `{ reason? }` (step-up): suspends an org (its owners cannot resume it themselves); `resume` brings it back. */
@@ -175,6 +189,48 @@ export interface AdminUserToken {
   expiresAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
+  /** A Portal MCP token's scope; absent for a reporter token and from an older server. */
+  scope?: 'read' | 'operate' | 'admin';
+  /** A Portal MCP token's default workspace for the tickets it makes, or null. */
+  defaultWorkspaceId?: string | null;
+}
+
+/** The lifetimes (days) the console offers for a token minted for a user (a subset of PORTAL_TOKEN_DAYS). */
+export const ADMIN_TOKEN_DAYS = [7, 30, 90, 365] as const;
+
+/** `POST ADMIN_API.tokens(id)`: a Portal MCP token for this account. */
+export interface AdminMintTokenRequest {
+  label: string;
+  /** `admin` only for an admin account. */
+  scope: 'read' | 'operate' | 'admin';
+  expiresInDays: number;
+  /** One the account may operate (`ADMIN_API.userWorkspaces`); not for a read token. */
+  defaultWorkspaceId?: string | null;
+}
+
+/** The answer: the token's row, its secret (shown ONCE, kept nowhere) and the `/mcp` URL when the portal knows it (PORTAL_MCP_URL), else null. */
+export interface AdminMintedToken {
+  token: AdminUserToken;
+  secret: string;
+  mcpUrl: string | null;
+}
+
+/** A workspace an account may operate: its id (`<target>/<name>`) and the label shown. */
+export interface AdminWorkspaceChoice {
+  id: string;
+  label: string;
+}
+
+/** The org roles the console gives (an owner is made only by creating the org or by Recover owner). */
+export const ADMIN_MEMBER_ROLES = ['admin', 'member', 'guest'] as const;
+export type AdminMemberRole = (typeof ADMIN_MEMBER_ROLES)[number];
+
+/** `POST ADMIN_API.orgMembers(id)`: `userId` of an existing account, or `email` (and a name) for a new one with no password. */
+export interface AdminAddMemberRequest {
+  userId?: string;
+  email?: string;
+  displayName?: string;
+  role: AdminMemberRole;
 }
 
 export interface AdminUserDetail extends AdminUserRow {

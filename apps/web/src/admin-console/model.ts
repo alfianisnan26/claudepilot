@@ -1,4 +1,14 @@
 // Pure helpers of the Admin console (tested in model.test.ts).
+import {
+  ADMIN_MEMBER_ROLES,
+  ADMIN_TOKEN_DAYS,
+  PORTAL_TOKEN_LABEL_MAX,
+  type AdminAddMemberRequest,
+  type AdminMemberRole,
+  type AdminMintTokenRequest,
+  type AdminUserRow,
+  type OrgMember,
+} from '@portal/contracts';
 
 export const TABS = ['users', 'orgs', 'workspaces', 'signin', 'settings', 'audit'] as const;
 export type Tab = (typeof TABS)[number];
@@ -118,4 +128,57 @@ export function userShows(u: { role: 'admin' | 'member'; state: 'active' | 'disa
   if (f === 'all') return true;
   if (f === 'disabled') return u.state === 'disabled';
   return u.state === 'active' && u.role === (f === 'admins' ? 'admin' : 'member');
+}
+
+/* ---------- Owner need 2026-11-01: an account's Portal MCP token, and an org's members, from the console ---------- */
+
+export type TokenScope = AdminMintTokenRequest['scope'];
+/** The scopes offered for an account's token: admin only for an admin account (the server refuses it for anyone else too). */
+export function tokenScopes(role: 'admin' | 'member'): TokenScope[] {
+  return role === 'admin' ? ['read', 'operate', 'admin'] : ['read', 'operate'];
+}
+
+export interface TokenForm {
+  label: string;
+  scope: TokenScope;
+  days: number;
+  /** '' for none. */
+  workspace: string;
+}
+
+/** The request the New token sheet sends, or what is wrong with the form (the server checks every one of these again). */
+export function mintRequest(f: TokenForm, role: 'admin' | 'member'): { req: AdminMintTokenRequest } | { error: string } {
+  const label = f.label.trim();
+  if (!label) return { error: 'Give it a label.' };
+  if (label.length > PORTAL_TOKEN_LABEL_MAX) return { error: `At most ${PORTAL_TOKEN_LABEL_MAX} characters.` };
+  if (!tokenScopes(role).includes(f.scope)) return { error: 'Admin scope is for admin accounts only.' };
+  if (!(ADMIN_TOKEN_DAYS as readonly number[]).includes(f.days)) return { error: 'Pick a lifetime.' };
+  if (f.workspace && f.scope === 'read') return { error: 'A read token makes no tickets.' };
+  return { req: { label, scope: f.scope, expiresInDays: f.days, ...(f.workspace ? { defaultWorkspaceId: f.workspace } : {}) } };
+}
+
+export const MEMBER_ROLES: readonly AdminMemberRole[] = ADMIN_MEMBER_ROLES;
+
+export interface MemberForm {
+  /** An existing account, or a new one (no password: SSO or a token only). */
+  mode: 'existing' | 'new';
+  userId: string;
+  email: string;
+  name: string;
+  role: AdminMemberRole;
+}
+
+/** The request the Add member sheet sends, or what is missing. Never an owner (the role list has none; the server refuses it too). */
+export function memberRequest(f: MemberForm): { req: AdminAddMemberRequest } | { error: string } {
+  if (!MEMBER_ROLES.includes(f.role)) return { error: 'Pick admin, member or guest.' };
+  if (f.mode === 'existing') return f.userId ? { req: { userId: f.userId, role: f.role } } : { error: 'Pick an account.' };
+  const email = f.email.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Give an email address.' };
+  return { req: { email, ...(f.name.trim() ? { displayName: f.name.trim() } : {}), role: f.role } };
+}
+
+/** The accounts the Add member sheet offers: active ones that are not in the org yet. */
+export function addableAccounts(users: readonly AdminUserRow[], members: readonly OrgMember[]): AdminUserRow[] {
+  const inOrg = new Set(members.map((m) => m.userId as string));
+  return users.filter((u) => u.state === 'active' && !inOrg.has(u.id));
 }

@@ -404,6 +404,21 @@ export class OrgsService {
     this.#record('org.member_removed', actor, id, userId, { member: userId, role: theirs });
   }
 
+  /**
+   * Owner need 2026-11-01 (the Admin console's Members → Remove): an instance admin, as a person, ends a membership. Never an owner's (owners
+   * change inside the org, or by Recover owner when none is left). The same grants end as for any removal (§6.9). Returns the role it had.
+   */
+  removeByPlatform(actor: Actor, id: OrgId, userId: UserId): OrgRole {
+    requireInstanceAdmin(actor);
+    const state = this.stateOf(id);
+    if (!state || state === 'deleting') throw notFound();
+    const theirs = this.roleOf(id, userId);
+    if (!theirs) throw notFound();
+    if (theirs === 'owner') throw new AppError('CONFLICT', 'Owners are changed by the org’s owners, or by Recover owner.');
+    this.#end(id, userId);
+    return theirs;
+  }
+
   /** Leaves an org (any member, guests too). The last owner cannot leave. */
   leave(actor: Actor, id: OrgId): void {
     requireCan(actor, 'view', orgRef(id));
