@@ -2,7 +2,8 @@
 // (`PORTAL_ADMIN_HOST`, e.g. admin.pilot.ai.isnan.me). Its own session (`__Host-pilot_admin`, table admin_sessions), its own routes under
 // /admin-api (declared in apps/server/src/admin/authz.ts), its own small UI bundle under /admin-ui. Nothing here is served on the main host.
 
-import type { Ability, AdminOrgSummary, OrgId } from './orgs.js';
+import type { OrgId } from './authz.js';
+import type { Ability, AdminOrgSummary } from './orgs.js';
 import type { PlatformAuditEntry } from './notify.js';
 import type { SsoProvider } from './portalUsers.js';
 

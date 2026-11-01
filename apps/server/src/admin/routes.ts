@@ -92,6 +92,9 @@ async function body(c: Context<AdminEnv>): Promise<Record<string, unknown>> {
   }
 }
 
+/** A path parameter (always present on the routes that read it). */
+const param = (c: Context<AdminEnv>, name: string): string => c.req.param(name) ?? '';
+
 const reasonOf = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) : undefined;
 
@@ -339,7 +342,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success(d.users.list().map((u) => row(u, by.get(u.id) ?? []))));
   });
   on('GET', '/admin-api/users/:id', (c) => {
-    const u = account(c.req.param('id'));
+    const u = account(param(c, 'id'));
     const detail: AdminUserDetail = {
       ...row(u, d.abilities.of(c.get('actor'), u.id).map((a) => a.ability)),
       sessions: { portal: portalSessions(u.id), admin: sessions.liveCount(u.id) },
@@ -348,7 +351,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success(detail));
   });
   on('POST', '/admin-api/users/:id/suspend', async (c) => {
-    const u = account(c.req.param('id'));
+    const u = account(param(c, 'id'));
     const reason = reasonOf((await body(c)).reason);
     if (u.id === c.get('admin').account.id) throw new AppError('CONFLICT', 'You cannot suspend your own account.');
     if (u.state === 'disabled') return c.json(success(row(u, [])));
@@ -360,7 +363,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success(row(next, [])));
   });
   on('POST', '/admin-api/users/:id/resume', async (c) => {
-    const u = account(c.req.param('id'));
+    const u = account(param(c, 'id'));
     const reason = reasonOf((await body(c)).reason);
     if (u.state === 'active') return c.json(success(row(u, [])));
     const next = await d.users.update(u.id, { state: 'active' });
@@ -368,7 +371,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success(row(next, [])));
   });
   on('POST', '/admin-api/users/:id/sessions/end', (c) => {
-    const u = account(c.req.param('id'));
+    const u = account(param(c, 'id'));
     const portal = portalSessions(u.id);
     d.revokePortalSessions(u.id);
     // Ending your own: every other admin session ends, this one stays.
@@ -378,8 +381,8 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success({ portal, admin }));
   });
   on('DELETE', '/admin-api/users/:id/tokens/:tid', (c) => {
-    const u = account(c.req.param('id'));
-    const tid = c.req.param('tid');
+    const u = account(param(c, 'id'));
+    const tid = param(c, 'tid');
     const t = tokensOf(u).find((x) => x.id === tid);
     if (!t) throw new AppError('NOT_FOUND', 'No such token.');
     const table = t.kind === 'pmcp' ? 'pmcp_tokens' : 'reporter_tokens';
@@ -388,17 +391,17 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success({ revoked: changed }));
   });
   const ability = (c: Context<AdminEnv>) => {
-    const a = c.req.param('ability');
+    const a = param(c, 'ability');
     if (!isAbility(a)) throw new AppError('NOT_FOUND', 'No such ability.');
     return a;
   };
   on('PUT', '/admin-api/users/:id/abilities/:ability', (c) => {
-    const u = account(c.req.param('id'));
+    const u = account(param(c, 'id'));
     const r = d.abilities.grant(c.get('actor'), u.id, ability(c), 'Admin console');
     return c.json(success(r));
   });
   on('DELETE', '/admin-api/users/:id/abilities/:ability', (c) => {
-    const u = account(c.req.param('id'));
+    const u = account(param(c, 'id'));
     const r = d.abilities.revoke(c.get('actor'), u.id, ability(c), 'Admin console');
     return c.json(success(r));
   });
@@ -408,7 +411,7 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
   on('POST', '/admin-api/orgs/:id/recover-owner', async (c) => {
     const b = await body(c);
     const userId = typeof b.userId === 'string' ? b.userId : '';
-    d.orgs.recoverOwner(c.get('actor'), c.req.param('id') as OrgId, userId as UserId, typeof b.reason === 'string' ? b.reason : '');
+    d.orgs.recoverOwner(c.get('actor'), param(c, 'id') as OrgId, userId as UserId, typeof b.reason === 'string' ? b.reason : '');
     return c.json(success({ recovered: true }));
   });
 

@@ -11,11 +11,16 @@ export { AdminHostGate, isAdminPath, normalizeAdminHost, routeAdminHostUpgrades 
 export { createAdminApp, type AdminConsoleDeps, type AdminEnv } from './routes.js';
 export { AdminSessions } from './sessions.js';
 
+/** The console's app as the middleware calls it (a Hono app). */
+export interface ConsoleApp {
+  fetch(req: Request, env?: unknown): Response | Promise<Response>;
+}
+
 /**
  * The first middleware of the main app: a request for the admin host goes to the console's own app (`console()`, built once the app's services
  * exist), and nothing of the main portal runs for it; the console's paths on any other host are the same 404 as an unknown /api route.
  */
-export function adminHostMiddleware(gate: AdminHostGate, console: () => { fetch: (req: Request, env?: unknown) => Response | Promise<Response> } | null): MiddlewareHandler {
+export function adminHostMiddleware(gate: AdminHostGate, console: () => ConsoleApp | null): MiddlewareHandler {
   return async (c, next) => {
     const h = c.req.raw.headers;
     // The node server builds the URL from the Host header, so the URL's host stands in when a Request carries none (tests, fetch()).

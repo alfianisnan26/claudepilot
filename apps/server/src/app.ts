@@ -124,7 +124,7 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import { createOrgRoutes, createOrgs } from './orgs/index.js';
-import { AdminHostGate, adminHostMiddleware, createAdminApp } from './admin/index.js';
+import { AdminHostGate, adminHostMiddleware, createAdminApp, type ConsoleApp } from './admin/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
 import { cookie as cookieOf } from './workspaces/shell.js';
@@ -274,7 +274,7 @@ export function createApp(
   // Organizations slice 4 (§6.11): FIRST, the host split. The admin host gets the console's own app (built below, once its services exist) and
   // nothing else of the portal; the console's paths on any other host are the same 404 as an unknown route.
   const adminGate = new AdminHostGate(adminHost, config.trustProxy);
-  let adminConsole: { fetch: (req: Request, env?: unknown) => Response | Promise<Response> } | null = null;
+  let adminConsole: ConsoleApp | null = null;
   app.use(adminHostMiddleware(adminGate, () => adminConsole));
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
