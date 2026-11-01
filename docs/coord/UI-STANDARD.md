@@ -35,7 +35,8 @@ Home/End), ONE section at a time.
 
 ## 3. Headers
 
-`PageHeader`: a title of one or two words, what the page is for in its InfoTip, the page's one primary action on the right. Inside a hub tab
+`PageHeader`: a title of one or two words, what the page is for in its InfoTip, the page's one primary action on the right, in one 44 px
+row whether or not there is an action. An empty state does not repeat the header's action. Inside a hub tab
 the header turns slim. No org or context label above a title (the side bar names the context).
 
 ## 4. Lists

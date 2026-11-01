@@ -1,4 +1,5 @@
 import { cn } from '@isnanme/ui';
+import { ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { compactCount } from './format';
@@ -67,8 +68,10 @@ export function Stats({ children }: { children: ReactNode }) {
 /** The link at a card's foot: the page behind it, with how many more there are when the card lists only some. */
 export function CardFoot({ to, children }: { to: string; children: ReactNode }) {
   return (
-    <Link to={to} className="press -mx-2 mt-1 flex min-h-11 items-center justify-center rounded-xl text-xs font-semibold text-muted hover:bg-surface-2 hover:text-ink">
+    // A trailing chevron: a lone word at a card's foot ("Usage") reads as a label, not a way out (UX sweep 2026-11-01).
+    <Link to={to} data-card-foot="" className="press -mx-2 mt-1 flex min-h-11 items-center justify-center gap-0.5 rounded-xl text-xs font-semibold text-muted hover:bg-surface-2 hover:text-ink">
       {children}
+      <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
     </Link>
   );
 }

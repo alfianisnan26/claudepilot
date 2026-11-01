@@ -270,7 +270,7 @@ function TicketQueue({ selected }: { selected: string | null }) {
 
   return (
     <div className={cn(pinned && 'flex min-h-0 flex-1 flex-col')}>
-      <PageHeader title="Tickets" action={none ? undefined : add} />
+      <PageHeader title="Tickets" description="One queue of work that people and agents share. Start a session from a ticket; agents open tickets when they need you." action={none ? undefined : add} />
 
       <div className={cn('mb-4 flex flex-col gap-2.5', none && 'hidden')}>
         <div className="flex gap-2">

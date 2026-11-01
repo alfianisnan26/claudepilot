@@ -137,6 +137,7 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
+        description="How the portal behaves for everyone: usage, agents, sessions, the Claude Code version, people and the glance widgets. Each change is kept in the history."
         action={
           <Button variant="ghost" size="icon" aria-label="Change history" onClick={() => setHistory(true)}>
             <History className="size-[18px]" />

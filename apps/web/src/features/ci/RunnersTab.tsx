@@ -1,4 +1,4 @@
-import { Button, ConfirmDialog, EmptyState, FormDialog, LoadError, Menu, RowsSkeleton, Select, Switch, TextArea, TextField, useToast, cn } from '@isnanme/ui';
+import { ConfirmDialog, EmptyState, FormDialog, LoadError, Menu, RowsSkeleton, Select, Switch, TextArea, TextField, useToast, cn } from '@isnanme/ui';
 import { type CiRunner, type UpsertCiRunnerRequest, type Workspace, workspaceDisplayName } from '@portal/contracts';
 import { Pause, Pencil, Play, Server, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -15,7 +15,7 @@ export const RUNNER_RISK_TIP = 'A runner receives other workspaces’ code and s
 const DOT: Record<CiRunner['state'], string> = { online: 'bg-ok', offline: 'bg-muted', gone: 'bg-danger' };
 
 /** The runners (T-557, PRD §23): workspaces that take the runs of others by label. Managing is a person's: the server judges and its refusal is shown as it is. */
-export function RunnersTab({ adding, onCloseAdd, onAdd }: { adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
+export function RunnersTab({ adding, onCloseAdd }: { adding: boolean; onCloseAdd: () => void }) {
   const toast = useToast();
   const [runners, setRunners] = useState<CiRunner[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -76,10 +76,9 @@ export function RunnersTab({ adding, onCloseAdd, onAdd }: { adding: boolean; onC
       {!runners && !failed && <RowsSkeleton rows={2} lines={1} icon="rounded-2xl" />}
       {runners &&
         (runners.length === 0 ? (
-          <>
-            <EmptyState icon={<Server className="size-6" />} title="No runners" action={<Button onClick={onAdd}>Add runner</Button>} />
-            <p className="mt-2 px-4 text-center text-[13px] text-muted">Add a workspace as a runner with labels, then put runs-on: [label] in a pipeline.</p>
-          </>
+          <EmptyState icon={<Server className="size-6" />} title="No runners">
+            Add a workspace as a runner with labels, then put runs-on: [label] in a pipeline.
+          </EmptyState>
         ) : (
           <ul className="flex flex-col gap-2">
             {runners.map((r) => (

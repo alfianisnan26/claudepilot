@@ -31,7 +31,7 @@ export function UsageTabs({ requests, top }: { requests: ReactNode; top?: ReactN
   const spikes = spend?.spikes24h ?? 0;
   return (
     <>
-      <PageHeader title="Usage" />
+      <PageHeader title="Usage" description="What your Claudes spent and on what: requests, plan quota per Claude, who it went to, budgets and unusual spend." />
       {top}
       <RoutedTabs
         base={BASE}

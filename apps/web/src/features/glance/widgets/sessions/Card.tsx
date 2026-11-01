@@ -34,7 +34,7 @@ export function SessionsCard() {
         <GlanceLine
           action={
             <Link to="/admin/sessions?new=1" className={buttonClass('primary', 'sm')}>
-              New session
+              New agent
             </Link>
           }
         >

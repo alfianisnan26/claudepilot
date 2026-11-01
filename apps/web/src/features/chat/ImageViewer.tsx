@@ -157,7 +157,7 @@ function LightboxPanel({ images, index, onIndex, onClose }: { images: ViewerImag
       transition={{ duration: 0.18, ease }}
       className="fixed inset-0 z-50 flex flex-col bg-black/90 text-white outline-none"
     >
-      <div className="flex shrink-0 items-center gap-1 px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2 sm:px-4">
+      <div className="flex shrink-0 items-center gap-1 px-2 pt-[max(0.5rem,var(--safe-top))] pb-2 sm:px-4">
         <p className="min-w-0 flex-1 truncate px-2 text-sm font-semibold">
           {image.name}
           {many && <span className="ml-2 font-normal text-white/60 tabular-nums">{index + 1} / {images.length}</span>}
@@ -283,7 +283,7 @@ function Stage({ image, many, onStep, onClose }: { image: ViewerImage; many: boo
       onPointerMove={move}
       onPointerUp={up}
       onPointerCancel={up}
-      className="flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] select-none sm:p-6"
+      className="flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden p-3 pb-[max(0.75rem,var(--safe-bottom))] select-none sm:p-6"
     >
       <motion.img
         src={image.src}

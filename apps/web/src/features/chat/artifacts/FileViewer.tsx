@@ -271,7 +271,7 @@ function Panel({ sessionId, file, onClose }: { sessionId: string; file: ChatFile
             <X className="size-5" />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain pb-[var(--safe-bottom)]">
           <Body sessionId={sessionId} file={file} />
         </div>
       </motion.div>

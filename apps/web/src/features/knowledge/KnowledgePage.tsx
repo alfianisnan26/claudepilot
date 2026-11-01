@@ -47,7 +47,7 @@ export function KnowledgePage() {
 
   return (
     <>
-      <PageHeader title="Knowledge" action={add} />
+      <PageHeader title="Knowledge" description="Vaults of Markdown notes that you and your agents read and write. Each vault says what agents may do in it." action={add} />
       {vaults.error && !vaults.data && <LoadError onRetry={vaults.reload} />}
       {!vaults.data && !vaults.error && <RowsSkeleton rows={3} lines={1} trailing icon="rounded-2xl" />}
       {vaults.data &&

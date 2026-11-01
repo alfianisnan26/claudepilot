@@ -188,10 +188,13 @@ export function InboxTab() {
                     {i.resolvedAt && i.resolution && <ClampedText className="mt-0.5 text-[12.5px] text-muted">{i.resolution}</ClampedText>}
                   </span>
                 </button>
-                {i.kind !== 'test' && !isMuteGuarded(i.kind) && (
+                {i.kind !== 'test' && !isMuteGuarded(i.kind) ? (
                   <div className="shrink-0 self-center pr-1">
                     <Menu label={`${i.title} actions`} items={[{ label: 'Mute similar…', onSelect: () => setMuting(i.id) }]} />
                   </div>
+                ) : (
+                  // The menu's room is kept, so every row's time lines up (UX sweep 2026-11-01: an approval's sat 40 px further right).
+                  <div aria-hidden="true" data-inbox-menu-slot="" className="w-10 shrink-0" />
                 )}
               </div>
             </li>
