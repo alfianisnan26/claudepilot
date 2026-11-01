@@ -13,11 +13,11 @@ const ok = { failed: false, stale: false };
 const NOW = Date.parse('2026-10-12T12:00:00Z');
 
 test('the chip counts working agents; amber while one waits for an answer; grey when none', () => {
-  assert.deepEqual(agentsCompact({ data: snapshot({ running: 4, waiting: 1 }), ...ok }), { value: '4', level: 'warn', title: 'Agents: 4 running and 1 waiting for you', stale: false });
-  assert.deepEqual(agentsCompact({ data: snapshot({ running: 2 }), ...ok }), { value: '2', level: 'ok', title: 'Agents: 2 running', stale: false });
-  assert.deepEqual(agentsCompact({ data: snapshot({}), ...ok }), { value: '0', level: 'idle', title: 'Agents: none running', stale: false });
-  assert.deepEqual(agentsCompact({ data: null, failed: false, stale: false }), { value: null, level: 'unknown', title: 'Agents: loading', loading: true });
-  assert.deepEqual(agentsCompact({ data: snapshot({ ok: false }), failed: false, stale: false }), { value: '-', level: 'unknown', title: 'Agents: could not be read', stale: false });
+  assert.deepEqual(agentsCompact({ data: snapshot({ running: 4, waiting: 1 }), ...ok }), { value: '4', level: 'warn', title: 'Workers: 4 running and 1 waiting for you', stale: false });
+  assert.deepEqual(agentsCompact({ data: snapshot({ running: 2 }), ...ok }), { value: '2', level: 'ok', title: 'Workers: 2 running', stale: false });
+  assert.deepEqual(agentsCompact({ data: snapshot({}), ...ok }), { value: '0', level: 'idle', title: 'Workers: none running', stale: false });
+  assert.deepEqual(agentsCompact({ data: null, failed: false, stale: false }), { value: null, level: 'unknown', title: 'Workers: loading', loading: true });
+  assert.deepEqual(agentsCompact({ data: snapshot({ ok: false }), failed: false, stale: false }), { value: '-', level: 'unknown', title: 'Workers: could not be read', stale: false });
 });
 
 const row = (over: Partial<GlanceAgent>): GlanceAgent => ({ key: 'k', depth: 0, kind: 'worker', sessionId: 's1', taskId: null, title: 'Fix tests', role: null, state: 'working', since: null, stoppable: true, ...over });

@@ -23,6 +23,36 @@ export function refusalsOf(items: readonly AttentionItem[]): { items: AttentionI
   return { items: refused, calls: refused.reduce((n, i) => n + Math.max(1, i.count ?? 1), 0) };
 }
 
+/** The page's list order, flat: every class group in order (oldest first in each), then the refused calls (its collapsed group, last). */
+export function pageOrder(items: readonly AttentionItem[]): AttentionItem[] {
+  return [...groupByWhy(items).flatMap((g) => g.items), ...refusalsOf(items).items];
+}
+
+/** How many rows Home's Needs you tile shows before "Show all". */
+export const PREVIEW_ROWS = 6;
+
+export interface NeedsYouPreview {
+  /** The first rows of the page, in the page's order. */
+  items: AttentionItem[];
+  /** Everything that waits (the page's count, every page of it). */
+  total: number;
+  /** Waiting and not shown here: what "Show all" opens. */
+  more: number;
+  /** Sources the server could not read: said, never counted as zero. */
+  unavailable: AttentionKind[];
+}
+
+/**
+ * Home's Needs you tile is a strict preview of the Needs you page (owner, 2026-11-01: "consistency"): the same list from the same source
+ * (`GET /api/attention`, the page's store), the same order, its first rows, and the rest behind Show all. It used to read the glance
+ * snapshot instead and listed interrupted chats, failed CI runs and tickets the page does not, so the two disagreed (47 against none).
+ */
+export function needsYouPreview(list: AttentionList, max = PREVIEW_ROWS): NeedsYouPreview {
+  const items = pageOrder(list.items).slice(0, Math.max(0, max));
+  const total = Math.max(list.total, list.items.length);
+  return { items, total, more: total - items.length, unavailable: list.unavailable };
+}
+
 /** "Agents refused 1 call" / "Agents refused 7 calls": the collapsed group's one line. */
 export const refusedTitle = (calls: number): string => `Agents refused ${calls} ${calls === 1 ? 'call' : 'calls'}`;
 

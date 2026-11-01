@@ -15,6 +15,9 @@ test('every registered widget has a unique id, a one-word label, a sentence for 
   assert.ok(widgets.length >= 1);
   const ids = widgets.map((w) => w.id);
   assert.equal(new Set(ids).size, ids.length, `duplicate ids in ${ids.join(', ')}`);
+  // Two widgets of one name side by side in the dock cannot be told apart (UX sweep 2026-11-01: two "Agents").
+  const labels = widgets.map((w) => w.label);
+  assert.equal(new Set(labels).size, labels.length, `duplicate labels in ${labels.join(', ')}`);
   for (const w of widgets) {
     assert.match(w.id, /^[a-z][a-z0-9-]*$/, `${w.id}: lower case, no spaces (it is stored and used in ?glance=)`);
     assert.match(w.label, /^\S{2,14}$/, `${w.id}: the label is one word`);

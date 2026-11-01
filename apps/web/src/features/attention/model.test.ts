@@ -1,7 +1,30 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ATTENTION_KIND_LABEL, type AttentionItem, type AttentionList } from '@portal/contracts';
-import { badgeText, groupByWhy, kindChoices, refusalsOf, refusedTitle, waited } from './model.js';
+import { badgeText, groupByWhy, kindChoices, needsYouPreview, pageOrder, PREVIEW_ROWS, refusalsOf, refusedTitle, waited } from './model.js';
+
+test('Home’s Needs you tile is a strict preview of the page: same items, same order, the rest behind Show all', () => {
+  const t = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+  const items = [
+    item({ id: 'q', why: 'question', since: t(5) }),
+    item({ id: 'ref', group: 'refusal', why: 'gate', since: t(90) }),
+    item({ id: 'old', since: t(50) }),
+    item({ id: 'p', why: 'production_uat', since: t(2) }),
+    ...Array.from({ length: 6 }, (_, n) => item({ id: `g${n}`, why: 'gate', since: t(10 + n) })),
+  ];
+  const list: AttentionList = { total: 14, counts: { mcp_version: 14 } as AttentionList['counts'], unavailable: [], items, offset: 0, limit: 50, at: t(0) };
+  // What the page draws, top to bottom: each class group, then the collapsed refused calls.
+  const page = [...groupByWhy(items).flatMap((g) => g.items), ...refusalsOf(items).items].map((i) => i.id);
+  assert.deepEqual(pageOrder(items).map((i) => i.id), page);
+  const p = needsYouPreview(list);
+  assert.deepEqual(p.items.map((i) => i.id), page.slice(0, PREVIEW_ROWS));
+  assert.equal(p.total, 14, 'the page’s whole count, not just the rows read');
+  assert.equal(p.more, 14 - PREVIEW_ROWS);
+  // Nothing on the page: nothing on the tile (it once listed 47 from another source while the page said "Nothing needs you").
+  const empty = needsYouPreview({ ...list, total: 0, items: [] });
+  assert.deepEqual([empty.items.length, empty.total, empty.more], [0, 0, 0]);
+  assert.ok(p.items.every((i) => items.includes(i)), 'every row the tile shows is a row of the page');
+});
 
 const item = (over: Partial<AttentionItem>): AttentionItem => ({
   kind: 'mcp_version',
