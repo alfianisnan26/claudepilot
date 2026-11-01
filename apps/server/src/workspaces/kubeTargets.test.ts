@@ -352,6 +352,8 @@ test('deploy/k3s: PORTAL_K8S_TARGETS in portal.yaml parses, and each of its name
   const dev = 'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.13-1';
   assert.deepEqual(targets.map((t) => [t.id, t.image]), [['isnan', dev], ['konfersi', dev], ['kohilabs', undefined]]);
   assert.ok(env.find((e) => e.name === 'PORTAL_K8S_IMAGE')?.value, 'kohilabs and `kubernetes` have PORTAL_K8S_IMAGE');
+  // D-111 (owner 2026-11-01, "target should also be per org"): each org's target is that org's.
+  assert.deepEqual(targets.map((t) => [t.id, t.org]), [['isnan', 'org_coIBg9Edb5bl'], ['konfersi', 'org_DQ_gJh-QoIFN'], ['kohilabs', 'org_ER4vap_Xpk02']]);
 
   const oldRole = docs('deploy/k3s/rbac.yaml').find((d) => d.kind === 'Role' && d.metadata.namespace === oldNs)!;
   assert.ok(docs('deploy/k3s/namespace.yaml').some((d) => d.kind === 'Namespace' && d.metadata.name === oldNs), 'the old namespace is kept');
@@ -489,4 +491,12 @@ test('deploy/k3s-build: the heavy Jobs keep away from workspace pods in every wo
     for (const ns of ['isnan-claudepilot-workspaces', 'isnan-pilot-ws-isnan', 'isnan-pilot-ws-konfersi', 'isnan-pilot-ws-kohilabs'])
       assert.match(text, new RegExp(`namespaces: \\[[^\\]]*\\b${ns}\\b`), `${file}: ${ns}`);
   }
+});
+
+test('D-111: `org` names the organization that owns a target (an id or a slug); anything else stops the portal', () => {
+  assert.equal(parseKubeTargets('[{"id":"acme","namespace":"acme-ws","org":"org_abcdefABCDEF"}]')[0]!.org, 'org_abcdefABCDEF');
+  assert.equal(parseKubeTargets('[{"id":"acme","namespace":"acme-ws","org":"acme"}]')[0]!.org, 'acme');
+  assert.equal(parseKubeTargets('[{"id":"acme","namespace":"acme-ws"}]')[0]!.org, undefined, 'none: the instance’s');
+  refused('[{"id":"acme","namespace":"acme-ws","org":"Not An Org"}]', /"org" is an organization/);
+  refused('[{"id":"acme","namespace":"acme-ws","org":7}]', /"org" is an organization/);
 });

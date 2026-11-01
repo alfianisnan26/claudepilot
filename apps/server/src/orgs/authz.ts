@@ -100,6 +100,8 @@ export const ORG_TRANSFER_POLICIES: RoutePolicies = {
   'POST /api/workspaces/:target/:name/move-to-org': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'target+name' }], audit: 'object.transferred' },
   'POST /api/tickets/buckets/:key/move-to-org': { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'manage', from: 'path', param: 'key' }], audit: 'object.transferred' },
   'POST /api/knowledge/vaults/:id/move-to-org': { kind: 'objects', checks: [{ type: 'vault', verb: 'manage', from: 'path', param: 'id' }], audit: 'object.transferred' },
+  // D-111 D2: a set of any multi-pool type (the URL's type must be the set's own).
+  'POST /api/pools/:type/:id/move-to-org': { kind: 'objects', checks: [{ type: 'pool', verb: 'manage', from: 'path', param: 'id', poolTypeParam: 'type' }], audit: 'object.transferred' },
 };
 
 /**

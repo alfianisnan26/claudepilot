@@ -117,21 +117,21 @@ test('policies: owners only, as a person; only the settable keys, booleans; a re
 test('Org.may matches the services: invite and create a team, by role and policy; nothing while suspended', () => {
   const org = freshOrg();
   const may = (u: string) => m.orgs.get(person(u), org).may;
-  assert.deepEqual(may(ALICE), { invite: true, createTeam: true });
-  assert.deepEqual(may(BOB), { invite: true, createTeam: true });
-  assert.deepEqual(may(CAROL), { invite: false, createTeam: true }, 'defaults: members create teams, do not invite');
-  assert.deepEqual(may(DAN), { invite: false, createTeam: false });
+  assert.deepEqual(may(ALICE), { invite: true, createTeam: true, createWorkspace: true });
+  assert.deepEqual(may(BOB), { invite: true, createTeam: true, createWorkspace: true });
+  assert.deepEqual(may(CAROL), { invite: false, createTeam: true, createWorkspace: false }, 'defaults: members create teams, do not invite, do not create workspaces');
+  assert.deepEqual(may(DAN), { invite: false, createTeam: false, createWorkspace: false });
   assert.equal(m.orgs.get(person(CAROL), org).policies, undefined, 'a member still does not read the policies');
   assert.throws(() => m.invitations.create(person(CAROL), org, { email: 'someone@example.test', role: 'member' }), code('FORBIDDEN'), 'and the service agrees');
 
-  m.orgs.update(person(ALICE), org, { policies: { membersMayInvite: true, membersCreateTeams: false } });
-  assert.deepEqual(may(CAROL), { invite: true, createTeam: false });
+  m.orgs.update(person(ALICE), org, { policies: { membersMayInvite: true, membersCreateTeams: false, membersCreateWorkspaces: true } });
+  assert.deepEqual(may(CAROL), { invite: true, createTeam: false, createWorkspace: true });
   assert.ok(m.invitations.create(person(CAROL), org, { email: 'someone@example.test', role: 'member' }).id, 'a member invites now');
   assert.throws(() => m.sharing.createTeam(person(CAROL), org, { name: 'Nope' }), code('FORBIDDEN'), 'and cannot create a team');
-  assert.deepEqual(may(DAN), { invite: false, createTeam: false }, 'a guest never');
+  assert.deepEqual(may(DAN), { invite: false, createTeam: false, createWorkspace: false }, 'a guest never');
 
   m.orgs.suspend(person(ALICE), org, { by: 'owner' });
-  assert.deepEqual(may(ALICE), { invite: false, createTeam: false }, 'a suspended org offers nothing');
+  assert.deepEqual(may(ALICE), { invite: false, createTeam: false, createWorkspace: false }, 'a suspended org offers nothing');
 });
 
 test('audit: `kind` filters by kind or prefix; a bad kind is refused; members never read it', () => {

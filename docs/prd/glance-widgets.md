@@ -6,7 +6,7 @@
 | Owner | Alfian Isnan |
 | Last updated | 2026-10-13 |
 | Depends on | [Claude usage](claude-usage.md) §20 (the snapshot's `pace`, `outlook` and `slot`, and the live topic `claudeusage`), [Web app & PWA](web-app-pwa.md) (shell, manifest, service worker), the shared colour helper `apps/web/src/lib/usage` |
-| Related | [Chat sessions](chat-sessions.md), [Tickets](tickets.md), [Local git and CI/CD](local-git-ci.md), [Settings & policies](settings-policies.md) (these settings are per device and live outside that store: §7) |
+| Related | [Chat sessions](chat-sessions.md), [Tickets](tickets.md), [Local git and CI/CD](local-git-ci.md), [Settings & policies](settings-policies.md) (these settings are per person and org context, in their own table: §7) |
 
 ## 1. Summary
 
@@ -103,7 +103,7 @@ Every chip, full form, global part and badge feed sits in a `Quiet` boundary: a 
 
 ## 7. Settings
 
-Per user and per device, in `localStorage` under `claudepilot.glance.<userId>` (`u_owner` while the portal has one shared sign-in), kept in step across tabs by the `storage` event; when the browser refuses storage they hold for the tab. Nothing is sent to the portal and there is no migration. Settings page, section **Glance** (one ⓘ says they are kept on this device; a reset arrow shows when anything differs from the defaults):
+Per person and per org context, saved on the server (D-111 D6, owner 2026-11-01): `GET /api/layouts?org=<personal|org id>` answers the Glance and Home layouts of the signed-in person in that context, `PUT /api/layouts/<glance|home>?org=` saves one (`{ layout }`, at most 8 KB; table `user_layouts`, migration 910; `apps/server/src/glance/layouts.ts`). Only a person signed in to the web app has one (a token or an agent is refused); an org the person is not in is the 404 of a missing one. This device keeps a cache in `localStorage` under `claudepilot.glance.<userId>` (Personal) or `claudepilot.glance.<userId>.<orgId>`, kept in step across tabs by the `storage` event, so the page draws at once; the server's copy wins when it answers (`apps/web/src/features/glance/layouts.ts`). First load: when the server has nothing for the person in Personal, this device's layout is copied up once (its cache, else the key from before people were told apart, `claudepilot.glance.u_owner`, which is then removed for anyone but the founding user); an org context starts from the defaults. Settings page, section **Glance** (one ⓘ says they are kept on this device; a reset arrow shows when anything differs from the defaults):
 
 | Setting | Default | Notes |
 | --- | --- | --- |
@@ -127,7 +127,7 @@ Stored values are validated on read: a malformed field falls back to its default
 | FR3 | Full | Popover, bottom sheet and dock panel with the same content (§6.4). | **Built** |
 | FR4 | Places | Header, list, composer and dock (§6.3). | **Built** |
 | FR5 | Data | Compact hooks read shared stores; the frame has no timer that asks the portal. | **Built** |
-| FR6 | Settings | Widgets and their order, places, app badge, Quota mode and thresholds, per device (§7). | **Built** |
+| FR6 | Settings | Widgets and their order, places, app badge, Quota mode and thresholds, per person and org context on the server (§7, D-111 D6). | **Built** |
 | FR7 | Links | `?glance=<id>` and `?new=1` (§6.5). | **Built** |
 | FR8 | Isolation | A failing widget is dropped, not the page (§6.6). | **Built** |
 | FR9 | Quota | Compact and full form with the basis of every figure (§9). | **Built**, and checked against the portal's own pace figures ([Claude usage](claude-usage.md) §20.2, §14) |

@@ -192,7 +192,12 @@ export class OrgsService {
     // What Org settings may offer (the same rules as OrgInvitations.create and OrgSharing.createTeam); nothing in an org that is not active.
     const manager = role === 'owner' || role === 'admin';
     const active = r.state === 'active';
-    out.may = { invite: active && (manager || (role === 'member' && policies.membersMayInvite)), createTeam: active && (manager || (role === 'member' && policies.membersCreateTeams)) };
+    out.may = {
+      invite: active && (manager || (role === 'member' && policies.membersMayInvite)),
+      createTeam: active && (manager || (role === 'member' && policies.membersCreateTeams)),
+      // D-111 D1 (orgs/creation.ts): the New workspace dialog offers this org as the owner.
+      createWorkspace: active && (manager || (role === 'member' && policies.membersCreateWorkspaces)),
+    };
     return out;
   }
 

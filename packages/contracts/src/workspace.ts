@@ -102,6 +102,12 @@ export interface CreateWorkspaceRequest {
   claudeVersion?: string;
   /** An enrolled cluster's node to place it on; the least loaded eligible node when absent (targets-connect PRD §12.8). */
   node?: string;
+  /**
+   * Who owns it (D-111 D1): `personal` (or absent) is the creator; an org id is that org, when the creator may create there (its owners and
+   * admins, a member while the org's `membersCreateWorkspaces`), else 403 ORG_CREATE_WORKSPACE_NOT_ALLOWED; an org they are not in is the
+   * 404 of a missing one. The New workspace dialog sends the current context by default.
+   */
+  owner?: string;
 }
 
 export const WORKSPACE_NAME_MAX = 40;

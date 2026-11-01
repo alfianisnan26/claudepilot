@@ -20,6 +20,7 @@ import {
   type UpdateConnectTargetRequest,
 } from '@portal/contracts';
 import { api, ApiError } from '@/lib/api';
+import { scopedList } from '@/lib/orgContext';
 
 /** The Connect admin routes (`/api/connect`): `{ data }` on success, an ApiError otherwise (the MCP feature's way). */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -44,7 +45,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const connectApi = {
-  list: () => request<ConnectTargetRow[]>('GET', CONNECT_API.targets),
+  /** In the app's context (D-111): an org lists its targets; Personal the instance's (admins). */
+  list: () => scopedList<ConnectTargetRow[]>(CONNECT_API.targets, (p) => request<ConnectTargetRow[]>('GET', p)),
   create: (body: CreateConnectTargetRequest) => request<ConnectEnrollmentCreated>('POST', CONNECT_API.targets, body),
   get: (id: string) => request<ConnectTargetView>('GET', CONNECT_API.target(id)),
   update: (id: string, body: UpdateConnectTargetRequest) => request<ConnectTargetView>('PATCH', CONNECT_API.target(id), body),

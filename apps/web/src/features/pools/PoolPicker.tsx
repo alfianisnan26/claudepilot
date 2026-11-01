@@ -71,7 +71,8 @@ export function PoolPickerDialog({
     setError(null);
     setPicked(assigned);
     let current = true;
-    api.pools.list(tab.pool.type).then(
+    // The sets valid for this workspace (its org's, or the person's for a personal one) and the ones it has (pools/scope.ts `?for=`).
+    api.pools.listFor(tab.pool.type, workspace.id).then(
       (list) => current && setPools(list),
       (e: unknown) => current && setError(errorText(e, 'Could not load them.')),
     );

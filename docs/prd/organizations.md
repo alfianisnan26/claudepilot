@@ -623,7 +623,7 @@ only narrows (`?org=`, §13.6, §13.6a): Personal lists what no org owns, an org
 
 | Area | Level | Who creates | Shared how | In the switcher | Today |
 | --- | --- | --- | --- | --- | --- |
-| Workspaces | personal or org (an unclaimed one: instance) | an admin (targets are the platform's, `connect/authz.ts:12-22`); a member cannot yet (D-82 S1b) | Move to organization (§13.5), org and team shares (§13.6) | the list by owner (`authz/orgScope.ts`) | ✅ resolver `authz/owners.ts:71`. ⚠️ a new workspace is the founding user's whoever creates it (`workspaces/identity.ts:333`): D1 |
+| Workspaces | personal or org (an unclaimed one: instance) | an admin (targets are the platform's, `connect/authz.ts:12-22`); a member cannot yet (D-82 S1b) | Move to organization (§13.5), org and team shares (§13.6) | the list by owner (`authz/orgScope.ts`) | ✅ resolver `authz/owners.ts:71`. ✅ D1 (D-111): the org of the creator's context when they may create there, else the creator (`orgs/creation.ts`) |
 | Sessions, chats | child of the workspace; the creator's (D14) | anyone with `operate` on the workspace | session shares; OD-3 read for org admins | through the workspace | ✅ `sessionOwnerOf` (`app.ts:360`), `chat/authz.ts`, the list scoped (`chat/routes.ts`) |
 | Claude logins (`workspace_claudes`) and quota | child of the workspace | `manage` on the workspace | the workspace's grants reach it (operate to use, manage to rename or remove) | through the workspace (`claudeusage/routes.ts`) | ✅ **fixed**: a resolver that follows the workspace (`authz/owners.ts:131`). Before: no resolver, so every admin account held `manage` on every org's Claudes, and a quota alert went to the founding user. ⚠️ §6.3 says "user only": D3 |
 | Usage and spend, budgets | the workspace and Claude it counts; a budget on everything: instance | an admin (Usage is a platform area for members) | none | `?org=` on the summaries (§13.6a) | ✅ **fixed**: read as the signed-in person (routes) or the token's person (tools), through `seamVisibility` (`usagespend/actor.ts`) and `seamCanUseClaude` (`claudeusage/actor.ts:9`), installed in `index.ts`. Before: every read was the founding user's view, so an admin outside an org read that org's spend |
@@ -634,7 +634,7 @@ only narrows (`?org=`, §13.6, §13.6a): Personal lists what no org owns, an org
 | Knowledge vaults | personal or org | a person (`POST /api/knowledge/vaults`) | Move to organization, shares | `?org=` on the list | ✅ **fixed**: a new or imported vault is its maker's (`knowledge/service.ts:451`). Before: the founding user's. ⚠️ `/api/knowledge/graph` keeps viewable vaults but ignores `?org=` |
 | CI remotes, runs, environments, deployments | children of the workspace | `operate` on the workspace (a remote) or the remote (a run); an environment on first use | the workspace's grants (`ci/authz.ts:30-45`) | runs and remotes scoped (§13.6) | ✅. `ci_environments.owner_id` and `ci_deployments.owner_id` are written `u_owner` and never read (`ci/service.ts:1029-1030`): dead columns, left in place (migrations are append only) |
 | Workspace git (repositories) | child of the workspace | the scan | the workspace's grants | `?org=` on the overview | ✅ **fixed**: a `repo` resolver (`authz/owners.ts:132`); the overview, the log and their tools keep the caller's workspaces (`repos/routes.ts:45`, `repos/portalTools.ts`). Before: any admin read every org's repositories |
-| Pools: Secrets & env, Skillsets, MCP sets, Personas, Context, Browser | personal (an org owner is read by the resolver) | an admin (`POST /api/pools/:type`); the portal for its own sets | assignment to a workspace | n/a (platform pages) | ✅ **fixed**: a new set or a copy is its maker's (`pools/service.ts:472`); the list keeps the sets the caller may view; adding a set to a workspace needs `operate` on it (`pools/service.ts:596`, workspace create in `app.ts`, the `pool_*` tools, which now ask `can()` on the named set: `portalmcp/tools/pools.ts:102`); bulk assign needs `manage` on each workspace. ⚠️ the founding user's sets assigned to org workspaces: D2 |
+| Pools: Secrets & env, Skillsets, MCP sets, Personas, Context, Browser | personal (an org owner is read by the resolver) | an admin (`POST /api/pools/:type`); the portal for its own sets | assignment to a workspace | n/a (platform pages) | ✅ **fixed**: a new set or a copy is its maker's (`pools/service.ts:472`); the list keeps the sets the caller may view; adding a set to a workspace needs `operate` on it (`pools/service.ts:596`, workspace create in `app.ts`, the `pool_*` tools, which now ask `can()` on the named set: `portalmcp/tools/pools.ts:102`); bulk assign needs `manage` on each workspace. ✅ D2 (D-111): Move to organization for sets; lists follow the org context (`pools/scope.ts`) |
 | Delivery (the reconciler) | follows the assignments | n/a | n/a | n/a | ✅ through the assignment, which is now gated; delivery does not re-check owners, so existing assignments keep working |
 | Accounts, endpoints, account pools | instance today (owner columns, `u_owner`) | an admin | an account pool's assignment | n/a | ✅ putting an account pool on a workspace needs `operate` on it (`app.ts`, the `account_pool_assign` tool, workspace create). ⚠️ the lists are not filtered (no org can own one yet): D5 |
 | Schedules | instance (a view over triggers and helpers) | n/a | n/a | n/a | ✅ platform `system` (`schedules/authz.ts:10`) |
@@ -645,8 +645,8 @@ only narrows (`?org=`, §13.6, §13.6a): Personal lists what no org owns, an org
 | Portal MCP tokens | personal (`pmcp_tokens.owner_id`, migration 461) | a person (admins; members not yet) | none | n/a | ✅ a token never exceeds its person. ⚠️ the `org_id` narrowing of §6.5 invariant 5 is not built: D4 |
 | VS Code tokens | personal (a `pmcp_tokens` row) | the person, approved in the portal | none | n/a | ✅ its lists keep viewable rows (`vscode/routes.ts`). ⚠️ they take no `?org=` |
 | App ports | personal, in memory (`appports/grants.ts`) | `operate` on the workspace | none | n/a | ✅ |
-| Glance widgets, Home layout | personal (intended) | n/a | n/a | the numbers are scoped (§13.6a) | ✅ server. ⚠️ the layout is kept per DEVICE: the key's user is the constant `u_owner` (`web:features/glance/user.ts:7-9`, also Home and the btw layout): D6 |
-| Connect targets | instance (org targets: slice 11) | an instance admin | none | n/a | ✅ platform-owned resolver (`connect/authz.ts:12-22`); `connect_targets.owner_id` is written and never read |
+| Glance widgets, Home layout | personal (intended) | n/a | n/a | the numbers are scoped (§13.6a) | ✅ server. ✅ D6 (D-111): per person and org context on the server (`glance/layouts.ts`, migration 910) |
+| Connect targets | instance, or an org's (D-111: a PORTAL_K8S_TARGETS entry's `org`) | an instance admin | none | `?org=` on the lists | ✅ resolver `connect/authz.ts` (`targetLevel`); enrolled targets stay the platform's; `connect_targets.owner_id` is written and never read |
 | Templates | not built (no table) | n/a | n/a | n/a | ✅ fails closed (required, no resolver: `authz/owners.ts`) |
 | Settings | instance (`portal_meta` `setting:*`); org (`orgs.policies`); personal (notification prefs; the org context, per device) | instance: admins; org: owners | n/a | n/a | ✅ `settings/authz.ts`; org policies owners only (§13.9) |
 | Audit | instance (`platform_audit`); an org's rows by `org_id` (migration 469) | the services | an org's owners and admins read its rows; a person reads rows about themselves | n/a | ✅ the org audit (`orgs/service.ts`), `platform/audit.ts:81` |
@@ -665,7 +665,48 @@ only narrows (`?org=`, §13.6, §13.6a): Personal lists what no org owns, an org
 
 `ORG_SCOPED_LISTS_LIVE` and the unused `empty` argument of `scopedList` (`web:lib/orgContext.ts`: the server has scoped every list since §13.6); `usagespend/actor.ts` `creatorOf` (always the founding user, used by nothing but its own test); the stale "no workspace resolver yet" note in `workspaces/authz.ts`; the founding-user actor of the usage routes and tools.
 
-### 16.4 Decisions needed (not guessed here)
+### 16.4 Decisions (decided: D-111)
+
+The owner approved every recommendation below on 2026-11-01 ("yes please can continue"; `docs/dev-sessions/DECISIONS.md` D-111). Built on
+branch `feat/org-decisions-d111`:
+
+- **D1, built.** `CreateWorkspaceRequest.owner` (`personal` or an org id or slug) decides the owner before anything is made
+  (`orgs/creation.ts` `ownerFor`): the org's owners and admins create there; a member only while the new org policy
+  `membersCreateWorkspaces` is on (off by default, Org settings, Policies); a member without it or a guest is refused with 403
+  ORG_CREATE_WORKSPACE_NOT_ALLOWED (never silently made personal); an org the person is not in is the 404. An org-owned one gets the creator
+  grant and an audit row `workspace.created_in_org` with the org's id. Personal (or no owner): the creator, no longer the founding user
+  (`workspaces/identity.ts` `allocate`, `workspaces/manager.ts` `create`). The New workspace dialog has an Owner select (Personal and the orgs
+  whose `Org.may.createWorkspace` is on), defaulting to the current context; its add-on sets follow the chosen owner. Tests:
+  `orgs/orgDecisions.test.ts`, `orgs/orgsSettings.test.ts`, web `features/orgs/decisions.test.ts`.
+- **D2, built.** `POST /api/pools/:type/:id/move-to-org` (`ORGS_API.movePool`): slice 5's transfer for a set of any multi-pool type
+  (`orgs/transfer.ts`: `manage` on the set, member or up in the org, the creator grant, audit `object.transferred` with `poolType`). A Secrets
+  & env set answers 409 SHARE_EXPOSES_CREDENTIALS until `acknowledgeExposure: true` (the org's owners and admins can read it once the org owns
+  it). Assignments are not touched: the workspaces it is delivered to keep it. Offered on the Pools page (a set's menu, Move to
+  organization) and in Org settings, Objects (sets are listed; Move here). `PoolSummary.orgId` says which org owns a set.
+- **Pools and Schedules in the org context (owner 2026-11-01, "pool also still not per org").** `GET /api/pools/:type?org=` keeps that
+  context's sets: an org's own and those shared to it (a grant to the org or one of its teams, `shared: true`), Personal what no org owns, an
+  org the caller is not in nothing (`pools/scope.ts`). `?for=<workspace>` (assigning sets to a workspace) keeps the sets of that workspace's
+  owner's context plus the ones it already has. `GET /api/account-pools?org=` narrows by owner the same way (none is org-owned yet, D5: an
+  org's list is empty). `GET /api/schedules?org=`: a trigger follows its workspace's org; the portal's own loops and helpers are listed in
+  Personal only. The Pools page and the Schedules page ask through `scopedList`; Targets are unchanged (instance-level, admins).
+- **D3, kept.** A Claude login follows its workspace's org (rights, quota alerts, usage), as built in 16.2. A person owner per login comes
+  when people bring their own logins into an org workspace.
+- **D4, later (recorded).** Portal MCP tokens narrowed to one org (`org_id`, §6.5 invariant 5) come with member tokens.
+- **D5, recorded.** Accounts, endpoints and account pools stay instance-wide (platform) until an org needs its own API keys.
+- **Targets: org-ownable (owner 2026-11-01, "target should also be per org"; a change of D5 for targets).** A PORTAL_K8S_TARGETS entry
+  names its org (`org`, an id or a slug; `workspaces/kubeTargets.ts`; set in `deploy/k3s/portal.yaml` for isnan, konfersi and kohilabs, so it
+  survives redeploys). The `target` resolver (`connect/authz.ts` `targetLevel`) gives the org's owners and admins `manage`, a member `view`
+  (`operate` while `membersCreateWorkspaces`), a guest or an outsider nothing; the instance's admins keep `manage` on every target (the
+  Admin console runs them all, `/admin-api/targets` unchanged). An org that does not resolve leaves the target the platform's. Lists:
+  `GET /api/workspaces/targets?org=` and `GET /api/connect/targets?org=` keep the context's targets (an org's own; Personal the instance's,
+  which only admins see). The Targets page and the Workspaces page (New workspace) ask in the context. Tests: `orgs/orgDecisions.test.ts`,
+  `workspaces/kubeTargets.test.ts`.
+- **D6, built.** The Home and Glance layouts are saved per person and org context on the server (`/api/layouts`, migration 910,
+  `glance/layouts.ts`); the device's layout is copied up once on first load (docs/prd/glance-widgets.md §7). The btw panel's width stays a
+  device preference (per person).
+
+The questions as they were put:
+
 
 | ID | Question | Recommendation |
 | --- | --- | --- |

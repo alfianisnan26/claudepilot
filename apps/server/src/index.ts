@@ -379,6 +379,16 @@ const connect = createConnect({
   config: config.connect,
   scanned: () => workspaces.targets(),
   scannedIds: () => scannedTargetIds,
+  // D-111: a PORTAL_K8S_TARGETS entry's `org` owns that target; an org's policy lets its members create there (orgs.policies JSON).
+  targetOrg: (id) => (ws.kubernetes.enabled ? (ws.kubernetes.targets.find((t) => t.id === id)?.org ?? null) : null),
+  membersCreate: (orgId) => {
+    try {
+      const raw = (store.db?.prepare('SELECT policies FROM orgs WHERE id = ?').get(orgId) as { policies?: string } | undefined)?.policies;
+      return (JSON.parse(raw ?? '{}') as { membersCreateWorkspaces?: unknown }).membersCreateWorkspaces === true;
+    } catch {
+      return false;
+    }
+  },
   workspacesOn: async (target) => (await workspaces.list()).filter((w) => w.target === target),
   removeWorkspace: (id) => workspaces.remove(id.slice(0, id.indexOf('/')), id.slice(id.indexOf('/') + 1)),
   recheck: (id) => workspaces.recheck(id),

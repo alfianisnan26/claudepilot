@@ -15,12 +15,14 @@ import type {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { poolRef, workspaceRef } from '@portal/contracts';
+import { orgScopeOf } from '../authz/orgScope.js';
 import { actorOf, actorUserId, can, requireCan, visible } from '../authz/seam.js';
 import type { Reconciler } from '../delivery/reconciler.js';
 import { workspaceGuard } from '../workspaces/authz.js';
 import { deliveryState } from '../workspaces/view.js';
 import { declareWorkspacePoolPolicies } from './authz.js';
 import type { MultiPoolType } from './kinds.js';
+import { scopeSets, workspaceScope } from './scope.js';
 import type { PoolService } from './service.js';
 
 export interface PoolRoutesDeps {
@@ -68,9 +70,20 @@ export function createPoolRoutes({ service }: Pick<PoolRoutesDeps, 'service'>): 
 
   app.get('/', (c) => c.json(success({ types: service.types() })));
   // Org isolation (owner request 2026-11-01): the list keeps the sets the caller may view; a new set (or a copy) is its maker's.
+  // The org context (pools/scope.ts): `?org=` (personal | an org id) keeps that context's sets (an org's own and those shared to it, marked
+  // `shared`); `?for=<workspace>` keeps the sets valid for that workspace's owner, plus the ones it already has. Never wider than `visible`.
   app.get('/:type', (c) => {
-    const t = type(c);
-    return c.json(success(visible(actorOf(c), 'pool', service.list(t), (p) => p.id, t as MultiPoolType)));
+    const t = type(c) as MultiPoolType;
+    const actor = actorOf(c);
+    const seen = visible(actor, 'pool', service.list(t), (p) => p.id, t);
+    const forWs = c.req.query('for');
+    if (forWs) {
+      const ws = workspaceScope(actor, forWs);
+      if (!ws) return c.json(success([]));
+      const keep = new Set(service.assignmentsFor(ws.key).filter((a) => a.type === t).map((a) => a.poolId));
+      return c.json(success(scopeSets(actor, t, seen, ws.scope, service.database(), keep)));
+    }
+    return c.json(success(scopeSets(actor, t, seen, orgScopeOf(c), service.database())));
   });
   app.post('/:type', async (c) => c.json(success(service.create(type(c), await body<PoolRequest>(c), actorUserId(actorOf(c)))), 201));
   // "Preview files" for a pool not saved yet.
