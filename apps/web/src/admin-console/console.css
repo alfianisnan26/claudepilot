@@ -20,6 +20,11 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The shared kit-free Sheet (components/Sheet.tsx) keeps clear of the home indicator by this; the portal sets none (it never draws one). */
+:root {
+  --sheet-safe-bottom: env(safe-area-inset-bottom);
+}
+
 /* Long emails, ids and kinds break anywhere instead of pushing the page sideways. */
 .break-any {
   overflow-wrap: anywhere;

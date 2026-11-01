@@ -14,6 +14,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { sweepRows } from './windowed.mjs';
 import { Browser } from './browser.mjs';
 import { api, login, PORT, sleep } from './lib.mjs';
 
@@ -190,11 +191,14 @@ for (const size of SIZES) {
     await b.waitFor(`!!document.querySelector('[data-chip=all]')`, 8000, 'chips').catch(() => {});
     await b.eval(`document.querySelector('[data-chip=all]')?.click()`);
     await sleep(500);
-    const rowRoles = await b.eval(`(() => {
-      const row = (t) => [...document.querySelectorAll('ul[data-session-rows] li')].find((li) => li.querySelector(':scope > div > div > a p.font-semibold')?.textContent === t);
-      const role = (t) => { const li = row(t); return li ? (li.querySelector(':scope > div > div > a [data-role-badge]')?.textContent.replace(/^Role /, '').trim() ?? '') : null; };
-      return { lead: role('QA limits lead'), w: role('QA limits worker'), long: role('QA limits worker with the long role') };
-    })()`);
+    // The list is windowed (components/WindowedList.tsx): sweep it top to bottom so a row off screen is read too.
+    const swept = await sweepRows(
+      b,
+      `[...document.querySelectorAll('ul[data-session-rows] li')].map((li) => ({ title: li.querySelector(':scope > div > div > a p.font-semibold')?.textContent ?? null, role: li.querySelector(':scope > div > div > a [data-role-badge]')?.textContent.replace(/^Role /, '').trim() ?? '' })).filter((r) => r.title)`,
+      { key: (r) => r.title },
+    );
+    const role = (t) => swept.find((r) => r.title === t)?.role ?? null;
+    const rowRoles = { lead: role('QA limits lead'), w: role('QA limits worker'), long: role('QA limits worker with the long role') };
     check(`${tag} Sessions list: the workers' rows carry their role, the lead's none`, rowRoles?.lead === '' && rowRoles.w === 'qa-verifier' && rowRoles.long === LONG_ROLE, JSON.stringify(rowRoles));
     check(`${tag} Sessions list: no sideways scroll`, (await sideways()) === true);
     await b.eval(`[...document.querySelectorAll('ul[data-session-rows] li')].find((li) => li.querySelector(':scope > div > div > a p.font-semibold')?.textContent === 'QA limits lead')?.scrollIntoView({ block: 'center' })`);

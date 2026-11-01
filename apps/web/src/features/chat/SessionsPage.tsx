@@ -347,7 +347,7 @@ export function SessionsPage() {
                 onFold={it.foldable ? () => setFolded((f) => flip(f, it.group.key)) : undefined}
               />
             ) : (
-              <RowSlice first={it.first} last={it.last} status={byStatus ? it.group.key : undefined}>
+              <RowSlice group={it.group.key} first={it.first} last={it.last} status={byStatus ? it.group.key : undefined}>
                 <SessionRow
                   row={it.row}
                   groupBy={view.groupBy}
@@ -488,10 +488,11 @@ function GroupHead({ group, status, folded, first, gap, onFold }: { group: ListG
  * between), so a windowed list can draw part of a group. The first and last rows take the card's inner corners (its 24 px radius less the
  * 1 px border) on their swipe box (T-100: nothing square paints past the curve); the card does not clip, so a row's ⋯ menu opens past it.
  */
-function RowSlice({ first, last, status, children }: { first: boolean; last: boolean; status?: string; children: React.ReactNode }) {
+function RowSlice({ group, first, last, status, children }: { group: string; first: boolean; last: boolean; status?: string; children: React.ReactNode }) {
   return (
     <div
       data-status-group={status}
+      data-group={group}
       className={cn('border-x border-t border-line bg-surface', first && 'rounded-t-[24px]', last && 'rounded-b-[24px] border-b')}
     >
       <ul

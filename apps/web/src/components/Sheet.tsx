@@ -28,7 +28,7 @@ export interface SheetProps {
 }
 
 /**
- * THE kit-free sheet (docs/coord/UI-STANDARD.md §5): a modal dialog with its title, a body that scrolls inside and an optional footer. Escape
+ * THE kit-free sheet (docs/coord/UI-STANDARD.md §5; its bundles set --sheet-safe-bottom from the safe area in their CSS): a modal dialog with its title, a body that scrolls inside and an optional footer. Escape
  * closes the top one only (and goes no further: the reporter panel's own Escape closes the panel), the backdrop closes it, focus moves into it
  * and returns to what opened it.
  */
@@ -92,7 +92,7 @@ export function Sheet({ title, onClose, children, variant = 'sheet', head, foote
         aria-label={title}
         tabIndex={-1}
         className={cn(
-          'relative flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-bg pb-[env(safe-area-inset-bottom)] shadow-lg outline-hidden',
+          'relative flex max-h-[90dvh] w-full flex-col rounded-t-2xl bg-bg pb-[var(--sheet-safe-bottom,0px)] shadow-lg outline-hidden',
           variant === 'sheet' && 'sm:max-w-lg sm:rounded-2xl sm:pb-0',
           className,
         )}

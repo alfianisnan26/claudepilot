@@ -20,6 +20,11 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The shared kit-free Sheet (components/Sheet.tsx) keeps clear of the home indicator by this. */
+:root {
+  --sheet-safe-bottom: env(safe-area-inset-bottom);
+}
+
 .skeleton {
   background: linear-gradient(90deg, var(--color-surface-2), var(--color-line), var(--color-surface-2));
   background-size: 200% 100%;

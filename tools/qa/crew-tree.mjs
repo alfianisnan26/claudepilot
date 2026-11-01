@@ -13,6 +13,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Browser } from './browser.mjs';
 import { login, PORT, sleep } from './lib.mjs';
 import { CREWS, purgeScale, seedScale } from './seed-scale.mjs';
+import { sweepRows } from './windowed.mjs';
 
 const args = process.argv.slice(2);
 const shots = args.includes('--shots') ? args[args.indexOf('--shots') + 1] : 'qa-shots/t378-crew';
@@ -108,7 +109,8 @@ for (const dark of [false, true]) {
     }
     await b.waitFor(`document.querySelectorAll('ul[data-session-rows] li').length > 0`, 15_000, 'rows').catch(() => {});
     await sleep(800);
-    const rows = await b.eval(TREE);
+    // The list is windowed (components/WindowedList.tsx): sweep it top to bottom so every row is read, not only those on screen.
+    const rows = await sweepRows(b, TREE);
     const workers = rows.filter((r) => !r.header && CREWS.parentOf.has(r.id));
     for (const lead of CREWS.leads) {
       const mine = workers.filter((r) => crewOf(r.id) === lead);

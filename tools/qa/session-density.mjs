@@ -16,6 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Browser } from './browser.mjs';
 import { login, PORT, sleep } from './lib.mjs';
 import { ON_STALE, purgeScale, seedScale } from './seed-scale.mjs';
+import { sweepRows } from './windowed.mjs';
 
 const args = process.argv.slice(2);
 const shots = args.includes('--shots') ? args[args.indexOf('--shots') + 1] : 'qa-shots/t378-density';
@@ -68,7 +69,7 @@ const ROWS = `(() => {
       const src = el.closest('[title],[data-source]');
       shown.push({ t, source: src && own.contains(src) ? (src.getAttribute('data-source') ?? src.getAttribute('title')) : null });
     }
-    out.push({ id, title, h: Math.round(r.height), lines: tops.size, role, ws, avatar, waits, shown, card: [...document.querySelectorAll('ul[data-session-rows]')].indexOf(li.closest('ul[data-session-rows]')) });
+    out.push({ id, title, h: Math.round(r.height), lines: tops.size, role, ws, avatar, waits, shown, card: li.closest('[data-group]')?.dataset.group ?? '' });
   }
   return out;
 })()`;
@@ -102,7 +103,8 @@ for (const dark of [false, true]) {
     }
     check(`${tag} the chip stays picked`, picked);
     await sleep(500);
-    const rows = await b.eval(ROWS);
+    // The list is windowed (components/WindowedList.tsx): sweep it top to bottom so every row is read, not only those on screen.
+    const rows = await sweepRows(b, ROWS);
     check(`${tag} seeded rows in sight`, rows.length >= 5, `${rows.length} rows`);
 
     const tall = rows.filter((r) => !r.waits && r.h > 80);
