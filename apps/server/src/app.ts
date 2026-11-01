@@ -57,6 +57,9 @@ import {
   type Actor,
   FOUNDING_USER_ID,
   workspaceRef,
+  objectRef,
+  poolRef,
+  type MultiPoolType,
 } from '@portal/contracts';
 import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
@@ -130,7 +133,7 @@ import { AdminHostGate, adminHostMiddleware, adminOidcConfig, createAdminApp, ty
 import type { Platform } from './platform/index.js';
 import { declareAllPolicies } from './authz/declarations.js';
 import { enforceRoutePolicy, useWorkspaceAlias } from './authz/routeGuard.js';
-import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
+import { actorOf, actorOfPrincipal, actorString, actorUserId, can, requireCan, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
 import { orgScopeFilter, orgScopeOf } from './authz/orgScope.js';
 import { cookie as cookieOf } from './workspaces/shell.js';
 import { AccountAdmin } from './identity/accountAdmin.js';
@@ -1115,10 +1118,15 @@ export function createApp(
   ws.post('/', targetBodyGuard('operate'), async (c) => {
     const req = await body<CreateWorkspaceRequest>(c);
     const poolId = req.accountPoolId ?? null;
-    if (poolId && !pools.list().some((p) => p.id === poolId))
+    // Org isolation: an account pool and the add-on sets must be ones the person may use (operate); another person's or org's is missing.
+    const actor = actorOf(c);
+    if (poolId && (!pools.list().some((p) => p.id === poolId) || !can(actor, 'operate', objectRef('account_pool', poolId)).allow))
       throw new AppError('VALIDATION_FAILED', 'That account pool no longer exists.', { details: { accountPoolId: 'Pick another pool.' } });
     const addOns = poolService.checkAddOns(req.pools);
-    const created = await workspaces.create(req, actorOf(c));
+    for (const [type, ids] of Object.entries(addOns))
+      if (ids.some((id) => !can(actor, 'operate', poolRef(id, type as MultiPoolType)).allow))
+        throw new AppError('VALIDATION_FAILED', 'One of the pools no longer exists.', { details: { pools: 'Pick another pool.' } });
+    const created = await workspaces.create(req, actor);
     // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
     if (poolId) pools.assign(created.id, { poolId }, { existing: false });
     for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));
@@ -1127,7 +1135,10 @@ export function createApp(
   });
   ws.put('/:target/:name/account', toManage, async (c) => {
     const id = `${c.req.param('target')}/${c.req.param('name')}`;
-    const state = pools.assign(id, await body<AssignAccountPoolRequest>(c), { existing: true });
+    const req = await body<AssignAccountPoolRequest>(c);
+    // Org isolation: the pool put on the workspace must be one the person may use (operate); else the same 404 as a missing one.
+    if (typeof req.poolId === 'string') requireCan(actorOf(c), 'operate', objectRef('account_pool', req.poolId));
+    const state = pools.assign(id, req, { existing: true });
     return c.json(success({ account: state }));
   });
   /**

@@ -392,9 +392,12 @@ export class ReposService {
     return out;
   }
 
-  /** Every workspace's summary, and the repositories that need a look first. */
-  async overview(): Promise<ReposOverview> {
-    const list = (await this.#deps.workspaces().catch(() => [])).filter((w) => w.supported !== false);
+  /**
+   * Every workspace's summary, and the repositories that need a look first. `keep` (the route's: what the caller may view, in the org context)
+   * narrows the workspaces before anything is counted, so another org's repositories never reach a total or the attention list.
+   */
+  async overview(keep: (workspaceId: string) => boolean = () => true): Promise<ReposOverview> {
+    const list = (await this.#deps.workspaces().catch(() => [])).filter((w) => w.supported !== false && keep(w.id));
     const names = new Map(list.map((w) => [w.id, w]));
     const byWorkspace = new Map<string, StoredRepo[]>();
     for (const r of this.#db.rows()) {
@@ -423,6 +426,16 @@ export class ReposService {
 
   events(q: RepoEventQuery): RepoEventPage {
     return this.#db.events(q);
+  }
+
+  /**
+   * `events` for a caller: `keep` (the route's) limits a query that names no workspace and no repository to the workspaces it keeps; a query
+   * that names one is checked by the route before it gets here.
+   */
+  async eventsWithin(q: RepoEventQuery, keep: (workspaceId: string) => boolean): Promise<RepoEventPage> {
+    if (q.workspaceId || q.repoId) return this.#db.events(q);
+    const ids = (await this.#deps.workspaces().catch(() => [])).map((w) => w.id).filter(keep);
+    return this.#db.events({ ...q, workspaceIds: ids });
   }
 
   #row(id: string): StoredRepo {

@@ -4,15 +4,15 @@
 import { AppError, success } from '@isnanme/core';
 import { Hono, type Context } from 'hono';
 import { byWorkspace, orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
-import { actorOf as seamActorOf } from '../authz/seam.js';
-import { OWNER_ACTOR, UI_OWNER, type Who } from './actor.js';
+import { actorUserId, actorOf as seamActorOf } from '../authz/seam.js';
+import type { Who } from './actor.js';
 import { attributionCsv } from './csv.js';
 import type { UsageSpend } from './service.js';
 
-// Who is asking: the one owner until the portal knows who is signed in (docs/prd/claude-usage.md §26.4, "Multi-user"). These two are the only
-// places that change: every read takes the actor it is for, every change records who made it.
-const actorOf = (_c: Context): string => OWNER_ACTOR;
-const whoOf = (_c: Context): Who => UI_OWNER;
+// Who is asking: the signed-in person (org isolation, owner request 2026-11-01). Every read takes the actor it is for (the service's
+// `visible`, installed by index.ts, keeps what they may view), every change records who made it. Nobody is an empty id (sees nothing).
+const actorOf = (c: Context): string => actorUserId(seamActorOf(c)) ?? '';
+const whoOf = (c: Context): Who => ({ actorId: actorOf(c), via: 'ui' });
 
 async function body(c: Context): Promise<Record<string, unknown>> {
   try {

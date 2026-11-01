@@ -35,9 +35,11 @@ import { createKnowledge } from './knowledge/module.js';
 import { registerKnowledgeTools } from './knowledge/portalTools.js';
 import { wireVaultBinding } from './knowledge/vaultBinding.js';
 import { createClaudeUsage } from './claudeusage/index.js';
+import { seamCanUseClaude } from './claudeusage/actor.js';
 import { registerClaudeUsageTools } from './claudeusage/portalTools.js';
 import { ClaudeVersions, registerClaudeVersionTools } from './claudeversion/index.js';
 import { createUsageSpend, registerUsageSpendTools } from './usagespend/index.js';
+import { seamVisibility } from './usagespend/actor.js';
 import { Lab } from './lab/index.js';
 import { registerLabTools } from './lab/portalTools.js';
 import { registerMetricsTools } from './lab/metricsTools.js';
@@ -711,6 +713,8 @@ const claudeUsage = createClaudeUsage({
   settings: settingsModule.settings,
   // T-1707: each prime of a Claude reading 0 % with no reset time goes to the platform audit, created further down.
   audit: (e) => platform.audit.record(e),
+  // Org isolation: a person sees the usage of the Claudes they may use (their workspace's org), never another org's.
+  canUseClaude: seamCanUseClaude,
 });
 claudeUsage.start();
 registerClaudeUsageTools(claudeUsage);
@@ -746,6 +750,8 @@ const usageSpend = createUsageSpend({
   notify: () => notify('claudeusage'),
   // Chat sessions store their workspace as the stable id (T-42 slice 3); usage groups by the key.
   workspaceKeyOf: (stored) => workspaces.identities.keyOf(stored) ?? stored,
+  // Org isolation: a person sees the spend of the workspaces and Claudes they may view (usagespend/actor.ts).
+  visible: seamVisibility,
 });
 chatController.onUsage = (turn, rows) => usageSpend.onTurn(turn, rows);
 // A side question's row (`kind = 'side'`, chat PRD §20) is a request like a turn's: budgets are evaluated and spikes looked for right then, not at the next turn.

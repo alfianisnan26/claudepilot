@@ -21,10 +21,10 @@ import {
 } from '@portal/contracts';
 import { fullInput } from '../portalmcp/compact.js';
 import { portalTools, PortalToolError, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
-import { OWNER_ACTOR, type Who } from './actor.js';
+import type { Who } from './actor.js';
 import type { UsageSpend } from './service.js';
 import { ticketKeyField, ticketKeyOf, ticketVisibleTo } from '../tickets/keys.js';
-import { actorOfPrincipal } from '../authz/seam.js';
+import { actorOfPrincipal, actorUserId } from '../authz/seam.js';
 
 /** T-1993: a ticket's bucket key as the caller may see it (none for a bucket it may not view). */
 const keyOf = (ctx: PortalToolContext, id: string): { key?: string } => {
@@ -168,8 +168,10 @@ function describe(s: BudgetState): string {
 }
 
 export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistry = portalTools): void {
-  /** Who a change is for: the owner, through this token (`via`), until tokens belong to users (docs/prd/claude-usage.md §26.4). */
-  const whoOf = (ctx: PortalToolContext): Who => ({ actorId: OWNER_ACTOR, via: ctx.actor });
+  /** The person this token acts for (org isolation: what they may see is what the service's `visible` keeps); nobody is an empty id. */
+  const userOf = (ctx: PortalToolContext): string => actorUserId(actorOfPrincipal(ctx.principal)) ?? '';
+  /** Who a change is for: the token's person, through this token (`via`). */
+  const whoOf = (ctx: PortalToolContext): Who => ({ actorId: userOf(ctx), via: ctx.actor });
 
   /** The session an agent speaks for, and the root of what it may read; an admin's token reads everything (or a tree, with `session_id`). */
   const rootOf = (ctx: PortalToolContext, asked: string | undefined): string | undefined => {
@@ -191,7 +193,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
     handler(ctx) {
       const own = rootOf(ctx, undefined);
       if (!own) {
-        const s = spend.summary();
+        const s = spend.summary(userOf(ctx));
         return {
           summary: `Today ${money(s.today.costUsd)} (estimated) in ${s.today.requests} requests; this month ${money(s.month.costUsd)}. ${s.budgets.total} budget${s.budgets.total === 1 ? '' : 's'} (${s.budgets.exhausted} used up, ${s.budgets.paused} pausing), ${s.spikes24h} spike${s.spikes24h === 1 ? '' : 's'} in the last day.`,
           scope: 'portal',
@@ -205,7 +207,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
           now: s.now,
         };
       }
-      const tree = spend.attribution({ by: 'session', range: '1d', sessionId: own, limit: 1 });
+      const tree = spend.attribution({ by: 'session', range: '1d', sessionId: own, limit: 1 }, userOf(ctx));
       const root = tree.rows.find((r) => r.key === own);
       const link = spend.sessionScope(own);
       const budgets = link ? spend.budgetsFor(link.workspaceId, link.claudeId) : [];
@@ -252,7 +254,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
       const actor = actorOfPrincipal(ctx.principal);
       const r = spend.attribution(
         { by: args.by, range: args.range, claudeId: args.claude_id, workspaceId: args.workspace_id, limit: args.limit, ...(args.done ? { done: true } : {}), ...(root ? { sessionId: root } : {}) },
-        undefined,
+        userOf(ctx),
         { ticketVisible: (id) => ticketVisibleTo(id, actor) },
       );
       return {
@@ -290,7 +292,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
         states = spend.budgetsFor(link.workspaceId, link.claudeId);
         timezone = spend.timezone;
       } else {
-        const r = spend.budgets();
+        const r = spend.budgets(userOf(ctx));
         states = r.budgets;
         timezone = r.timezone;
       }
@@ -316,7 +318,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
     handler(ctx, args) {
       const own = rootOf(ctx, undefined);
       const range = args.range ?? '7d';
-      const events = own ? spend.spikesOf(own, range) : spend.spikes(range).events;
+      const events = own ? spend.spikesOf(own, range, userOf(ctx)) : spend.spikes(range, userOf(ctx)).events;
       return {
         summary: events.length ? `${events.length} spike${events.length === 1 ? '' : 's'} in ${range}; latest: ${events[0]!.summary}.` : `No spikes in ${range}.`,
         range,
@@ -357,7 +359,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
       if (args.limit_tokens !== undefined) raw.limitTokens = args.limit_tokens;
       if (args.mode !== undefined) raw.mode = args.mode;
       if (args.enabled !== undefined) raw.enabled = args.enabled;
-      const before = args.id ? spend.budget(args.id) : null;
+      const before = args.id ? spend.budget(args.id, userOf(ctx)) : null;
       if (args.mode === 'pause' && before?.budget.mode !== 'pause') {
         const gate = ctx.confirm(args, { change: before ? `${describe(before)} → pause new messages when used up` : 'a new budget that pauses new messages when it is used up', effect: 'Once the budget is used up its scope’s new messages are refused until the period ends or the budget is raised or set to alerts only. A running turn finishes.' }, before ? before.budget.id + '@' + before.budget.updatedAt : 'new');
         if (gate) return gate;
@@ -388,7 +390,7 @@ export function registerUsageSpendTools(spend: UsageSpend, registry: ToolRegistr
     rate: { perHour: 60 },
     input: z.object({ id: z.string().max(40), confirm_token: z.string().optional() }),
     handler(ctx, args) {
-      const state = spend.budget(args.id);
+      const state = spend.budget(args.id, userOf(ctx));
       const gate = ctx.confirm(args, { remove: describe(state), pausing_now: state.paused }, `${state.budget.id}@${state.budget.updatedAt}`);
       if (gate) return gate;
       spend.deleteBudget(args.id, whoOf(ctx));

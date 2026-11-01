@@ -1,9 +1,9 @@
 import { AppError } from '@isnanme/core';
-import type { MultiPoolType, Workspace } from '@portal/contracts';
+import { objectRef, poolRef, type MultiPoolType, type Workspace } from '@portal/contracts';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
 import { registerPortalTool, PortalToolError } from '../registry.js';
-import { actorOfPrincipal } from '../../authz/seam.js';
+import { actorOfPrincipal, can } from '../../authz/seam.js';
 import { assertCanChange, labelProse, resolveWorkspace, uiLink, workspaceBrief } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 import { declareWorkspacePolicies } from '../../workspaces/authz.js';
@@ -95,7 +95,7 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       // Names resolve to ids first, so a typo is refused before anything is created.
       let poolId: string | null = null;
       if (args.account_pool) {
-        const found = accountPools.list().filter((p) => p.id === args.account_pool || p.name === args.account_pool);
+        const found = accountPools.list().filter((p) => (p.id === args.account_pool || p.name === args.account_pool) && can(actorOfPrincipal(ctx.principal), 'operate', objectRef('account_pool', p.id)).allow);
         if (found.length !== 1) throw new AppError('VALIDATION_FAILED', `No single account pool “${args.account_pool}”.`, { details: { account_pool: 'Use an id or an exact name.' } });
         poolId = found[0]!.id;
       }
@@ -103,7 +103,8 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       for (const [type, items] of Object.entries(args.pools ?? {}) as [MultiPoolType, string[] | undefined][]) {
         if (!items?.length) continue;
         wanted[type] = items.map((x) => {
-          const found = poolService.list(type).filter((p) => p.id === x || p.name === x);
+          // Org isolation: only a set the token's person may use (operate); another's answers like a missing one.
+          const found = poolService.list(type).filter((p) => (p.id === x || p.name === x) && can(actorOfPrincipal(ctx.principal), 'operate', poolRef(p.id, type as MultiPoolType)).allow);
           if (found.length !== 1) throw new AppError('VALIDATION_FAILED', `No single ${type} pool “${x}”.`, { details: { pools: `Unknown ${type} pool.` } });
           return found[0]!.id;
         });

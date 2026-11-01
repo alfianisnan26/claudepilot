@@ -24,6 +24,8 @@ export interface ImportOptions {
   policy: ConflictPolicy;
   actor: Actor;
   scope?: CallerScope | null;
+  /** Who owns a new vault made for the zip (the person importing); absent, the column's default. */
+  ownerId?: string | null;
 }
 
 const tick = () => new Promise<void>((r) => setImmediate(r));
@@ -172,7 +174,7 @@ export async function importZip(service: KnowledgeService, buf: Buffer, o: Impor
     let name = base.slice(0, 60);
     const taken = new Set(service.list().map((v) => v.name.toLowerCase()));
     for (let i = 2; taken.has(name.toLowerCase()) && i < 1000; i++) name = `${base.slice(0, 55)} (${i})`;
-    const made = service.createForImport(name, o.actor);
+    const made = service.createForImport(name, o.actor, o.ownerId);
     created = true;
     target = { vault: made.vault, id: made.summary.id, name: made.summary.name };
   }

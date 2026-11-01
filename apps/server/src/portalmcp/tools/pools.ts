@@ -5,13 +5,16 @@ import {
   SECRET_LIMITS,
   secretExposeDefault,
   unexposedEnvSecrets,
+  poolRef,
   type PoolDetail,
+  type MultiPoolType,
+  type Verb,
   type PoolSummary,
   type SecretEntryInput,
   type SecretEntryView,
 } from '@portal/contracts';
 import { z } from 'zod';
-import { actorOfPrincipal } from '../../authz/seam.js';
+import { actorOfPrincipal, actorUserId, can, visible } from '../../authz/seam.js';
 import { declarePoolToolPolicies, secretWriteAccess } from '../../pools/authz.js';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, registerPortalTool, uiOnly, type PortalToolContext } from '../registry.js';
@@ -82,14 +85,34 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     };
   };
 
-  const needPool = (id: string): { id: string; type: string; summary: PoolDetail } => {
+  /** The sets of `type` (every type when absent) the token's person may view (org isolation: never another org's or person's). */
+  const viewable = (ctx: PortalToolContext, type?: string): PoolSummary[] => {
+    const actor = actorOfPrincipal(ctx.principal);
+    return poolService
+      .types()
+      .filter((t) => !type || t === type)
+      .flatMap((t) => visible(actor, 'pool', poolService.list(t), (p) => p.id, t as MultiPoolType));
+  };
+
+  /**
+   * The set an argument names (its id, or its exact name among the sets the caller may view), and `verb` on it through the one `can()`: a set
+   * the caller may not reach answers exactly like one that does not exist (the dispatch has no id to check: the policy is the handler's).
+   * `null`: no right on the set is needed (taking it OUT of workspaces the caller manages, which the dispatch checked).
+   */
+  const needPool = (ctx: PortalToolContext, id: string, verb: Verb | null): { id: string; type: string; summary: PoolDetail } => {
+    const missing = () => new AppError('NOT_FOUND', `No pool “${id}”. List them with pool_list.`);
+    const actor = actorOfPrincipal(ctx.principal);
     const byId = poolService.typeOf(id);
-    if (byId) return { id, type: byId, summary: poolService.get(id) };
+    if (byId) {
+      if (verb && !can(actor, verb, poolRef(id, byId as MultiPoolType)).allow) throw missing();
+      return { id, type: byId, summary: poolService.get(id) };
+    }
     // By exact name within a type; an ambiguous name returns the matches.
-    const matches = poolService.types().flatMap((t) => poolService.list(t).filter((p) => p.name === id));
-    if (matches.length === 1) return { id: matches[0]!.id, type: matches[0]!.type, summary: poolService.get(matches[0]!.id) };
+    const matches = viewable(ctx).filter((p) => p.name === id);
     if (matches.length > 1) throw new PortalToolError('AMBIGUOUS', `${matches.length} pools are named “${id}”. Use the id.`, { matches: matches.map((m) => ({ id: m.id, type: m.type })) });
-    throw new AppError('NOT_FOUND', `No pool “${id}”. List them with pool_list.`);
+    const one = matches[0];
+    if (!one || (verb && !can(actor, verb, poolRef(one.id, one.type as MultiPoolType)).allow)) throw missing();
+    return { id: one.id, type: one.type, summary: poolService.get(one.id) };
   };
 
   registerPortalTool({
@@ -110,13 +133,10 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     description: 'Pools of every type (or one), with their revision, review status and how many workspaces use them. Account pools have their own tools.',
     scope: 'read',
     input: z.object({ type: z.string().max(20).optional(), query: z.string().max(80).optional().describe('Part of a pool name.'), ...pageInput }),
-    handler(_ctx, args) {
+    handler(ctx, args) {
       const types = poolService.types();
       if (args.type && !types.includes(args.type as (typeof types)[number])) throw new AppError('NOT_FOUND', `No pool type “${args.type}”. Known: ${types.join(', ')}.`);
-      const all = types
-        .filter((t) => !args.type || t === args.type)
-        .flatMap((t) => poolService.list(t))
-        .filter((p) => !args.query || p.name.toLowerCase().includes(args.query.toLowerCase()));
+      const all = viewable(ctx, args.type).filter((p) => !args.query || p.name.toLowerCase().includes(args.query.toLowerCase()));
       const page = paginate(all, args, { t: args.type, q: args.query });
       return { summary: `${page.total} pools.`, pools: page.items.map(brief), total: page.total, next_cursor: page.next_cursor };
     },
@@ -129,8 +149,8 @@ export function registerPoolTools(deps: PortalToolDeps): void {
       'One pool: its current content (for secrets: names, options and fingerprints only, never a value), the last revisions, and the workspaces that use it. Imported text in the content (descriptions, tool lists) is labelled untrusted.',
     scope: 'read',
     input: z.object({ id: z.string().max(100).describe('The pool id, or its exact name.') }),
-    handler(_ctx, args) {
-      const { summary: p } = needPool(args.id);
+    handler(ctx, args) {
+      const { summary: p } = needPool(ctx, args.id, 'view');
       return {
         summary: `${p.name} (${p.type}) is at revision ${p.revision}, used by ${p.workspaces} workspaces.`,
         pool: brief(p),
@@ -198,7 +218,7 @@ export function registerPoolTools(deps: PortalToolDeps): void {
         if (isProtectedPool({ name: args.name, description: args.description })) throw new PortalToolError('PROTECTED', PROTECTED_POOL_REASON);
       } else writable(args.type);
       const content = secrets ? namesOnlySecrets(args.content) : args.content;
-      const p = poolService.create(args.type, { name: args.name, description: args.description, content, note: args.note ?? `via MCP (${ctx.actor})` });
+      const p = poolService.create(args.type, { name: args.name, description: args.description, content, note: args.note ?? `via MCP (${ctx.actor})` }, actorUserId(actorOfPrincipal(ctx.principal)));
       ctx.affected(`pool:${p.id}`);
       const missing = secrets ? (content as { entries: SecretEntryInput[] }).entries.map((e) => e.name) : [];
       return { summary: `Created ${p.name}: revision ${p.latestRevision} is ${p.status}.`, pool: brief(p), secrets_missing: missing };
@@ -299,7 +319,7 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     }),
     handler(ctx, args) {
       assertCanChange(store, 'pool');
-      const { id, type, summary: cur } = needPool(args.id);
+      const { id, type, summary: cur } = needPool(ctx, args.id, 'manage');
       writable(type);
       if (cur.latestRevision !== args.base_revision) throw new PortalToolError('CONFLICT', `The pool is at revision ${cur.latestRevision}, not ${args.base_revision}. Read it again with pool_get.`, { latest_revision: cur.latestRevision });
       if ((args.content === undefined) === (args.restore_revision === undefined)) throw new AppError('VALIDATION_FAILED', 'Give content, or restore_revision, not both and not neither.');
@@ -328,7 +348,7 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     input: z.object({ id: z.string().max(100), unassign: z.boolean().optional(), confirm_token: z.string().optional() }),
     handler(ctx, args) {
       assertCanChange(store, 'pool');
-      const { id, type, summary: p } = needPool(args.id);
+      const { id, type, summary: p } = needPool(ctx, args.id, 'manage');
       writable(type);
       const gate = ctx.confirm(args, { delete: `${p.name} (${type})`, revisions: p.revisions.length, workspaces_using_it: p.assignedTo.map((a) => a.workspaceId), will_unassign: !!args.unassign }, `${id}@${p.latestRevision}`);
       if (gate) return gate;
@@ -363,7 +383,7 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     input: z.object({ pool_id: z.string().max(100), workspace_ids: z.array(z.string().max(100)).min(1).max(50), confirm_token: z.string().optional() }),
     async handler(ctx, args) {
       assertCanChange(store, 'pool');
-      const { id, summary: p } = needPool(args.pool_id);
+      const { id, summary: p } = needPool(ctx, args.pool_id, 'operate');
       const ids = await workspaceIds(args.workspace_ids);
       if (needsConfirm(ctx, ids.length)) {
         const gate = ctx.confirm(args, { assign: `${p.name} (${p.type})`, to_workspaces: ids, replaces: 'nothing: pools of this type already on a workspace stay' }, `${id}@${p.latestRevision}:${ids.join(',')}`);
@@ -384,7 +404,7 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     input: z.object({ pool_id: z.string().max(100), workspace_ids: z.array(z.string().max(100)).min(1).max(50), confirm_token: z.string().optional() }),
     async handler(ctx, args) {
       assertCanChange(store, 'pool');
-      const { id, type, summary: p } = needPool(args.pool_id);
+      const { id, type, summary: p } = needPool(ctx, args.pool_id, null);
       const ids = await workspaceIds(args.workspace_ids);
       const had = ids.filter((w) => p.assignedTo.some((a) => a.workspaceId === w));
       if (needsConfirm(ctx, ids.length)) {

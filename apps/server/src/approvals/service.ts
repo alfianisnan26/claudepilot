@@ -26,7 +26,7 @@ import {
   type ApprovalStatus,
 } from '@portal/contracts';
 import { findSecret } from '../portalmcp/sanitize.js';
-import { mayDecide, NO_APPROVAL } from './authz.js';
+import { mayDecide, mayDecideOn, NO_APPROVAL } from './authz.js';
 import {
   APPROVAL_KIND_DEFS,
   type ApprovalChat,
@@ -375,19 +375,29 @@ export class Approvals {
     return Number(r.n);
   }
 
-  /** The queue a person decides from (pending, not expired, oldest first). Anyone else: empty. */
+  /** Whether the person may see and decide this request (its workspace or session, authz.ts `mayDecideOn`). */
+  #mayAct(actor: Actor, r: Row): boolean {
+    return mayDecideOn(actor, { workspace: r.workspace, requesterSession: r.requester_session });
+  }
+
+  /** Whether `actor` may see and decide `a` (Needs you filters its items by it). */
+  mayAct(actor: Actor, a: Pick<Approval, 'workspace' | 'requesterSession'>): boolean {
+    return mayDecideOn(actor, a);
+  }
+
+  /** The queue a person decides from (pending, not expired, oldest first, the ones they may decide). Anyone else: empty. */
   pending(actor: Actor): Approval[] {
     if (!mayDecide(actor)) return [];
     const rows = this.#db()
       .prepare("SELECT * FROM approvals WHERE status = 'pending' AND expires_at > ? ORDER BY created_at, id")
       .all(this.#iso()) as Row[];
-    return rows.map((r) => this.#toApproval(r));
+    return rows.filter((r) => this.#mayAct(actor, r)).map((r) => this.#toApproval(r));
   }
 
   /** One request for a person (any status). Anyone else: NOT_FOUND, as a missing one. */
   getFor(actor: Actor, id: string): Approval {
     const r = mayDecide(actor) ? this.#row(id) : undefined;
-    if (!r) throw new AppError('NOT_FOUND', NO_APPROVAL);
+    if (!r || !this.#mayAct(actor, r)) throw new AppError('NOT_FOUND', NO_APPROVAL);
     return this.#toApproval(r);
   }
 
@@ -458,7 +468,7 @@ export class Approvals {
 
   #pendingOr404(actor: Actor, id: string): { row: Row; def: ApprovalKindDef } {
     const row = mayDecide(actor) ? this.#row(id) : undefined;
-    if (!row || !isApprovalKind(row.kind)) throw new AppError('NOT_FOUND', NO_APPROVAL);
+    if (!row || !isApprovalKind(row.kind) || !this.#mayAct(actor, row)) throw new AppError('NOT_FOUND', NO_APPROVAL);
     if (row.status !== 'pending') throw new AppError('CONFLICT', `This request was already ${row.status}.`);
     if (row.expires_at <= this.#iso()) throw new AppError('CONFLICT', 'This request expired.');
     return { row, def: APPROVAL_KIND_DEFS[row.kind] };

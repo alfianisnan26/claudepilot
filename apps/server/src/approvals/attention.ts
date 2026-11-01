@@ -6,7 +6,7 @@ import { clip, isPerson, present, readsPersonOnly, sessionWho, type AnchoredItem
 import { APPROVAL_KIND_DEFS } from './kinds.js';
 import type { Approvals } from './service.js';
 
-export function approvalAttentionSource(approvals: Pick<Approvals, 'pendingRows' | 'deps'>): AttentionSource {
+export function approvalAttentionSource(approvals: Pick<Approvals, 'pendingRows' | 'deps' | 'mayAct'>): AttentionSource {
   return {
     kind: 'approval',
     list(actor, now, scope) {
@@ -15,7 +15,10 @@ export function approvalAttentionSource(approvals: Pick<Approvals, 'pendingRows'
       // A title quotes names an agent wrote (a session title, a secret name): a person sees them quoted; an agent reading with `see` gets
       // the kind's label only, so no agent's words reach another agent through this list (review nit 1, T-2867).
       const person = isPerson(actor);
-      return approvals.pendingRows(now).map((a): AnchoredItem => {
+      // Org isolation: a signed-in person lists only the requests about a workspace or session they may use (never another org's); the
+      // portal itself (`system`) lists every one.
+      const reader = actor.kind === 'user' ? actor : null;
+      return approvals.pendingRows(now).filter((a) => !reader || approvals.mayAct(reader, a)).map((a): AnchoredItem => {
         const def = APPROVAL_KIND_DEFS[a.kind];
         const count = a.count ?? 1;
         return {

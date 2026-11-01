@@ -1,5 +1,6 @@
 import { AppError } from '@isnanme/core';
-import type { Account } from '@portal/contracts';
+import { objectRef, type Account } from '@portal/contracts';
+import { actorOfPrincipal, can } from '../../authz/seam.js';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
 import { registerPortalTool, type PortalToolContext } from '../registry.js';
@@ -108,7 +109,9 @@ export function registerAccountTools(deps: PortalToolDeps): void {
       const w = resolveWorkspace(await workspaces.list(), args.workspace_id);
       let poolId: string | null = null;
       if (args.pool_id !== null) {
-        const found = accountPools.list().filter((p) => p.id === args.pool_id || p.name === args.pool_id);
+        // Org isolation: only an account pool the token's person may use (operate); another's answers like a missing one.
+        const actor = actorOfPrincipal(ctx.principal);
+        const found = accountPools.list().filter((p) => (p.id === args.pool_id || p.name === args.pool_id) && can(actor, 'operate', objectRef('account_pool', p.id)).allow);
         if (found.length !== 1) throw new AppError('NOT_FOUND', `No single account pool “${args.pool_id}”. List them with account_pool_list.`);
         poolId = found[0]!.id;
       }

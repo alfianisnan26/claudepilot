@@ -11,7 +11,7 @@ import { compress } from 'hono/compress';
 import { attachmentHeaders } from './attachments.js';
 import { KnowledgeError } from './errors.js';
 import { importZip } from './importer.js';
-import { actorOf, can } from '../authz/seam.js';
+import { actorOf, actorUserId, can } from '../authz/seam.js';
 import { orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import { UI_ACTOR, type CallerScope, type KnowledgeService } from './service.js';
 
@@ -111,14 +111,15 @@ export function createKnowledgeRoutes(service: KnowledgeService) {
     const seen = service.list(viewScope(c));
     return c.json(success(inScope ? seen.filter((v) => inScope(vaultRef(v.id))) : seen));
   });
-  r.post('/vaults', async (c) => c.json(success(service.create(await body<CreateVaultRequest>(c))), 201));
+  // A new vault is its maker's (org isolation), never the founding user's by default.
+  r.post('/vaults', async (c) => c.json(success(service.create(await body<CreateVaultRequest>(c), undefined, actorUserId(actorOf(c)))), 201));
 
   // A zip of a vault, raw in the body (Content-Type: application/zip). `?into=<vault>` adds to one, else a new vault is made.
   r.post('/vaults/import', async (c) => {
     const policy = (q(c, 'policy') || 'keep-both') as VaultImportPolicy;
     if (!['skip', 'keep-both', 'overwrite'].includes(policy)) throw new KnowledgeError('INVALID_INPUT', 'The conflict policy is skip, keep-both or overwrite.');
     const data = await bytes(c, service.limits.importPackedBytes);
-    const report = await importZip(service, data, { filename: q(c, 'filename') || undefined, name: q(c, 'name') || undefined, into: q(c, 'into') || undefined, policy, actor: UI_ACTOR });
+    const report = await importZip(service, data, { filename: q(c, 'filename') || undefined, name: q(c, 'name') || undefined, into: q(c, 'into') || undefined, policy, actor: UI_ACTOR, ownerId: actorUserId(actorOf(c)) });
     return c.json(success(report), 201);
   });
 

@@ -37,7 +37,7 @@ import type {
   VaultTreeEntry,
   WriteNoteResult,
 } from '@portal/contracts';
-import { AGENT_POLICIES, GRAPH_LENSES, WORKSPACE_KEY } from '@portal/contracts';
+import { AGENT_POLICIES, GRAPH_LENSES, isUserId, WORKSPACE_KEY } from '@portal/contracts';
 import type { Store } from '../store/store.js';
 import { isDate, serverTimezone, timeIn, todayIn, validTimezone } from './daily.js';
 import { Directory } from './directory.js';
@@ -399,7 +399,11 @@ export class KnowledgeService {
     return v;
   }
 
-  create(req: Partial<CreateVaultRequest>, actor: Actor = UI_ACTOR): VaultSummary {
+  /**
+   * `ownerId`: the person who makes it owns it (org isolation, owner request 2026-11-01); absent (the portal's own, module tests), the
+   * column's default.
+   */
+  create(req: Partial<CreateVaultRequest>, actor: Actor = UI_ACTOR, ownerId?: string | null): VaultSummary {
     const db = this.store.db;
     if (!db || !this.#ready() || !this.store.writable)
       throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t available for changes.');
@@ -444,6 +448,7 @@ export class KnowledgeService {
     db.prepare(
       'INSERT INTO kg_vaults (id, name, kind, root, read_only, agents, daily_folder, timezone, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(id, n, kind, root, readOnly, agents, daily, tz, row.settings, at, at);
+    if (ownerId && isUserId(ownerId)) db.prepare("UPDATE kg_vaults SET owner_kind = 'user', owner_id = ? WHERE id = ?").run(ownerId, id);
     const vault = this.#open(row);
     void vault.scan().catch((e: unknown) => this.#log(`[knowledge] ${n}: scan failed: ${(e as Error).message}`));
     this.journal.audit({
@@ -1329,8 +1334,8 @@ export class KnowledgeService {
   /* ---------- Used by the importer ---------- */
 
   /** Makes a vault for an import and returns it opened. */
-  createForImport(name: string, actor: Actor): { summary: VaultSummary; vault: Vault; row: VaultRow } {
-    const summary = this.create({ name }, actor);
+  createForImport(name: string, actor: Actor, ownerId?: string | null): { summary: VaultSummary; vault: Vault; row: VaultRow } {
+    const summary = this.create({ name }, actor, ownerId);
     const row = this.#row(summary.id);
     return { summary, vault: this.#open(row), row };
   }
