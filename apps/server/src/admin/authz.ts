@@ -4,10 +4,11 @@
 // admin (`requireInstanceAdmin`, read on every use), and `reauth` needs a step-up within 5 minutes. A denial on a platform route is the
 // platform's (404 for anything that is not a person). No route takes a bearer token: the console refuses any `Authorization` header.
 
-import type { RoutePolicies, RoutePolicy } from '@portal/contracts';
+import type { PlatformArea, RoutePolicies, RoutePolicy } from '@portal/contracts';
 import { declarePolicies } from '../authz/seam.js';
 
-const users = (verb: 'view' | 'manage', extra: Partial<RoutePolicy> = {}): RoutePolicy => ({ kind: 'platform', area: 'users', verb, ...extra }) as RoutePolicy;
+const area = (a: PlatformArea, verb: 'view' | 'manage', extra: Partial<RoutePolicy> = {}): RoutePolicy => ({ kind: 'platform', area: a, verb, ...extra }) as RoutePolicy;
+const users = (verb: 'view' | 'manage', extra: Partial<RoutePolicy> = {}): RoutePolicy => area('users', verb, extra);
 
 export const ADMIN_ROUTE_POLICIES: RoutePolicies = {
   'POST /admin-api/session': { kind: 'public', why: 'the console’s sign-in: an active admin account’s email and password, throttled per email and address', audit: 'admin.signin' },
@@ -43,6 +44,26 @@ export const ADMIN_ROUTE_POLICIES: RoutePolicies = {
   'GET /admin-api/break-glass': users('view'),
   'GET /admin-api/sso': users('view'),
   'GET /admin-api/audit': users('view'),
+  // Owner, 2026-11-01 ("the console controls everything"): the main portal's own services, called with the admin as the actor. Every write
+  // needs the step-up and writes a platform audit row; the service decides the rest (a workspace start is the seam's `operate`, D12 holds).
+  'POST /admin-api/users': users('manage', { reauth: true, audit: 'account.created' }),
+  'PATCH /admin-api/users/:id': users('manage', { reauth: true, audit: 'account.updated' }),
+  'DELETE /admin-api/users/:id': users('manage', { reauth: true, audit: 'account.removed' }),
+  'POST /admin-api/users/:id/password': users('manage', { reauth: true, audit: 'account.password_reset' }),
+  'POST /admin-api/orgs': users('manage', { reauth: true, audit: 'org.created' }),
+  'GET /admin-api/orgs/:id': users('view'),
+  'DELETE /admin-api/orgs/:id': users('manage', { reauth: true, audit: 'org.deleted' }),
+  'GET /admin-api/workspaces': area('targets', 'view'),
+  'POST /admin-api/workspaces/:target/:name/start': area('targets', 'manage', { reauth: true, audit: 'workspace.start' }),
+  'POST /admin-api/workspaces/:target/:name/stop': area('targets', 'manage', { reauth: true, audit: 'workspace.stop' }),
+  'GET /admin-api/targets': area('targets', 'view'),
+  'POST /admin-api/sso': area('registration', 'manage', { reauth: true, audit: 'sso.provider_created' }),
+  'PATCH /admin-api/sso/:id': area('registration', 'manage', { reauth: true, audit: 'sso.provider_changed' }),
+  'GET /admin-api/signin': area('registration', 'view'),
+  'PUT /admin-api/signin/server-code': area('registration', 'manage', { reauth: true, audit: 'portal.server_code_switched' }),
+  'POST /admin-api/signin/server-code/rotate': area('registration', 'manage', { reauth: true, audit: 'portal.server_code_rotated' }),
+  'GET /admin-api/settings': area('settings', 'view'),
+  'PUT /admin-api/settings/:key': area('settings', 'manage', { reauth: true, audit: 'setting.changed' }),
 };
 
 export function declareAdminPolicies(): void {

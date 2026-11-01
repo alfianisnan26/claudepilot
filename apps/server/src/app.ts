@@ -131,7 +131,7 @@ import { declareAllPolicies } from './authz/declarations.js';
 import { enforceRoutePolicy, useWorkspaceAlias } from './authz/routeGuard.js';
 import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
 import { cookie as cookieOf } from './workspaces/shell.js';
-import { revokeAccountTokens } from './identity/accountGate.js';
+import { AccountAdmin } from './identity/accountAdmin.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
@@ -290,6 +290,8 @@ export function createApp(
   // Teams and SSO (owner, 2026-10-17): accounts in teams, sessions shared to a team, sign-in through an OpenID Connect provider by domain.
   const teams = new PortalTeams(() => store.db, () => (store.writable ? store.db : null));
   const sso = new SsoProviders(() => store.db, () => (store.writable ? store.db : null), () => store.secrets, users, teams, oidc);
+  // Owner, 2026-11-01: an account's changes with their side effects, shared by /api/admin/users and the Admin console (identity/accountAdmin.ts).
+  const accountAdmin = new AccountAdmin({ users, writable: () => (store.writable ? store.db : null), revokeSessions: (id) => portal.revokeUser(id), forget: [grants, teams, sso] });
   // Review #5: the attempt counters are swept once an hour.
   const sweep = setInterval(() => {
     try {
@@ -728,27 +730,21 @@ export function createApp(
 
   // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
   admin.get('/users', (c) => c.json(success(users.list())));
-  /** Review M1: revokes what the account minted or started (identity/accountGate.ts), with one audit row of the counts. */
-  const endAccountTokens = (id: string, reason: string, c: Context<Env>) => {
-    const db = store.writable ? store.db : null;
-    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
-    const ended = revokeAccountTokens(db, id, new Date().toISOString(), reason);
-    if (ended.pmcp + ended.reporter + ended.agent > 0) audit('account.tokens_revoked', id, { ...ended, reason }, 'medium', actorOf(c));
+  /** Review M1: one audit row of the tokens and agents a change ended (identity/accountAdmin.ts revokes them). */
+  const auditTokens = (id: string, ended: { pmcp: number; reporter: number; agent: number } | null, reason: string | null, c: Context<Env>) => {
+    if (ended && ended.pmcp + ended.reporter + ended.agent > 0) audit('account.tokens_revoked', id, { ...ended, reason }, 'medium', actorOf(c));
   };
   admin.post('/users', async (c) => {
-    const u = await users.create(await body<CreatePortalUserRequest>(c), 'ui');
+    const u = await accountAdmin.create(await body<CreatePortalUserRequest>(c), 'ui');
     audit('account.created', u.id, { email: u.email, role: u.role }, 'info', actorOf(c));
     return c.json(success(u), 201);
   });
   admin.patch('/users/:id', async (c) => {
     const id = c.req.param('id');
     const req = await body<UpdatePortalUserRequest>(c);
-    const before = users.get(id);
-    const u = await users.update(id, req);
-    // Review #3: a password reset or a disable ends the account's sessions now (and its sockets with them).
-    if (req.password !== undefined || u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) portal.revokeUser(id);
-    // Review M1: a disable or a demotion also ends every token the account minted and every agent of a session it started, for good.
-    if (u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) endAccountTokens(id, u.state === 'disabled' ? 'account disabled' : 'account demoted', c);
+    // Sessions and tokens end inside (reviews #3 and M1): a password reset, a disable, a demotion.
+    const { before, after: u, tokens, reason } = await accountAdmin.update(id, req);
+    auditTokens(id, tokens, reason, c);
     audit(
       'account.updated',
       id,
@@ -765,13 +761,8 @@ export function createApp(
   });
   admin.delete('/users/:id', (c) => {
     const id = c.req.param('id');
-    const before = users.get(id);
-    users.remove(id);
-    grants.removeUser(id);
-    teams.removeUser(id);
-    sso.removeUser(id);
-    portal.revokeUser(id);
-    endAccountTokens(id, 'account removed', c);
+    const { before, tokens } = accountAdmin.remove(id);
+    auditTokens(id, tokens, 'account removed', c);
     audit('account.removed', id, { email: before.email, role: before.role }, 'info', actorOf(c));
     return c.json(success({ removed: true }));
   });
@@ -1459,6 +1450,11 @@ export function createApp(
       consoleDir: serveWeb ? config.paths.adminDist : null,
       // Owner, 2026-11-01: sign-in through git.isnan.me for the allow list only (admin/oidc.ts); unset: off.
       oidc: { config: adminOidcConfig(config.adminOidc, (m) => console.error(m)), client: oidc },
+      // Owner, 2026-11-01 ("the console controls everything"): the same services as the main portal, with the admin as the actor.
+      accounts: accountAdmin,
+      workspaces,
+      serverCode: portal,
+      settings: settings?.settings ?? null,
     }).app;
   }
 
