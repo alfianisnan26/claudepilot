@@ -93,8 +93,12 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
         await b.waitFor(`!!document.querySelector('[role=dialog]')`, 4000, 'the Arrange dialog');
         await sleep(400);
         await b.shot('home-arrange-390');
+        const sent = b.requests.length;
         await b.clickSel('[role=dialog] [aria-label="Show Usage"]');
         await b.clickSel('[role=dialog] button[aria-label="Move Quota up"]');
+        // The layout is saved per person on the server (D-111), debounced: reload only once it was sent (reloading at once lost it).
+        for (let i = 0; i < 40 && !b.requests.slice(sent).some((r) => r.method === 'PUT' && r.url.includes('/api/layouts/home')); i++) await sleep(100);
+        await sleep(300);
         await b.goto('/admin/home', 2500);
         await b.waitFor(`document.querySelectorAll('[data-home-card]').length >= ${CARDS.length - 1}`, 8000, 'the cards after reload');
         const after = await b.eval(`[...document.querySelectorAll('[data-home-card]')].map((e) => e.dataset.homeCard)`);
@@ -103,6 +107,9 @@ for (const [width, height] of [[390, 844], [1280, 800]]) {
         const want = moved.filter((id) => id !== 'usage');
         check(JSON.stringify(after) === JSON.stringify(want), `${tag}: Arrange hid Usage and moved Quota up, kept on reload (${after.join(', ')}; want ${want.join(', ')})`);
         await b.eval(`localStorage.clear()`);
+        // And on the server, where the layout now lives (D-111), so the next size starts from the default again.
+        const reset = await call('PUT', '/api/layouts/home', { layout: {} });
+        check(reset.status < 300, `${tag}: the Home layout is reset for the next run (${reset.status})`);
       }
       if (b.errors.length) check(false, `${tag}: page errors ${b.errors.slice(0, 3).join(' | ')}`);
     } finally {
