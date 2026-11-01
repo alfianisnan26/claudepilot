@@ -29,6 +29,11 @@ export interface OrgPolicies {
   ssoFreshnessDays: number | null;
   defaultJoinRole: Exclude<OrgRole, 'owner'>;
   domainJoin: boolean;
+  /**
+   * Fine-grained access (owner request 2026-11-01): whether the org's ADMINS may grant access to the org's objects by their role (owners
+   * always may; anyone holding `manage` on one object through a grant may grant on that object, up to their own level). Owners set it.
+   */
+  adminsMayShare: boolean;
 }
 export const ORG_POLICY_DEFAULTS: OrgPolicies = {
   membersMayInvite: false,
@@ -38,6 +43,7 @@ export const ORG_POLICY_DEFAULTS: OrgPolicies = {
   ssoFreshnessDays: null,
   defaultJoinRole: 'member',
   domainJoin: false,
+  adminsMayShare: true,
 };
 
 export const ORG_LIMITS = {
@@ -86,7 +92,7 @@ export interface CreateOrgRequest {
   slug: string;
 }
 /** The policies an owner sets in Org settings' Policies (requireSso has its own route, `ssoPolicy`, with the lockout guard). */
-export const ORG_SETTABLE_POLICIES = ['membersMayInvite', 'membersCreateTeams', 'externalShares'] as const;
+export const ORG_SETTABLE_POLICIES = ['membersMayInvite', 'membersCreateTeams', 'externalShares', 'adminsMayShare'] as const;
 export type OrgSettablePolicy = (typeof ORG_SETTABLE_POLICIES)[number];
 
 export interface UpdateOrgRequest {
@@ -392,14 +398,21 @@ export interface SetOrgTeamMemberRequest {
   role: OrgTeamRole;
 }
 
-/** Who an org share goes to: the whole org (its active members that are not guests) or one of its teams. */
-export type OrgShareSubject = { kind: 'org' } | { kind: 'team'; teamId: string };
+/**
+ * Who an org share goes to: the whole org (its active members that are not guests), one of its teams, or one person who is an active member
+ * (a guest too). Fine-grained access (owner request 2026-11-01) added the person.
+ */
+export type OrgShareSubject = { kind: 'org' } | { kind: 'team'; teamId: string } | { kind: 'user'; userId: UserId };
 
 export interface CreateOrgShareRequest {
   target: { type: OrgTransferKind; id: string };
   subject: OrgShareSubject;
-  /** view or operate to the org; view, operate or manage to a team (manage only by the object's owner, or an org owner or admin for an org object). */
+  /** view or operate to the org; view, operate or manage to a team or a person; never above the sharer's own level (docs/prd/access.md §4). */
   level: 'view' | 'operate' | 'manage';
+  /** When it ends by itself (ISO, at least a minute ahead, at most a year); null or absent: no end. Never past the sharer's own end. */
+  expiresAt?: string | null;
+  /** Why (shown to managers, kept in the audit). At most ACCESS_LIMITS.noteMax characters. */
+  note?: string | null;
   /**
    * The person saw that a workspace shared at operate exposes the credential sets assigned to it (anyone who can operate it can read them).
    * Required when it has any: else 409 SHARE_EXPOSES_CREDENTIALS lists them in `details.credentials`.
@@ -411,12 +424,15 @@ export interface OrgShare {
   id: string;
   orgId: OrgId;
   target: { type: OrgTransferKind; id: string };
-  subject: { kind: 'org' } | { kind: 'team'; teamId: string; name: string };
+  subject: { kind: 'org' } | { kind: 'team'; teamId: string; name: string } | { kind: 'user'; userId: UserId; name: string };
   level: 'view' | 'operate' | 'manage';
   /** A share of the sharer's own object: it ends when the sharer leaves the org. */
   personal: boolean;
   createdBy: UserId;
   createdAt: string;
+  /** When it ends by itself; null: no end. */
+  expiresAt?: string | null;
+  note?: string | null;
 }
 
 /** One read of a member's session by an org owner or admin (OD-3): `GET /api/orgs/:id/transcript-views` (org owners); the member reads their own rows at `GET /api/platform/audit?kind=org.transcript_viewed`. */
@@ -530,5 +546,13 @@ export const ORGS_ERROR_CODES = {
   ORG_OWNS_OBJECTS: 'ORG_OWNS_OBJECTS',
   /** Slice 8. The platform admin suspended it: only the Admin console resumes it (403). */
   ORG_SUSPENDED_BY_PLATFORM: 'ORG_SUSPENDED_BY_PLATFORM',
+  /** Access: the level or the end asked for is above what the granter holds (403, details.max, details.maxUntil). */
+  ACCESS_ABOVE_OWN: 'ACCESS_ABOVE_OWN',
+  /** Access: the org's owners have not let admins share by role (policy adminsMayShare off) (403). */
+  ACCESS_SHARING_OWNERS_ONLY: 'ACCESS_SHARING_OWNERS_ONLY',
+  /** Access request: they already hold that level (409). */
+  ACCESS_ALREADY_HELD: 'ACCESS_ALREADY_HELD',
+  /** Access request: an open request for the same object exists (409). */
+  ACCESS_REQUEST_OPEN: 'ACCESS_REQUEST_OPEN',
 } as const;
 export type OrgsErrorCode = (typeof ORGS_ERROR_CODES)[keyof typeof ORGS_ERROR_CODES];

@@ -11,7 +11,6 @@ import {
   canListInvitations,
   canManageTeam,
   canMoveHere,
-  canRevokeShare,
   canSeeOwnerAudit,
   confirmsDelete,
   consentCredentials,
@@ -26,9 +25,9 @@ const ROLES: OrgRole[] = ['owner', 'admin', 'member', 'guest'];
 const active = (myRole: OrgRole, may?: { invite: boolean; createTeam: boolean }) => ({ myRole, state: 'active' as const, may });
 
 test('sections by role in an active org: owners everything; admins no Policies or Danger zone; members and guests less', () => {
-  assert.deepEqual(orgSections(active('owner')), ['general', 'members', 'teams', 'invitations', 'objects', 'sharing', 'sign-in', 'policies', 'audit', 'danger']);
-  assert.deepEqual(orgSections(active('admin')), ['general', 'members', 'teams', 'invitations', 'objects', 'sharing', 'sign-in', 'audit']);
-  assert.deepEqual(orgSections(active('member', { invite: false, createTeam: true })), ['general', 'members', 'teams', 'objects', 'sharing']);
+  assert.deepEqual(orgSections(active('owner')), ['general', 'members', 'teams', 'invitations', 'objects', 'access', 'sign-in', 'policies', 'audit', 'danger']);
+  assert.deepEqual(orgSections(active('admin')), ['general', 'members', 'teams', 'invitations', 'objects', 'access', 'sign-in', 'audit']);
+  assert.deepEqual(orgSections(active('member', { invite: false, createTeam: true })), ['general', 'members', 'teams', 'objects', 'access']);
   assert.deepEqual(orgSections(active('guest', { invite: false, createTeam: false })), ['general', 'teams', 'objects']);
 });
 
@@ -67,15 +66,6 @@ test('teams: create follows Org.may (the policy), else managers; manage a team: 
   assert.deepEqual(ROLES.map((r) => canManageTeam(r, undefined)), [true, true, false, false]);
   assert.deepEqual(ROLES.map((r) => canManageTeam(r, 'member')), [true, true, false, false]);
   assert.deepEqual(ROLES.map((r) => canManageTeam(r, 'owner')), [true, true, true, true], 'a team owner manages their team');
-});
-
-test('shares: org owners and admins revoke any; anyone else only what they shared', () => {
-  const share = { createdBy: 'u_me' };
-  assert.equal(canRevokeShare('owner', share, 'u_other'), true);
-  assert.equal(canRevokeShare('admin', share, 'u_other'), true);
-  assert.equal(canRevokeShare('member', share, 'u_me'), true);
-  assert.equal(canRevokeShare('member', share, 'u_other'), false);
-  assert.equal(canRevokeShare('member', share, null), false, 'not known yet: hidden');
 });
 
 test('Move here: members and up (the server also needs manage on the object)', () => {

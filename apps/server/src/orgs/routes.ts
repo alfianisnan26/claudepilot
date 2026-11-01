@@ -6,6 +6,8 @@ import { AppError, success } from '@isnanme/core';
 import { Hono, type Context } from 'hono';
 import type {
   AcceptOrgInvitationRequest,
+  CreateAccessRequest,
+  DecideAccessRequest,
   ChangeOrgMemberRoleRequest,
   CreateOrgInvitationRequest,
   CreateOrgRequest,
@@ -17,6 +19,7 @@ import type {
   UpdateOrgRequest,
 } from '@portal/contracts';
 import { actorOf } from '../authz/seam.js';
+import type { OrgAccess } from './access.js';
 import type { BreakGlassService } from './breakGlass.js';
 import type { OrgInvitations } from './invitations.js';
 import type { OrgsService } from './service.js';
@@ -32,7 +35,7 @@ async function body(c: { req: { json: () => Promise<unknown> } }): Promise<Recor
   }
 }
 
-export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService, sharing?: OrgSharing, invitations?: OrgInvitations): Hono {
+export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService, sharing?: OrgSharing, invitations?: OrgInvitations, access?: OrgAccess): Hono {
   const r = new Hono();
   const inv = (): OrgInvitations => {
     if (!invitations) throw new AppError('NOT_FOUND', 'Not found.');
@@ -120,6 +123,28 @@ export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassServic
     return c.json(success({ revoked: true }));
   });
   r.get('/:id/transcript-views', (c) => c.json(success(sh().transcriptViews(actorOf(c), c.req.param('id') as OrgId))));
+
+  // Fine-grained access (docs/prd/access.md, ./access.ts): who reaches what and why, the catalog, access requests. Grants and revokes are
+  // the shares routes above. Always registered; 404 without the service.
+  const ac = (): OrgAccess => {
+    if (!access) throw new AppError('NOT_FOUND', 'Not found.');
+    return access;
+  };
+  r.get('/:id/access/catalog', (c) => c.json(success(ac().catalog(actorOf(c), c.req.param('id') as OrgId))));
+  r.get('/:id/access/object', (c) => c.json(success(ac().object(actorOf(c), c.req.param('id') as OrgId, c.req.query('type'), c.req.query('id')))));
+  r.get('/:id/access/people/:uid', (c) => c.json(success(ac().person(actorOf(c), c.req.param('id') as OrgId, c.req.param('uid')))));
+  r.get('/:id/access/requests', (c) => c.json(success(ac().requests(actorOf(c), c.req.param('id') as OrgId))));
+  r.post('/:id/access/requests', async (c) => c.json(success(ac().request(actorOf(c), c.req.param('id') as OrgId, (await body(c)) as Partial<CreateAccessRequest>)), 201));
+  r.post('/:id/access/requests/:requestId/approve', async (c) =>
+    c.json(success(ac().approve(actorOf(c), c.req.param('id') as OrgId, c.req.param('requestId'), (await body(c)) as Partial<DecideAccessRequest>))),
+  );
+  r.post('/:id/access/requests/:requestId/deny', async (c) =>
+    c.json(success(ac().deny(actorOf(c), c.req.param('id') as OrgId, c.req.param('requestId'), (await body(c)) as Partial<DecideAccessRequest>))),
+  );
+  r.delete('/:id/access/requests/:requestId', (c) => {
+    ac().cancel(actorOf(c), c.req.param('id') as OrgId, c.req.param('requestId'));
+    return c.json(success({ cancelled: true }));
+  });
 
   return r;
 }

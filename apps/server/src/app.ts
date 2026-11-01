@@ -914,6 +914,16 @@ export function createApp(
       void platform?.bus.emit({ kind: 'security', subject: { type: 'portal', id: `break-glass:${n.entryId}` }, facts: { org: n.orgName, admin: n.admin, until: n.expiresAt }, audience: owners }),
     // Slice 10: an org's own OIDC provider lives with the instance ones (sso_providers.org_id).
     ssoProviders: sso,
+    // Fine-grained access (docs/prd/access.md): a new access request tells who may decide it; a decision tells the requester ('attention';
+    // fixed words and the org's name only, the object's name is the untrusted detail; the link opens the org's Access section).
+    notifyAccess: (to, n) =>
+      void platform?.bus.emit({
+        kind: 'attention',
+        subject: { type: 'portal', id: `access-request:${n.requestId}` },
+        facts: { what: n.what === 'requested' ? 'Access request' : n.what === 'approved' ? 'Access given' : 'Access refused', why: n.orgName, orgId: n.orgId },
+        detail: { text: n.objectName, truncated: false },
+        audience: to,
+      }),
   });
   {
     // Slice 10 (§9.2): every org domain is looked up again once a day (7 failures in a row: lost).
@@ -925,6 +935,8 @@ export function createApp(
     const sweep = setInterval(() => {
       try {
         orgsModule.breakGlass.sweep();
+        // Fine-grained access: shares past their end are closed (access already stopped then: decisions read the grant's end).
+        orgsModule.sharing.sweepExpired();
         // Slice 8: orgs deleted 30 days ago are purged (memberships, invitations and grants with them).
         orgsModule.orgs.purgeDeleted();
       } catch (e) {
@@ -1465,7 +1477,7 @@ export function createApp(
   {
     const og = new Hono<Env>();
     og.use(requireSession);
-    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass, orgsModule.sharing, orgsModule.invitations));
+    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass, orgsModule.sharing, orgsModule.invitations, orgsModule.access));
     // Slice 10: the Sign-in tab (domains, the org's provider, requireSso).
     if (orgsModule.sso) og.route('/', createOrgSsoRoutes(orgsModule.sso, identity.redirectUri));
     app.route('/api/orgs', og);
