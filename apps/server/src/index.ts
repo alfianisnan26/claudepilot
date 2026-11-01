@@ -117,6 +117,7 @@ import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
 import type { Runtime } from './workspaces/runtime.js';
 import { AppPorts, routeAppHostUpgrades } from './appports/index.js';
+import { AdminHostGate, isAdminPath, routeAdminHostUpgrades } from './admin/index.js';
 import { loop } from './platform/loops.js';
 import { managerAccess } from './manager/access.js';
 import { MANAGER_BRIEF } from './manager/service.js';
@@ -902,7 +903,11 @@ const app = createApp(portal, workspaces, store, accounts, pools, reconciler, he
   connect,
   appPorts,
   reporter: { service: reporter, vendorDirs: reporterVendor },
+  adminHost: config.adminHost,
 });
+// Organizations slice 4 (docs/prd/organizations.md §6.11): the Admin console's host. app.ts answers its HTTP; here its sockets are refused.
+const adminGate = new AdminHostGate(config.adminHost, config.trustProxy);
+if (config.adminHost && !adminGate.enabled) console.error('[portal] PORTAL_ADMIN_HOST is not a host name: the Admin console is off');
 const handleApi = getRequestListener(app.fetch);
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
@@ -930,6 +935,8 @@ if (config.dev) {
     const url = req.url ?? '/';
     if (appPorts.proxy.owns(req.headers.host)) void appPorts.proxy.request(req, res);
     else if (
+      adminGate.isAdmin(req.headers) ||
+      isAdminPath(url.split('?')[0]!) ||
       url.startsWith('/api/') ||
       url === '/healthz' ||
       url === '/mcp' ||
@@ -945,6 +952,8 @@ if (config.dev) {
 }
 // After every module (and Vite's HMR) attached its `upgrade` listener: an app host's upgrade goes to the app-port proxy alone.
 routeAppHostUpgrades(server, appPorts.proxy);
+// No socket of any kind on the admin host (the console is plain HTTP with its own cookie).
+routeAdminHostUpgrades(server, adminGate);
 
 server.listen(config.port, config.host, () => {
   const where = `http://localhost:${config.port}`;

@@ -151,9 +151,10 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
    T-975's on its branch): take the next free number there after checking integration and the open branches.
    The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-903 used, 2026-10-31: 902 is reporter_ip, 903 the annotations).
    Organizations (docs/prd/organizations.md §8) have their own block, 460-479 (2026-10-31: 460 founder account and password_set, 461 token owners, 462 token accounts and session starters,
-   slice 0; 463 orgs, org_members and the keep-an-owner triggers, 464 user_abilities, slice 3; 465-469 held for slice 3 follow-ups, 470-479 for later
-   slices); identity and the multi-user retrofit keep 400-459, usage per user 480-499. Organizations slices built in parallel take sub-blocks:
-   slice 1 410-419 (410 owner columns, workspace_owners; P3), slice 2 420-429 (420 sso_providers.admin_ack_at/by), slice 3 463-469, slice 4 470-474.
+   slice 0; 463 orgs, org_members and the keep-an-owner triggers, 464 user_abilities, slice 3; 465-469 held for slice 3 follow-ups; 470 admin_sessions,
+   slice 4 (the Admin console), 471-474 held for slice 4 follow-ups; 475-479 for later slices); identity and the multi-user retrofit keep 400-459,
+   usage per user 480-499. Organizations slices built in parallel took sub-blocks: slice 1 410-419 (410 owner columns, workspace_owners; P3),
+   slice 2 420-429 (420 sso_providers.admin_ack_at/by).
 6. Dependencies: run `npm install` only under `flock COORD/npm.lock npm install ...`, then re-run the typecheck. Prefer no new dependencies; say in your
    report which you added and why. Never edit `@isnanme/*` packages in node_modules.
 7. Docker is ONE shared daemon. Give everything your prefix. A portal lists every `claudepilot-*` managed container, so other agents' workspaces show up in

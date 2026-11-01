@@ -1,0 +1,23 @@
+/* The Admin console's styles: Tailwind over the design tokens, scanning only the console's own files (the app's classes stay out). */
+@import 'tailwindcss' source(none);
+@import '@isnanme/tokens/tailwind.css';
+@source './';
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  /* The page never rubber-bands (QA-STANDARDS). */
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Long emails, ids and kinds break anywhere instead of pushing the page sideways. */
+.break-any {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

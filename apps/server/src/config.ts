@@ -17,6 +17,11 @@ export const config = {
    * Only for a portal no one can reach except through the proxy, or the header can be forged.
    */
   trustProxy: env('PORTAL_TRUST_PROXY') === 'true',
+  /**
+   * The Admin console's host (docs/prd/organizations.md §6.11, the PRD's `settings.adminHost`), e.g. admin.pilot.ai.isnan.me. Unset (or not a
+   * host name): the console is off and its paths are 404 everywhere. Compared with the request's Host (X-Forwarded-Host only with trustProxy).
+   */
+  adminHost: env('PORTAL_ADMIN_HOST'),
   /** Fixed server code; when unset one is generated at startup. */
   serverCode: env('PORTAL_SERVER_CODE'),
   /** Encrypts stored secrets: 32 random bytes in base64url, given directly or as a file. */
@@ -26,6 +31,8 @@ export const config = {
     root,
     web: `${root}apps/web`,
     webDist: `${root}apps/web/dist`,
+    /** The Admin console's UI bundle (apps/web/vite.admin.config.ts), served on the admin host only. */
+    adminDist: `${root}apps/web/dist-admin`,
     data: env('PORTAL_DATA_DIR') ?? `${root}.data`,
   },
   session: {
