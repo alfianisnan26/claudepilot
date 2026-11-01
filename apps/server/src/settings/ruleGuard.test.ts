@@ -1313,6 +1313,7 @@ test('T-924: the roots file is delivered root-owned 0644 with the default roots,
     '/home/node/work/tradingbot.worktrees',
     '/home/node/work/konfersi-universe.worktrees',
     'tool /home/node/work/claudepilot', // PILOT-998: the read-only tool checkout
+    'tool /home/node/work/konfersi-universe', // 2026-11-01: the Konfersi leads read their main checkout (fetch, log, status, worktree list)
   ]);
   const bundle = compile({
     portalId: 'p',

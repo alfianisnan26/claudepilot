@@ -2604,7 +2604,7 @@ export const GITC_ROOTS: readonly string[] = [
  * The read-only tool checkouts (PILOT-998), the one list: lanes run their scripts by these absolute paths and may keep them current
  * with `git -C <root>` fetch, pull --ff-only, merge --ff-only, log, show, status, rev-parse, diff and branch --contains, nothing else.
  */
-export const GITC_TOOL_ROOTS: readonly string[] = ['/home/node/work/claudepilot'];
+export const GITC_TOOL_ROOTS: readonly string[] = ['/home/node/work/claudepilot', '/home/node/work/konfersi-universe'];
 
 /**
  * The file's content: one lane root a line, then one `tool <path>` line per tool checkout. Throws for a lane root that is not
