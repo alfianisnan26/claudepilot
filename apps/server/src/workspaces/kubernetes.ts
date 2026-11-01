@@ -365,10 +365,14 @@ export class KubernetesRuntime implements Runtime {
 
   #status(d: V1Deployment, pods: V1Pod[]): { status: WorkspaceStatus; detail?: string } {
     if (d.metadata?.deletionTimestamp) return { status: 'stopping' };
-    const live = pods.filter((p) => !p.metadata?.deletionTimestamp);
-    if (d.spec?.replicas === 0) return pods.length ? { status: 'stopping' } : { status: 'stopped' };
+    // A pod in phase Succeeded or Failed has finished: its containers are gone and it holds nothing, though it stays listed ("Completed",
+    // 0/1) until it is garbage collected. Only a pod still running its containers, or one terminating, keeps a workspace "stopping".
+    const finished = (p: V1Pod) => p.status?.phase === 'Succeeded' || p.status?.phase === 'Failed';
+    if (d.spec?.replicas === 0) return pods.some((p) => !finished(p)) ? { status: 'stopping' } : { status: 'stopped' };
 
-    const pod = live[0];
+    const live = pods.filter((p) => !p.metadata?.deletionTimestamp);
+    // An old finished pod never stands for the workspace while another is on its way; a Failed one alone still tells why.
+    const pod = live.find((p) => !finished(p)) ?? live.find((p) => p.status?.phase === 'Failed');
     if (!pod) return { status: 'starting', detail: 'Scheduling' };
     // The workspace's own containers only (browser PRD §20 A5): a browser container whose image can't be pulled, or that crash-loops,
     // is the browser's state, never the workspace's.
