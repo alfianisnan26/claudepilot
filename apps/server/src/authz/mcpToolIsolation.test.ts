@@ -336,12 +336,6 @@ test('every list and read a member may call answers nothing of org B or of anoth
     ['session_get', { id: 's_a' }, (d) => assert.equal(d.workers_total, 0, 'foreign workers under its own chat are not listed')],
     ['ci_runs_list', {}, (d) => assert.deepEqual(d.runs.map((x: { id: string }) => x.id).sort(), ['run_a', 'run_mine'])],
     ['deploy_status', {}, (d) => assert.deepEqual(d.deploys.map((x: { id: string }) => x.id).sort(), ['run_a', 'run_mine'])],
-    ['repos_list', {}, (d) => assert.deepEqual(d.workspaces.map((w: { workspace_id: string }) => w.workspace_id).sort(), [WS.a, WS.mine].sort())],
-    ['repos_list', { workspace_id: WS.a }, (d) => assert.equal(d.repos.length, 1)],
-    ['repos_attention', {}, (d) => assert.equal(d.repos.length, 2)],
-    ['repo_events', {}, (d) => assert.equal(d.events.length, 2)],
-    ['repo_get', { id: 'r_aaaaaaaaaaaa' }, (d) => assert.equal(d.repo.id, 'r_aaaaaaaaaaaa')],
-    ['approvals_list', {}, (d) => assert.equal(d.total, 0)],
   ];
   for (const [name, args, check] of lists) {
     const r = await call(secret, name, args);
@@ -363,10 +357,11 @@ test('org B’s objects read like missing ones to a member’s token; writes on 
     ['session_send', { id: 's_b', text: 'hi' }],
     ['session_list', { workspace_id: WS.b }],
     ['ci_run_get', { id: 'run_b' }],
-    ['repos_list', { workspace_id: WS.b }],
-    ['repo_events', { workspace_id: WS.b }],
-    ['repos_attention', { workspace_id: WS.b }],
-    ['repo_get', { id: 'r_bbbbbbbbbbbb' }],
+    // Not for members yet (multi-user.md §22): repositories and the approvals queue, even their own.
+    ['repos_list', {}],
+    ['repos_list', { workspace_id: WS.mine }],
+    ['repo_get', { id: 'r_cccccccccccc' }],
+    ['approvals_list', {}],
     // Not member doors: the same answer as an unknown object, whatever the token's scope.
     ['workspace_create', { name: 'x', target: 'docker' }],
     ['pool_list', {}],
@@ -395,4 +390,29 @@ test('an admin account outside org B does not see org B’s workspaces either; t
   const ownerIds = (owner.data.workspaces as { id: string }[]).map((w) => w.id).sort();
   // No `?org=` over MCP: the person's whole visible set (every org they are in, and personal), never more.
   assert.deepEqual(ownerIds, [WS.a, WS.own].sort());
+});
+
+test('repositories over MCP keep to the workspaces the token’s person may view (an admin account outside org B, and a workspace_id)', async () => {
+  const secret = mint(ADA, 'operate', 'ada-repos');
+  const all = await call(secret, 'repos_list');
+  assert.equal(all.result?.isError, undefined, all.text);
+  assert.deepEqual((all.data.workspaces as { workspace_id: string }[]).map((w) => w.workspace_id), [WS.own]);
+  const attention = await call(secret, 'repos_attention');
+  assert.deepEqual((attention.data.repos as { workspace_id: string }[]).map((r) => r.workspace_id), [WS.own]);
+  const events = await call(secret, 'repo_events');
+  assert.deepEqual((events.data.events as { workspace_id: string }[]).map((e) => e.workspace_id), [WS.own]);
+  // Before: a workspace_id or a repository id of another org was read as it is (ctx.assertWorkspace let every token that is not an agent's through).
+  for (const [name, args] of [
+    ['repos_list', { workspace_id: WS.b }],
+    ['repos_attention', { workspace_id: WS.b }],
+    ['repo_events', { workspace_id: WS.b }],
+    ['repo_get', { id: 'r_bbbbbbbbbbbb' }],
+    ['repo_get', { id: 'r_aaaaaaaaaaaa' }],
+  ] as [string, Record<string, unknown>][]) {
+    const r = await call(secret, name, args);
+    assert.equal(r.code, 'NOT_FOUND', `${name} ${JSON.stringify(args)}: ${r.text}`);
+    assert.doesNotMatch(r.text, /ws-b|ws-a|bbbbbbbbbbbb|aaaaaaaaaaaa/);
+  }
+  const own = await call(secret, 'repo_get', { id: 'r_ffffffffffff' });
+  assert.equal(own.data.repo?.id, 'r_ffffffffffff', 'the founding user’s personal workspace stays an admin’s (D-82)');
 });

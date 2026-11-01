@@ -7,6 +7,7 @@
 //   - `signed-in`, `self`, `agent`: ONLY the doors listed here. Each was read for an unfiltered answer or a founding-user fallback before it was
 //     listed; the reason says why it is per person. Every other tool answers a member's token NOT_FOUND, so a new tool is closed to members
 //     until someone reads it and lists it (fail closed; authz/mcpToolIsolation.test.ts calls every tool with a member's token).
+// Not doors (multi-user.md §22 "not for members yet"): repositories and the approvals queue, though their handlers filter per person.
 // The live leak this closes: `workspace_list` (signed-in) answered a member's token with every workspace of every org. A platform admin (the
 // founding user, an active admin account) is never held to this list; their answers are filtered by the same visible() in each handler.
 // An agent's per-session token (cpst_) is not held to it either: it is boxed to its own workspace and session by can() and by its handler.
@@ -16,7 +17,6 @@ export const MEMBER_TOOL_DOORS: Readonly<Record<string, string>> = {
   portal_status: 'counts over visible(workspace) and visible(session); targets visible(target) (none for a member); the portal state only with view on platform system',
   workspace_list: 'visible(workspace), as GET /api/workspaces',
   session_list: 'visible(session) on every row, as GET /api/chat/sessions; a named workspace passes view at dispatch',
-  approvals_list: 'each open request passes can(view) on its session (chat/managerTools.ts)',
   autotransfer_events: 'each event passes can(view) on its session (autotransfer/portalTools.ts), as GET /api/autotransfer/events',
   attention_list: 'each source filters by its own can() for this person, as GET /api/attention',
   notify_status: 'the person’s own destinations and preferences (keyed by the token’s user id), as GET /api/notify',
@@ -40,10 +40,6 @@ export const MEMBER_TOOL_DOORS: Readonly<Record<string, string>> = {
   tag_list: 'a vault the person may view only (CallerScope.canView)',
   graph_neighbours: 'the vaults the person may view only (CallerScope.canView), as GET /api/knowledge/graph',
   graph_query: 'the vaults the person may view only (CallerScope.canView), as GET /api/knowledge/graph',
-  repos_list: 'all workspaces: overview of the workspaces the person may view; one workspace: assertWorkspace(view) through can()',
-  repo_get: 'the repository’s workspace passes assertWorkspace(view) through can()',
-  repo_events: 'eventsWithin the workspaces the person may view; a named one passes assertWorkspace(view)',
-  repos_attention: 'overview of the workspaces the person may view; a named one passes assertWorkspace(view)',
 };
 
 export const isMemberToolDoor = (name: string): boolean => Object.prototype.hasOwnProperty.call(MEMBER_TOOL_DOORS, name);
