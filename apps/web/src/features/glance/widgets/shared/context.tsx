@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
+import { useSyncExternalStore, type ComponentType, type FunctionComponent, type ReactNode } from 'react';
 import { InfoTip } from '@/components/InfoTip';
 import { currentContext, subscribeContext } from '@/lib/orgContext';
 import type { GlanceCompact, GlanceContext } from '../../types';
@@ -46,7 +46,7 @@ export function PersonalOnly({ label }: { label: string }) {
 }
 
 /** `Card` in Personal; the Personal-only line in an org context (the card itself never mounts there, so it asks for nothing). */
-export function personalOnlyCard(label: string, Card: ComponentType): ComponentType {
+export function personalOnlyCard(label: string, Card: ComponentType): FunctionComponent {
   function Scoped() {
     return useInOrg() ? <PersonalOnly label={label} /> : <Card />;
   }
