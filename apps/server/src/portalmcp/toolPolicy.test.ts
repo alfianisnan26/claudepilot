@@ -175,42 +175,13 @@ test('agent, self and signed-in policies are the handler\'s: the dispatch adds n
   }
 });
 
-/** Anything at all: the tools are only built here, never called, so their services are never asked. */
-const stub: any = new Proxy(function () {}, { get: (_t, k) => (k === Symbol.iterator || k === 'then' || k === Symbol.toPrimitive ? undefined : stub), apply: () => stub, construct: () => stub });
 
 test('every real tool\'s object checks name arguments of its input, optional exactly where the input is', async () => {
-  const { registerSessionTools } = await import('./tools/sessions.js');
-  const { registerWorkspaceTools } = await import('./tools/workspaces.js');
-  const { declarePortalMcpPolicies } = await import('./authz.js');
-  const { registerChatTools } = await import('../chat/portalTools.js');
-  const { registerChatAuthz } = await import('../chat/authz.js');
-  const { registerCiTools } = await import('../ci/portalTools.js');
-  const { registerClaudeVersionTools } = await import('../claudeversion/portalTools.js');
-  const { declareClaudeVersionPolicies } = await import('../claudeversion/authz.js');
-  const { registerKeepGoingTools } = await import('../keepgoing/portalTools.js');
-  const { declareKeepGoingPolicies } = await import('../keepgoing/authz.js');
-  const { registerLabTools } = await import('../lab/portalTools.js');
-  const { registerTicketTools } = await import('../tickets/portalTools.js');
-  const { registerAutoTransferTools } = await import('../autotransfer/portalTools.js');
-  const { declareAutoTransferPolicies } = await import('../autotransfer/authz.js');
-  const { declareWorkspacePolicies } = await import('../workspaces/authz.js');
-  registerSessionTools(stub);
-  registerWorkspaceTools(stub);
-  registerChatTools(stub);
-  registerCiTools(stub, undefined);
-  registerClaudeVersionTools(stub);
-  registerKeepGoingTools(stub);
-  registerLabTools(stub);
-  registerTicketTools(stub);
-  registerAutoTransferTools(stub);
-  const { registerChatManagerTools } = await import('../chat/managerTools.js');
-  registerChatManagerTools(stub);
-  declarePortalMcpPolicies();
-  registerChatAuthz(() => null);
-  declareClaudeVersionPolicies();
-  declareKeepGoingPolicies();
-  declareAutoTransferPolicies();
-  declareWorkspacePolicies();
+  // Organizations slice 1 (P4): every family of tools, registered as index.ts does, and the whole policy table.
+  const { registerAllTools } = await import('../authz/wholeApp.testkit.js');
+  const { declareAllPolicies } = await import('../authz/declarations.js');
+  await registerAllTools();
+  declareAllPolicies();
   clearResolvers();
 
   const checked: string[] = [];
@@ -225,5 +196,11 @@ test('every real tool\'s object checks name arguments of its input, optional exa
     }
     checked.push(name);
   }
-  assert.deepEqual(checked.sort(), ['approvals_list', 'autotransfer_events', 'autotransfer_status', 'ci_run_bump', 'ci_run_cancel', 'ci_run_get', 'ci_run_logs', 'crew_limits_get', 'manager_message', 'session_keepgoing_set', 'session_start', 'ticket_bump', 'ticket_create', 'ticket_list', 'ticket_timeline', 'ticket_update', 'workspace_rename', 'workspace_resources']);
+  assert.deepEqual(checked.sort(), [
+    'account_check', 'account_pool_assign', 'approvals_list', 'autotransfer_events', 'autotransfer_status', 'ci_run_bump', 'ci_run_cancel', 'ci_run_get', 'ci_run_logs',
+    'crew_limits_get', 'manager_message', 'pool_assign', 'pool_unassign', 'reporter_evidence', 'reporter_record_deployment', 'session_configure', 'session_end',
+    'session_get', 'session_interrupt', 'session_keepgoing_set', 'session_list', 'session_respond', 'session_send', 'session_start', 'ticket_bump', 'ticket_create',
+    'ticket_list', 'ticket_start_session', 'ticket_timeline', 'ticket_update', 'usage_budget_delete', 'workspace_delete', 'workspace_get', 'workspace_rename',
+    'workspace_resources', 'workspace_start', 'workspace_stop', 'workspace_sync',
+  ]);
 });

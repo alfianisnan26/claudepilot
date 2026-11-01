@@ -1,6 +1,7 @@
 import type { PortalCallerScope, PortalScope } from '@portal/contracts';
 import { z } from 'zod';
 import type { UntrustedText } from './sanitize.js';
+import { declareToolTablePolicies } from '../authz/toolPolicies.js';
 
 // The Portal MCP tool registry (interface I2). Every area adds the tools of its own feature from its own
 // `portalTools.ts`, which index.ts calls once at startup:
@@ -238,6 +239,9 @@ export class ToolRegistry {
 
 /** The portal's registry: `registerPortalTool` adds to it, `/mcp` serves from it. */
 export const portalTools = new ToolRegistry();
+// Organizations slice 1 (P4): the dispatch refuses an undeclared tool, so the table of the tools that declared nowhere else is declared with
+// the registry itself: wherever tools can run, their policies are known.
+declareToolTablePolicies();
 
 /** Adds a tool to the portal's registry (interface I2). Throws on a bad or duplicate definition, at startup. */
 export function registerPortalTool<S extends z.ZodObject>(tool: PortalToolDefinition<S>): void {

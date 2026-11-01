@@ -10,7 +10,7 @@
 
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { normalizeWorkspaceLabel, STABLE_WORKSPACE_ID, workspaceId, workspaceResourcesProblem, type Workspace, type WorkspaceResourceValues } from '@portal/contracts';
+import { FOUNDING_USER_ID, normalizeWorkspaceLabel, STABLE_WORKSPACE_ID, workspaceId, workspaceResourcesProblem, type Workspace, type WorkspaceResourceValues } from '@portal/contracts';
 import { PLAIN_NAME, WORKSPACE_ID } from '../names.js';
 import type { RuntimeNames } from './runtime.js';
 import { pinRefsOfRemoved } from './refRewrite.js';
@@ -316,12 +316,25 @@ export class WorkspaceIdentities implements RuntimeNames, WorkspaceRefs {
    * `Runtime.runtimeNameForNew`). The caller has checked the target has no workspace of that name, so a record still holding the name is a
    * workspace that is gone: it is marked removed first (its id is never given again).
    */
-  allocate(target: string, name: string, pick?: (stableId: string) => string | undefined): WorkspaceIdentity {
+  allocate(target: string, name: string, pick?: (stableId: string) => string | undefined, createdBy?: string): WorkspaceIdentity {
     const stale = this.of(target, name);
     if (stale) this.retire(target, name);
     const id = this.#newId();
     const picked = pick?.(id);
-    return this.#insert(target, name, picked && PLAIN_NAME.test(picked) ? picked : newRuntimeName(id), id);
+    const w = this.#insert(target, name, picked && PLAIN_NAME.test(picked) ? picked : newRuntimeName(id), id);
+    // Organizations slice 1 (P3): its owner, recorded with this workspace's id (`uid`), so a row left by an earlier workspace of the same name
+    // never counts for it. The founding user owns it until members create their own (D-82 S1b); `createdBy` is who asked.
+    this.#write(
+      `INSERT INTO workspace_owners (workspace_id, uid, owner_kind, owner_id, created_by, created_at, origin) VALUES (?, ?, 'user', ?, ?, ?, 'created')
+       ON CONFLICT (workspace_id) DO UPDATE SET uid = excluded.uid, owner_kind = excluded.owner_kind, owner_id = excluded.owner_id,
+         created_by = excluded.created_by, created_at = excluded.created_at, origin = 'created'`,
+      w.legacyId,
+      w.id,
+      FOUNDING_USER_ID,
+      createdBy ?? FOUNDING_USER_ID,
+      w.createdAt,
+    );
+    return w;
   }
 
   /** The workspace was removed: its record stays (the id is never reused), the name is free for another. */

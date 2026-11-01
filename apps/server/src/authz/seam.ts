@@ -26,7 +26,7 @@
 //   6. Jobs that act for a person run as `asUser(ownerId, '<job>')`, and re-check `can(owner, ...)` when they RUN, not when they were set up.
 
 import type { IncomingMessage } from 'node:http';
-import { AppError } from '@isnanme/core';
+import { AppError, defineErrorCodes } from '@isnanme/core';
 import {
   FOUNDING_USER_ID,
   LEVEL_RANK,
@@ -55,6 +55,14 @@ import {
   type UserId,
   type Verb,
 } from '@portal/contracts';
+
+declare module '@isnanme/core' {
+  interface ErrorCodeRegistry {
+    NO_POLICY: true;
+  }
+}
+/** A route or a tool with no declared policy is refused (Authorization FR4, organizations slice 1 P4). */
+defineErrorCodes({ NO_POLICY: { status: 403, message: 'This has no access policy.' } });
 
 export { FOUNDING_USER_ID as OWNER_ID, actorString, actorUserId, parseActorString } from '@portal/contracts';
 
@@ -88,7 +96,16 @@ const resolvers = new Map<ObjectType, ObjectResolver>();
  * instead of the single-owner fallback that gives the founding user everything: a ticket bucket another person owns must never open to the
  * owner because the resolver was not registered yet (fail closed). The tickets service registers its own when it is made.
  */
-const RESOLVER_REQUIRED: ReadonlySet<ObjectType> = new Set<ObjectType>(['ticket_bucket']);
+const RESOLVER_REQUIRED = new Set<ObjectType>(['ticket_bucket']);
+/**
+ * Organizations slice 1 (P3): the owner resolvers (authz/owners.ts) mark their types required when they are registered at start-up, so from then
+ * on a type whose resolver is missing refuses (not found) instead of answering the founding user. Only ever adds; `clearResolvers` keeps the
+ * marks (a test that cleared its resolvers stays fail closed). Module tests that never start the portal keep the single-owner fallback.
+ */
+export const requireResolvers = (types: readonly ObjectType[]): void => {
+  for (const t of types) RESOLVER_REQUIRED.add(t);
+};
+export const resolverRequired = (type: ObjectType): boolean => RESOLVER_REQUIRED.has(type);
 export const registerResolver = (r: ObjectResolver): void => void resolvers.set(r.type, r);
 export const resolverFor = (type: ObjectType): ObjectResolver | undefined => resolvers.get(type);
 /** For tests. */
@@ -131,11 +148,15 @@ export const declaredToolPolicies = (): ReadonlyMap<string, ToolPolicy> => toolP
  * check whose argument is given (an optional one left out or empty is skipped; a required one missing is refused); `platform`: the area.
  * Every refusal is NOT_FOUND with the check's `notFound` text, the tool's own answer for a missing object, so a call can't tell an object
  * it may not reach from one that does not exist. It only ever refuses: the handler's own checks stay. `signed-in`, `self` and `agent`
- * (reach from the token) are the handler's. A tool with no declaration is left to its handler.
+ * (reach from the token) are the handler's. Organizations slice 1 (P4): a tool with no declaration is refused (NO_POLICY), never left to
+ * its handler; authz/routeTable.test.ts fails first on any tool of the portal that has none.
  */
 export function requireToolPolicy(actor: Actor, name: string, args: Record<string, unknown>): void {
   const policy = toolPolicies.get(name);
-  if (!policy) return;
+  if (!policy) {
+    console.error(`[authz] refused tool ${name}: it has no declared policy`);
+    throw new AppError('NO_POLICY', 'This tool has no access policy.');
+  }
   const notFound = (text?: string) => new AppError('NOT_FOUND', text ?? 'Not found.');
   if (actor.kind === 'anonymous') throw notFound();
   if (policy.kind === 'platform') {
@@ -299,6 +320,8 @@ export const singleOwner: Authz = {
     // not exist; never the founding user. Both answers are the same (nobody), so neither tells which.
     if (!found && RESOLVER_REQUIRED.has(object.type)) return [];
     if (found?.owner?.kind === 'user') return [found.owner.id];
+    // A platform-owned object (an unclaimed workspace, organizations slice 1) is the founding user's to hear about, as it was before.
+    if (found?.owner?.kind === 'platform') return [FOUNDING_USER_ID];
     return found?.owner ? [] : [FOUNDING_USER_ID];
   },
 

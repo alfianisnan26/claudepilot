@@ -31,6 +31,7 @@ function mcpMode(mode: ChatPermissionMode | undefined): Exclude<ChatPermissionMo
 }
 /** Slash commands MCP text may use (chat-sessions FR13): anything else is for the terminal. */
 import { SLASH_ALLOWED, slashWord } from '../../chat/slash.js';
+import { declarePortalMcpPolicies } from '../authz.js';
 /** What `session_get` returns of the transcript stays under this, so one call fits a result block. */
 const EVENT_CHARS_MAX = 12_000;
 /** T-294: `session_get` lists at most this many of a session's workers (live ones first); the count is always whole. */
@@ -72,6 +73,8 @@ export function registerSessionTools(
   deps: Pick<PortalToolDeps, 'store' | 'chat' | 'approvals'> & { workspaces?: Pick<PortalToolDeps['workspaces'], 'list' | 'resolve'> },
   registry: ToolRegistry = portalTools,
 ): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declarePortalMcpPolicies();
   const { store, chat, workspaces, approvals } = deps;
   const registerPortalTool: ToolRegistry['register'] = (tool) => registry.register(tool);
 

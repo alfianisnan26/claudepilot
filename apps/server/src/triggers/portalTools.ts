@@ -8,8 +8,11 @@ import type { PlatformOwner } from '../platform/owner.js';
 import { registerPortalTool, z } from '../portalmcp/registry.js';
 import type { TriggerService } from './service.js';
 import { ticketKeyField } from '../tickets/keys.js';
+import { declareTriggerPolicies } from './authz.js';
 
 export function registerTriggerTools(d: { service: TriggerService; owner: PlatformOwner }): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareTriggerPolicies();
   const mine = (userId: string | null) => (userId ? d.service.store.list(userId).filter((t) => d.owner.can(userId, 'view', { type: 'trigger', id: t.id })) : []);
 
   registerPortalTool({

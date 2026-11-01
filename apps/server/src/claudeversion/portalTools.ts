@@ -7,8 +7,11 @@ import { claudeBelowMinimum, isExactClaudeVersion } from '@portal/contracts';
 import { actorOfPrincipal } from '../authz/seam.js';
 import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { ClaudeVersions } from './service.js';
+import { declareClaudeVersionPolicies } from './authz.js';
 
 export function registerClaudeVersionTools(svc: ClaudeVersions, registry: ToolRegistry = portalTools): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareClaudeVersionPolicies();
   registry.register({
     name: 'claude_versions',
     title: 'Claude Code versions',

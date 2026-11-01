@@ -4,8 +4,8 @@
 // person's acts: the routes also refuse any actor that is not a signed-in user, and no Portal MCP tool reaches them, so an agent never approves.
 
 import { AppError } from '@isnanme/core';
-import { FOUNDING_USER_ID, objectRef, vaultRef, workspaceRef, type Actor, type CiRepo, type RoutePolicies, type UserId } from '@portal/contracts';
-import { can, declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
+import { FOUNDING_USER_ID, objectRef, vaultRef, workspaceRef, type Actor, type CiRepo, type Owner, type RoutePolicies, type UserId } from '@portal/contracts';
+import { can, declarePolicies, declareToolPolicies, registerResolver, resolverFor } from '../authz/seam.js';
 import { branchProblem } from '../chat/worktrees.js';
 import type { CiSession } from './sessions.js';
 
@@ -16,16 +16,30 @@ export interface CiAuthzFacts {
 }
 
 /**
- * Registers the two resolvers. `ownerOf` answers who owns a workspace; until workspaces record an owner it is the founding user, and tests pass
- * two fake users (`u_a`, `u_b`) to prove a run or remote of one is the same 404 as a missing one to the other.
+ * Who owns a workspace, for a run or a remote in it (organizations slice 1, P3): the workspace resolver's answer (authz/owners.ts, asked when the
+ * call is made, so a later registration counts), unowned when it does not know the workspace; the founding user only where no workspace
+ * resolver is registered at all (a module test that never started the portal).
  */
-export function registerCiAuthz(facts: CiAuthzFacts, ownerOf: (workspaceId: string) => UserId = () => FOUNDING_USER_ID): void {
+const workspaceOwner = (workspaceId: string): Owner | null => {
+  const r = resolverFor('workspace');
+  if (!r) return { kind: 'user', id: FOUNDING_USER_ID };
+  return r.resolve(workspaceId)?.owner ?? null;
+};
+
+/**
+ * Registers the two resolvers. `ownerOf` answers who owns a workspace: by default the workspace's own owner (above); tests pass two fake users
+ * (`u_a`, `u_b`) to prove a run or remote of one is the same 404 as a missing one to the other.
+ */
+export function registerCiAuthz(facts: CiAuthzFacts, ownerOf: (workspaceId: string) => UserId | Owner | null = workspaceOwner): void {
   for (const type of ['ci_run', 'ci_repo'] as const) {
     registerResolver({
       type,
       resolve(id) {
         const ws = type === 'ci_run' ? facts.workspaceOfRun(id) : facts.workspaceOfRepo(id);
-        return ws ? { ref: objectRef(type, id), owner: { kind: 'user', id: ownerOf(ws) }, parent: workspaceRef(ws), attrs: { workspaceId: ws } } : null;
+        if (!ws) return null;
+        const o = ownerOf(ws);
+        const owner: Owner | null = typeof o === 'string' ? { kind: 'user', id: o } : o;
+        return { ref: objectRef(type, id), owner, parent: workspaceRef(ws), attrs: { workspaceId: ws } };
       },
     });
   }
