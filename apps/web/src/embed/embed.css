@@ -56,3 +56,80 @@ body {
     background-position: -150% 0;
   }
 }
+
+/* Motion (owner, 2026-11-01): short (150-250 ms), ease-out, transform and opacity only, played once when a part mounts (a class on the
+   element, never a state that changes on re-render). prefers-reduced-motion turns every one off (embedMotion.test.ts checks both). */
+.anim-in {
+  animation: pr-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.anim-fade {
+  animation: pr-fade 150ms ease-out;
+}
+.anim-pop {
+  animation: pr-pop 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.anim-sheet {
+  animation: pr-sheet 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.anim-grow-x {
+  animation: pr-grow-x 200ms ease-out;
+}
+@keyframes pr-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes pr-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pr-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+@keyframes pr-sheet {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes pr-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+/* A busy button's spinner, in the icon's place. */
+.spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.8;
+  animation: pr-spin 0.8s linear infinite;
+}
+@keyframes pr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-in,
+  .anim-fade,
+  .anim-pop,
+  .anim-sheet,
+  .anim-grow-x {
+    animation: none;
+  }
+  .spinner {
+    animation: none;
+    border-top-color: currentColor;
+    opacity: 0.5;
+  }
+}

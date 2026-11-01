@@ -12,7 +12,7 @@ import {
   type TicketPriority,
   type TicketType,
 } from '@portal/contracts';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { SEVERITIES, countBySeverity, shotCaption } from '@/features/reporter/shared';
 import type { ReporterClient } from './api';
 import { Annotator } from './Annotator';
@@ -20,9 +20,10 @@ import { editorSource, uploadPlan } from './annotate';
 import { usePanel, type Capture } from './context';
 import { Icon, type IconName } from './icons';
 import { afterFiled, askLeadNote, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
+import { autoAnnotate, hasUnsavedWork, progressText, uploadCount } from './journey';
 import { pickTarget, proposedSummary, sentText, ticketsFor } from './model';
 import { Viewer } from './Viewer';
-import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './ui';
+import { AuthImg, Btn, Chip, ConfirmBar, Field, IconBtn, Notice, Seg, inputClass } from './ui';
 
 const TYPES: TicketType[] = ['bug', 'feature', 'task', 'question'];
 const PRIORITIES: TicketPriority[] = ['urgent', 'high', 'normal', 'low'];
@@ -39,14 +40,20 @@ const captureInput = (c: Capture, note: string | null): ReporterCaptureInput => 
  * Uploads a capture's screenshot (the blurred image when a mark blurs, never the original then), its annotated image, and its evidence;
  * returns what failed (the ticket or comment exists either way).
  */
-async function uploadCapture(attach: (captureId: string, kind: 'screenshot' | 'annotated' | 'evidence', blob: Blob) => Promise<unknown>, c: Capture): Promise<string[]> {
+async function uploadCapture(
+  attach: (captureId: string, kind: 'screenshot' | 'annotated' | 'evidence', blob: Blob) => Promise<unknown>,
+  c: Capture,
+  onStep: () => void = () => undefined,
+): Promise<string[]> {
   const failed: string[] = [];
-  for (const f of uploadPlan(c))
+  for (const f of uploadPlan(c)) {
     try {
       await attach(c.captureId, f.kind, f.blob);
     } catch {
       failed.push(f.kind === 'annotated' ? 'annotated image' : 'screenshot');
     }
+    onStep();
+  }
   const json = new Blob([JSON.stringify(c.evidence)], { type: 'application/json' });
   if (json.size > REPORTER_LIMITS.evidenceBytes) failed.push('evidence (too large)');
   else
@@ -55,6 +62,7 @@ async function uploadCapture(attach: (captureId: string, kind: 'screenshot' | 'a
     } catch {
       failed.push('evidence');
     }
+  onStep();
   return failed;
 }
 
@@ -90,8 +98,10 @@ export function ReportTab() {
 export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => void }) {
   const { select, setTab, notify } = usePanel();
   return (
-    <div role="status" className="m-3 mb-0 flex flex-wrap items-center gap-1 rounded-2xl bg-accent-soft py-1 pr-1 pl-3">
-      <Icon name="check" className="size-4 text-accent" />
+    <div role="status" className="anim-in m-3 mb-0 flex flex-wrap items-center gap-1 rounded-2xl bg-accent-soft py-1 pr-1 pl-3">
+      <span className="anim-pop inline-flex size-6 items-center justify-center rounded-full bg-accent text-primary-ink">
+        <Icon name="check" className="size-4" />
+      </span>
       <span className="min-w-0 flex-1 text-[14px] font-semibold whitespace-nowrap">
         Filed <span className="whitespace-nowrap tabular-nums">{ticketKey}</span>
       </span>
@@ -127,7 +137,7 @@ export function Filed({ ticketKey, onDone }: { ticketKey: string; onDone: () => 
  * the shot to the report being written (the strip's "+").
  */
 export function CaptureButtons({ append = false, onPicked }: { append?: boolean; onPicked?: () => void }) {
-  const { coarse, requestCapture, pending } = usePanel();
+  const { coarse, requestCapture, pending, prefs } = usePanel();
   const [precise, setPrecise] = useState(false);
   const go = (mode: ReporterCaptureMode) => {
     requestCapture(mode, precise, append);
@@ -138,16 +148,19 @@ export function CaptureButtons({ append = false, onPicked }: { append?: boolean;
     ...(coarse ? [] : [{ mode: 'full' as const, label: 'Whole page', icon: 'arrowUpDown' as const }]),
     { mode: 'crop', label: 'Crop', icon: 'crop' },
   ];
+  // The mode used last is the filled one (the next capture is most likely the same kind); Screen the first time.
+  const last = modes.some((m) => m.mode === prefs.mode) ? prefs.mode : 'viewport';
   return (
     <div className="flex flex-col gap-2">
       <div role="group" aria-label="Capture" className="flex gap-0.5 rounded-xl bg-surface-2 p-0.5">
-        {modes.map((m, i) => (
+        {modes.map((m) => (
           <button
             key={m.mode}
             type="button"
             disabled={!!pending}
             onClick={() => go(m.mode)}
-            className={`inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[10px] px-2 text-[13.5px] font-semibold focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-50 ${i === 0 ? 'bg-primary text-primary-ink' : 'text-ink'}`}
+            data-last={m.mode === last || undefined}
+            className={`inline-flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[10px] px-2 text-[13.5px] font-semibold transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-hidden disabled:opacity-50 ${m.mode === last ? 'bg-primary text-primary-ink' : 'text-ink'}`}
           >
             <Icon name={m.icon} className="size-[18px]" />
             {m.label}
@@ -202,12 +215,22 @@ function Home({ onOpenReview }: { onOpenReview: () => void }) {
   );
 }
 
+/** Shots whose editor already opened by itself (module scope: leaving the Report tab and coming back does not open it again). */
+const autoOpened = new Set<string>();
+
 /** The report's shots as a strip: tap opens the viewer, × removes one, "+" adds another (Screen or Crop). */
 function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (id: string) => void; canAdd: boolean }) {
-  const { annotateShot } = usePanel();
+  const { annotateShot, prefs, setPref } = usePanel();
   const [view, setView] = useState<Capture | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  // Straight to annotate after a capture (owner, 2026-11-01): the newest shot opens the editor once; Done with no marks is the skip.
+  useLayoutEffect(() => {
+    const id = autoAnnotate(shots, autoOpened);
+    if (!id) return;
+    autoOpened.add(id);
+    setEditing(id);
+  }, [shots]);
   const edited = shots.find((c) => c.captureId === editing) ?? null;
   return (
     <div>
@@ -291,6 +314,8 @@ function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (
         <Annotator
           src={editorSource(edited).url}
           initial={editorSource(edited).marks}
+          tool={prefs.tool}
+          onTool={(t) => setPref('tool', t)}
           onCancel={() => setEditing(null)}
           onDone={(marks, image) => {
             annotateShot(edited.captureId, marks, image);
@@ -450,19 +475,36 @@ function TypePriority({ type, setType, priority, setPriority, urgent }: { type: 
   );
 }
 
+/** Ctrl/Cmd+Enter in a field sends the form (Enter alone in a text area is a new line; Enter in the title sends already). */
+function submitOnModEnter(e: KeyboardEvent<HTMLFormElement>) {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+    e.preventDefault();
+    e.currentTarget.requestSubmit();
+  }
+}
+
 function Sticky({ children }: { children: ReactNode }) {
   return <div className="sticky bottom-0 -mx-3 mt-auto flex flex-col gap-2 border-t border-line bg-bg px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">{children}</div>;
 }
 
 /** The quick path: the shots, one ticket (or a direct ask that opens the chat). */
 function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
-  const { client, shots, removeShot, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build, hostTarget, choice, setChoice, coarse, openChat, showContext } = usePanel();
+  const { client, shots, removeShot, setCapture, refresh, notify, setTab, select, sdkVersion, targets, setReview, build, hostTarget, choice, setChoice, coarse, openChat, showContext, prefs, setPref } =
+    usePanel();
   const capture = shots[0]!;
-  const [summary, setSummary] = useState(() => suggestTitle(capture.evidence.page.title, elementLabel(capture.evidence)));
+  const [suggested] = useState(() => suggestTitle(capture.evidence.page.title, elementLabel(capture.evidence)));
+  const [summary, setSummary] = useState(suggested);
   const [description, setDescription] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [type, setType] = useState<TicketType>('bug');
-  const [priority, setPriority] = useState<TicketPriority>('normal');
+  // The priority picked last starts the next report (owner, 2026-11-01).
+  const [priority, setPriorityState] = useState<TicketPriority>(prefs.priority);
+  const setPriority = (v: TicketPriority) => {
+    setPriorityState(v);
+    setPref('priority', v);
+  };
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   // The capture toolbar's choice when it said one, else the person's last choice.
   const [target, setTarget] = useState<ReporterReportTarget>(() => pickTarget(capture.target ?? hostTarget ?? choice, targets));
   useEffect(() => {
@@ -487,6 +529,7 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
     if (problem) return setError(problem);
     setBusy(true);
     setError(null);
+    setProgress(progressText({ stage: 'filing' }));
     try {
       const res = await client.createTicket({
         summary: summary.trim(),
@@ -500,7 +543,11 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
         target,
       });
       const failed: string[] = [];
-      for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(res.key, id, kind, blob), c)));
+      const total = uploadCount(shots);
+      let done = 0;
+      const step = () => setProgress(progressText({ stage: 'uploading', done: ++done, total }));
+      setProgress(progressText({ stage: 'uploading', done, total }));
+      for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(res.key, id, kind, blob), c, step)));
       refresh();
       // A direct ask goes straight into the chat with that session (the delivered message and the reply live); a ticket shows Filed.
       const next = afterFiled(target, res, description, capture.screenshot);
@@ -512,8 +559,11 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
+  // Closing throws the report away: it asks first when something would be lost (journey.ts hasUnsavedWork).
+  const discard = () => (hasUnsavedWork({ title: summary, suggested, details: description, shots }) ? setConfirmDiscard(true) : setCapture(null));
 
   const toReview = async () => {
     setBusy(true);
@@ -534,9 +584,11 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
         e.preventDefault();
         void submit();
       }}
+      onKeyDown={submitOnModEnter}
     >
+      {confirmDiscard && <ConfirmBar text="Discard this report?" confirm="Discard" onConfirm={() => setCapture(null)} onKeep={() => setConfirmDiscard(false)} />}
       <div className="-mt-1 flex items-center justify-between gap-1">
-        <IconBtn icon="x" label="Discard" onClick={() => setCapture(null)} />
+        <IconBtn icon="x" label="Discard" onClick={discard} />
         <Btn tone="ghost" icon="messageSquare" disabled={busy} onClick={() => void toReview()} className="text-[13px] text-ink-soft" title="Collect several shots as one review">
           Start review
         </Btn>
@@ -584,7 +636,7 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
         />
         <Destination value={target} onChange={setTarget} />
         <div className="flex items-center gap-1">
-          <Btn type="submit" tone={button.tone === 'urgent' ? 'danger' : 'primary'} busy={busy} className="min-w-0 flex-1" icon="send">
+          <Btn type="submit" tone={button.tone === 'urgent' ? 'danger' : 'primary'} busy={busy} busyText={progress} className="min-w-0 flex-1" icon="send">
             <span className="truncate">{button.label}</span>
           </Btn>
           <Btn tone="ghost" onClick={() => showContext('carries')} className="shrink-0 text-[13px] text-muted">
@@ -600,6 +652,7 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
 function CommentForm({ capture, onAlone }: { capture: Capture; onAlone: () => void }) {
   const { client, review, setCapture, reloadReview, notify } = usePanel();
   const [body, setBody] = useState('');
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (!review) return null;
@@ -627,9 +680,11 @@ function CommentForm({ capture, onAlone }: { capture: Capture; onAlone: () => vo
         e.preventDefault();
         void submit();
       }}
+      onKeyDown={submitOnModEnter}
     >
+      {confirmDiscard && <ConfirmBar text="Discard this comment?" confirm="Discard" onConfirm={() => setCapture(null)} onKeep={() => setConfirmDiscard(false)} />}
       <div className="flex items-center gap-1">
-        <IconBtn icon="x" label="Discard shot" onClick={() => setCapture(null)} />
+        <IconBtn icon="x" label="Discard shot" onClick={() => (body.trim() || capture.annotations?.length ? setConfirmDiscard(true) : setCapture(null))} />
         <h2 className="min-w-0 flex-1 truncate text-[15px] font-bold">Comment</h2>
         <Btn tone="ghost" onClick={onAlone}>
           File alone
@@ -737,24 +792,14 @@ function ReviewView({ onBack, onFinish }: { onBack: () => void; onFinish: () => 
         ))}
       </ol>
       {confirm ? (
-        <div className="flex flex-col gap-2 rounded-2xl bg-danger-soft p-3">
-          <p className="text-[13.5px] font-semibold text-danger">Discard this review and its {comments.length} comments?</p>
-          <div className="flex gap-2">
-            <Btn tone="danger" busy={busy} onClick={() => void discard()} className="flex-1">
-              Discard
-            </Btn>
-            <Btn onClick={() => setConfirm(false)} className="flex-1">
-              Keep
-            </Btn>
-          </div>
-        </div>
+        <ConfirmBar text={`Discard this review and its ${comments.length} comments?`} confirm="Discard" busy={busy} onConfirm={() => void discard()} onKeep={() => setConfirm(false)} />
       ) : (
         <Sticky>
           <div className="flex gap-2">
-          <Btn tone="ghost" icon="trash2" onClick={() => setConfirm(true)} aria-label="Discard review" />
-          <Btn tone="primary" disabled={!comments.length} onClick={onFinish} className="flex-1">
-            {comments.length} {comments.length === 1 ? 'comment' : 'comments'} · Finish review
-          </Btn>
+            <Btn tone="ghost" icon="trash2" onClick={() => setConfirm(true)} aria-label="Discard review" />
+            <Btn tone="primary" disabled={!comments.length} onClick={onFinish} className="flex-1">
+              {comments.length} {comments.length === 1 ? 'comment' : 'comments'} · Finish review
+            </Btn>
           </div>
         </Sticky>
       )}

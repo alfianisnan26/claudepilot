@@ -46,6 +46,7 @@ import {
 import { usePanel } from './context';
 import { clampView, fitView, zoomAt, type Size, type View } from './formModel';
 import { Icon, type IconName } from './icons';
+import { editorEscape, marksChanged } from './journey';
 
 /**
  * The annotation editor (PILOT-1111, owner 2026-10-31): full screen over the panel, the screenshot with a canvas of marks in its own pixel
@@ -89,7 +90,23 @@ type Editing = { id: string | null; x: number; y: number; value: string; color: 
 let seq = 0;
 const markId = () => `m${Date.now().toString(36)}${(seq++).toString(36)}`;
 
-export function Annotator({ src, initial, onCancel, onDone }: { src: string; initial?: ReporterAnnotation[]; onCancel: () => void; onDone: (marks: ReporterAnnotation[], image: Blob | null) => void }) {
+export function Annotator({
+  src,
+  initial,
+  tool: startTool = 'rect',
+  onTool,
+  onCancel,
+  onDone,
+}: {
+  src: string;
+  initial?: ReporterAnnotation[];
+  /** The tool it opens on (the one used last; Rectangle the first time). */
+  tool?: Tool;
+  /** A tool picked: remembered for the next shot. */
+  onTool?: (t: Tool) => void;
+  onCancel: () => void;
+  onDone: (marks: ReporterAnnotation[], image: Blob | null) => void;
+}) {
   const { post } = usePanel();
   const frame = useRef<HTMLDivElement>(null);
   const baseCanvas = useRef<HTMLCanvasElement>(null);
@@ -101,12 +118,14 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
   const [area, setArea] = useState<Size>({ w: 0, h: 0 });
   const [view, setView] = useState<View>({ scale: 1, x: 0, y: 0 });
   const [doc, setDoc] = useState<Doc>(() => emptyDoc(fromWire(initial, markId)));
-  const [tool, setTool] = useState<Tool>('pen');
+  const [tool, setTool] = useState<Tool>(startTool);
   const [color, setColor] = useState<ReporterAnnotationColor>(DEFAULT_COLOR);
   const [sizeClass, setSizeClass] = useState<SizeClass>('m');
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [help, setHelp] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -456,9 +475,17 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
       if (st.current.editing) commitText();
       setTool(t);
       if (t !== 'select') setSelected(null);
+      onTool?.(t);
     },
-    [commitText],
+    [commitText, onTool],
   );
+
+  /** Cancel throws the marks away: it asks first when they changed since the editor opened (journey.ts marksChanged). */
+  const changed = marksChanged(initial, toWire(doc.marks));
+  const cancel = useCallback(() => {
+    if (marksChanged(initial, toWire(st.current.doc.marks))) setConfirmCancel(true);
+    else onCancel();
+  }, [initial, onCancel]);
 
   const doUndo = useCallback(() => {
     setSelected(null);
@@ -487,6 +514,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
     setDoc((d) => replaceMark(d, next));
   };
 
+  const finishRef = useRef<() => Promise<void>>(async () => undefined);
   const finish = async () => {
     if (editing) commitText();
     const marks = toWire(st.current.doc.marks);
@@ -505,6 +533,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
       setBusy(false);
     }
   };
+  finishRef.current = finish;
 
   // Keyboard: tool letters, Delete, Esc (drops the mark in progress, else the selection; never closes the panel), undo and redo.
   useEffect(() => {
@@ -531,11 +560,30 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
         return;
       }
       if (e.key === 'Escape') {
+        // The topmost thing only (journey.ts editorEscape); the panel behind never closes from here.
         e.preventDefault();
         e.stopPropagation();
-        if (op.current || draft.current) cancelOp();
-        else if (confirmClear) setConfirmClear(false);
-        else setSelected(null);
+        const act = editorEscape({ drawing: !!(op.current || draft.current), help, asking: confirmClear || confirmCancel, selected: !!st.current.selected, changed });
+        if (act === 'drop-mark') cancelOp();
+        else if (act === 'close-help') setHelp(false);
+        else if (act === 'keep') {
+          setConfirmClear(false);
+          setConfirmCancel(false);
+        } else if (act === 'deselect') setSelected(null);
+        else if (act === 'ask-discard') setConfirmCancel(true);
+        else onCancel();
+        return;
+      }
+      if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
+        e.preventDefault();
+        setHelp((v) => !v);
+        return;
+      }
+      const onControl = (e.target as Element | null)?.closest?.('button, a, select');
+      if (e.key === 'Enter' && !onControl && !mod && !e.altKey && !e.shiftKey && !confirmClear && !confirmCancel) {
+        // Enter is Done (in a text box it ends the text instead: handled above, before this).
+        e.preventDefault();
+        void finishRef.current();
         return;
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -565,7 +613,7 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('keyup', onKeyUp, true);
     };
-  }, [doUndo, doRedo, deleteSelected, cancelOp, confirmClear, pick]);
+  }, [doUndo, doRedo, deleteSelected, cancelOp, confirmClear, confirmCancel, help, changed, onCancel, pick]);
 
   const blurred = hasBlur(doc.marks);
   const tooBig = img ? !canAnnotate(size) : false;
@@ -626,9 +674,19 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
     : undefined;
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Annotate" className="fixed inset-0 z-[70] flex flex-col" style={DARK} data-annotator data-marks={doc.marks.length} data-scale={view.scale.toFixed(3)}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Annotate"
+      className="anim-fade fixed inset-0 z-[70] flex flex-col"
+      style={DARK}
+      data-annotator
+      data-marks={doc.marks.length}
+      data-scale={view.scale.toFixed(3)}
+      data-tool={tool}
+    >
       <div className="flex shrink-0 items-center gap-1 pt-[env(safe-area-inset-top)] pr-12 pl-1">
-        <BarBtn icon="x" label="Cancel" onClick={onCancel} />
+        <BarBtn icon="x" label="Cancel" onClick={cancel} />
         <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:flex">
           {toolRow(false)}
           <span className="mx-1 h-6 w-px shrink-0 bg-white/20" aria-hidden="true" />
@@ -638,6 +696,8 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
         <BarBtn icon="undo" label="Undo" disabled={!canUndo(doc) || busy} onClick={doUndo} />
         <BarBtn icon="redo" label="Redo" disabled={!canRedo(doc) || busy} onClick={doRedo} />
         {sel ? <BarBtn icon="trash2" label="Delete mark" onClick={deleteSelected} /> : <BarBtn icon="trash2" label="Clear all" disabled={!doc.marks.length || busy} aria-expanded={confirmClear} onClick={() => setConfirmClear(!confirmClear)} />}
+        {/* Shortcuts (desktop: keys are the point there; a phone has none). */}
+        <BarBtn icon="keyboard" label="Shortcuts (?)" aria-expanded={help} onClick={() => setHelp(!help)} className="max-sm:hidden" />
         <button
           type="button"
           onClick={() => void finish()}
@@ -648,8 +708,25 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
           {busy ? '…' : 'Done'}
         </button>
       </div>
+      {confirmCancel && (
+        <div role="alertdialog" aria-label="Discard your marks?" className="anim-in flex shrink-0 items-center gap-2 px-3 pb-1">
+          <span className="min-w-0 flex-1 text-[13.5px]">Discard your marks?</span>
+          <button
+            type="button"
+            autoFocus
+            onClick={() => setConfirmCancel(false)}
+            className="inline-flex min-h-11 items-center rounded-xl px-3 text-[14px] font-semibold focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-hidden"
+          >
+            Keep
+          </button>
+          <button type="button" onClick={onCancel} className="inline-flex min-h-11 items-center rounded-xl bg-[#ef233c] px-3 text-[14px] font-semibold text-white focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-hidden">
+            Discard
+          </button>
+        </div>
+      )}
+      {help && <Shortcuts onClose={() => setHelp(false)} />}
       {confirmClear && (
-        <div role="group" aria-label="Clear all marks" className="flex shrink-0 items-center gap-2 px-3 pb-1">
+        <div role="group" aria-label="Clear all marks" className="anim-in flex shrink-0 items-center gap-2 px-3 pb-1">
           <span className="min-w-0 flex-1 text-[13.5px]">Clear all marks?</span>
           <button type="button" onClick={() => setConfirmClear(false)} className="inline-flex min-h-11 items-center rounded-xl px-3 text-[14px] font-semibold focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-hidden">
             Keep
@@ -749,9 +826,44 @@ function ToolBtn({ icon, label, on, onClick }: { icon: IconName; label: string; 
       title={label}
       aria-pressed={on}
       onClick={onClick}
-      className={`inline-flex size-11 shrink-0 items-center justify-center rounded-xl focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-hidden ${on ? 'bg-white text-[#0b0d12]' : 'text-white'}`}
+      className={`inline-flex size-11 shrink-0 items-center justify-center rounded-xl transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-hidden ${on ? 'bg-white text-[#0b0d12]' : 'text-white'}`}
     >
       <Icon name={icon} />
     </button>
+  );
+}
+
+/** The keys, in one small list (desktop; `?` or the keyboard button toggles it, Esc closes it first). */
+function Shortcuts({ onClose }: { onClose: () => void }) {
+  const rows: [string, string][] = [
+    ...TOOLS.map((t): [string, string] => [t.key.toUpperCase(), t.label]),
+    ['⌘/Ctrl Z', 'Undo'],
+    ['⇧ ⌘/Ctrl Z', 'Redo'],
+    ['Delete', 'Delete the selected mark'],
+    ['Space + drag', 'Pan'],
+    ['Enter', 'Done'],
+    ['Esc', 'Step back (closes last)'],
+  ];
+  return (
+    <div role="dialog" aria-label="Shortcuts" data-shortcuts className="anim-in absolute top-[calc(env(safe-area-inset-top)+3rem)] right-2 z-20 w-64 rounded-2xl p-3 shadow-xl" style={{ background: '#1b1e26' }}>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[13px] font-bold">Shortcuts</span>
+        <BarBtn icon="x" label="Close shortcuts" onClick={onClose} />
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px]">
+        {rows.map(([k, v]) => (
+          <div key={k} className="contents">
+            <dt>
+              <kbd className="rounded-md px-1.5 py-0.5 font-mono text-[11.5px] whitespace-nowrap" style={{ background: 'rgba(255,255,255,0.12)' }}>
+                {k}
+              </kbd>
+            </dt>
+            <dd className="m-0" style={DIM}>
+              {v}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
