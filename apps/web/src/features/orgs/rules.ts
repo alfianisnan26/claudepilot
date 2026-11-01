@@ -7,12 +7,18 @@ import {
   ORG_ROLES,
   ORGS_ERROR_CODES,
   type Ability,
+  type MoveToOrgCredential,
+  type Org,
   type OrgDomain,
   type OrgDomainState,
   type OrgGroupRule,
   type OrgInvitationRole,
   type OrgMember,
   type OrgRole,
+  type OrgShare,
+  type OrgTeamRole,
+  type OrgTransferKind,
+  type PlatformAuditEntry,
 } from '@portal/contracts';
 
 /** "New organization": an instance admin or someone holding `orgs.create` (GET /api/orgs/abilities says which). */
@@ -82,6 +88,12 @@ export function orgErrorText(e: unknown, fallback: string): string {
   if (reason === ORGS_ERROR_CODES.INVITATION_INVALID) return 'This invitation is not valid. Ask for a new one.';
   if (reason === ORGS_ERROR_CODES.INVITATION_EXPIRED) return 'This invitation has expired. Ask for a new one.';
   if (reason === ORGS_ERROR_CODES.INVITATION_EMAIL_MISMATCH) return 'This invitation is for another email address. Sign in with that one.';
+  if (reason === ORGS_ERROR_CODES.INVITATION_OTHER_ORG_DOMAIN) return 'Another organization has verified that email’s domain.';
+  if (reason === ORGS_ERROR_CODES.ALREADY_MEMBER) return 'They are already a member.';
+  if (reason === ORGS_ERROR_CODES.ORG_OWNS_OBJECTS) return 'It still owns things. Move them out first (Objects).';
+  if (reason === ORGS_ERROR_CODES.ORG_SUSPENDED_BY_PLATFORM) return 'The portal’s admin suspended it. Ask them to resume it.';
+  if (reason === ORGS_ERROR_CODES.ORG_ALREADY_OWNER) return 'The organization already owns it.';
+  if (reason === ORGS_ERROR_CODES.TEAM_NOT_ORG_MEMBER) return 'Only members of the organization can be in its teams.';
   return e instanceof Error && e.message ? e.message : fallback;
 }
 
@@ -128,4 +140,126 @@ export function slugFrom(name: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
     .replace(/-+$/g, '');
+}
+
+/* ---------- Org settings sections (owner request 2026-11-01) ---------- */
+
+export type OrgSection = 'general' | 'members' | 'teams' | 'invitations' | 'objects' | 'sharing' | 'sign-in' | 'policies' | 'audit' | 'danger';
+
+export const SECTION_LABEL: Record<OrgSection, string> = {
+  general: 'General',
+  members: 'Members',
+  teams: 'Teams',
+  invitations: 'Invitations',
+  objects: 'Objects',
+  sharing: 'Sharing',
+  'sign-in': 'Sign-in',
+  policies: 'Policies',
+  audit: 'Audit',
+  danger: 'Danger zone',
+};
+
+/**
+ * The sections a role sees, in order; a section whose every action the server would refuse is not shown. A suspended org is seen by its
+ * owners only (to resume or delete): General and Danger zone. `may` (Org.may) says whether a member may invite (membersMayInvite).
+ */
+export function orgSections(org: Pick<Org, 'myRole' | 'state' | 'may'>): OrgSection[] {
+  const role = org.myRole;
+  if (org.state !== 'active') return role === 'owner' ? ['general', 'danger'] : ['general'];
+  const out: OrgSection[] = ['general'];
+  if (canSeeMembers(role)) out.push('members');
+  out.push('teams');
+  if (canManageOrg(role) || org.may?.invite) out.push('invitations');
+  out.push('objects');
+  if (role !== 'guest') out.push('sharing');
+  if (canSeeSignIn(role)) out.push('sign-in');
+  if (role === 'owner') out.push('policies');
+  if (canManageOrg(role)) out.push('audit');
+  if (role === 'owner') out.push('danger');
+  return out;
+}
+
+/** The invitations list (and revoke) is the managers'; a member allowed to invite gets the form only. */
+export const canListInvitations = (role: OrgRole) => canManageOrg(role);
+
+/** Create a team: what the server says (Org.may.createTeam), falling back to managers for an older server. */
+export const canCreateTeam = (org: Pick<Org, 'myRole' | 'may'>) => (org.may ? org.may.createTeam : canManageOrg(org.myRole));
+
+/** Add or remove people, or delete the team: an org owner or admin, or an owner of the team (OrgSharing.#requireTeamManager). */
+export const canManageTeam = (role: OrgRole, teamRole: OrgTeamRole | undefined) => canManageOrg(role) || teamRole === 'owner';
+
+/** Revoke a share: an org owner or admin, or who shared it (a manager of the object may too; the page does not know that, so it does not offer it). */
+export const canRevokeShare = (role: OrgRole, share: Pick<OrgShare, 'createdBy'>, meId: string | null) => canManageOrg(role) || (!!meId && share.createdBy === meId);
+
+/** Move to organization: a member or up (and manage on the object, which the server checks). */
+export const canMoveHere = (role: OrgRole) => role !== 'guest';
+
+/** Transcript views and break-glass entries: the org's owners. */
+export const canSeeOwnerAudit = (role: OrgRole) => role === 'owner';
+
+/** Delete asks for the slug, typed exactly. */
+export const confirmsDelete = (typed: string, slug: string) => typed.trim() === slug;
+
+/** The credential sets a refused workspace move lists (409 CREDENTIALS_CONSENT_REQUIRED), or null for any other error. */
+export function consentCredentials(e: unknown): MoveToOrgCredential[] | null {
+  const details = (e as { details?: unknown } | null)?.details;
+  if (!details || typeof details !== 'object') return null;
+  const d = details as { reason?: unknown; credentials?: unknown };
+  if (d.reason !== ORGS_ERROR_CODES.CREDENTIALS_CONSENT_REQUIRED || !Array.isArray(d.credentials)) return null;
+  return d.credentials.filter((c): c is MoveToOrgCredential => !!c && typeof c === 'object' && typeof c.poolId === 'string' && typeof c.name === 'string');
+}
+
+/** The audit filter: a kind prefix the server matches (`GET /api/orgs/:id/audit?kind=`). */
+export const AUDIT_FILTERS: readonly { kind: string; label: string }[] = [
+  { kind: '', label: 'All' },
+  { kind: 'org.member', label: 'Members' },
+  { kind: 'org.team', label: 'Teams' },
+  { kind: 'org.share', label: 'Sharing' },
+  { kind: 'org.invitation', label: 'Invitations' },
+  { kind: 'object.transferred', label: 'Moves' },
+  { kind: 'org.domain', label: 'Domains' },
+  { kind: 'org.sso', label: 'SSO' },
+  { kind: 'org.break_glass', label: 'Break-glass' },
+  { kind: 'org.updated', label: 'Settings' },
+];
+
+/** An audit kind in words: `org.member_role_changed` -> "Member role changed". */
+export function auditKindText(kind: string): string {
+  const words = kind.replace(/^org\./, '').replace(/[._]+/g, ' ').trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : kind;
+}
+
+/** Who did it, in words: `user:<id>` -> their name when known, else the id; `system:x` stays. */
+export function auditActorText(entry: Pick<PlatformAuditEntry, 'actor'>, names: ReadonlyMap<string, string>): string {
+  const m = /^user:(.+)$/.exec(entry.actor);
+  return m ? (names.get(m[1]!) ?? m[1]!) : entry.actor;
+}
+
+/** One object in Objects (and the names Sharing shows): a workspace, a ticket bucket or a vault, with where it opens. */
+export interface OrgObjectRow {
+  kind: OrgTransferKind;
+  id: string;
+  name: string;
+  href: string;
+}
+
+export const KIND_LABEL: Record<OrgTransferKind, string> = { workspace: 'Workspace', ticket_bucket: 'Bucket', vault: 'Vault' };
+
+/** The lists (`?org=`) as rows, workspaces first, each by name. */
+export function objectRows(o: {
+  workspaces: readonly { id: string; name: string; label?: string }[];
+  buckets: readonly { key: string; name: string }[];
+  vaults: readonly { id: string; name: string }[];
+}): OrgObjectRow[] {
+  const by = (a: OrgObjectRow, b: OrgObjectRow) => a.name.localeCompare(b.name);
+  return [
+    ...o.workspaces.map((w) => ({ kind: 'workspace' as const, id: w.id, name: w.label || w.name, href: '/admin/workspaces' })).sort(by),
+    ...o.buckets.map((b) => ({ kind: 'ticket_bucket' as const, id: b.key, name: b.name, href: `/admin/tickets?bucket=${encodeURIComponent(b.key)}` })).sort(by),
+    ...o.vaults.map((v) => ({ kind: 'vault' as const, id: v.id, name: v.name, href: `/admin/knowledge/${encodeURIComponent(v.id)}` })).sort(by),
+  ];
+}
+
+/** A share's object by name when a list has it, else its id (an object the person cannot list). */
+export function targetName(target: { type: OrgTransferKind; id: string }, rows: readonly OrgObjectRow[]): string {
+  return rows.find((r) => r.kind === target.type && r.id === target.id)?.name ?? target.id;
 }

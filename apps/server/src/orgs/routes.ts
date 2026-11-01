@@ -89,7 +89,7 @@ export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassServic
     orgs.delete(actorOf(c), c.req.param('id'));
     return c.json(success({ deleted: true }));
   });
-  r.get('/:id/audit', (c) => c.json(success(orgs.audit(actorOf(c), c.req.param('id'), { before: c.req.query('before'), limit: c.req.query('limit') }))));
+  r.get('/:id/audit', (c) => c.json(success(orgs.audit(actorOf(c), c.req.param('id'), { before: c.req.query('before'), limit: c.req.query('limit'), kind: c.req.query('kind') }))));
 
   r.get('/:id/break-glass', (c) => c.json(success(bg().forOrg(actorOf(c), c.req.param('id') as OrgId))));
   r.post('/:id/break-glass/:entryId/end', (c) => c.json(success(bg().endByOrgOwner(actorOf(c), c.req.param('id') as OrgId, c.req.param('entryId')))));

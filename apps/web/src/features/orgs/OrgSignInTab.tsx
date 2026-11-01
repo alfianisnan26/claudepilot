@@ -76,12 +76,12 @@ function Domains({ org, s, run }: { org: Org; s: OrgSignInSettings; run: Run }) 
   };
   return (
     <section aria-labelledby="org-domains">
-      <h2 id="org-domains" className={heading}>
+      <h3 id="org-domains" className={heading}>
         Domains
         <InfoTip label="About domains">
           Publish the TXT record at your DNS, then Check. A verified domain signs in through this organization’s provider. It is checked daily; seven failed checks in a row and it stops working.
         </InfoTip>
-      </h2>
+      </h3>
       <Card>
         <ul className="divide-y divide-line">
           {s.domains.map((d) => (
@@ -169,12 +169,12 @@ function Provider({ org, s, run }: { org: Org; s: OrgSignInSettings; run: Run })
 
   return (
     <section aria-labelledby="org-provider">
-      <h2 id="org-provider" className={heading}>
+      <h3 id="org-provider" className={heading}>
         Provider
         <InfoTip label="About the provider">
           Your organization’s OpenID Connect sign-in (Google Workspace, Entra, Okta, Keycloak). It serves every verified domain. An existing account with a password is never linked by email: its holder connects it from here.
         </InfoTip>
-      </h2>
+      </h3>
       <Card className="p-4 sm:p-5">
         <form onSubmit={save} className="flex flex-col gap-3" noValidate>
           <Field label="Name" value={name} onChange={setName} placeholder="Acme sign-in" />
@@ -285,12 +285,12 @@ function Policy({ org, s, members, run }: { org: Org; s: OrgSignInSettings; memb
   };
   return (
     <section aria-labelledby="org-require-sso">
-      <h2 id="org-require-sso" className={heading}>
+      <h3 id="org-require-sso" className={heading}>
         Require SSO
         <InfoTip label="About requiring SSO">
           Members on a verified domain reach this organization’s things only after signing in through the provider; their passwords stop working here. Members outside the domains count as guests unless listed below. Only owners change this.
         </InfoTip>
-      </h2>
+      </h3>
       <Card className="flex flex-col gap-3 p-4 sm:p-5">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={s.thisSession ? 'success' : 'neutral'}>{s.thisSession ? 'This session: connected' : 'This session: not connected'}</Badge>

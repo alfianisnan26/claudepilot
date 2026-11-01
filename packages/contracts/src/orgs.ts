@@ -64,6 +64,12 @@ export interface Org {
   createdAt: string;
   /** Only for owners and admins. */
   policies?: OrgPolicies;
+  /**
+   * What the signed-in person may start here that depends on a policy they cannot read (Org settings, owner request 2026-11-01): `invite`
+   * (owners and admins; a member while `membersMayInvite`), `createTeam` (owners and admins; a member while `membersCreateTeams`). The server
+   * still decides each request.
+   */
+  may?: { invite: boolean; createTeam: boolean };
 }
 
 export interface OrgMember {
@@ -79,8 +85,15 @@ export interface CreateOrgRequest {
   name: string;
   slug: string;
 }
+/** The policies an owner sets in Org settings' Policies (requireSso has its own route, `ssoPolicy`, with the lockout guard). */
+export const ORG_SETTABLE_POLICIES = ['membersMayInvite', 'membersCreateTeams', 'externalShares'] as const;
+export type OrgSettablePolicy = (typeof ORG_SETTABLE_POLICIES)[number];
+
 export interface UpdateOrgRequest {
+  /** Owners and admins. */
   name?: string;
+  /** Owners only; booleans for the keys of ORG_SETTABLE_POLICIES (any other key is refused). Keys left out keep their value. */
+  policies?: Partial<Pick<OrgPolicies, OrgSettablePolicy>>;
 }
 export interface ChangeOrgMemberRoleRequest {
   role: OrgRole;
@@ -476,7 +489,7 @@ export const ORGS_API = {
   suspend: (id: OrgId) => `/api/orgs/${id}/suspend`,
   /** Slice 8. POST: an owner resumes an org THEY suspended (one the platform admin suspended is resumed in the Admin console). */
   resume: (id: OrgId) => `/api/orgs/${id}/resume`,
-  /** Slice 8. GET ?before&limit (manage) -> PlatformAuditEntry[]: the org's audit rows, newest first. */
+  /** Slice 8. GET ?before&limit&kind (manage) -> PlatformAuditEntry[]: the org's audit rows, newest first; `kind` is a prefix (`org.member`). */
   audit: (id: OrgId) => `/api/orgs/${id}/audit`,
 } as const;
 

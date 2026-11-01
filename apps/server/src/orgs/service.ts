@@ -25,6 +25,7 @@ import {
   ORG_DELETE_GRACE_MS,
   ORG_LIMITS,
   ORG_POLICY_DEFAULTS,
+  ORG_SETTABLE_POLICIES,
   ORG_SLUG_PATTERN,
   ORGS_ERROR_CODES,
   actorString,
@@ -43,6 +44,7 @@ import {
   type OrgMembershipVia,
   type OrgPolicies,
   type OrgRole,
+  type OrgSettablePolicy,
   type OrgState,
   type PlatformAuditEntry,
   type UserId,
@@ -185,7 +187,12 @@ export class OrgsService {
 
   #view(r: OrgRow, role: OrgRole): Org {
     const out: Org = { id: r.id, slug: r.slug, name: r.name, state: r.state, myRole: role, members: role === 'guest' ? 0 : this.#activeMembers(r.id), createdAt: r.created_at };
-    if (role === 'owner' || role === 'admin') out.policies = this.#policies(r.policies);
+    const policies = this.#policies(r.policies);
+    if (role === 'owner' || role === 'admin') out.policies = policies;
+    // What Org settings may offer (the same rules as OrgInvitations.create and OrgSharing.createTeam); nothing in an org that is not active.
+    const manager = role === 'owner' || role === 'admin';
+    const active = r.state === 'active';
+    out.may = { invite: active && (manager || (role === 'member' && policies.membersMayInvite)), createTeam: active && (manager || (role === 'member' && policies.membersCreateTeams)) };
     return out;
   }
 
@@ -263,13 +270,49 @@ export class OrgsService {
     return this.get(actor, id);
   }
 
-  /** Renames an org (manage: owners and admins). Policies come with Org settings (a later slice). */
-  update(actor: Actor, id: OrgId, req: { name?: unknown }): Org {
+  /**
+   * Renames an org (manage: owners and admins) and sets its policies (Org settings' Policies: owners only, as a person; only the keys of
+   * ORG_SETTABLE_POLICIES, booleans; requireSso has its own route with the lockout guard). Both are checked before anything is written.
+   */
+  update(actor: Actor, id: OrgId, req: { name?: unknown; policies?: unknown }): Org {
     requireCan(actor, 'manage', orgRef(id));
+    let policyChange: Partial<Record<OrgSettablePolicy, boolean>> | null = null;
+    if (req.policies !== undefined) {
+      this.#requireOwner(actor, id);
+      const p = req.policies;
+      if (!p || typeof p !== 'object' || Array.isArray(p)) throw new AppError('VALIDATION_FAILED', 'Policies are an object.', { details: { policies: 'An object.' } });
+      policyChange = {};
+      for (const [k, v] of Object.entries(p as Record<string, unknown>)) {
+        if (!(ORG_SETTABLE_POLICIES as readonly string[]).includes(k)) throw new AppError('VALIDATION_FAILED', `${k} is not set here.`, { details: { [k]: 'Not settable.' } });
+        if (typeof v !== 'boolean') throw new AppError('VALIDATION_FAILED', `${k} is on or off.`, { details: { [k]: 'A boolean.' } });
+        policyChange[k as OrgSettablePolicy] = v;
+      }
+    }
     if (req.name !== undefined) {
       const name = this.#name(req.name);
       this.#write().prepare('UPDATE orgs SET name = ? WHERE id = ?').run(name, id);
       this.#record('org.updated', actor, id, actorUserId(actor), { name });
+    }
+    if (policyChange && Object.keys(policyChange).length > 0) {
+      const db = this.#write();
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        // Merged into what is stored, so keys set elsewhere (requireSso, freshness, join rules) are kept as they are.
+        const raw = (db.prepare('SELECT policies FROM orgs WHERE id = ?').get(id) as { policies: string } | undefined)?.policies ?? '{}';
+        let stored: Record<string, unknown> = {};
+        try {
+          const v = JSON.parse(raw) as unknown;
+          if (v && typeof v === 'object' && !Array.isArray(v)) stored = v as Record<string, unknown>;
+        } catch {
+          // a broken value: start from the defaults
+        }
+        db.prepare('UPDATE orgs SET policies = ? WHERE id = ?').run(JSON.stringify({ ...stored, ...policyChange }), id);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+      this.#record('org.updated', actor, id, actorUserId(actor), { policies: policyChange });
     }
     return this.get(actor, id);
   }
@@ -512,14 +555,22 @@ export class OrgsService {
   }
 
   /** The org's audit rows (§6.10): owners and admins (manage), newest first. */
-  audit(actor: Actor, id: OrgId, q: { before?: unknown; limit?: unknown } = {}): PlatformAuditEntry[] {
+  audit(actor: Actor, id: OrgId, q: { before?: unknown; limit?: unknown; kind?: unknown } = {}): PlatformAuditEntry[] {
     requireCan(actor, 'manage', orgRef(id));
     const before = Number(q.before);
     const paged = Number.isInteger(before) && before > 0;
     const limit = Math.max(1, Math.min(200, Math.floor(Number(q.limit) || 100)));
+    // Org settings' filter: a kind or a prefix of one (`org.member`), letters, digits, dots and underscores; anything else is refused.
+    const kind = typeof q.kind === 'string' && q.kind !== '' ? q.kind : null;
+    if (kind !== null && !/^[a-z][a-z0-9_.]{0,59}$/.test(kind)) throw new AppError('VALIDATION_FAILED', 'Not a kind.', { details: { kind: 'Not a kind.' } });
+    const args: (string | number)[] = [id];
+    if (paged) args.push(before);
+    if (kind !== null) args.push(kind, `${kind.replace(/_/g, '\\_')}%`);
     const rows = this.#read()
-      .prepare(`SELECT id, at, severity, kind, actor, user_id, subject, detail FROM platform_audit WHERE org_id = ? ${paged ? 'AND id < ?' : ''} ORDER BY id DESC LIMIT ${limit}`)
-      .all(...(paged ? [id, before] : [id])) as {
+      .prepare(
+        `SELECT id, at, severity, kind, actor, user_id, subject, detail FROM platform_audit WHERE org_id = ? ${paged ? 'AND id < ?' : ''} ${kind !== null ? "AND (kind = ? OR kind LIKE ? ESCAPE '\\')" : ''} ORDER BY id DESC LIMIT ${limit}`,
+      )
+      .all(...args) as {
       id: number;
       at: string;
       severity: PlatformAuditEntry['severity'];
