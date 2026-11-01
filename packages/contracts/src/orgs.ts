@@ -19,7 +19,7 @@ export type OrgState = 'active' | 'suspended' | 'deleting';
 /** How a person came to be in the org. */
 export type OrgMembershipVia = 'created' | 'invite' | 'sso_jit' | 'domain_join' | 'migration' | 'recovered';
 
-/** §6.6. Stored as JSON on the org; a key that is absent takes its default. Changing them comes with Org settings (a later slice). */
+/** §6.6. Stored as JSON on the org; a key that is absent takes its default. Owners set ORG_SETTABLE_POLICIES in Org settings (PATCH the org); requireSso has its own route. */
 export interface OrgPolicies {
   membersMayInvite: boolean;
   membersCreateTeams: boolean;
