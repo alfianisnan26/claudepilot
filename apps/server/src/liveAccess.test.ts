@@ -71,7 +71,7 @@ const names = (m: LiveMessage | undefined) => ((m as { data: { id: string }[] } 
 const last = (got: LiveMessage[], type: string) => got.filter((m) => m.type === type).at(-1);
 
 test('X: each person gets only their own workspaces; the founding user and an admin account get theirs and the founder’s', async () => {
-  const [a, b, owner, admin] = await Promise.all(['a', 'b', 'owner', 'admin'].map((k) => tab(`portal_session=${k}`)));
+  const [a, b, owner, admin] = await Promise.all([tab('portal_session=a'), tab('portal_session=b'), tab('portal_session=owner'), tab('portal_session=admin')]);
   for (const t of [a, b, owner, admin]) t.subscribe('workspaces');
   await until(() => [a, b, owner, admin].every((t) => t.got.some((m) => m.type === 'workspaces')));
   assert.deepEqual(names(last(a.got, 'workspaces')), ['docker/alpha']);

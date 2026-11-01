@@ -136,7 +136,7 @@ export class LiveHub {
    * Something changed. Workspaces are listed again (and pushed to each tab whose own cut differs); other topics tell pages to reload.
    * `to`: the people it concerns (a notification arrived for them), so nobody else's tab is told; absent, everyone who may hear of the topic.
    */
-  publish(topic: LiveTopic, to?: readonly UserId[]) {
+  publish(topic: LiveTopic, to?: readonly UserId[]): void {
     if (to) return this.#publishTo(topic, to);
     // Whatever was listed before this change is stale, even if nobody is watching right now.
     if (topic === 'workspaces' && this.#snapshot) this.#snapshot.at = 0;
@@ -238,7 +238,7 @@ export class LiveHub {
   }
 
   /** A nudge for named people only: their tabs that watch the topic. Not coalesced with everyone's (it is rare and small). */
-  #publishTo(topic: LiveTopic, to: readonly UserId[]) {
+  #publishTo(topic: LiveTopic, to: readonly UserId[]): void {
     if (topic === 'workspaces' || topic === 'usage') return this.publish(topic); // data topics are cut per person anyway
     const people = new Set<string>(to);
     const frame = JSON.stringify({ type: topic } satisfies LiveMessage);
