@@ -76,6 +76,9 @@ spec:
               value: alfian@isnan.me
             - name: PORTAL_ADMIN_OIDC_ALLOW_PRIVATE
               value: "true"
+            # Org SSO (organizations slice 10): these IdPs run in this cluster and resolve privately; the operator trusts exactly these origins.
+            - name: PORTAL_ORG_SSO_TRUSTED_ISSUERS
+              value: "https://auth.konfersi.com,https://auth.kohi-labs.com,https://git.isnan.me"
             - name: PORTAL_ADMIN_OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:

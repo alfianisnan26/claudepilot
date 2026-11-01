@@ -35,6 +35,8 @@ export const config = {
     allow: env('PORTAL_ADMIN_OIDC_ALLOW'),
     allowPrivate: env('PORTAL_ADMIN_OIDC_ALLOW_PRIVATE'),
   },
+  /** Org SSO issuers the operator trusts on the private network (identity/sso.ts `parseTrustedIssuers`): comma-separated https origins. */
+  orgSsoTrustedIssuers: env('PORTAL_ORG_SSO_TRUSTED_ISSUERS'),
   /** Fixed server code; when unset one is generated at startup. */
   serverCode: env('PORTAL_SERVER_CODE'),
   /** Encrypts stored secrets: 32 random bytes in base64url, given directly or as a file. */

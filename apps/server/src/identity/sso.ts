@@ -121,6 +121,33 @@ export function jitRole(r: Pick<Row, 'default_role' | 'auto_create' | 'admin_ack
   return r.default_role === 'admin' && r.auto_create === 1 && !!r.admin_ack_at ? 'admin' : 'member';
 }
 
+/** An issuer is trusted when its https origin is exactly one on the list (no path, user info or suffix tricks: the URL's own origin). */
+export function isTrustedIssuer(issuer: string, trusted: readonly string[]): boolean {
+  let u: URL;
+  try {
+    u = new URL(issuer);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'https:' || u.username || u.password) return false;
+  return trusted.includes(u.origin);
+}
+
+/** PORTAL_ORG_SSO_TRUSTED_ISSUERS: comma-separated https origins; anything else in it is dropped. */
+export function parseTrustedIssuers(raw: string | undefined): string[] {
+  const out: string[] = [];
+  for (const part of (raw ?? '').split(',').map((x) => x.trim()).filter(Boolean)) {
+    try {
+      const u = new URL(part);
+      if (u.protocol === 'https:' && !u.username && !u.password && (u.pathname === '/' || u.pathname === '') && !u.search && !u.hash) out.push(u.origin);
+      else console.warn(`[sso] PORTAL_ORG_SSO_TRUSTED_ISSUERS: ignored ${JSON.stringify(part)} (an https origin only)`);
+    } catch {
+      console.warn(`[sso] PORTAL_ORG_SSO_TRUSTED_ISSUERS: ignored ${JSON.stringify(part)} (not a URL)`);
+    }
+  }
+  return out;
+}
+
 export class SsoProviders {
   readonly #pending = new Map<string, Pending>();
 
@@ -132,7 +159,18 @@ export class SsoProviders {
     private readonly teams: PortalTeams,
     readonly oidc: OidcClient = new OidcClient(),
     private readonly now: () => Date = () => new Date(),
+    /**
+     * Org providers whose issuer the operator trusts to be on the private network (PORTAL_ORG_SSO_TRUSTED_ISSUERS, exact https origins; the
+     * owner's own IdPs run in the same cluster, 2026-11-01). Env only: an org admin cannot add to it. Every other org provider stays public.
+     */
+    private readonly trustedIssuers: readonly string[] = [],
   ) {}
+
+  /** Whether this provider's issuer may resolve to a private address: its own flag (instance providers), or the operator's trust list. */
+  #privateOk(r: Pick<Row, 'issuer' | 'allow_private_network'>): boolean {
+    if (r.allow_private_network === 1) return true;
+    return isTrustedIssuer(r.issuer, this.trustedIssuers);
+  }
 
   #db(): DatabaseSync {
     const db = this.db();
@@ -362,7 +400,7 @@ export class SsoProviders {
   /** Whether the issuer's discovery document reads and checks out (the admin's Test button). */
   async test(id: string): Promise<{ ok: true; authorizationEndpoint: string }> {
     const r = this.#instanceRow(id);
-    const doc = await this.oidc.discover(r.issuer, r.allow_private_network === 1, true);
+    const doc = await this.oidc.discover(r.issuer, this.#privateOk(r), true);
     return { ok: true, authorizationEndpoint: doc.authorization_endpoint };
   }
 
@@ -476,7 +514,7 @@ export class SsoProviders {
     const r = this.#row(providerId);
     if (r.enabled !== 1) throw new AppError('NOT_FOUND', 'No such provider.');
     if (stepUp && !r.org_id) throw new AppError('NOT_FOUND', 'No such provider.');
-    const doc = await this.oidc.discover(r.issuer, r.allow_private_network === 1);
+    const doc = await this.oidc.discover(r.issuer, this.#privateOk(r));
     this.#sweep();
     const state = randomToken();
     const pending: Pending = {
@@ -532,7 +570,7 @@ export class SsoProviders {
     }
     let claims: IdTokenClaims;
     try {
-      const doc = await this.oidc.discover(r.issuer, r.allow_private_network === 1);
+      const doc = await this.oidc.discover(r.issuer, this.#privateOk(r));
       claims = await this.oidc.finish(doc, {
         code: q.code,
         verifier: pending.verifier,
@@ -540,7 +578,7 @@ export class SsoProviders {
         clientId: r.client_id,
         clientSecret: secret,
         nonce: pending.nonce,
-        allowPrivate: r.allow_private_network === 1,
+        allowPrivate: this.#privateOk(r),
       });
     } catch (e) {
       throw new SsoError('token', e instanceof Error ? e.message : 'The provider’s answer did not check out.');

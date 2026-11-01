@@ -140,7 +140,7 @@ import { identityRoutes } from './identity/routes.js';
 import { listLoops } from './platform/loops.js';
 import { managerHealer } from './manager/access.js';
 import { ManagerService } from './manager/service.js';
-import { SsoProviders } from './identity/sso.js';
+import { parseTrustedIssuers, SsoProviders } from './identity/sso.js';
 import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes, releaseOf } from './reporter/routes.js';
@@ -291,7 +291,7 @@ export function createApp(
   const grants = new SessionGrants(() => store.db, () => (store.writable ? store.db : null));
   // Teams and SSO (owner, 2026-10-17): accounts in teams, sessions shared to a team, sign-in through an OpenID Connect provider by domain.
   const teams = new PortalTeams(() => store.db, () => (store.writable ? store.db : null));
-  const sso = new SsoProviders(() => store.db, () => (store.writable ? store.db : null), () => store.secrets, users, teams, oidc);
+  const sso = new SsoProviders(() => store.db, () => (store.writable ? store.db : null), () => store.secrets, users, teams, oidc, undefined, parseTrustedIssuers(config.orgSsoTrustedIssuers));
   // Owner, 2026-11-01: an account's changes with their side effects, shared by /api/admin/users and the Admin console (identity/accountAdmin.ts).
   const accountAdmin = new AccountAdmin({ users, writable: () => (store.writable ? store.db : null), revokeSessions: (id) => portal.revokeUser(id), forget: [grants, teams, sso] });
   // Review #5: the attempt counters are swept once an hour.
