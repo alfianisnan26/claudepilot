@@ -82,7 +82,7 @@ export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avata
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        aria-label={`Account menu: ${v.title}`}
+        aria-label="Account menu"
         onClick={() => setOpen((x) => !x)}
         className={cn(
           'press',

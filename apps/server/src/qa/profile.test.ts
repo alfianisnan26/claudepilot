@@ -73,8 +73,8 @@ test('GET /api/me: a server-code session names the founder and says it is the se
     assert.doesNotMatch(JSON.stringify(me), /scrypt|password_hash|token/i, 'no hash or token in the answer');
 
     // The server code has no profile of its own: the profile writes refuse it.
-    assert.equal((await call('PATCH', '/api/me', { displayName: 'X' }, code)).status, 400);
-    assert.equal((await call('GET', '/api/me/devices', undefined, code)).status, 400);
+    assert.equal((await call('PATCH', '/api/me', { displayName: 'X' }, code)).status, 422);
+    assert.equal((await call('GET', '/api/me/devices', undefined, code)).status, 422);
     // Signed out: 401 everywhere.
     for (const [m, p] of [['GET', '/api/me'], ['PATCH', '/api/me'], ['GET', '/api/me/devices'], ['DELETE', '/api/me/avatar'], ['GET', `/api/users/avatars/${'a'.repeat(64)}`]] as const)
       assert.equal((await call(m, p, m === 'PATCH' ? {} : undefined)).status, 401, `${m} ${p}`);
@@ -111,7 +111,7 @@ test('a member edits only their own profile; the picture is theirs; the device l
     const img = await call('GET', avatar, undefined, adminCookie);
     assert.equal(img.status, 200);
     assert.equal(img.headers.get('content-type'), 'image/png', 'what is served is the portal’s PNG, not the upload');
-    assert.equal((await call('POST', '/api/me/avatar', new TextEncoder().encode('<svg/>'), m1, { 'content-type': 'image/svg+xml' })).status, 400);
+    assert.equal((await call('POST', '/api/me/avatar', new TextEncoder().encode('<svg/>'), m1, { 'content-type': 'image/svg+xml' })).status, 422);
     assert.equal((await call('DELETE', '/api/me/avatar', undefined, m1)).status, 200);
     assert.equal((await call('GET', avatar, undefined, adminCookie)).status, 404, 'removed and swept');
 
