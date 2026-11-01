@@ -832,3 +832,28 @@ test('routes: a workspace’s pools, with its delivery status, and changing one 
     h.done();
   }
 });
+
+/* ---------- Org isolation (owner request 2026-11-01) ---------- */
+
+test('org isolation: a new set or a copy is its maker’s; a set added to a workspace must be one the caller may use, sets already there stay', async () => {
+  const h = await setup();
+  try {
+    const owner = (id: string) => ({ ...(h.store.db!.prepare('SELECT owner_kind, owner_id FROM pools WHERE id = ?').get(id) as object) });
+    const mine = h.service.create('secrets', { name: 'Mine', content: {} }, 'u_a');
+    assert.deepEqual(owner(mine.id), { owner_kind: 'user', owner_id: 'u_a' }, 'before: every new set was the founding user’s');
+    assert.deepEqual(owner(h.service.duplicate(mine.id, 'Copy', 'u_b').id), { owner_kind: 'user', owner_id: 'u_b' });
+    assert.deepEqual(owner(h.service.create('secrets', { name: 'Portal', content: {} }).id), { owner_kind: 'user', owner_id: 'u_owner' }, 'the portal’s own: the default');
+    const theirs = h.service.create('secrets', { name: 'Theirs', content: {} }, 'u_b');
+    const mayUse = (poolId: string) => poolId !== theirs.id;
+    // Before: any set the caller named was assigned, whoever owned it.
+    assert.throws(() => h.service.setAssignments('docker/ws1', 'secrets', [{ poolId: theirs.id }], mayUse), (e) => code('VALIDATION_FAILED')(e) && /no longer exists/.test((e as Error).message));
+    assert.equal(h.service.assignmentsFor('docker/ws1').length, 0, 'nothing written');
+    h.service.setAssignments('docker/ws1', 'secrets', [{ poolId: mine.id }], mayUse);
+    // A set already on the workspace (put there by someone who could) stays when someone who cannot use it saves the list again.
+    h.service.setAssignments('docker/ws1', 'secrets', [{ poolId: mine.id }, { poolId: theirs.id }]);
+    const kept = h.service.setAssignments('docker/ws1', 'secrets', [{ poolId: theirs.id }, { poolId: mine.id }], mayUse);
+    assert.deepEqual(kept.assignments.map((a) => a.poolId).sort(), [mine.id, theirs.id].sort());
+  } finally {
+    h.done();
+  }
+});

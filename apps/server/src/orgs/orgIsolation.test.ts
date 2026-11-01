@@ -161,7 +161,7 @@ test('approvals: the queue, one request, a decision and Needs you keep what the 
   const needsYou = (who: Actor) => approvalAttentionSource(approvals).list(who, Date.now()).map((i) => i.id).sort();
   assert.deepEqual(needsYou(person(EVE)), ['apr-oth', 'apr-ses']);
   assert.deepEqual(needsYou(person(CAROL)), []);
-  assert.equal(needsYou({ kind: 'system' }).length, 5, 'the portal itself lists every one');
+  assert.equal(needsYou({ kind: 'system', job: 'test' }).length, 5, 'the portal itself lists every one');
 });
 
 test('repositories: the overview and the log keep the caller’s workspaces, narrowed by the org context', async () => {

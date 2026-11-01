@@ -121,7 +121,7 @@ export function registerClaudeUsageTools(usage: ClaudeUsageMonitor, registry: To
       claude_id: z.string().max(120).optional().describe('One Claude (as listed). Default: every Claude.'),
       tz_offset_min: z.number().int().min(-1440).max(1440).optional().describe('The caller’s Date.getTimezoneOffset(), so "today" starts at their midnight. Default: UTC.'),
     }),
-    async handler(_ctx, args) {
+    async handler(ctx, args) {
       const s = await usage.summary({ claudeId: args.claude_id, tzOffsetMin: args.tz_offset_min, actorId: userOf(ctx) });
       const money = (f: Figure<number>) => (f.value === null ? 'unknown' : `$${f.value.toFixed(2)}`);
       const limit =
@@ -184,7 +184,7 @@ export function registerClaudeUsageTools(usage: ClaudeUsageMonitor, registry: To
       workspace_id: z.string().max(120).optional().describe('`<target>/<name>`. Optional when from_claude_id is given.'),
       from_claude_id: z.string().max(120).optional().describe('The Claude the chat leaves; left out of the candidates.'),
     }),
-    async handler(_ctx, args) {
+    async handler(ctx, args) {
       if (!args.workspace_id && !args.from_claude_id) throw new AppError('VALIDATION_FAILED', 'Give workspace_id, or from_claude_id.');
       const m = args.workspace_id ? await usage.recommend(args.workspace_id, args.from_claude_id, userOf(ctx)) : await usage.recommendFrom(args.from_claude_id!, userOf(ctx));
       const best = m.candidates.find((c) => c.recommended);
