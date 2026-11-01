@@ -3001,6 +3001,8 @@ export class Tickets {
       title,
       worktree,
       ...(caller.kind === 'trigger' ? { actor: `portal:trigger-${caller.triggerId}` } : {}),
+      // D-82 S1a: a person's start records their account, so a member's session is theirs (chat/authz.ts) and its agent acts as them.
+      ...(caller.kind === 'ui' && caller.actor?.kind === 'user' && caller.actor.accountId ? { account: caller.actor.accountId } : {}),
     });
 
     const w: Writer = { ...this.#writer(caller), session: null };

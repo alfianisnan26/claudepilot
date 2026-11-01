@@ -2,6 +2,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from '../config.js';
+import { cutOnLostOperate, workspaceSocketActor } from '../authz/socketAccess.js';
 import type { Portal } from '../portal.js';
 import { cookie } from '../workspaces/shell.js';
 import { DEVICE_ID, deviceLabel } from './control.js';
@@ -45,10 +46,15 @@ export function attachBrowserSockets(server: Server, deps: { portal: Portal; ser
     const match = PATH.exec(url.pathname);
     if (!match) return; // not ours
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-    if (!deps.portal.session(cookie(req, config.session.cookie))) return refuse(socket, 401, 'Unauthorized');
+    const authorized = (r: IncomingMessage) => !!deps.portal.personSession(cookie(r, config.session.cookie));
+    if (!authorized(req)) return refuse(socket, 401, 'Unauthorized');
     const device = url.searchParams.get('device') ?? '';
     if (!DEVICE_ID.test(device)) return refuse(socket, 400, 'Bad Request');
     const workspaceId = `${match[1]}/${match[2]}`;
+    // D-82 S1a: the live view drives a browser inside the workspace: `operate` on it, for the cookie's person (the same 404 as a missing one).
+    const actor = workspaceSocketActor(req, authorized, workspaceId);
+    if (!actor) return refuse(socket, 404, 'Not Found');
+    const cut = (ws: WebSocket) => ws.on('close', cutOnLostOperate(actor, workspaceId, () => ws.close(4403, 'Access ended.')));
     if (deps.service.configuration(workspaceId).container !== 'running') return refuse(socket, 409, 'Conflict');
     const secure = secureContext(req, req.headers['x-forwarded-proto'] as string | undefined);
     deviceLabel(url.searchParams.get('label')); // validated where it is used (the control route)
@@ -57,8 +63,8 @@ export function attachBrowserSockets(server: Server, deps: { portal: Portal; ser
       ws.close(1011, 'Something went wrong.');
     };
     if (match[3] === 'preview')
-      preview.handleUpgrade(req, socket, head, (ws) => void new PreviewSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)));
-    else vnc.handleUpgrade(req, socket, head, (ws) => void new VncSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws)));
+      preview.handleUpgrade(req, socket, head, (ws) => (cut(ws), void new PreviewSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws))));
+    else vnc.handleUpgrade(req, socket, head, (ws) => (cut(ws), void new VncSession({ ws, service: deps.service, workspaceId, device, secure }).run().catch(failed(ws))));
   });
 
   return {

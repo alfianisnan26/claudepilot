@@ -30,9 +30,9 @@ import { WorkspacesPage } from '@/features/workspaces/WorkspacesPage';
 import { VscodePage } from '@/features/vscode/VscodePage';
 import { useAppUpdate } from '@/lib/appUpdate';
 import { MemberPage } from '@/features/auth/MemberPage';
-import { AuthProvider, useAuth } from '@/lib/auth';
+import { AuthProvider, isAdminState, useAuth } from '@/lib/auth';
 import { LiveProvider } from '@/lib/live';
-import { HOME } from './nav';
+import { HOME, isAdminOnlyPath } from './nav';
 import { uiStrings } from './strings';
 
 // The full-screen views load on first use, in chunks of their own: the chat (markdown and all) and
@@ -103,7 +103,7 @@ function Pages() {
         element={
           <SignedInOnly>
             <AppShell />
-            <ClaudeUsageWatcher />
+            <AdminUsageWatcher />
           </SignedInOnly>
         }
       >
@@ -161,6 +161,15 @@ function Pages() {
           </SignedInOnly>
         }
       />
+      {/* D-82 S1a: a member's sessions shared through the delegation door, their teams, password and sign-out (the former member page). */}
+      <Route
+        path="/admin/shared"
+        element={
+          <SignedInOnly>
+            <MemberPage />
+          </SignedInOnly>
+        }
+      />
       {/* Full screen, outside the app frame: the graphs of the whole portal. */}
       <Route
         path="/admin/knowledge/graph"
@@ -210,6 +219,12 @@ function Pages() {
   );
 }
 
+/** Claude usage and spend alerts are the platform's (`platform(usage)`): a member's app does not ask (D-82 S1a). */
+function AdminUsageWatcher() {
+  const { state } = useAuth();
+  return isAdminState(state) ? <ClaudeUsageWatcher /> : null;
+}
+
 function Splash() {
   return <div className="min-h-dvh" aria-busy="true" />;
 }
@@ -221,8 +236,8 @@ function SignedInOnly({ children }: { children: ReactNode }) {
   if (state.status === 'unreachable') return <Unreachable />;
   // The fragment comes along (kept in router state, never sent to the server): an invitation link opened signed out still works after sign-in.
   if (state.status === 'out') return <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />;
-  // MU2 S1a: a member account has no access to the admin app yet.
-  if (state.status === 'member') return <MemberPage />;
+  // D-82 S1a: a member account gets the normal app; a platform area (its nav item hidden) sends it home, the server refuses its calls anyway.
+  if (!isAdminState(state) && isAdminOnlyPath(location.pathname)) return <Navigate to={HOME} replace />;
   return children;
 }
 
@@ -231,7 +246,7 @@ function SignedOutOnly({ children }: { children: ReactNode }) {
   const location = useLocation();
   if (state.status === 'loading') return <Splash />;
   if (state.status === 'unreachable') return <Unreachable />;
-  if (state.status === 'in' || state.status === 'member') {
+  if (state.status === 'in') {
     // The UI reporter's connect popup sent the person here to sign in: back to it (a server page, so a full load).
     const back = connectReturnPath(new URLSearchParams(location.search).get('next'));
     if (back) {

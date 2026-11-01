@@ -333,11 +333,12 @@ export function createApp(
   /**
    * Organizations slice 0 (P1): the person a FULL session is, set once per request by `requireSession` and read by sockets the same way. The
    * server code is the founding user; an admin account is its OWN user id (the one account marked founder, migration 460, is `u_owner`).
-   * Null for no session or a member's (default deny, D-82). The role is read on every use (`portal.session`, and the seam through
-   * `useAccountRoles`), so a demotion or a disable takes effect at once.
+   * D-82 S1a (member access): a member's session is its own user id too; what it may reach is the seam's (the route guard's declared policy,
+   * its member doors, `can()`). Null for no session, or an account that is disabled, gone or cannot be read now. The role is read on every use
+   * (`portal.personSession`, and the seam through `useAccountRoles`), so a demotion or a disable takes effect at once.
    */
   const sessionActor = (token: string | undefined): (Actor & { kind: 'user'; userId: string }) | null => {
-    const s = token ? portal.session(token) : undefined;
+    const s = token ? portal.personSession(token) : undefined;
     if (!s) return null;
     let userId = FOUNDING_USER_ID;
     if (s.userId) {
@@ -351,6 +352,15 @@ export function createApp(
     return { kind: 'user', userId, loginSessionId: `ws:${sessionTokenHash(token!)}`, via: 'ui', ...(s.userId ? { accountId: s.userId } : {}) };
   };
   useAccountRoles((id) => portal.roleOf(id));
+  // D-82 S1a: a session a MEMBER account started is that member's (chat/controller.ts `sessionOwnerOf`); anything else, or an account that
+  // cannot be read, stays the founding user's (the member then does not reach it: fail closed for them, unchanged for admins).
+  chatController.sessionOwnerOf = (account) => {
+    try {
+      return users.roleOf(account) === 'member' ? users.principalOf(account) : null;
+    } catch {
+      return null;
+    }
+  };
   useSocketActor((req) => {
     try {
       return sessionActor(cookieOf(req, cookie));
@@ -665,9 +675,10 @@ export function createApp(
   };
   const requireSession = createMiddleware<Env>(async (c, next) => {
     const token = getCookie(c, cookie);
-    if (!token || !portal.session(token)) {
-      // MU2 S1a: a member is signed in but has no access to the admin app yet (default deny); everything else is "sign in again".
-      if (token && portal.anySession(token)) throw new AppError('FORBIDDEN', 'Your account has no access to this yet.');
+    if (!token || !portal.personSession(token)) {
+      // D-82 S1a: an admin's and a member's session both pass; the declared policy decides below. A live session whose account cannot be
+      // read right now is not signed out (a 401 would), it is refused for now; everything else is "sign in again".
+      if (token && portal.anySession(token)) throw new AppError('FORBIDDEN', 'Your account can’t be checked right now. Try again in a moment.');
       throw new AppError('UNAUTHORIZED', 'Sign in again.');
     }
     const field = await hostileWorkspaceField(c);
@@ -714,7 +725,11 @@ export function createApp(
 
   // T-968: the person's General Manager (one per person): its state, Enable (makes and starts it), Disable (ends it).
   const managers = new ManagerService(chatController, workspaces);
-  const managerOwner = (c: Context<Env>) => portal.session(c.get('token'))?.userId ?? 'u_owner';
+  // The account the request signed in as (raw, as the manager is keyed), the server code's 'u_owner'; never another person's (D-82 S1a).
+  const managerOwner = (c: Context<Env>) => {
+    const a = actorOf(c);
+    return a.kind === 'user' && a.accountId ? a.accountId : 'u_owner';
+  };
   admin.get('/manager', async (c) => c.json(success(await managers.status(managerOwner(c)))));
   admin.post('/manager/prepare', async (c) => {
     const st = await managers.prepare(managerOwner(c));

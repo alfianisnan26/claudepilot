@@ -90,6 +90,11 @@ export interface ResolvedObject {
   publicLevel?: Level;
   /** Small facts a policy needs: a session's `workspaceId`, a ticket's, whether it is `private`. */
   attrs?: Record<string, string | number | boolean | null>;
+  /**
+   * D-82 S1a: the object whose grants also count for this one (a ticket counts its bucket's shares). Resolved through that type's own
+   * resolver and read with its own facts (owner, uid); one level only.
+   */
+  grantsFrom?: ObjectRef;
 }
 
 /** One per object type, written by the module that owns it (`<module>/authz.ts`) and registered at start-up. No handler reads an object without one. */
@@ -178,15 +183,28 @@ export function orgRoleIn(orgId: string, userId: UserId): OrgRole | null {
   }
 }
 
-/** The grants' level on a resolved object; `none` without the orgs module or when it cannot be read. */
+/** The grants' level on a resolved object (and on its `grantsFrom`); `none` without the orgs module or when it cannot be read. */
 function grantsOf(userId: UserId, found: ResolvedObject): Level {
   if (!orgAuthority) return 'none';
-  try {
-    const l = orgAuthority.grantLevel(found.ref, userId, found);
-    return l === 'view' || l === 'operate' || l === 'manage' ? l : 'none';
-  } catch {
-    return 'none';
+  const one = (f: ResolvedObject): Level => {
+    try {
+      const l = orgAuthority!.grantLevel(f.ref, userId, f);
+      return l === 'view' || l === 'operate' || l === 'manage' ? l : 'none';
+    } catch {
+      return 'none';
+    }
+  };
+  let level = one(found);
+  if (found.grantsFrom) {
+    let from: ResolvedObject | null = null;
+    try {
+      from = resolvers.get(found.grantsFrom.type)?.resolve(found.grantsFrom.id, found.grantsFrom.poolType) ?? null;
+    } catch {
+      from = null;
+    }
+    if (from) level = maxLevel(level, one({ ...from, grantsFrom: undefined }));
   }
+  return level;
 }
 
 /**

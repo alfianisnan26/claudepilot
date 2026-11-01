@@ -29,6 +29,8 @@ export interface CreateSession {
   worktree?: { repo?: string; branch?: string; base?: string };
   /** Who starts it, when not the ticket itself: a trigger's `portal:trigger-<id>` (its session then counts as started from outside). */
   actor?: string;
+  /** D-82 S1a: the email account of the person who started it (a member's session is then theirs: chat/authz.ts); absent: none recorded. */
+  account?: string;
 }
 
 export interface TicketSessions {
@@ -78,7 +80,7 @@ export class ChatTicketSessions implements TicketSessions {
   async create(req: CreateSession): Promise<TicketSessionInfo> {
     const session = await this.chat.create(
       { workspaceId: req.workspaceId, title: req.title, cwd: req.cwd, claudeId: req.claudeId, ticketId: req.ticketId, ...(req.worktree ? { worktree: req.worktree } : {}) },
-      { actor: req.actor ?? `ticket:${req.ticketId}` },
+      { actor: req.actor ?? `ticket:${req.ticketId}`, ...(req.account ? { account: req.account } : {}) },
     );
     return info(session);
   }

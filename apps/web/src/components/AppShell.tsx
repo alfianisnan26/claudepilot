@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { Ellipsis } from 'lucide-react';
 import { Fragment, Suspense, useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router';
-import { BAR_ITEMS, MORE_ITEMS, NAV, NAV_GROUPS, type NavItem } from '@/app/nav';
+import { navFor, type NavItem } from '@/app/nav';
 import { GlanceDock } from '@/features/glance/Dock';
 import { NavBadge } from '@/features/notify/NavBadge';
 import { AttentionBadge, AttentionRoot } from '@/features/attention/Root';
@@ -13,12 +13,15 @@ import { GlanceStrip } from '@/features/glance/Strip';
 import { api } from '@/lib/api';
 import { serializeContext } from '@/lib/orgContext';
 import { workbenchPage } from '@/lib/panels';
-import { useAuth } from '@/lib/auth';
+import { isAdminState, useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
 import { InfoTip } from './InfoTip';
 
-/** A phone tab bar only earns its place with two or more sections. */
-const showTabBar = NAV.length > 1;
+/** This person's navigation: a member's has no platform areas (D-82 S1a). */
+function useNav() {
+  const { state } = useAuth();
+  return navFor(isAdminState(state));
+}
 
 /**
  * pay's dashboard frame. Phones: an app bar on top (and a tab bar once there are several
@@ -41,6 +44,8 @@ function Shell() {
   // A Workbench page (T-158) gets the whole width (no centred column), less padding under it (it ends at the window's bottom), and
   // stays mounted across its own sub-paths: opening a ticket beside the board must not remount (and refetch) the board.
   const workbench = workbenchPage(pathname);
+  // A phone tab bar only earns its place with two or more sections.
+  const showTabBar = useNav().items.length > 1;
   // The labels of renamed workspaces (T-42), once: every place that only holds a workspace id names it by its label.
   useEffect(() => void api.workspaces.labels().catch(() => undefined), []);
 
@@ -93,6 +98,7 @@ function Shell() {
 }
 
 function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => void }) {
+  const nav = useNav();
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-20 flex-col border-r border-line bg-bg sm:flex lg:w-64">
       {/* The context switcher sits where the logo was (owner, 2026-11-01): the mark, the current context, a chevron. */}
@@ -101,7 +107,7 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
       </div>
       <nav aria-label="Main" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:thin] lg:px-4">
         <ul className="flex flex-col gap-1">
-          {NAV_GROUPS.map((items, g) => (
+          {nav.groups.map((items, g) => (
             <Fragment key={items[0]!.group}>
               {/* A quiet divider between work and admin, no headings. */}
               {g > 0 && <li aria-hidden="true" className="mx-3 my-2 h-px bg-line" />}
@@ -150,6 +156,7 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
  */
 function TabBar({ pathname }: { pathname: string }) {
   const [more, setMore] = useState(false);
+  const { bar: barItems, more: moreItems } = useNav();
   // Lets fixed things (the toast) sit just above the bar.
   useEffect(() => {
     const root = document.documentElement;
@@ -157,8 +164,8 @@ function TabBar({ pathname }: { pathname: string }) {
     return () => void root.style.removeProperty('--tabbar-h');
   }, []);
   useEffect(() => setMore(false), [pathname]);
-  const hasMore = MORE_ITEMS.length > 0;
-  const inMore = MORE_ITEMS.some((i) => pathname.startsWith(i.to));
+  const hasMore = moreItems.length > 0;
+  const inMore = moreItems.some((i) => pathname.startsWith(i.to));
   return (
     <>
       <nav
@@ -166,8 +173,8 @@ function TabBar({ pathname }: { pathname: string }) {
         data-tabbar=""
         className="glass-card fixed right-[var(--bar-right)] bottom-[var(--bar-gap)] left-[var(--bar-left)] z-30 h-[60px] overflow-hidden rounded-full sm:hidden"
       >
-        <ul className="grid" style={{ gridTemplateColumns: `repeat(${BAR_ITEMS.length + (hasMore ? 1 : 0)}, minmax(0, 1fr))` }}>
-          {BAR_ITEMS.map((item) => (
+        <ul className="grid" style={{ gridTemplateColumns: `repeat(${barItems.length + (hasMore ? 1 : 0)}, minmax(0, 1fr))` }}>
+          {barItems.map((item) => (
             <li key={item.id} className="min-w-0">
               <TabLink item={item} active={pathname.startsWith(item.to)} />
             </li>
@@ -187,7 +194,7 @@ function TabBar({ pathname }: { pathname: string }) {
                 <span className="relative">
                   <TabIcon active={inMore || more} icon={Ellipsis} />
                   {/* Needs you sits in More on a phone: its number shows on the More button too. */}
-                  {MORE_ITEMS.some((i) => i.id === 'attention') && <AttentionBadge className="!top-0 !left-auto right-1" />}
+                  {moreItems.some((i) => i.id === 'attention') && <AttentionBadge className="!top-0 !left-auto right-1" />}
                 </span>
               </button>
             </li>
@@ -229,7 +236,7 @@ function TabIcon({ active, icon: Icon }: { active: boolean; icon: NavItem['icon'
 
 /** The sections the bar has no room for, with their names (there is room here), work first and then admin. */
 function MoreList({ pathname, onPick }: { pathname: string; onPick: () => void }) {
-  const groups = NAV_GROUPS.map((items) => items.filter((i) => !i.bar)).filter((items) => items.length > 0);
+  const groups = useNav().groups.map((items) => items.filter((i) => !i.bar)).filter((items) => items.length > 0);
   return (
     <ul className="flex flex-col pb-2">
       {groups.map((items, g) => (
