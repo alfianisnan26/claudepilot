@@ -89,6 +89,8 @@ let chatRoutes: Hono;
 let ticketRoutes: Hono;
 let knowledgeRoutes: Hono;
 let ciRoutes: Hono;
+/** The `within` the ticket list was last asked with (the buckets the SQL narrows to, so pages are full and totals scoped). */
+let lastWithin: readonly string[] | undefined;
 
 before(async () => {
   store = await Store.open({ dataDir: tempDirectory('cp-orgscope-'), secretKey: null });
@@ -145,7 +147,10 @@ before(async () => {
     keyOf: () => null,
     buckets: () => (['ORG', 'OWN', 'OTH'] as const).map((key) => ({ key })),
     bucketKeys: () => ['ORG', 'OWN', 'OTH'],
-    listPage: (_v: unknown, _f: unknown, args: { keep: (t: { id: string; bucket?: string }) => boolean }) => ({ items: TICKETS.filter(args.keep), next: null }),
+    listPage: (_v: unknown, _f: unknown, args: { keep: (t: { id: string; bucket?: string }) => boolean; within?: readonly string[] }) => {
+      lastWithin = args.within;
+      return { items: TICKETS.filter(args.keep), next: null };
+    },
   } as unknown as Tickets);
 
   knowledgeRoutes = createKnowledgeRoutes({
@@ -212,6 +217,24 @@ test('tickets and buckets: a ticket through its bucket’s org; a ticket with no
   assert.deepEqual(await appFor(person(EVE))(`/tickets/buckets?org=${orgB}`), ['OTH']);
   assert.deepEqual(await appFor(person(EVE))(`/tickets/buckets?org=${orgA}`), []);
   assert.deepEqual(await appFor(person(CAROL))(`/tickets/buckets?org=${orgA}`), [], 'member without a grant');
+});
+
+test('tickets: the org narrows in the query (within), and an org may be named by its slug under the same role check (audit 2026-11-01)', async () => {
+  const get = appFor(person(OWNER));
+  assert.deepEqual(await get(`/tickets?org=${orgA}`), ['t_org']);
+  assert.deepEqual(lastWithin, ['ORG'], 'the org reaches the SQL as its buckets: a page is full, total and counts are the org’s');
+  assert.deepEqual(await get('/tickets?org=acme'), ['t_org'], 'the slug is the org');
+  assert.deepEqual(lastWithin, ['ORG']);
+  assert.deepEqual(await get('/tickets?org=ACME'), ['t_org'], 'a slug in any case');
+  assert.deepEqual(await get('/tickets/buckets?org=acme'), ['ORG']);
+  // A slug of an org the caller left, or of none: the one empty scope, like a forged id (never an error, never a hint it exists).
+  assert.deepEqual(await get('/tickets?org=other'), []);
+  assert.deepEqual(lastWithin, []);
+  assert.deepEqual(await get('/tickets?org=nope-not-here'), []);
+  assert.deepEqual(await appFor(person(EVE))('/tickets?org=acme'), [], 'another org’s slug never widens');
+  assert.deepEqual(await appFor(person(EVE))('/tickets/buckets?org=other'), ['OTH']);
+  assert.deepEqual(await get('/tickets'), ['t_none', 't_org', 't_own']);
+  assert.equal(lastWithin, undefined, 'no ?org=: no narrowing');
 });
 
 test('vaults: by their own owner', async () => {

@@ -53,6 +53,11 @@ test('upload, list, download (inline image, download for the rest, safe headers)
     assert.match(g2.headers.get('content-disposition') ?? '', /^attachment;/);
     assert.equal(g2.headers.get('x-content-type-options'), 'nosniff');
     assert.match(g2.headers.get('content-security-policy') ?? '', /sandbox/);
+    const json = ((await r3.json()) as { data: { id: number } }).data;
+    const gj = await a.request(`/api/tickets/${t.id}/attachments/${json.id}`);
+    assert.equal(gj.headers.get('content-type'), 'application/json', 'JSON (the reporter evidence) keeps its type');
+    assert.match(gj.headers.get('content-disposition') ?? '', /^attachment;/, 'still a download');
+    assert.equal(gj.headers.get('x-content-type-options'), 'nosniff');
     const g3 = await a.request(`/api/tickets/${t.id}/attachments/${img.id}?download`);
     assert.match(g3.headers.get('content-disposition') ?? '', /^attachment;/, '?download forces a download for an image too');
 

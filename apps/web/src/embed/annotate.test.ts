@@ -20,6 +20,7 @@ import {
   moveMark,
   nextStep,
   pixelate,
+  pointerClient,
   redo,
   removeMark,
   renderFlat,
@@ -285,6 +286,40 @@ test('pointer to image: after a layout shift (the blur note pushing the stage 44
   // The same holds for a zoom that changed between pointer-down and the move (pinch, wheel, a refit on resize).
   const zoomed = { scale: 0.9, x: -200, y: -500 };
   near(clientToImage(screenOf(after, zoomed, secret), boxOf(after, zoomed), SIZE), secret, 'after a zoom');
+});
+
+test('pointer to image: touch and mouse map the same at DPR 1, 2 and 3, with a visual-viewport offset and a scrolled page (KONF-2403)', () => {
+  // A phone 390 css px wide: the screenshot is 390*dpr device pixels, drawn fitted on a stage under the annotator's bar inside the SDK's
+  // sheet. A pinch-zoomed host (or the keyboard) offsets the visual viewport; the panel's own document is scrolled under the stage.
+  for (const dpr of [1, 2, 3]) {
+    const size = { w: 390 * dpr, h: 844 * dpr };
+    const view = { scale: 285.57 / size.w, x: 52.2, y: 0 };
+    const stage = { left: 0, top: 44 };
+    const box = { left: stage.left + view.x, top: stage.top + view.y, width: size.w * view.scale, height: size.h * view.scale };
+    const secret = { x: 300 * dpr, y: 598 * dpr };
+    const client = { x: box.left + secret.x * view.scale, y: box.top + secret.y * view.scale };
+    const vv = { offsetLeft: 67, offsetTop: 233 };
+    const scrollY = 1200;
+    const at = (e: { clientX: number; clientY: number }) => clientToImage(pointerClient(e), box, size);
+    // What the browser hands the handlers: client coordinates the same for every pointer type; page and screen ones carry the scroll,
+    // the visual viewport and the frame's place in the host, which the canvas rect does not.
+    const mouse = { pointerType: 'mouse', clientX: client.x, clientY: client.y, pageX: client.x, pageY: client.y + scrollY, screenX: client.x, screenY: client.y + 44 };
+    const touch = {
+      pointerType: 'touch',
+      clientX: client.x,
+      clientY: client.y,
+      pageX: client.x + vv.offsetLeft,
+      pageY: client.y + scrollY + vv.offsetTop,
+      screenX: client.x - vv.offsetLeft,
+      screenY: client.y + 44 - vv.offsetTop,
+    };
+    near(at(mouse), secret, `mouse at DPR ${dpr}`);
+    near(at(touch), secret, `touch at DPR ${dpr}`);
+    near(at(touch), at(mouse), `touch equals mouse at DPR ${dpr}`);
+    // Reading the page coordinates instead (the bug shape this guards) would put the blur off by the offset.
+    const wrong = clientToImage({ x: touch.pageX, y: touch.pageY }, box, size);
+    assert.ok(Math.abs(wrong.y - secret.y) > 100, `page coordinates are off at DPR ${dpr}`);
+  }
 });
 
 test('a pointer-down while a text box is open: with Text it only ends the text; with any other tool it ends it and draws', () => {

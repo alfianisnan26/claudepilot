@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { isInternalIp, reporterIpText } from '@portal/contracts';
+import { clientAddress } from '../clientAddress.js';
 import { releaseOf } from './routes.js';
 import { build, capture, reporterHarness } from './testkit.js';
 
@@ -22,6 +23,31 @@ test('/me returns the client address and its family; a widget ticket stores it a
     assert.equal(ev.reporterIp, '127.0.0.1', 'what the portal saw, not what the body claimed');
     const desc = (h.store.db!.prepare('SELECT description FROM tickets WHERE number = ?').get(Number(id.slice(2))) as { description: string }).description;
     assert.match(desc, /- Reporter IP: `127\.0\.0\.1` \(internal: behind the cluster proxy\)/, "a loopback or cluster address is labelled, not shown as the client's public IP");
+  } finally {
+    h.done();
+  }
+});
+
+test('behind Cloudflare: the reporter IP is CF-Connecting-IP when the hop is the tunnel, never a header from a public peer (audit 2026-11-01)', async () => {
+  // The app's visitorAddress: Traefik's hop from X-Forwarded-For (here fixed per request by a test header), Cloudflare trusted.
+  const h = await reporterHarness({
+    visitorIp: (c) => clientAddress(c.req.header('x-test-hop'), '10.42.0.5', true, { connectingIp: c.req.header('cf-connecting-ip'), trusted: true }),
+  });
+  try {
+    const t = h.mint().token;
+    const me = async (headers: Record<string, string>) =>
+      ((await (await h.call('/reporter/v1/me', { token: t, headers })).json()) as { data: { clientIp: string } }).data.clientIp;
+    assert.equal(await me({ 'x-test-hop': '10.42.0.17', 'cf-connecting-ip': '198.51.100.23' }), '198.51.100.23', 'through the tunnel');
+    assert.equal(await me({ 'x-test-hop': '203.0.113.66', 'cf-connecting-ip': '198.51.100.1' }), '203.0.113.66', 'spoofed from a public peer: ignored');
+    const r = await h.call('/reporter/v1/tickets', {
+      method: 'POST',
+      token: t,
+      headers: { 'content-type': 'application/json', 'x-test-hop': '10.42.0.17', 'cf-connecting-ip': '198.51.100.23' },
+      body: JSON.stringify({ summary: 'Via Cloudflare', captures: [capture()], build: build(), sdkVersion: '1' }),
+    });
+    assert.equal(r.status, 201);
+    const key = ((await r.json()) as { data: { key: string } }).data.key;
+    assert.equal(h.service.evidence(h.tickets.resolve({ kind: 'system' }, key)!)!.reporterIp, '198.51.100.23', 'the stored IP is the visitor’s');
   } finally {
     h.done();
   }

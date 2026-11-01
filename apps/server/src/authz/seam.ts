@@ -165,6 +165,8 @@ export interface OrgAuthority {
    * (owner or admin). One audit row the member can read (the service de-duplicates bursts). Never called for a list's filter.
    */
   onTranscriptRead?(orgId: string, viewerId: UserId, sessionId: string, ownerId: UserId): void;
+  /** The id of the org with this slug, or null (a list's `?org=` may name the slug; authz/orgScope.ts checks the role after). */
+  orgIdBySlug?(slug: string): string | null;
 }
 let orgAuthority: OrgAuthority | null = null;
 /** The orgs module installs it at start-up; returns the one before (tests restore it). Null: org-owned objects are unowned (404 for all). */
@@ -178,6 +180,15 @@ export const useOrgAuthority = (a: OrgAuthority | null): OrgAuthority | null => 
 export function orgRoleIn(orgId: string, userId: UserId): OrgRole | null {
   try {
     return orgAuthority?.roleIn(orgId, userId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The org id a slug names, or null (no orgs module, no such slug, a database that cannot be read). */
+export function orgIdBySlug(slug: string): string | null {
+  try {
+    return orgAuthority?.orgIdBySlug?.(slug) ?? null;
   } catch {
     return null;
   }

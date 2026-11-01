@@ -421,6 +421,23 @@ test('list: this page by position, same repo across environments only, counts; c
   }
 });
 
+test('list: only tickets that came through the reporter; an agent’s internal ticket in the bucket stays out of the panel (audit 2026-11-01)', async () => {
+  const h = await reporterHarness();
+  try {
+    const t = h.mint().token;
+    await h.postJson('/reporter/v1/tickets', t, { summary: 'From the page', captures: [capture('/pricing', 100)], build: build(), sdkVersion: '1' });
+    const internal = h.tickets.create(UI, { summary: 'Agent: refactor the deploy script', bucket: 'KONF' });
+    const all = (await body(await h.call('/reporter/v1/tickets?status=all', { token: t }))).data;
+    assert.deepEqual(all.items.map((x: any) => x.summary), ['From the page']);
+    assert.equal(all.counts.status.all, 1, 'counts leave it out too');
+    const found = (await body(await h.call('/reporter/v1/tickets?status=all&q=refactor', { token: t }))).data;
+    assert.deepEqual(found.items, [], 'not by search either');
+    assert.equal((await h.call(`/reporter/v1/tickets/${internal.key}`, { token: t })).status, 200, 'a key from a chat link still opens');
+  } finally {
+    h.done();
+  }
+});
+
 test('duplicates: same area, same element, same error, open tickets of this repo only', async () => {
   const h = await reporterHarness();
   try {

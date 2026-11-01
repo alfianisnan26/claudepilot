@@ -14,6 +14,7 @@ import {
   parseHotkeys,
   parsePrefs,
   pickTarget,
+  proposedSummary,
   targetNotice,
   playlist,
   querySearch,
@@ -133,6 +134,12 @@ test('the viewer’s own draft comments show as pending callouts', () => {
   assert.equal(ticketsFor(review, 'single'), 1);
   assert.equal(ticketsFor(review, 'per-page'), 2);
   assert.equal(ticketsFor(review, 'per-capture'), 2);
+  // The submit's default summary: the review's title; else one comment's first line; else the pages, never the first of several comments.
+  assert.equal(proposedSummary(review), 'Landing pass');
+  assert.equal(proposedSummary({ ...review, title: ' ' }), 'UI review of 2 pages (2 comments)');
+  assert.equal(proposedSummary({ ...review, title: '', comments: [review.comments[0]!, { ...review.comments[1]!, anchor: anchor('/pricing') }] }), 'UI review of /pricing (2 comments)');
+  assert.equal(proposedSummary({ ...review, title: '', comments: [review.comments[0]!] }), 'Button cut off');
+  assert.equal(proposedSummary({ ...review, title: '', comments: [] }), 'UI review');
 });
 
 test('Play all walks every capture on the page top to bottom; grouping keeps first-seen order', () => {

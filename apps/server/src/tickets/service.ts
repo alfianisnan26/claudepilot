@@ -1098,7 +1098,7 @@ export class Tickets {
     const limit = clampLimit(args.limit);
     const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
     const kind = closedOnly ? 'closed' : filter.sort === 'newest' ? 'newest' : 'priority';
-    const scope = `tickets|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, kind, filter.bucket ?? null, filter.status ?? null, filter.priority ?? null, filter.type ?? null, filter.tag ?? null, filter.assignee ?? null, filter.workspaceId ?? null, filter.query?.trim() ?? null, !!filter.includeClosed, !!filter.orphan])}`;
+    const scope = `tickets|${JSON.stringify([caller.kind === 'agent' ? `agent:${caller.workspaceId}` : caller.kind, kind, filter.bucket ?? null, filter.status ?? null, filter.priority ?? null, filter.type ?? null, filter.tag ?? null, filter.assignee ?? null, filter.workspaceId ?? null, filter.query?.trim() ?? null, !!filter.includeClosed, !!filter.orphan, args.within ?? null])}`;
     // The sort key of a row, as the cursor carries it, and the SQL that says "after the cursor" in the list's order.
     const keyOf = (r: Row): string =>
       kind === 'closed' ? (r.closed_at ?? '') : kind === 'newest' ? r.created_at : `${r.priority_rank}|${r.updated_at}`;

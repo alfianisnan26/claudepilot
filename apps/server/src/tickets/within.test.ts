@@ -57,3 +57,23 @@ test('list and counts take within too (the glance’s tickets block); bucketKeys
     h.done();
   }
 });
+
+test('listPage: pages in an org are full (the narrowing is in the query, not after the page) and a cursor is bound to the org', async () => {
+  const h = await threeBuckets();
+  try {
+    // Many tickets of another bucket ranked ahead of the org's: a filter after the page would leave page 1 nearly empty (audit 2026-11-01).
+    for (let i = 0; i < 30; i++) h.tickets.create(UI, { summary: `own extra ${i}`, bucket: 'OWN', priority: 'urgent' });
+    for (let i = 0; i < 4; i++) h.tickets.create(UI, { summary: `org extra ${i}`, bucket: 'ORG' });
+    const p1 = h.tickets.listPage(UI, {}, { within: ['ORG'], limit: 3 });
+    assert.equal(p1.items.length, 3, 'a full page');
+    assert.ok(p1.items.every((t) => t.bucket === 'ORG'));
+    assert.equal(p1.total, 6);
+    assert.ok(p1.next);
+    const p2 = h.tickets.listPage(UI, {}, { within: ['ORG'], limit: 3, cursor: p1.next! });
+    assert.equal(p2.items.length, 3);
+    assert.ok(p2.items.every((t) => t.bucket === 'ORG'));
+    assert.throws(() => h.tickets.listPage(UI, {}, { within: ['OWN'], limit: 3, cursor: p1.next! }), /cursor/i, 'another org’s cursor is refused');
+  } finally {
+    h.done();
+  }
+});

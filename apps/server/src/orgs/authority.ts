@@ -33,6 +33,12 @@ export function orgAuthority(deps: {
     breakGlass: (orgId, userId) => deps.breakGlass.isOpen(orgId, userId),
     onBreakGlassUse: (entryId, userId, orgId, verb, object) => deps.breakGlass.recordAccess(entryId, userId, orgId, verb, object),
     onTranscriptRead: (orgId, viewerId, sessionId, ownerId) => deps.sharing?.transcriptRead(orgId, viewerId, sessionId, ownerId),
+    orgIdBySlug(slug: string): string | null {
+      const db = deps.db();
+      if (!db) return null;
+      const r = db.prepare('SELECT id FROM orgs WHERE slug = ?').get(slug.toLowerCase()) as { id?: unknown } | undefined;
+      return typeof r?.id === 'string' ? r.id : null;
+    },
     anyOrgOwned(): boolean {
       const db = deps.db();
       if (!db) return false;

@@ -56,6 +56,10 @@ spec:
             # Traefik is the only way in: its X-Forwarded-For is the client address (sign-in rate limit).
             - name: PORTAL_TRUST_PROXY
               value: "true"
+            # Cloudflare's tunnel is the hop Traefik sees for public visitors (a cluster address): their address is CF-Connecting-IP,
+            # read only when that hop is private (clientAddress.ts), and only for the reporter's shown IP (rate limits keep the hop).
+            - name: PORTAL_TRUST_CLOUDFLARE
+              value: "true"
             # The origin an SSO provider sends the browser back to (T-1052); never taken from a request's Host here.
             - name: PORTAL_SSO_ORIGIN
               value: "https://pilot.ai.isnan.me"

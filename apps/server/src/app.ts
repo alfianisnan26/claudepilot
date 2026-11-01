@@ -170,6 +170,12 @@ export function sameHostOrigin(origin: string, host: string | undefined): boolea
 }
 
 const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
+/**
+ * The visitor's address as Cloudflare saw it (clientAddress.ts): only what is SHOWN and stored about a visitor (the UI reporter's IP).
+ * Rate limits stay on clientKey: a pod in the cluster or a device at home could set CF-Connecting-IP itself and change its key with it.
+ */
+const visitorAddress = (c: Context<Env>) =>
+  clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy, { connectingIp: c.req.header('cf-connecting-ip'), trusted: config.trustCloudflare });
 
 async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   try {
@@ -1623,6 +1629,7 @@ export function createApp(
         },
         userLabel: () => 'Owner',
         clientKey: (c) => clientKey(c as Context<Env>),
+        visitorIp: (c) => visitorAddress(c as Context<Env>),
         audit: reporterAudit,
         release: releaseOf(process.env.PORTAL_RELEASE),
       }) as never,

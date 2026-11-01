@@ -94,6 +94,15 @@ export function clientToImage(client: Pt, box: { left: number; top: number; widt
   return { x: ((client.x - box.left) * size.w) / box.width, y: ((client.y - box.top) * size.h) / box.height };
 }
 
+/**
+ * The one point a pointer event is read at: its client coordinates, the space getBoundingClientRect() is in. Mouse, pen and touch take
+ * the same path; page and screen coordinates are never used (they carry the document's scroll, the visual viewport's offset on a pinch
+ * zoomed or keyboard-shifted phone, and the frame's place in the host page, none of which the canvas rect has). The audit of 2026-11-01
+ * (KONF-2403) saw a touch blur 44 screen px off; this path was measured exact for touch and mouse at DPR 1, 2 and 3 in Chromium, inside
+ * the SDK's sheet and with a pinch-zoomed host, so the test below pins it.
+ */
+export const pointerClient = (e: { clientX: number; clientY: number }): Pt => ({ x: e.clientX, y: e.clientY });
+
 /** Screen pixels per image pixel of the image as drawn now (for touch slop and handle reach). */
 export const drawnScale = (box: { width: number }, size: { w: number }) => (size.w > 0 && box.width > 0 ? box.width / size.w : 1);
 

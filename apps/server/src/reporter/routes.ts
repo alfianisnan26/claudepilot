@@ -150,6 +150,8 @@ export interface ReporterWidgetDeps {
   signedIn: (c: Context) => (Actor & { userId: string }) | null;
   userLabel?: (userId: string) => string;
   clientKey: (c: Context) => string;
+  /** The visitor's address to show and store (Cloudflare's, behind the tunnel; clientAddress.ts); clientKey when absent. Never a rate key. */
+  visitorIp?: (c: Context) => string;
   audit?: (kind: string, detail: Record<string, unknown>, actor: string) => void;
   /** The clock of the held approvals (tests); Date.now by default. */
   now?: () => number;
@@ -371,7 +373,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     if (!ctx) throw notFound();
     if (perToken.blocked(ctx.id)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
     perToken.fail(ctx.id);
-    c.set('reporter', { ...ctx, clientIp: plainIp(deps.clientKey(c)) });
+    c.set('reporter', { ...ctx, clientIp: plainIp((deps.visitorIp ?? deps.clientKey)(c)) });
     await next();
   });
   const ctxOf = (c: Context<Vars>) => c.get('reporter');

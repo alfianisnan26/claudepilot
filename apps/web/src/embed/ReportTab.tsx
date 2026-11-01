@@ -19,7 +19,7 @@ import { Annotator } from './Annotator';
 import { editorSource, uploadPlan } from './annotate';
 import { usePanel, type Capture } from './context';
 import { Icon, type IconName } from './icons';
-import { afterFiled, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
+import { afterFiled, askLeadNote, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
 import { pickTarget, proposedSummary, sentText, ticketsFor } from './model';
 import { Viewer } from './Viewer';
 import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './ui';
@@ -374,7 +374,7 @@ function Duplicates({ shots, onAdded }: { shots: Capture[]; onAdded: (key: strin
 export function Destination({ value, onChange }: { value: ReporterReportTarget; onChange: (t: ReporterReportTarget) => void }) {
   const { targets } = usePanel();
   const usable = targets.filter((t) => t.available);
-  const reason = !targets.length ? 'No lead session is set up for this bucket.' : !usable.length ? (targets[0]?.reason ?? 'No lead session is available now.') : undefined;
+  const note = askLeadNote(targets);
   const current = value.kind === 'session' ? targets.find((t) => t.sessionId === value.sessionId) : undefined;
   return (
     <div className="flex flex-col gap-1.5">
@@ -384,9 +384,15 @@ export function Destination({ value, onChange }: { value: ReporterReportTarget; 
         onChange={(k) => onChange(k === 'ticket' ? { kind: 'ticket' } : { kind: 'session', sessionId: usable[0]!.sessionId })}
         options={[
           { value: 'ticket', label: 'Queue' },
-          { value: 'session', label: 'Ask lead now', disabled: !usable.length, hint: reason },
+          { value: 'session', label: 'Ask lead now', disabled: !usable.length, hint: note ?? undefined },
         ]}
       />
+      {/* The reason in words, not only in a title (a title never shows on a touch screen). */}
+      {note && (
+        <p data-ask-lead-note className="px-1 text-[12px] break-words text-muted">
+          {note}
+        </p>
+      )}
       {value.kind === 'session' && (
         <div className="flex min-h-11 items-center gap-2 px-1">
           <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${current?.status === 'working' ? 'bg-flame' : current?.status === 'ended' ? 'bg-line-strong' : 'bg-accent'}`} />
@@ -414,8 +420,9 @@ export function Destination({ value, onChange }: { value: ReporterReportTarget; 
 /** Type and priority as one row of chips (Bug, Normal by default); a direct ask is always urgent, so priority hides then. */
 function TypePriority({ type, setType, priority, setPriority, urgent }: { type: TicketType; setType: (t: TicketType) => void; priority: TicketPriority; setPriority: (p: TicketPriority) => void; urgent: boolean }) {
   return (
-    <div className="-mx-3 flex items-center gap-1.5 overflow-x-auto px-3 pb-0.5">
-      <div role="group" aria-label="Type" className="flex shrink-0 gap-1.5">
+    // Wraps instead of scrolling sideways: at 390 px the priority control was cut off at the edge (audit 2026-11-01).
+    <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
+      <div role="group" aria-label="Type" className="flex flex-wrap gap-1.5">
         {TYPES.map((t) => (
           <Chip key={t} on={type === t} onClick={() => setType(t)}>
             {TICKET_TYPE_LABEL[t]}
@@ -424,7 +431,6 @@ function TypePriority({ type, setType, priority, setPriority, urgent }: { type: 
       </div>
       {!urgent && (
         <>
-          <span aria-hidden="true" className="mx-0.5 h-6 w-px shrink-0 bg-line" />
           {/* Priority as one compact control (UX review): Normal unless changed. */}
           <label className={`relative inline-flex min-h-11 shrink-0 items-center gap-1 rounded-full border px-3 text-[13px] font-medium ${priority === 'normal' ? 'border-line-strong text-ink' : 'border-primary bg-primary text-primary-ink'}`}>
             <Icon name="flag" className="size-3.5" />

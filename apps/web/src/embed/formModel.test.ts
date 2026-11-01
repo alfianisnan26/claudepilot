@@ -5,6 +5,7 @@ import type { ReporterStatus } from '@portal/contracts';
 import {
   REDACTION_RULES,
   afterFiled,
+  askLeadNote,
   carriesRows,
   clampView,
   contextGroups,
@@ -143,4 +144,12 @@ test('what a ticket carries: live counts when the SDK sends them, unknown before
   assert.equal(rows[1]!.value, '40 requests · 1 failed');
   assert.equal(rows[2]!.value, '7');
   assert.ok(REDACTION_RULES.some((r) => /IP/.test(r)) && REDACTION_RULES.some((r) => /bodies/.test(r)));
+});
+
+test('askLeadNote: the reason "Ask lead now" is off, in words (audit 2026-11-01: a title never shows on touch)', () => {
+  assert.equal(askLeadNote([{ available: true, reason: null }]), null);
+  assert.equal(askLeadNote([{ available: false, reason: 'That session has ended.' }, { available: true, reason: null }]), null);
+  assert.equal(askLeadNote([{ available: false, reason: 'That session has ended.' }]), 'That session has ended. File it to the queue instead.');
+  assert.equal(askLeadNote([]), 'No lead session is set up for this bucket. File it to the queue instead.');
+  assert.equal(askLeadNote([{ available: false, reason: null }]), 'No lead session is available now. File it to the queue instead.');
 });
