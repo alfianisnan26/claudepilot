@@ -129,6 +129,7 @@ import { createUsageSpendRoutes, type UsageSpend } from './usagespend/index.js';
 import type { Lab } from './lab/index.js';
 import { createLabRoutes } from './lab/routes.js';
 import { createGlanceRoutes, type Glance } from './glance/index.js';
+import { createLayoutRoutes, LayoutStore } from './glance/layouts.js';
 import { createApprovalRoutes, type Approvals } from './approvals/index.js';
 import { createAttentionRoutes, type AttentionRegistry } from './attention/index.js';
 import type { ConnectModule } from './connect/index.js';
@@ -1225,7 +1226,11 @@ export function createApp(
     for (const [type, ids] of Object.entries(addOns))
       if (ids.some((id) => !can(actor, 'operate', poolRef(id, type as MultiPoolType)).allow))
         throw new AppError('VALIDATION_FAILED', 'One of the pools no longer exists.', { details: { pools: 'Pick another pool.' } });
-    const created = await workspaces.create(req, actor);
+    // D-111 D1: who owns it, decided before anything is made (the org of the creator's context when they may create there, else refused;
+    // Personal: the creator).
+    const owner = orgsModule.creation.ownerFor(actor, req.owner);
+    const created = await workspaces.create(req, actor, owner);
+    orgsModule.creation.created(actor, owner, created);
     // A new workspace has no sign-in of its own yet, so no override confirmation is needed.
     if (poolId) pools.assign(created.id, { poolId }, { existing: false });
     for (const [type, ids] of Object.entries(addOns)) poolService.setAssignments(created.id, type, ids.map((id) => ({ poolId: id })));
@@ -1358,7 +1363,12 @@ export function createApp(
 
   const ap = new Hono<Env>();
   ap.use(requireSession);
-  ap.get('/', (c) => c.json(success(pools.list())));
+  // `?org=`: the account pools of that context by owner (none is org-owned yet, D-111 D5: an org's list is empty; Personal keeps them all).
+  ap.get('/', (c) => {
+    const inScope = orgScopeFilter(actorOf(c), orgScopeOf(c));
+    const list = pools.list();
+    return c.json(success(inScope ? list.filter((p) => inScope(objectRef('account_pool', p.id))) : list));
+  });
   ap.post('/', async (c) => c.json(success(pools.create(await body<AccountPoolRequest>(c))), 201));
   ap.patch('/:id', async (c) => c.json(success(pools.update(c.req.param('id'), await body<AccountPoolRequest>(c)))));
   ap.delete('/:id', (c) => {
@@ -1371,6 +1381,8 @@ export function createApp(
   const pl = new Hono<Env>();
   pl.use(requireSession);
   pl.route('/', createPoolRoutes({ service: poolService }));
+  // D-111 D2: Move to organization for a set (slice 5's transfer; a Secrets & env set asks for the exposure acknowledgement).
+  pl.route('/', createMoveToOrgRoute(orgsModule.transfers, 'pool', '/:type/:id/move-to-org', 'type+id'));
   app.route('/api/pools', pl);
 
   // MCP sets: the catalog, "Try in set" and each workspace's MCP status (the sets use /api/pools/mcpset).
@@ -1528,6 +1540,14 @@ export function createApp(
     rp.use(requireSession);
     rp.route('/', createReposRoutes(repos));
     app.route('/api/repos', rp);
+  }
+
+  // D-111 D6: the Home and Glance layouts, per person and org context (glance/layouts.ts, migration 910).
+  {
+    const ly = new Hono<Env>();
+    ly.use(requireSession);
+    ly.route('/', createLayoutRoutes(new LayoutStore(store)));
+    app.route('/api/layouts', ly);
   }
 
   // Glance widgets: one snapshot of what waits on a person and who is working (docs/prd/glance-widgets.md); read-only.

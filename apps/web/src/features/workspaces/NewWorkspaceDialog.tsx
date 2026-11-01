@@ -10,6 +10,8 @@ import {
 } from '@portal/contracts';
 import { ChevronDown } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useOrgs } from '@/features/orgs/OrgsProvider';
+import { orgErrorText, workspaceOwners } from '@/features/orgs/rules';
 import { personasApi } from '@/features/personas/api';
 import { PoolChoice } from '@/features/pools/PoolPicker';
 import { multiPoolTabs, type MultiPoolTab } from '@/features/pools/registry';
@@ -56,6 +58,10 @@ export function NewWorkspaceDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // D-111 D1: who owns it. The current context by default, changeable to Personal or an org where the person may create.
+  const { orgs, context } = useOrgs();
+  const owners = useMemo(() => workspaceOwners(orgs, context), [orgs, context]);
+  const [owner, setOwner] = useState('personal');
   // This machine is one workspace you start and stop; there is nothing to create on it.
   // A single (an enrolled host or container) is one workspace that already exists: nothing to create on it either.
   const creatable = useMemo(() => targets.filter((t) => t.kind !== 'local' && t.role !== 'single'), [targets]);
@@ -93,6 +99,9 @@ export function NewWorkspaceDialog({
     setErrors({});
     setFormError(null);
   }, [open, creatable, defaultTarget]);
+  useEffect(() => {
+    if (open) setOwner(owners.initial);
+  }, [open, owners.initial]);
 
   // Persona PRD FR10: the default persona starts selected; picking "None" sends nothing.
   useEffect(() => {
@@ -123,13 +132,14 @@ export function NewWorkspaceDialog({
         cpus: cpus ? Number(cpus) : undefined,
         memoryMb: memory ? Number(memory) : undefined,
         accountPoolId: poolId || null,
+        owner,
         // Assigned right after the create, the way the account pool is.
         pools: Object.fromEntries(Object.entries(addOns).filter(([, ids]) => ids.length > 0)),
       });
     } catch (e) {
       if (e instanceof ApiError && e.details && typeof e.details === 'object')
         setErrors(e.details as Record<string, string>);
-      setFormError(e instanceof Error ? e.message : 'Could not create it.');
+      setFormError(orgErrorText(e, e instanceof Error ? e.message : 'Could not create it.'));
     } finally {
       setSaving(false);
     }
@@ -166,6 +176,15 @@ export function NewWorkspaceDialog({
           error={errors.name}
           data-autofocus
         />
+        {owners.options.length > 1 && (
+          <Select
+            label="Owner"
+            value={owner}
+            onChange={(v) => (setOwner(v), setAddOns({}), setErrors(({ owner: _, ...rest }) => rest))}
+            options={owners.options}
+            error={errors.owner}
+          />
+        )}
         <Select
           label="Runs on"
           value={target}
@@ -208,31 +227,32 @@ export function NewWorkspaceDialog({
         {multiPoolTabs()
           .filter((t) => t.pool.single)
           .map((t) => (
-            <SinglePick key={t.id} open={open} tab={t} value={addOns[t.pool.type] ?? []} onChange={(ids) => setAddOns((a) => ({ ...a, [t.pool.type]: ids }))} />
+            <SinglePick key={t.id} open={open} scope={owner} tab={t} value={addOns[t.pool.type] ?? []} onChange={(ids) => setAddOns((a) => ({ ...a, [t.pool.type]: ids }))} />
           ))}
         <div className="grid grid-cols-2 gap-3">
           <Select label="CPU" value={cpus} onChange={setCpus} options={withValue(CPU_OPTIONS, cpus, cpuLabel)} error={errors.cpus} />
           <Select label="Memory" value={memory} onChange={setMemory} options={withValue(MEMORY_OPTIONS, memory, memoryLabel)} error={errors.memoryMb} />
         </div>
-        <AddOnsSection open={open} value={addOns} onChange={setAddOns} error={errors.pools} />
+        <AddOnsSection open={open} scope={owner} value={addOns} onChange={setAddOns} error={errors.pools} />
       </div>
     </FormDialog>
   );
 }
 
 /** A one-per-workspace type (a persona) as one compact select in the main form; nothing shows while there is nothing to pick. */
-function SinglePick({ open, tab, value, onChange }: { open: boolean; tab: MultiPoolTab; value: string[]; onChange: (poolIds: string[]) => void }) {
+function SinglePick({ open, scope, tab, value, onChange }: { open: boolean; scope: string; tab: MultiPoolTab; value: string[]; onChange: (poolIds: string[]) => void }) {
   const [list, setList] = useState<PoolSummary[] | null>(null);
   useEffect(() => {
     if (!open) return;
     setList(null);
     let current = true;
-    api.pools.list(tab.pool.type).then(
+    // The sets of the owner's context (D-111): an org workspace is offered the org's sets, a personal one the person's.
+    api.pools.listIn(tab.pool.type, scope).then(
       (l) => current && setList(l),
       () => current && setList([]),
     );
     return () => void (current = false);
-  }, [open, tab.pool.type]);
+  }, [open, scope, tab.pool.type]);
   if (!list || list.length === 0) return null;
   return <PoolChoice ui={tab.pool} label={tab.label} pools={list} value={value} onChange={onChange} />;
 }
@@ -241,7 +261,7 @@ function SinglePick({ open, tab, value, onChange }: { open: boolean; tab: MultiP
  * Add-ons (foundation PRD §10): pools of each registered multi-assignment type, collapsed by default.
  * Hidden while no such type is registered. One-per-workspace types (personas) have their own select above.
  */
-function AddOnsSection({ open, value, onChange, error }: { open: boolean; value: AddOns; onChange: (next: AddOns) => void; error?: string }) {
+function AddOnsSection({ open, scope, value, onChange, error }: { open: boolean; scope: string; value: AddOns; onChange: (next: AddOns) => void; error?: string }) {
   const tabs = multiPoolTabs().filter((t) => !t.pool.single);
   const [expanded, setExpanded] = useState(false);
   const [pools, setPools] = useState<Partial<Record<MultiPoolType, PoolSummary[]>>>({});
@@ -252,12 +272,12 @@ function AddOnsSection({ open, value, onChange, error }: { open: boolean; value:
     setPools({});
     let current = true;
     for (const t of multiPoolTabs().filter((x) => !x.pool.single))
-      api.pools.list(t.pool.type).then(
+      api.pools.listIn(t.pool.type, scope).then(
         (list) => current && setPools((p) => ({ ...p, [t.pool.type]: list })),
         () => current && setPools((p) => ({ ...p, [t.pool.type]: [] })),
       );
     return () => void (current = false);
-  }, [open]);
+  }, [open, scope]);
 
   if (tabs.length === 0) return null;
   const count = tabs.reduce((n, t) => n + (value[t.pool.type]?.length ?? 0), 0);

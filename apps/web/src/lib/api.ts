@@ -22,6 +22,7 @@ import {
   type CreatedOrgInvitation,
   type CreateOrgInvitationRequest,
   type OrgInvitation,
+  MULTI_POOL_TYPES,
   POOLS_API,
   WORKSPACE_API,
   type AssignPoolResult,
@@ -84,6 +85,9 @@ import {
   type SsoProviderRequest,
   SSO_API,
   SCHEDULES_API,
+  LAYOUT_API,
+  type LayoutKind,
+  type Layouts,
   MANAGER_API,
   type ManagerStatus,
   type ScheduleRow,
@@ -213,7 +217,13 @@ export const api = {
   enableManager: () => request<ManagerStatus>('POST', MANAGER_API.enable, {}),
   disableManager: () => request<ManagerStatus>('POST', MANAGER_API.disable, {}),
   // Schedules and open apps (owner, 2026-10-18).
-  schedules: () => request<{ items: ScheduleRow[] }>('GET', SCHEDULES_API.list).then((d) => d.items),
+  /** In the app's context (`?org=`): an org lists the triggers of its workspaces; Personal also the portal's own loops and helpers. */
+  schedules: () => scopedList<{ items: ScheduleRow[] }>(SCHEDULES_API.list, (p) => request<{ items: ScheduleRow[] }>('GET', p)).then((d) => d.items),
+  /** D-111 D6: the Home and Glance layouts of the signed-in person in one context (`personal` or an org id). */
+  layouts: {
+    get: (scope: string) => request<Layouts>('GET', withOrg(LAYOUT_API.all, scope)),
+    save: (scope: string, kind: LayoutKind, layout: Record<string, unknown>) => request<{ saved: true }>('PUT', withOrg(LAYOUT_API.one(kind), scope), { layout }),
+  },
   setTriggerEnabled: (id: string, enabled: boolean) => request<Trigger>('PATCH', TRIGGER_API.one(id), { enabled }),
   runTrigger: (id: string) => request<TriggerRun>('POST', TRIGGER_API.run(id), {}),
   // The triggers editor and the detail sheet on the Schedules page (T-2950): the trigger routes as they are.
@@ -262,7 +272,8 @@ export const api = {
     updateEndpoint: (id: string, body: EndpointRequest) => request<Endpoint>('PATCH', ACCOUNT_API.endpoint(id), body),
     removeEndpoint: (id: string) => request<{ ok: true }>('DELETE', ACCOUNT_API.endpoint(id)),
     endpointModels: (id: string) => request<string[]>('GET', ACCOUNT_API.endpointModels(id)),
-    pools: () => request<AccountPool[]>('GET', ACCOUNT_API.pools),
+    /** `scoped`: in the app's context (`?org=`, the Pools page); the workspace dialogs ask for every pool the person may use. */
+    pools: (scoped = false) => (scoped ? scopedList<AccountPool[]>(ACCOUNT_API.pools, (p) => request<AccountPool[]>('GET', p)) : request<AccountPool[]>('GET', ACCOUNT_API.pools)),
     createPool: (body: AccountPoolRequest) => request<AccountPool>('POST', ACCOUNT_API.pools, body),
     updatePool: (id: string, body: Partial<AccountPoolRequest>) => request<AccountPool>('PATCH', ACCOUNT_API.pool(id), body),
     removePool: (id: string) => request<{ ok: true }>('DELETE', ACCOUNT_API.pool(id)),
@@ -364,21 +375,31 @@ export const api = {
     endBreakGlass: (id: string, entryId: string) => request<BreakGlassEntry>('POST', ORGS_API.endBreakGlass(id, entryId)),
     /** What an org owns (`scope` = its id) or what no org owns (`personal`), through the lists' `?org=` (never the app's current context). */
     objects: async (scope: string) => {
-      const [workspaces, buckets, vaults] = await Promise.all([
+      const [workspaces, buckets, vaults, sets] = await Promise.all([
         request<Workspace[]>('GET', withOrg(WORKSPACE_API.list, scope)),
         request<TicketBucket[]>('GET', withOrg(TICKET_API.buckets, scope)),
         request<VaultSummary[]>('GET', withOrg(KNOWLEDGE_API.vaults, scope)),
+        // D-111 D2: the sets of every multi-pool type (a type this portal lacks, or one that fails, adds none).
+        Promise.all(MULTI_POOL_TYPES.map((t) => request<PoolSummary[]>('GET', withOrg(POOLS_API.list(t), scope)).catch(() => [] as PoolSummary[]))),
       ]);
-      return { workspaces, buckets, vaults };
+      // Shared sets are the org's to use, not its own: Objects lists what it owns.
+      return { workspaces, buckets, vaults, sets: sets.flat().filter((p) => !p.shared) };
     },
     moveWorkspace: (ref: string, body: MoveToOrgRequest) => request<MoveToOrgResult>('POST', ORGS_API.moveWorkspace(ref), body),
     moveBucket: (key: string, body: MoveToOrgRequest) => request<MoveToOrgResult>('POST', ORGS_API.moveBucket(key), body),
     moveVault: (vaultId: string, body: MoveToOrgRequest) => request<MoveToOrgResult>('POST', ORGS_API.moveVault(vaultId), body),
+    movePool: (type: string, id: string, body: MoveToOrgRequest) => request<MoveToOrgResult>('POST', ORGS_API.movePool(type, id), body),
   },
   /** Multi-assignment pools (secrets & env, skillsets, MCP sets): one API for every type. */
   pools: {
     types: () => request<{ types: MultiPoolType[] }>('GET', POOLS_API.types),
     list: (type: MultiPoolType) => request<PoolSummary[]>('GET', POOLS_API.list(type)),
+    /** The Pools page: the sets of the app's context (`?org=`: an org's own and those shared to it; Personal: what no org owns). */
+    listScoped: (type: MultiPoolType) => scopedList<PoolSummary[]>(POOLS_API.list(type), (p) => request<PoolSummary[]>('GET', p)),
+    /** The sets of one context by name (`personal` or an org id): the New workspace dialog's owner, Org settings' Objects. */
+    listIn: (type: MultiPoolType, scope: string) => request<PoolSummary[]>('GET', withOrg(POOLS_API.list(type), scope)),
+    /** The sets valid for one workspace (its owner's context) and the ones it has: what assigning offers. */
+    listFor: (type: MultiPoolType, workspaceId: string) => request<PoolSummary[]>('GET', `${POOLS_API.list(type)}?for=${encodeURIComponent(workspaceId)}`),
     get: (type: MultiPoolType, id: string) => request<PoolDetail>('GET', POOLS_API.one(type, id)),
     create: (type: MultiPoolType, body: PoolRequest) => request<PoolSummary>('POST', POOLS_API.list(type), body),
     update: (type: MultiPoolType, id: string, body: Partial<PoolRequest>) => request<PoolSummary>('PUT', POOLS_API.one(type, id), body),

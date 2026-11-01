@@ -12,6 +12,24 @@ export const GLANCE_API = {
   snapshot: '/api/glance',
 } as const;
 
+/**
+ * D-111 (D6): the Home and Glance layouts, saved per person and per org context on the server (not per device). `GET` answers both kinds for
+ * the context `?org=` names (`personal`, or an org id the person is in; any other org is the 404 of a missing one); `PUT` saves one kind,
+ * `{ layout }`, a JSON object of at most `LAYOUT_LIMITS.bytes` that the web client cleans (glance/settings.ts, home/settings.ts) on read.
+ */
+export const LAYOUT_API = {
+  all: '/api/layouts',
+  one: (kind: LayoutKind) => `/api/layouts/${kind}`,
+} as const;
+export const LAYOUT_KINDS = ['glance', 'home'] as const;
+export type LayoutKind = (typeof LAYOUT_KINDS)[number];
+export const LAYOUT_LIMITS = { bytes: 8192 } as const;
+/** A context's saved layouts; null where the person saved none there yet. */
+export type Layouts = Record<LayoutKind, Record<string, unknown> | null>;
+export interface SaveLayoutRequest {
+  layout: Record<string, unknown>;
+}
+
 /** How many items each list carries. The counts beside them are whole. */
 export const GLANCE_LIMITS = { sessions: 8, recent: 8, agents: 16, approvals: 6, tickets: 5, ci: 5, deploys: 5 } as const;
 

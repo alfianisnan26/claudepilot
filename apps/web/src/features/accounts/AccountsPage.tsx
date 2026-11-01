@@ -36,7 +36,7 @@ export function AccountsPage() {
   const load = useCallback(async () => {
     setFailed(false);
     try {
-      const [overview, poolList] = await Promise.all([api.accounts.overview(), api.accounts.pools()]);
+      const [overview, poolList] = await Promise.all([api.accounts.overview(), api.accounts.pools(true)]);
       setData(overview);
       setPools(poolList);
     } catch {

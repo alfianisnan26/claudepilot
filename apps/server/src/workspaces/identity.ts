@@ -19,6 +19,9 @@ import { pinRefsOfRemoved } from './refRewrite.js';
  * What a module that stores workspace references needs from the registry (T-42 slice 3): `storedRef` on save (the stable id), `keyOf` on
  * read (the `<target>/<name>` key the rest of the portal speaks), `storedForms` in a filter (every form a row may hold while the move runs).
  */
+/** Who a new workspace's owner row names (D-111 D1): a person, or an org. */
+export type NewWorkspaceOwner = { kind: 'user'; id: string } | { kind: 'org'; id: string };
+
 export interface WorkspaceRefs {
   storedRef(ref: string | null): string | null;
   keyOf(stored: string | null): string | null;
@@ -316,21 +319,24 @@ export class WorkspaceIdentities implements RuntimeNames, WorkspaceRefs {
    * `Runtime.runtimeNameForNew`). The caller has checked the target has no workspace of that name, so a record still holding the name is a
    * workspace that is gone: it is marked removed first (its id is never given again).
    */
-  allocate(target: string, name: string, pick?: (stableId: string) => string | undefined, createdBy?: string): WorkspaceIdentity {
+  allocate(target: string, name: string, pick?: (stableId: string) => string | undefined, createdBy?: string, owner?: NewWorkspaceOwner): WorkspaceIdentity {
     const stale = this.of(target, name);
     if (stale) this.retire(target, name);
     const id = this.#newId();
     const picked = pick?.(id);
     const w = this.#insert(target, name, picked && PLAIN_NAME.test(picked) ? picked : newRuntimeName(id), id);
     // Organizations slice 1 (P3): its owner, recorded with this workspace's id (`uid`), so a row left by an earlier workspace of the same name
-    // never counts for it. The founding user owns it until members create their own (D-82 S1b); `createdBy` is who asked.
+    // never counts for it. D-111 (D1): the owner the caller decided (the creator, or the org of their context: orgs/creation.ts); the founding
+    // user when none was given (a caller with no person behind it). `createdBy` is who asked.
+    const o = owner ?? { kind: 'user', id: FOUNDING_USER_ID };
     this.#write(
-      `INSERT INTO workspace_owners (workspace_id, uid, owner_kind, owner_id, created_by, created_at, origin) VALUES (?, ?, 'user', ?, ?, ?, 'created')
+      `INSERT INTO workspace_owners (workspace_id, uid, owner_kind, owner_id, created_by, created_at, origin) VALUES (?, ?, ?, ?, ?, ?, 'created')
        ON CONFLICT (workspace_id) DO UPDATE SET uid = excluded.uid, owner_kind = excluded.owner_kind, owner_id = excluded.owner_id,
          created_by = excluded.created_by, created_at = excluded.created_at, origin = 'created'`,
       w.legacyId,
       w.id,
-      FOUNDING_USER_ID,
+      o.kind,
+      o.id,
       createdBy ?? FOUNDING_USER_ID,
       w.createdAt,
     );

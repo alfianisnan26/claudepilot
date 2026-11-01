@@ -1,3 +1,4 @@
+import type { DatabaseSync } from 'node:sqlite';
 import { AppError, newId } from '@isnanme/core';
 import {
   isUserId,
@@ -36,6 +37,9 @@ interface PoolRow {
   current_revision: number;
   created_at: string;
   updated_at: string;
+  /** Migration 410's owner columns (absent on a database older than it). */
+  owner_kind?: string;
+  owner_id?: string;
 }
 
 interface RevisionRow {
@@ -281,7 +285,13 @@ export class PoolService {
       content: latest ? kind.view(JSON.parse(latest.content)) : null,
       createdAt: p.created_at,
       updatedAt: p.updated_at,
+      orgId: p.owner_kind === 'org' && p.owner_id ? p.owner_id : null,
     };
+  }
+
+  /** The read handle (pools/scope.ts reads the grants that share a set to an org); null when there is none. */
+  database(): DatabaseSync | null {
+    return this.store.db ?? null;
   }
 
   /** The type's pools, oldest first, each with its current revision, status, rollout pause and use. */

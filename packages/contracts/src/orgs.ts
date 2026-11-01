@@ -34,6 +34,11 @@ export interface OrgPolicies {
    * always may; anyone holding `manage` on one object through a grant may grant on that object, up to their own level). Owners set it.
    */
   adminsMayShare: boolean;
+  /**
+   * D-111 (D1): whether the org's MEMBERS may create workspaces in the org's context (owners and admins always may). Off by default: a
+   * member's create there is refused (ORG_CREATE_WORKSPACE_NOT_ALLOWED), never silently made personal. Owners set it.
+   */
+  membersCreateWorkspaces: boolean;
 }
 export const ORG_POLICY_DEFAULTS: OrgPolicies = {
   membersMayInvite: false,
@@ -44,6 +49,7 @@ export const ORG_POLICY_DEFAULTS: OrgPolicies = {
   defaultJoinRole: 'member',
   domainJoin: false,
   adminsMayShare: true,
+  membersCreateWorkspaces: false,
 };
 
 export const ORG_LIMITS = {
@@ -73,9 +79,9 @@ export interface Org {
   /**
    * What the signed-in person may start here that depends on a policy they cannot read (Org settings, owner request 2026-11-01): `invite`
    * (owners and admins; a member while `membersMayInvite`), `createTeam` (owners and admins; a member while `membersCreateTeams`). The server
-   * still decides each request.
+   * still decides each request. `createWorkspace` (D-111 D1): owners and admins; a member while `membersCreateWorkspaces`.
    */
-  may?: { invite: boolean; createTeam: boolean };
+  may?: { invite: boolean; createTeam: boolean; createWorkspace?: boolean };
 }
 
 export interface OrgMember {
@@ -92,7 +98,7 @@ export interface CreateOrgRequest {
   slug: string;
 }
 /** The policies an owner sets in Org settings' Policies (requireSso has its own route, `ssoPolicy`, with the lockout guard). */
-export const ORG_SETTABLE_POLICIES = ['membersMayInvite', 'membersCreateTeams', 'externalShares', 'adminsMayShare'] as const;
+export const ORG_SETTABLE_POLICIES = ['membersMayInvite', 'membersCreateTeams', 'externalShares', 'adminsMayShare', 'membersCreateWorkspaces'] as const;
 export type OrgSettablePolicy = (typeof ORG_SETTABLE_POLICIES)[number];
 
 export interface UpdateOrgRequest {
@@ -137,6 +143,11 @@ export interface UserAbility {
 
 /** What can be moved into an org in slice 5 (the rest of §6.3 follows): a workspace, a ticket bucket (its tickets follow it), a vault. */
 export type OrgTransferKind = 'workspace' | 'ticket_bucket' | 'vault';
+/**
+ * What Move to organization takes (D-111 D2): the slice 5 kinds and a set of any multi-pool type (Secrets & env, Skillsets, MCP sets,
+ * Personas, Context, Browser). Kept apart from OrgTransferKind, which is also what an org share and the access sheet name.
+ */
+export type MoveToOrgKind = OrgTransferKind | 'pool';
 
 export interface MoveToOrgRequest {
   orgId: OrgId;
@@ -146,6 +157,11 @@ export interface MoveToOrgRequest {
    * listed is unassigned. Off by default: an empty list keeps none. Keeping one needs `manage` on that set.
    */
   keepCredentials?: string[];
+  /**
+   * Sets only (D-111 D2): the person saw that a Secrets & env set moved into the org can be read by the org's owners and admins. Required for
+   * one (else 409 SHARE_EXPOSES_CREDENTIALS lists it in `details.credentials`).
+   */
+  acknowledgeExposure?: boolean;
 }
 
 /** One credential set assigned to a workspace, as the consent screen lists it (a name, never a value). */
@@ -155,8 +171,8 @@ export interface MoveToOrgCredential {
 }
 
 export interface MoveToOrgResult {
-  kind: OrgTransferKind;
-  /** The object's id as the seam knows it (a workspace's `<target>/<name>`, a bucket's key, a vault's id). */
+  kind: MoveToOrgKind;
+  /** The object's id as the seam knows it (a workspace's `<target>/<name>`, a bucket's key, a vault's id, a set's id). */
   id: string;
   owner: { kind: 'org'; id: OrgId };
   /** Who holds the automatic creator grant (`manage`) while they are a member of the org: the previous personal owner, else the mover. */
@@ -467,6 +483,8 @@ export const ORGS_API = {
   moveWorkspace: (ref: string) => `/api/workspaces/${ref.split('/').map(encodeURIComponent).join('/')}/move-to-org`,
   moveBucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/move-to-org`,
   moveVault: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/move-to-org`,
+  /** D-111 D2: a set of any multi-pool type (`type` is the set's own). */
+  movePool: (type: string, id: string) => `/api/pools/${encodeURIComponent(type)}/${encodeURIComponent(id)}/move-to-org`,
   /** Slice 10. GET -> OrgSignInSettings (manage). */
   signIn: (id: OrgId) => `/api/orgs/${id}/sign-in`,
   /** Slice 10. POST { domain } -> OrgDomain (manage). */
@@ -554,5 +572,7 @@ export const ORGS_ERROR_CODES = {
   ACCESS_ALREADY_HELD: 'ACCESS_ALREADY_HELD',
   /** Access request: an open request for the same object exists (409). */
   ACCESS_REQUEST_OPEN: 'ACCESS_REQUEST_OPEN',
+  /** D-111 D1: creating a workspace in this org's context needs owner or admin (or a member while `membersCreateWorkspaces`) (403). */
+  ORG_CREATE_WORKSPACE_NOT_ALLOWED: 'ORG_CREATE_WORKSPACE_NOT_ALLOWED',
 } as const;
 export type OrgsErrorCode = (typeof ORGS_ERROR_CODES)[keyof typeof ORGS_ERROR_CODES];

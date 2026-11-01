@@ -1,5 +1,6 @@
 import { FOUNDING_USER_ID, type Ability, type Org } from '@portal/contracts';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { syncLayouts, setLayoutApi } from '@/features/glance/layouts';
 import { api } from '@/lib/api';
 import {
   browserStorage,
@@ -50,6 +51,13 @@ export function OrgsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => void reload(), [reload]);
+
+  // D-111 D6: the Home and Glance layouts follow the person and the context (glance/layouts.ts), read again when either changes.
+  useEffect(() => {
+    if (!userId) return;
+    setLayoutApi(api.layouts);
+    void syncLayouts(userId, context.kind === 'org' ? context.id : 'personal');
+  }, [userId, context]);
 
   const setContext = useCallback(
     (ctx: AppContext) => {

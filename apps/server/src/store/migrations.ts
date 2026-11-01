@@ -4727,6 +4727,24 @@ export const MIGRATIONS: Migration[] = [
         ALTER TABLE web_sessions ADD COLUMN method TEXT;
       `);
     },
+  },  {
+    version: 910,
+    name: 'glance: the Home and Glance layouts per person and org context (D-111 D6)',
+    up(db) {
+      // Owner decision D-111 (D6, 2026-11-01): the layouts are saved per person on the server, per org context ('personal' or an org id),
+      // not per device. `body` is the web client's JSON (glance/settings.ts, home/settings.ts clean it on read), capped here and by the route
+      // (LAYOUT_LIMITS). A new table, nothing else touched (glance's block: 910-919, docs/coord/PLAN.md).
+      db.exec(`
+        CREATE TABLE user_layouts (
+          user_id TEXT NOT NULL,
+          context TEXT NOT NULL CHECK (length(context) BETWEEN 1 AND 100),
+          kind TEXT NOT NULL CHECK (kind IN ('glance', 'home')),
+          body TEXT NOT NULL CHECK (length(body) <= 16384),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, context, kind)
+        ) STRICT;
+      `);
+    },
   },
 ];
 

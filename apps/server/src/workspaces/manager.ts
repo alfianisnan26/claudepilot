@@ -22,7 +22,7 @@ import { actorString, actorUserId, requireCan } from '../authz/seam.js';
 import { redact } from '../chat/redact.js';
 import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
-import { findWorkspace, WorkspaceIdentities, type WorkspaceIdentity } from './identity.js';
+import { findWorkspace, WorkspaceIdentities, type NewWorkspaceOwner, type WorkspaceIdentity } from './identity.js';
 import { describeValues } from './resources.js';
 import { isTargetUnreachable, type ResourceAccess, type ResourceApplied, type Runtime, type ShellSession } from './runtime.js';
 
@@ -668,8 +668,12 @@ export class Workspaces {
     }
   }
 
-  /** `actor`: who asks (the route's `actorOf(c)`); creating on a target needs `operate` on it (multi-user PRD; the single-owner seam allows the owner). */
-  async create(req: Partial<CreateWorkspaceRequest>, actor: Actor): Promise<Workspace> {
+  /**
+   * `actor`: who asks (the route's `actorOf(c)`); creating on a target needs `operate` on it (multi-user PRD; the single-owner seam allows the owner).
+   * `owner` (D-111 D1): who owns it, decided by the caller (orgs/creation.ts `ownerForNew`: the org of the creator's context, when they may
+   * create there); without one, the creator personally (the founding user when no person is behind the actor).
+   */
+  async create(req: Partial<CreateWorkspaceRequest>, actor: Actor, owner?: NewWorkspaceOwner): Promise<Workspace> {
     const name = typeof req.name === 'string' ? req.name.trim() : '';
     const problem = workspaceNameProblem(name);
     if (problem) throw new AppError('VALIDATION_FAILED', problem, { details: { name: problem } });
@@ -712,7 +716,14 @@ export class Workspaces {
     // Its identity (T-42): a new stable id, and the runtime name its container or Deployment and volume get (`ws-<12 hex>`, or the form
     // the target's runtime must use), stored and never derived from the name again. A record still holding the name is of a workspace that
     // is gone (the list above has none): it is retired.
-    const identity = this.identities.allocate(target.id, name, (stableId) => runtime.runtimeNameForNew?.(name, stableId), actorString(actor));
+    const creator = actorUserId(actor);
+    const identity = this.identities.allocate(
+      target.id,
+      name,
+      (stableId) => runtime.runtimeNameForNew?.(name, stableId),
+      actorString(actor),
+      owner ?? (creator ? { kind: 'user', id: creator } : undefined),
+    );
     const workspace: Workspace = {
       id,
       stableId: identity.id,

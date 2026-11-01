@@ -12,6 +12,7 @@ import { PlatformAudit } from '../platform/audit.js';
 import type { Store } from '../store/store.js';
 import { UserAbilities } from './abilities.js';
 import { OrgAccess, type AccessNotice } from './access.js';
+import { OrgCreation } from './creation.js';
 import { orgAuthority } from './authority.js';
 import { declareOrgPolicies } from './authz.js';
 import { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
@@ -25,6 +26,7 @@ export { OrgSso, normalizeOrgDomain, type TxtResolver } from './sso.js';
 export { createOrgSsoRoutes } from './ssoRoutes.js';
 export { UserAbilities, requireInstanceAdmin } from './abilities.js';
 export { OrgAccess, type AccessNotice } from './access.js';
+export { OrgCreation, type NewOwner } from './creation.js';
 export { ORG_ROUTE_POLICIES, ORG_TRANSFER_POLICIES, orgLevel, orgResolver } from './authz.js';
 export { BreakGlassService, type BreakGlassNotice } from './breakGlass.js';
 export { createMoveToOrgRoute, createOrgRoutes } from './routes.js';
@@ -46,6 +48,8 @@ export interface OrgsModule {
   sso: OrgSso | null;
   /** Fine-grained access (docs/prd/access.md): who reaches what and why, access requests. */
   access: OrgAccess;
+  /** D-111 D1: who owns a new workspace (the org of the creator's context, when they may create there). */
+  creation: OrgCreation;
 }
 
 export function createOrgs(deps: {
@@ -84,5 +88,6 @@ export function createOrgs(deps: {
   useOrgAuthority(orgAuthority({ db, orgs, grants, breakGlass, sharing, ...(sso ? { ssoGate: (orgId: string, actor: Actor) => sso.gate(orgId, actor) } : {}) }));
   const invitations = new OrgInvitations({ db, writable, orgs, audit: record, now: deps.now });
   const access = new OrgAccess({ db, writable, orgs, sharing, grants, audit: record, credentials, notify: (to, n) => deps.notifyAccess?.(to, n), now: deps.now });
-  return { orgs, abilities, grants, breakGlass, transfers, sharing, invitations, sso, access };
+  const creation = new OrgCreation({ writable, orgs, grants, audit: record });
+  return { orgs, abilities, grants, breakGlass, transfers, sharing, invitations, sso, access, creation };
 }

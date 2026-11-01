@@ -1,16 +1,17 @@
 import { Button, Dialog, useToast } from '@isnanme/ui';
-import type { MoveToOrgCredential, Org, OrgTransferKind } from '@portal/contracts';
-import { ArrowRightToLine, BookOpen, Box, ChevronRight, KeyRound, Ticket } from 'lucide-react';
+import type { MoveToOrgCredential, MoveToOrgKind, Org, PoolSummary } from '@portal/contracts';
+import { ArrowRightToLine, BookOpen, Box, ChevronRight, KeyRound, Layers, Ticket } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Card } from '@/components/Card';
 import { api } from '@/lib/api';
 import { AccessSheet } from './AccessSheet';
+import { MoveSetDialog } from './MoveSetDialog';
 import { useOrgs } from './OrgsProvider';
 import { canMoveHere, consentCredentials, KIND_LABEL, objectRows, orgErrorText, type OrgObjectRow } from './rules';
 import { Alert, SectionTitle } from './settingsUi';
 
-const ICON: Record<OrgTransferKind, typeof Box> = { workspace: Box, ticket_bucket: Ticket, vault: BookOpen };
+const ICON: Record<MoveToOrgKind, typeof Box> = { workspace: Box, ticket_bucket: Ticket, vault: BookOpen, pool: Layers };
 
 /**
  * Objects: what the org owns (workspaces, ticket buckets, vaults, through the lists' `?org=<id>`), each opening in the org's context, and
@@ -56,16 +57,18 @@ export function ObjectsSection({ org, rows, meId, onMoved }: { org: Org; rows: O
                     </span>
                     <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden />
                   </Link>
-                  <Button variant="ghost" size="icon" aria-label={`Access of ${r.name}`} onClick={() => setAccess(r)} data-org-object-access="">
-                    <KeyRound className="size-[18px]" />
-                  </Button>
+                  {r.kind !== 'pool' && (
+                    <Button variant="ghost" size="icon" aria-label={`Access of ${r.name}`} onClick={() => setAccess(r)} data-org-object-access="">
+                      <KeyRound className="size-[18px]" />
+                    </Button>
+                  )}
                 </li>
               );
             })}
           </ul>
         )}
       </Card>
-      {access && <AccessSheet org={org} target={{ type: access.kind, id: access.id }} name={access.name} meId={meId} open={!!access} onClose={() => setAccess(null)} />}
+      {access && access.kind !== 'pool' && <AccessSheet org={org} target={{ type: access.kind, id: access.id }} name={access.name} meId={meId} open={!!access} onClose={() => setAccess(null)} />}
       {canMoveHere(org.myRole) && <MoveDialog open={moving} org={org} onClose={() => setMoving(false)} onMoved={onMoved} />}
     </section>
   );
@@ -80,6 +83,8 @@ function MoveDialog({ open, org, onClose, onMoved }: { open: boolean; org: Org; 
   const [keep, setKeep] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A set has its own step (the credentials warning, D-111 D2): MoveSetDialog.
+  const [set, setSet] = useState<PoolSummary | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -103,7 +108,8 @@ function MoveDialog({ open, org, onClose, onMoved }: { open: boolean; org: Org; 
     try {
       if (row.kind === 'workspace') await api.orgs.moveWorkspace(row.id, body);
       else if (row.kind === 'ticket_bucket') await api.orgs.moveBucket(row.id, body);
-      else await api.orgs.moveVault(row.id, body);
+      else if (row.kind === 'vault') await api.orgs.moveVault(row.id, body);
+      else return;
       toast(`${row.name} moved`);
       onClose();
       await onMoved();
@@ -130,6 +136,7 @@ function MoveDialog({ open, org, onClose, onMoved }: { open: boolean; org: Org; 
     );
 
   return (
+    <>
     <Dialog open={open} onClose={onClose} title={title} stepKey={step.kind} footer={footer}>
       <Alert text={error} />
       {step.kind === 'pick' &&
@@ -145,7 +152,11 @@ function MoveDialog({ open, org, onClose, onMoved }: { open: boolean; org: Org; 
                 <li key={`${r.kind}:${r.id}`}>
                   <button
                     type="button"
-                    onClick={() => setStep({ kind: 'confirm', row: r })}
+                    onClick={() =>
+                      r.kind === 'pool' && r.poolType
+                        ? setSet({ id: r.id, name: r.name, type: r.poolType } as PoolSummary)
+                        : setStep({ kind: 'confirm', row: r })
+                    }
                     className="press flex min-h-12 w-full items-center gap-3 rounded-xl px-2 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
                   >
                     <Icon className="size-[18px] shrink-0 text-muted" aria-hidden />
@@ -187,5 +198,16 @@ function MoveDialog({ open, org, onClose, onMoved }: { open: boolean; org: Org; 
         </div>
       )}
     </Dialog>
+      <MoveSetDialog
+        pool={set}
+        orgId={org.id}
+        onClose={() => setSet(null)}
+        onMoved={() => {
+          setSet(null);
+          onClose();
+          void onMoved();
+        }}
+      />
+    </>
   );
 }
