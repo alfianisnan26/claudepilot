@@ -54,6 +54,11 @@ export const ADMIN_ROUTE_POLICIES: RoutePolicies = {
   'POST /admin-api/users/:id/founder': users('manage', { reauth: true, audit: 'identity.founder_transferred' }),
   'POST /admin-api/orgs': users('manage', { reauth: true, audit: 'org.created' }),
   'GET /admin-api/orgs/:id': users('view'),
+  // Owner need 2026-11-01 (an AI agent's account limited to one org): members of an org, and Portal MCP tokens that act AS an account.
+  'POST /admin-api/orgs/:id/members': users('manage', { reauth: true, audit: 'org.member_added_by_admin' }),
+  'DELETE /admin-api/orgs/:id/members/:userId': users('manage', { reauth: true, audit: 'org.member_removed_by_admin' }),
+  'GET /admin-api/users/:id/workspaces': users('view'),
+  'POST /admin-api/users/:id/tokens': users('manage', { reauth: true, audit: 'pmcp.token.minted_for_user' }),
   'DELETE /admin-api/orgs/:id': users('manage', { reauth: true, audit: 'org.deleted' }),
   'GET /admin-api/workspaces': area('targets', 'view'),
   'POST /admin-api/workspaces/:target/:name/start': area('targets', 'manage', { reauth: true, audit: 'workspace.start' }),

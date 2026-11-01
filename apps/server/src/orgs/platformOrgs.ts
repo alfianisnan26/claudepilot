@@ -206,6 +206,29 @@ export class PlatformOrgs {
     }));
   }
 
+  /**
+   * Owner need 2026-11-01 (Members → Add): puts an active account in the org with a role (admin, member or guest; never owner) through the
+   * org service's `admit` (via `invite`: the column has no platform value, and the audit row says who). Refused for an org being deleted, an
+   * account that is not active, and someone already in it (their role changes inside the org).
+   */
+  addMember(actor: Actor, id: OrgId, userId: unknown, role: unknown): void {
+    requireInstanceAdmin(actor);
+    const state = this.#orgs.stateOf(id);
+    if (!state || state === 'deleting') throw notFound();
+    if (role !== 'admin' && role !== 'member' && role !== 'guest')
+      throw new AppError('VALIDATION_FAILED', 'Pick admin, member or guest.', { details: { role: 'One of admin, member, guest.' } });
+    if (typeof userId !== 'string' || !this.#accountActive(userId)) throw new AppError('VALIDATION_FAILED', 'Pick an active account.', { details: { userId: 'Not an active account.' } });
+    if (this.#orgs.roleOf(id, userId as UserId)) throw new AppError('CONFLICT', 'Already a member. Their role is changed in the org.', { details: { userId: 'Already a member.' } });
+    this.#orgs.admit(id, userId as UserId, role as OrgRole, 'invite', actorString(actor));
+    this.#record('org.member_added_by_admin', actor, id, userId as UserId, { member: userId, role, ability: 'instance_admin' });
+  }
+
+  /** Members → Remove: ends a membership that is not an owner's (the org service's `removeByPlatform`). */
+  removeMember(actor: Actor, id: OrgId, userId: string): void {
+    const role = this.#orgs.removeByPlatform(actor, id, userId as UserId);
+    this.#record('org.member_removed_by_admin', actor, id, userId as UserId, { member: userId, role, ability: 'instance_admin' });
+  }
+
   /** Deletes an org that owns nothing, by the platform: `deleting` at once (invitations revoked, nobody sees it), purged after 30 days. */
   delete(actor: Actor, id: OrgId, rawReason?: unknown): void {
     requireInstanceAdmin(actor);

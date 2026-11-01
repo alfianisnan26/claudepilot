@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { AppError, defineErrorCodes } from '@isnanme/core';
 import {
+  FOUNDING_USER_ID,
   PORTAL_SCOPES,
   PORTAL_TOKEN_CAP,
   PORTAL_TOKEN_CAP_DEFAULT,
@@ -97,6 +98,15 @@ export const hashToken = (secret: string): string => createHash('sha256').update
 
 /** `cpat_` plus 43 base64url characters: 256 random bits. */
 export const newTokenSecret = (): string => `${PORTAL_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
+
+/** Whether the account a token acts as exists and is active (any role). A database that cannot be read answers no. */
+function ownerActive(db: Store['db'], ownerId: string): boolean {
+  try {
+    return (db?.prepare('SELECT state FROM users WHERE id = ?').get(ownerId) as { state: string } | undefined)?.state === 'active';
+  } catch {
+    return false;
+  }
+}
 
 const preview = (last4: string) => `${PORTAL_TOKEN_PREFIX}…${last4}`;
 
@@ -271,7 +281,11 @@ export class PortalTokens {
     const now = this.now();
     if (Date.parse(row.expires_at) <= now.getTime()) return { ok: false, reason: 'expired', tokenId: row.id };
     // Review M1: a token lives no longer than the account it was minted from (disabled, demoted, removed: refused like a revoked one).
-    if (!accountStanding(this.#db, tokenAccount(this.#db, 'pmcp', row.id)).ok) return { ok: false, reason: 'revoked', tokenId: row.id };
+    const account = tokenAccount(this.#db, 'pmcp', row.id);
+    if (!accountStanding(this.#db, account).ok) return { ok: false, reason: 'revoked', tokenId: row.id };
+    // Owner need 2026-11-01: a token an admin minted FOR another account (the Admin console) acts as that account, so it also stops while that
+    // account is gone or disabled (a member is fine: the token has the member's rights, no more).
+    if (account && row.owner_id !== account && row.owner_id !== FOUNDING_USER_ID && !ownerActive(this.#db, row.owner_id)) return { ok: false, reason: 'revoked', tokenId: row.id };
     this.#touch(row.id, ip, now);
     return {
       ok: true,

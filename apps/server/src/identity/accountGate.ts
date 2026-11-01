@@ -47,9 +47,12 @@ export function revokeAccountTokens(db: DatabaseSync, accountId: string, at: str
   const n = (sql: string, ...args: (string | null)[]) => Number(db.prepare(sql).run(...args).changes);
   const hasTable = (name: string) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
   const pmcp = n(
-    "UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE revoked_at IS NULL AND id IN (SELECT token_id FROM token_accounts WHERE kind = 'pmcp' AND account_id = ?)",
+    // Owner need 2026-11-01: and the tokens an admin minted FOR this account (they act as it: `owner_id`). The founder's own act as u_owner,
+    // never as the account id, so this never reaches the founding user's tokens.
+    "UPDATE pmcp_tokens SET revoked_at = ?, revoked_reason = ? WHERE revoked_at IS NULL AND (id IN (SELECT token_id FROM token_accounts WHERE kind = 'pmcp' AND account_id = ?) OR owner_id = ?)",
     at,
     reason,
+    accountId,
     accountId,
   );
   const reporter = hasTable('reporter_tokens')

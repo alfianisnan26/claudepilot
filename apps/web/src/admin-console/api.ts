@@ -25,6 +25,10 @@ import {
   type SettingView,
   type SettingsView,
   type AdminFounderTransferResult,
+  type AdminAddMemberRequest,
+  type AdminMintTokenRequest,
+  type AdminMintedToken,
+  type AdminWorkspaceChoice,
   type AdminTransferFounderRequest,
 } from '@portal/contracts';
 
@@ -85,6 +89,9 @@ export const api = {
   suspend: (id: string, reason?: string) => call<AdminUserRow>('POST', ADMIN_API.suspend(id), { reason }),
   resume: (id: string) => call<AdminUserRow>('POST', ADMIN_API.resume(id), {}),
   endSessions: (id: string) => call<{ portal: number; admin: number }>('POST', ADMIN_API.endSessions(id), {}),
+  /** Owner need 2026-11-01: a Portal MCP token that acts as this account; the secret is in the answer once. */
+  mintToken: (id: string, req: AdminMintTokenRequest) => call<AdminMintedToken>('POST', ADMIN_API.tokens(id), req),
+  userWorkspaces: (id: string) => call<AdminWorkspaceChoice[]>('GET', ADMIN_API.userWorkspaces(id)),
   revokeToken: (id: string, tokenId: string) => call<{ revoked: boolean }>('DELETE', ADMIN_API.token(id, tokenId)),
   setAbility: (id: string, ability: Ability, on: boolean) => call<{ changed: boolean }>(on ? 'PUT' : 'DELETE', ADMIN_API.ability(id, ability)),
   // Orgs
@@ -94,6 +101,8 @@ export const api = {
   deleteOrg: (id: OrgId, reason?: string) => call<{ deleted: true }>('DELETE', ADMIN_API.org(id), { reason }),
   suspendOrg: (id: OrgId, reason?: string) => call<{ suspended: true }>('POST', ADMIN_API.suspendOrg(id), { reason }),
   resumeOrg: (id: OrgId) => call<{ resumed: true }>('POST', ADMIN_API.resumeOrg(id), {}),
+  addMember: (id: OrgId, req: AdminAddMemberRequest) => call<AdminOrgDetail>('POST', ADMIN_API.orgMembers(id), req),
+  removeMember: (id: OrgId, userId: string) => call<AdminOrgDetail>('DELETE', ADMIN_API.orgMember(id, userId)),
   recoverOwner: (id: OrgId, userId: string, reason: string) => call<{ recovered: true }>('POST', ADMIN_API.recoverOwner(id), { userId, reason }),
   startBreakGlass: (id: OrgId, reason: string) => call<BreakGlassEntry>('POST', ADMIN_API.breakGlass(id), { reason }),
   endBreakGlass: (id: OrgId) => call<{ ended: number }>('DELETE', ADMIN_API.breakGlass(id)),

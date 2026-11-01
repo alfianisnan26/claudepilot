@@ -31,6 +31,9 @@ import {
   type Actor,
   type AdminAuditQuery,
   type AdminMe,
+  type AdminMintedToken,
+  type AdminWorkspaceChoice,
+  type CreatePortalTokenRequest,
   type AdminPasswordResult,
   type AdminSignInConfig,
   type AdminSignInMethods,
@@ -54,7 +57,9 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { requireCan } from '../authz/seam.js';
+import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
+import { isWorkspaceId } from '../names.js';
+import type { PortalMcpModule } from '../portalmcp/module.js';
 import { oneTimePassword, type AccountAdmin } from '../identity/accountAdmin.js';
 import { revokeAccountTokens } from '../identity/accountGate.js';
 import { adminSignInPaths, currentFounder, transferFounder } from '../identity/founder.js';
@@ -87,6 +92,8 @@ export interface AdminUsers {
   update(id: string, req: { state?: 'active' | 'disabled' }): Promise<PortalUser>;
   roleOf(id: string): 'admin' | 'member' | 'disabled' | null;
   principalOf(id: string): string;
+  /** An account with no password of its own (it signs in by SSO, or acts only through a token); identity/users.ts. Missing: `email` on Add member is refused. */
+  createExternal?(email: string, displayName: string, role: 'admin' | 'member', by: string): Promise<PortalUser>;
 }
 
 export interface AdminConsoleDeps {
@@ -141,6 +148,12 @@ export interface AdminConsoleDeps {
    * the button is hidden). Tests pass a client that talks to the fake provider.
    */
   oidc?: { config: AdminOidcConfig | null; client?: OidcClient } | null;
+  /**
+   * Owner need 2026-11-01: Portal MCP, to mint a token FOR an account (it acts as that account, capped by its scope). Missing: those routes
+   * answer 404. `mcpUrl` is PORTAL_MCP_URL, shown with the secret when set.
+   */
+  pmcp?: (Pick<PortalMcpModule, 'createToken'> & { tokens: Pick<PortalMcpModule['tokens'], 'setDefaultWorkspace'> }) | null;
+  mcpUrl?: string | null;
 }
 
 const WRONG = () => new AppError('UNAUTHORIZED', 'That email or password is not right.');
@@ -458,11 +471,30 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     const ownerMatch = principal === u.id ? 'OR t.owner_id = ?' : '';
     const pmcp = r
       .prepare(
-        `SELECT t.id, t.label, t.created_at, t.expires_at, t.last_used_at, t.revoked_at FROM pmcp_tokens t
+        `SELECT t.id, t.label, t.scope, t.default_workspace_id, t.created_at, t.expires_at, t.last_used_at, t.revoked_at FROM pmcp_tokens t
          WHERE t.id IN (SELECT token_id FROM token_accounts WHERE kind = 'pmcp' AND account_id = ?) ${ownerMatch} ORDER BY t.created_at DESC LIMIT 200`,
       )
-      .all(...(ownerMatch ? [u.id, u.id] : [u.id])) as { id: string; label: string; created_at: string; expires_at: string; last_used_at: string | null; revoked_at: string | null }[];
-    const out: AdminUserToken[] = pmcp.map((t) => ({ kind: 'pmcp', id: t.id, label: t.label, createdAt: t.created_at, expiresAt: t.expires_at, lastUsedAt: t.last_used_at, revokedAt: t.revoked_at }));
+      .all(...(ownerMatch ? [u.id, u.id] : [u.id])) as {
+      id: string;
+      label: string;
+      scope: AdminUserToken['scope'];
+      default_workspace_id: string | null;
+      created_at: string;
+      expires_at: string;
+      last_used_at: string | null;
+      revoked_at: string | null;
+    }[];
+    const out: AdminUserToken[] = pmcp.map((t) => ({
+      kind: 'pmcp',
+      id: t.id,
+      label: t.label,
+      createdAt: t.created_at,
+      expiresAt: t.expires_at,
+      lastUsedAt: t.last_used_at,
+      revokedAt: t.revoked_at,
+      scope: t.scope,
+      defaultWorkspaceId: t.default_workspace_id ?? null,
+    }));
     if (tableExists('reporter_tokens')) {
       const userMatch = principal === u.id ? 'OR t.actor_user = ?' : '';
       const rep = r
@@ -540,6 +572,67 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     if (changed) record(c, 'account.token_revoked', u.id, { kind: t.kind, tokenId: t.id });
     return c.json(success({ revoked: changed }));
   });
+  // ---------- Portal MCP tokens FOR an account (owner need 2026-11-01: an AI agent's account with access limited to one org) ----------
+  // The token's owner is the account (`principalOf`: the founder's acts as u_owner), so it acts with that account's rights, capped by its
+  // scope: a member of an org reaches only what the org shares with its members. The minting admin is recorded as the account behind it
+  // (token_accounts), so it also stops when that admin stops being one; tokens/verify stops it while its owner is disabled or gone.
+  const pmcp = () => {
+    if (!d.pmcp) throw new AppError('NOT_FOUND');
+    return d.pmcp;
+  };
+  /** The actor a token of this account and scope would be (for what it may operate), before it exists. */
+  const tokenActor = (ownerId: string, scope: 'read' | 'operate' | 'admin') => actorOfPrincipal({ kind: 'user', userId: ownerId, tokenId: 'ptk_pending', scope, workspaceId: null, sessionId: null });
+  const operable = async (ownerId: string, scope: 'read' | 'operate' | 'admin'): Promise<AdminWorkspaceChoice[]> => {
+    const who = tokenActor(ownerId, scope);
+    return (await workspaces().list()).filter((w) => can(who, 'operate', workspaceRef(w.id)).allow).map((w) => ({ id: w.id, label: w.label ?? w.name }));
+  };
+  on('GET', '/admin-api/users/:id/workspaces', async (c) => {
+    const u = account(param(c, 'id'));
+    return c.json(success(await operable(d.users.principalOf(u.id), 'operate')));
+  });
+  on('POST', '/admin-api/users/:id/tokens', async (c) => {
+    const pm = pmcp();
+    const u = account(param(c, 'id'));
+    if (u.state !== 'active') throw new AppError('CONFLICT', 'The account is suspended. Resume it first.');
+    const b = await body(c);
+    const scope = b.scope;
+    if (scope !== 'read' && scope !== 'operate' && scope !== 'admin') throw new AppError('VALIDATION_FAILED', 'Pick read or operate.', { details: { scope: 'Pick a scope.' } });
+    if (scope === 'admin' && d.users.roleOf(u.id) !== 'admin')
+      throw new AppError('VALIDATION_FAILED', 'Admin scope is for admin accounts only.', { details: { scope: 'Read or operate for this account.' } });
+    const ownerId = d.users.principalOf(u.id) as UserId;
+    let workspaceId: string | null = null;
+    if (b.defaultWorkspaceId !== undefined && b.defaultWorkspaceId !== null && b.defaultWorkspaceId !== '') {
+      if (!isWorkspaceId(b.defaultWorkspaceId)) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { defaultWorkspaceId: 'Pick a workspace.' } });
+      if (scope === 'read') throw new AppError('VALIDATION_FAILED', 'A read token makes no tickets: give it operate.', { details: { defaultWorkspaceId: 'Not for a read token.' } });
+      if (!(await operable(ownerId, scope)).some((w) => w.id === b.defaultWorkspaceId))
+        throw new AppError('VALIDATION_FAILED', 'Pick a workspace this account may operate.', { details: { defaultWorkspaceId: 'Not one this account may operate.' } });
+      workspaceId = b.defaultWorkspaceId;
+    }
+    const actor = c.get('actor');
+    // Checked by the token service (PORTAL_TOKEN_DAYS); anything else is refused there, never defaulted.
+    const days = (typeof b.expiresInDays === 'number' ? b.expiresInDays : Number.NaN) as CreatePortalTokenRequest['expiresInDays'];
+    const made = pm.createToken({ label: typeof b.label === 'string' ? b.label : '', scope, expiresInDays: days }, d.mcpUrl ?? '', actorString(actor), undefined, {
+      ownerId,
+      accountId: c.get('admin').account.id,
+    });
+    if (workspaceId) pm.tokens.setDefaultWorkspace(made.token.id, workspaceId);
+    // The id, label, scope and lifetime; never the secret (it is in this answer only).
+    record(c, 'pmcp.token.minted_for_user', u.id, { email: u.email, tokenId: made.token.id, label: made.token.label, scope, expiresAt: made.token.expiresAt, defaultWorkspace: workspaceId });
+    const row = tokensOf(u).find((t) => t.kind === 'pmcp' && t.id === made.token.id);
+    const token: AdminUserToken = row ?? {
+      kind: 'pmcp',
+      id: made.token.id,
+      label: made.token.label,
+      createdAt: made.token.createdAt,
+      expiresAt: made.token.expiresAt,
+      lastUsedAt: null,
+      revokedAt: null,
+      scope,
+      defaultWorkspaceId: workspaceId,
+    };
+    return c.json(success<AdminMintedToken>({ token, secret: made.secret, mcpUrl: d.mcpUrl || null }), 201);
+  });
+
   const ability = (c: Context<AdminEnv>) => {
     const a = param(c, 'ability');
     if (!isAbility(a)) throw new AppError('NOT_FOUND', 'No such ability.');
@@ -685,6 +778,36 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
     return c.json(success(platformOrgs.create(c.get('actor'), { name: b.name, slug: b.slug, ownerId: b.ownerId })), 201);
   });
   on('GET', '/admin-api/orgs/:id', (c) => c.json(success(platformOrgs.detail(c.get('actor'), param(c, 'id') as OrgId))));
+  // Owner need 2026-11-01: Members → Add (an existing account, or a new one with no password) and Remove (never an owner).
+  on('POST', '/admin-api/orgs/:id/members', async (c) => {
+    const actor = c.get('actor');
+    const id = param(c, 'id') as OrgId;
+    const b = await body(c);
+    // The org first: a new account is not made for an org that is not there.
+    platformOrgs.detail(actor, id);
+    let userId = typeof b.userId === 'string' ? b.userId : '';
+    if (!userId && typeof b.email === 'string' && b.email.trim()) {
+      if (!d.users.createExternal) throw new AppError('NOT_FOUND');
+      const name = typeof b.displayName === 'string' ? b.displayName : '';
+      const made = await d.users.createExternal(b.email, name, 'member', actorString(actor)).catch((e: unknown) => {
+        // Its own message speaks of a sign-in provider; here an admin typed the address.
+        if (isAppError(e) && e.is('VALIDATION_FAILED')) throw new AppError('VALIDATION_FAILED', 'Give a valid email address.', { details: { email: 'An email address.' } });
+        if (isAppError(e) && e.is('CONFLICT')) throw new AppError('CONFLICT', 'An account with that email exists. Pick it instead.', { details: { email: 'Already used.' } });
+        throw e;
+      });
+      record(c, 'account.created', made.id, { email: made.email, role: made.role, password: 'none' }, 'info');
+      userId = made.id;
+    }
+    if (!userId) throw new AppError('VALIDATION_FAILED', 'Pick an account, or give an email for a new one.', { details: { userId: 'Required.' } });
+    platformOrgs.addMember(actor, id, userId, b.role);
+    return c.json(success(platformOrgs.detail(actor, id)), 201);
+  });
+  on('DELETE', '/admin-api/orgs/:id/members/:userId', (c) => {
+    const actor = c.get('actor');
+    const id = param(c, 'id') as OrgId;
+    platformOrgs.removeMember(actor, id, param(c, 'userId'));
+    return c.json(success(platformOrgs.detail(actor, id)));
+  });
   on('DELETE', '/admin-api/orgs/:id', async (c) => {
     // A DELETE may come without a body: the reason is optional.
     const reason = c.req.header('content-type')?.includes('json') ? (await body(c)).reason : undefined;
