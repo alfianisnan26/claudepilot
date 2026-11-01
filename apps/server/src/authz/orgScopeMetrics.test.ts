@@ -58,7 +58,8 @@ function caller(routes: Hono, who: Actor) {
   });
   app.route('/x', routes as never);
   return async <T>(path: string): Promise<T> => {
-    const res = await app.request(`/x${path}`);
+    // A route mounted at `/x` answers `/x` and `/x?org=`, not `/x/` (strict paths): the tests write `/` and `/?org=` for it.
+    const res = await app.request(`/x${path.replace(/^\/(?=$|\?)/, '')}`);
     assert.equal(res.status, 200, `${path}: ${await res.clone().text()}`);
     return ((await res.json()) as { data: T }).data;
   };
