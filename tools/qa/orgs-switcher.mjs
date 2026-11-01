@@ -74,6 +74,10 @@ try {
       await b.waitFor(`!!document.querySelector('${trigger}')`, 20_000, 'the switcher').catch(() => {});
       check(`${t}: the switcher is shown`, await b.eval(`!!document.querySelector('${trigger}')`));
       if (!size.mobile) check(`${t}: closed, it reads Personal`, (await b.eval(`document.querySelector('${trigger}').innerText`)).includes('Personal'));
+      if (size.mobile) {
+        const right = await b.eval(`Math.round(document.querySelector('header [aria-label="Account menu"]')?.getBoundingClientRect().right ?? -1)`);
+        check(`${t}: the top bar keeps the account button on screen`, right > 0 && right <= size.w, `right=${right}`);
+      }
       await b.shot(`orgs-switcher-closed-${t}`);
 
       await b.clickSel(trigger);
