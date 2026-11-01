@@ -295,7 +295,7 @@ test('requireSso: owner only, and only after an owner signed in through the prov
   assert.throws(() => m.sso!.putProvider(person(ALICE), acme, { enabled: false }, REDIRECT), code('CONFLICT', 'SSO_LOCKOUT_GUARD'));
   assert.throws(() => m.sso!.removeProvider(person(ALICE), acme), code('CONFLICT', 'SSO_LOCKOUT_GUARD'));
   assert.equal(sso.passwordRefused('alice@acme.test'), true, 'a password is refused for the org’s domain now');
-  assert.equal(sso.forEmail('alice@acme.test')?.passwordToo, undefined);
+  assert.equal(sso.forEmail('alice@acme.test')?.passwordToo, false, 'discover then offers SSO only');
 });
 
 test('requireSso enforcement: a password session and a stale token lose the org’s objects; a marked session and a fresh token keep them', async () => {
