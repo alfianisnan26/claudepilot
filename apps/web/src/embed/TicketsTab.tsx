@@ -15,6 +15,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { appendPage, filterChips, refreshLimit, reuseRows, rowThumb, splitPrefix, windowRange } from './chatModel';
 import { SEVERITIES, deployLine, pathnameOf, shortCommit, shotCaption } from '@/features/reporter/shared';
 import { usePanel } from './context';
+import { useFreshKeys } from './hooks';
 import { Icon } from './icons';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
@@ -160,6 +161,8 @@ function TicketList() {
   }, [focused, play]);
 
   const items = list?.items ?? [];
+  // A ticket that just arrived (filed, or by an event) slides in once; a first load or a new filter just appears.
+  const fresh = useFreshKeys(useMemo(() => list?.items.map((t) => t.key) ?? null, [list]));
   const env = status.site?.environment ?? null;
   const filters = activeFilterCount(prefs);
   const grouped = prefs.scope === 'grouped' ? groupByPage(items) : null;
@@ -292,12 +295,12 @@ function TicketList() {
               <h2 className="px-1 text-[12.5px] font-semibold break-all text-muted">{g.path || 'No page'}</h2>
               <ul className="flex flex-col">
                 {g.items.map((t) => (
-                  <Row key={t.key} t={t} path={path} env={env} onOpen={open} />
+                  <Row key={t.key} t={t} path={path} env={env} onOpen={open} fresh={fresh.has(t.key)} />
                 ))}
               </ul>
             </section>
           ))
-        : list && <Rows items={items} path={path} env={env} onOpen={open} />}
+        : list && <Rows items={items} path={path} env={env} onOpen={open} fresh={fresh} />}
       {list?.nextCursor && (
         <div ref={end} className="flex min-h-11 items-center justify-center">
           {more ? <span className="text-[13px] text-muted">Loading…</span> : <Btn tone="ghost" onClick={loadMore}>More</Btn>}
@@ -308,7 +311,7 @@ function TicketList() {
 }
 
 /** The rows; a long list renders only the rows near the scrolled-to range (spacers keep its length). */
-function Rows({ items, path, env, onOpen }: { items: ReporterTicket[]; path: string | null; env: string | null; onOpen: (key: string) => void }) {
+function Rows({ items, path, env, onOpen, fresh }: { items: ReporterTicket[]; path: string | null; env: string | null; onOpen: (key: string) => void; fresh: ReadonlySet<string> }) {
   const [range, setRange] = useState(() => ({ start: 0, end: Math.min(items.length, WINDOW_FROM) }));
   const ul = useRef<HTMLUListElement>(null);
   const windowed = items.length > WINDOW_FROM;
@@ -332,7 +335,7 @@ function Rows({ items, path, env, onOpen }: { items: ReporterTicket[]; path: str
     <ul ref={ul} className="flex flex-col gap-1">
       {start > 0 && <li aria-hidden="true" style={{ height: start * ROW_PX }} />}
       {items.slice(start, end).map((t) => (
-        <Row key={t.key} t={t} path={path} env={env} onOpen={onOpen} />
+        <Row key={t.key} t={t} path={path} env={env} onOpen={onOpen} fresh={fresh.has(t.key)} />
       ))}
       {end < items.length && <li aria-hidden="true" style={{ height: (items.length - end) * ROW_PX }} />}
     </ul>
@@ -346,13 +349,13 @@ const PRIORITY_TONE: Partial<Record<TicketPriority, string>> = { urgent: 'text-d
  * waits on the reporter, else an unread dot) and the title on two lines, a bracketed prefix as a small tag. A small thumbnail on the left
  * ONLY when the ticket has a screenshot (fixed 48 px, lazy): a ticket filed elsewhere is a text row with no placeholder. Memoised.
  */
-export const Row = memo(function Row({ t, path, onOpen }: { t: ReporterTicket; path: string | null; env?: string | null; onOpen: (key: string) => void }) {
+export const Row = memo(function Row({ t, path, onOpen, fresh = false }: { t: ReporterTicket; path: string | null; env?: string | null; onOpen: (key: string) => void; fresh?: boolean }) {
   const { client } = usePanel();
   const thumb = rowThumb(t, path ? capturesHere(t, path) : []);
   const title = splitPrefix(t.summary);
   const tone = PRIORITY_TONE[t.priority];
   return (
-    <li>
+    <li className={fresh ? 'anim-in' : undefined}>
       <button
         type="button"
         onClick={() => onOpen(t.key)}
@@ -413,8 +416,8 @@ function FilterSheet({ prefs, counts, items, onApply, onClose }: { prefs: ListPr
   }, [onClose]);
   return (
     <div className="fixed inset-0 z-40 flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Filter">
-      <button type="button" aria-label="Close filters" tabIndex={-1} onClick={onClose} className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.35)' }} />
-      <div className="relative flex max-h-[85%] flex-col rounded-t-2xl bg-bg shadow-lg">
+      <button type="button" aria-label="Close filters" tabIndex={-1} onClick={onClose} className="anim-fade absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.35)' }} />
+      <div className="anim-sheet relative flex max-h-[85%] flex-col rounded-t-2xl bg-bg shadow-lg">
         <div className="flex shrink-0 items-center gap-1 px-3 pt-1">
           <h2 className="flex-1 text-[15px] font-bold">Filter</h2>
           <IconBtn icon="x" label="Close filters" onClick={onClose} />
