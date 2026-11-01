@@ -4202,6 +4202,22 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 420,
+    name: 'organizations slice 2: an SSO provider records the confirmation that its new accounts are full admins (P6)',
+    up(db) {
+      // docs/prd/organizations.md §13 P6 (slice 2 takes 420-429). A first sign-in through a provider set to "admin" with "Make accounts" makes
+      // a full admin; the admin page has always asked for a confirmation (acknowledgeAdminAutoCreate), but nothing recorded it, so a row that
+      // reached that state any other way (an old row, a database edit) made admins too. Now the sign-in makes an admin only while
+      // `admin_ack_at` is set (identity/sso.ts jitRole); it is cleared when the provider stops making admins. Rows that make admins today
+      // were saved through that confirmation (it exists since the table, migration 406), so they keep it, audited as by this migration.
+      db.exec(`
+        ALTER TABLE sso_providers ADD COLUMN admin_ack_at TEXT;
+        ALTER TABLE sso_providers ADD COLUMN admin_ack_by TEXT;
+        UPDATE sso_providers SET admin_ack_at = updated_at, admin_ack_by = 'system:migration-420' WHERE default_role = 'admin' AND auto_create = 1;
+      `);
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {

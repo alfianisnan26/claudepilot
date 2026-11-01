@@ -7,6 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { isAppError } from '@isnanme/core';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { ownerActor } from '../authz/seam.js';
 import { tempDirectory } from '../store/testTmp.js';
 import { fixtureZip } from './fixtures.js';
 import { createKnowledgeRoutes } from './routes.js';
@@ -22,6 +23,11 @@ app.onError((e, c) => {
   const err = isAppError(e) ? e : null;
   if (!err) throw e;
   return c.json(err.toJSON(), err.status as ContentfulStatusCode);
+});
+// The session middleware sets who is asking (organizations slice 0); lists and searches keep to what that person may view (slice 2).
+app.use('*', async (c, next) => {
+  c.set('actor' as never, ownerActor() as never);
+  await next();
 });
 app.route('/api/knowledge', createKnowledgeRoutes(svc));
 

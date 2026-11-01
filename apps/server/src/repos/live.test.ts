@@ -7,8 +7,12 @@ import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import type { LiveMessage } from '@portal/contracts';
 import { WebSocket } from 'ws';
+import { ownerActor, useSocketActor } from '../authz/seam.js';
 import { LiveHub } from '../live.js';
 import { buildPool, commitFile, reposHarness, WS } from './testkit.js';
+
+// Organizations slice 2 (P5): an anonymous tab hears nothing; these tabs are the founding user's.
+useSocketActor(() => ownerActor());
 
 let server: Server;
 let hub: LiveHub;

@@ -400,6 +400,8 @@ enumerates all 578 routes and 138 tools, probes every `objects`/`platform` decla
 Not in slice 1: per-person filtering of lists (`filter` on vault, account, pool and repo lists is still the handler's: P5), object checks on the
 pool tools (they accept a set's name), the member's creating and owning (S1b).
 
+Built so far (not yet merged): P1, P2 and the P6 linking rule in slice 0; P5 and the rest of P6 in slice 2 (`docs/prd/multi-user.md` §20, §21; migration 420).
+
 ### 13.2 Slices (each with its tests and a blind security review, D-82 style)
 
 | # | Slice | Tests (minimum) |

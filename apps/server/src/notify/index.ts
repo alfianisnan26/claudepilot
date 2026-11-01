@@ -55,7 +55,7 @@ export interface NotifyDeps {
   pushContact: string | null;
   /** This portal on its own port, when no link address is set. */
   selfOrigin: string;
-  publish: () => void;
+  publish: (to?: readonly string[]) => void;
   /** Tests: a client with injected resolution, plain http, private addresses. Never set from a request. */
   egress?: Egress;
   /** Whether a sign-in checked the server code recently. */

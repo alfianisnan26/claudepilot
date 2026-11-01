@@ -12,7 +12,7 @@ import { afterEach, test } from 'node:test';
 import { CHAT_HISTORY_GAP_HEADER, CHAT_SOCKET_PATH, type ChatEvent, type ChatServerMessage } from '@portal/contracts';
 import { Hono } from 'hono';
 import { WebSocket } from 'ws';
-import { clearResolvers } from '../authz/seam.js';
+import { clearResolvers, ownerActor, useSocketActor } from '../authz/seam.js';
 import type { Workspaces } from '../workspaces/manager.js';
 import { registerChatAuthz } from './authz.js';
 import { ChatController } from './controller.js';
@@ -22,6 +22,8 @@ import { ChatStore, HISTORY_MAX_EVENTS } from './store.js';
 import { FakeWorkspaces, freshStore, until } from './testkit.js';
 
 const CAP = HISTORY_MAX_EVENTS;
+// Organizations slice 2 (P5): the socket's person is checked on every subscribe; these tabs are the founding user's.
+useSocketActor(() => ownerActor());
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
   clearResolvers();

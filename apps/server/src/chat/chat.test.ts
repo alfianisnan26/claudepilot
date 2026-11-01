@@ -41,11 +41,15 @@ import {
 import { MAX_HOLD, redact, StreamRedactor } from './redact.js';
 import { createChatRoutes } from './routes.js';
 import { attachChat } from './socket.js';
+import { ownerActor, useSocketActor } from '../authz/seam.js';
 import { usageReport } from './usage.js';
 import { ChatStore, EVENT_TEXT_MAX, sessionCwd } from './store.js';
 import { conversationBudget, FILE_MAX_CHARS, FILE_MESSAGE_MAX_CHARS, TRANSFER_WRITE_SCRIPT, transferConversation, transferFileConversation, transferOpening, type TransferMeta } from './transfer.js';
 import { FOLDER_CHANGED, FOLDER_NOT_TRUSTED } from './trust.js';
 import { APPLIED, controls, EMPTY_SCAN, fail, FakeExec, FakeWorkspaces, firstTurn, freshStore, init, line, liveSession, ok, QUICK_GONE, sleep, until, USAGE_API_KEY, vanish, type Control, type Live } from './testkit.js';
+
+// Organizations slice 2 (P5): the chat socket checks its person on every subscribe, send and control; these tabs are the founding user's.
+useSocketActor(() => ownerActor());
 
 
 /* ========================= protocol (pure) ========================= */

@@ -10,7 +10,8 @@
 //   arguments. There is no delete, rename, restore, upload or import here: a person does those in the portal.
 
 import type { GraphNodeKind, GraphQuery, GraphResponse } from '@portal/contracts';
-import { GRAPH_LENSES, GRAPH_NODE_KINDS } from '@portal/contracts';
+import { GRAPH_LENSES, GRAPH_NODE_KINDS, vaultRef } from '@portal/contracts';
+import { actorOfPrincipal, can } from '../authz/seam.js';
 import { pageInput, pageWindow } from '../portalmcp/paging.js';
 import { PortalToolError, z, portalTools, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { isKnowledgeError } from './errors.js';
@@ -18,7 +19,11 @@ import { parseActor } from './journal.js';
 import type { CallerScope, KnowledgeService } from './service.js';
 
 const actorOf = (ctx: PortalToolContext) => parseActor(ctx.actor);
-const scopeOf = (ctx: PortalToolContext): CallerScope => ({ vaults: ctx.vaults });
+/** The token's vaults, and (organizations slice 2, P5) only those the person behind the token may view, through the one `can()`. */
+const scopeOf = (ctx: PortalToolContext): CallerScope => {
+  const person = actorOfPrincipal(ctx.principal);
+  return { vaults: ctx.vaults, canView: (id) => can(person, 'view', vaultRef(id)).allow };
+};
 const noteSource = (vault: string, path: string) => `note:${vault}/${path}`;
 
 /**

@@ -126,7 +126,7 @@ const METADATA = new Set(['169.254.169.254', 'fd00:ec2::254', '100.100.100.200',
  * Whether an address or host is a metadata endpoint in any spelling (QA-003): an IPv4-mapped or NAT64 IPv6
  * address carries the IPv4 inside (`::ffff:a9fe:a9fe` is 169.254.169.254), so the text isn't compared alone.
  */
-const isMetadata = (addr: string) => METADATA.has(addr.toLowerCase()) || METADATA.has(embeddedIPv4(addr.toLowerCase()) ?? '');
+export const isMetadata = (addr: string): boolean => METADATA.has(addr.toLowerCase()) || METADATA.has(embeddedIPv4(addr.toLowerCase()) ?? '');
 
 /** A remote server's URL, normalized: https (or http, flagged), no credentials or fragment, nothing credential-shaped. */
 export function normalizeRemoteUrl(input: unknown, check: UrlCheck = {}): string {

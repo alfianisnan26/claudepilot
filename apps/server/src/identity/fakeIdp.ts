@@ -65,6 +65,8 @@ export function fakeIdp(now: () => number = () => Date.now()) {
   return {
     calls,
     client: new OidcClient(fetchImpl, async () => {}, now),
+    /** The provider's `fetch` stand-in, for a test that builds its own client (another guard, say). */
+    fetch: fetchImpl,
     sign,
     claims,
     /** Rotate: a new RSA key replaces rsa1 under a new kid. */
