@@ -6,7 +6,8 @@
 //   3. the spend summary, attribution, budgets and spikes (usagespend) do the same.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { usageHarness } from '../claudeusage/fixtures.js';
+import { NOW as USAGE_NOW, usageHarness } from '../claudeusage/fixtures.js';
+import { outlierEvidence } from '../usagespend/spikes.js';
 import { NOW, spendHarness } from '../usagespend/testkit.js';
 import { Store } from '../store/store.js';
 import { tempDirectory } from '../store/testTmp.js';
@@ -92,7 +93,7 @@ function seedHistory(db: NonNullable<Store['db']>, at: number): void {
 test('claude usage: the Requests report, the strip and the export keep only the requests anchored in the context; old Claudes read "(old)"', async () => {
   const h = await usageHarness();
   try {
-    seedHistory(h.store.db!, NOW - 5 * MIN);
+    seedHistory(h.store.db!, USAGE_NOW - 5 * MIN);
     const cost = (ws?: string) => h.usage.requestsReport('1d', ws ? { inWorkspace: only(ws) } : {}).totals.costUsd;
     assert.equal(cost(), 15, 'no context: every request, as before');
     assert.equal(cost(KONFERSI), 1, 'the relocated chat’s request follows it to Konfersi');
@@ -135,9 +136,10 @@ test('usage spend: the summary, attribution, budgets and spikes keep only what i
     assert.deepEqual(names(only(ISNAN)), ['old fadlilah']);
     assert.deepEqual(names((w) => w === null), ['all'], 'a budget on everything: no workspace (Personal only)');
     // A spike recorded on the old workspace for the relocated chat follows the chat.
+    const evidence = JSON.stringify(outlierEvidence(5, { medianUsd: 0.5, factor: 10, requests: 20 }));
     h.db
-      .prepare("INSERT INTO usage_spikes (at_ms, kind, subject, session_id, workspace_id, claude_id, evidence, alerted, owner) VALUES (?, 'outlier', 's_moved', 's_moved', ?, 'c_oldfad', '{}', 1, 'u_owner')")
-      .run(NOW - MIN, KOHI);
+      .prepare("INSERT INTO usage_spikes (at_ms, kind, subject, session_id, workspace_id, claude_id, evidence, alerted, owner) VALUES (?, 'outlier', 's_moved', 's_moved', ?, 'c_oldfad', ?, 1, 'u_owner')")
+      .run(NOW - MIN, KOHI, evidence);
     const spikes = (ws: string) => h.spend.spikes('1d', undefined, only(ws)).events.length;
     assert.equal(spikes(KONFERSI), 1);
     assert.equal(spikes(ISNAN), 0);
