@@ -1,6 +1,7 @@
 // The change-scoped release gate's selector (scripts/gate-select.mjs, D-106) on small repositories in a temporary folder: the import graph
 // walk, a reference from a test to a script, the walkers, shared core and unknown bases running the whole gate, documents reusing a green
-// result, and a broken file in a non-core place still reaching the test that imports it.
+// result, and a broken file in a non-core place still reaching the test that imports it. Then D-110's --affected (what the deploy gate
+// passes): core one hop, no "more than half", the merge base when nothing is recorded, an error (never full) when nothing can be selected.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -187,4 +188,62 @@ test('--reuse-only (the nightly): reuse when a full green result covers the tree
   const docs = r.commit({ 'docs/guide.md': '# again\n' });
   assert.equal(select(r.root, ['--head', docs, '--reuse-only', '--kinds', 'full'], `${r.base} full ${at()}\n`).mode, 'reuse');
   assert.equal(select(r.root, ['--head', docs, '--reuse-only', '--kinds', 'full'], `${r.base} scoped ${at()}\n`).mode, 'none', 'a scoped result is not a full one');
+});
+
+/* ---------- D-110 (owner, 2026-11-01): --affected, what the deploy gate passes: only the affected tests, never the whole suite ---------- */
+
+test('D-110 --affected: shared core is followed one hop to the tests that import or name it, never to the whole suite', () => {
+  const r = repo({
+    ...BASE,
+    'apps/server/src/store/db.test.ts': "import { db } from './db.js';\nconsole.log(db);\n",
+    'apps/server/src/a/uses.ts': "import { db } from '../store/db.js';\nexport const u = db;\n",
+    'apps/server/src/a/uses.test.ts': "import { u } from './uses.js';\nconsole.log(u);\n",
+  });
+  const head = r.commit({ 'apps/server/src/store/db.ts': 'export const db = 2;\n' });
+  const p = select(r.root, ['--affected', '--head', head, '--base', r.base]);
+  assert.equal(p.mode, 'scoped', p.reason);
+  assert.deepEqual(p.files, ['src/store/db.test.ts'], 'the test that imports db.ts; uses.test.ts only reaches it through uses.ts');
+  assert.deepEqual(p.steps, ['typecheck', 'web-build', 'web-tests', 'server-suite']);
+  assert.match(p.reason, /shared core \(1\) followed to the tests that import or name it/);
+  assert.equal(select(r.root, ['--head', head, '--base', r.base]).mode, 'full', 'without --affected, D-106 as before (the nightly and hand runs)');
+
+  for (const file of ['package-lock.json', 'apps/web/tsconfig.json', 'scripts/gate.sh', 'packages/contracts/src/index.ts']) {
+    const q = repo();
+    const h = q.commit({ [file]: file.endsWith('.sh') ? '#!/usr/bin/env bash\n' : file.endsWith('.ts') ? 'export {};\n' : '{}\n' });
+    const plan = select(q.root, ['--affected', '--head', h, '--base', q.base]);
+    assert.equal(plan.mode, 'scoped', `${file}: ${plan.reason}`);
+    assert.deepEqual(plan.steps, ['typecheck', 'web-build', 'web-tests'], `${file}: no server test imports or names it here`);
+  }
+});
+
+test('D-110 --affected: typecheck, web build and web tests always; a change that reaches more than half of the tests runs just those', () => {
+  const r = repo();
+  const one = r.commit({ 'apps/server/src/a/x.ts': 'export const x = 2;\n' });
+  const p = select(r.root, ['--affected', '--head', one, '--base', r.base]);
+  assert.deepEqual([p.mode, p.steps, p.files], ['scoped', ['typecheck', 'web-build', 'web-tests', 'server-suite'], ['src/a/y.test.ts']]);
+  const wide = r.commit({ 'apps/server/src/a/x.ts': 'export const x = 3;\n', 'apps/server/src/b/z.ts': 'export const z = 0;\n' });
+  const q = select(r.root, ['--affected', '--head', wide, '--base', r.base]);
+  assert.equal(q.mode, 'scoped', 'y.test and z.test are 2 of 3 test files: still only those');
+  assert.deepEqual(q.files, ['src/a/y.test.ts', 'src/b/z.test.ts']);
+  const same = select(r.root, ['--affected', '--head', wide, '--base', wide]);
+  assert.deepEqual([same.mode, same.steps], ['scoped', ['typecheck', 'web-build', 'web-tests']]);
+});
+
+test('D-110 --affected: no green record diffs against the merge base; nothing selectable is an error, never full; --full stays an explicit ask', () => {
+  const r = repo();
+  git(r.root, 'branch', 'released', r.base);
+  const head = r.commit({ 'apps/server/src/a/x.ts': 'export const x = 7;\n' });
+  const p = select(r.root, ['--affected', '--head', head, '--base-ref', 'released']);
+  assert.equal(p.mode, 'scoped', p.reason);
+  assert.equal(p.base, r.base);
+  assert.match(p.reason, /no green record on released: its merge base with the head/);
+  assert.deepEqual(p.files, ['src/a/y.test.ts']);
+
+  const gone = select(r.root, ['--affected', '--head', head, '--base', 'f'.repeat(40)]);
+  assert.deepEqual([gone.mode, gone.steps], ['error', []], 'a base that is not here');
+  assert.equal(select(r.root, ['--affected', '--head', head, '--base-ref', 'nowhere']).mode, 'error', 'a base ref that is not here');
+  assert.equal(select(r.root, ['--affected', '--head', head, '--base', r.base, '--full']).mode, 'full', '--full');
+  const env = spawnSync('node', [SELECT, '--repo', r.root, '--affected', '--head', head, '--base', 'f'.repeat(40)], { encoding: 'utf8', env: GIT_ENV });
+  assert.match(env.stdout, /^MODE=error$/m);
+  assert.match(env.stdout, /^STEPS=$/m);
 });

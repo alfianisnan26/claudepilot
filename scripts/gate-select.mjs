@@ -3,8 +3,14 @@
 // of one commit must run, from what changed since a GREEN gated commit. Plain node, no dependency (it runs in the workspace pod before any
 // npm ci; D-61: the heavy part, the gate itself, stays a Job in the cluster). It reads git objects only, never the working tree.
 //
-//   node scripts/gate-select.mjs --head <rev> [--base <rev> | --base-ref <ref> --records <file>] [--full] [--kinds full,scoped,reuse]
-//                                [--reuse-only] [--format env|json|text]
+//   node scripts/gate-select.mjs --head <rev> [--base <rev> | --base-ref <ref> --records <file>] [--full] [--affected]
+//                                [--kinds full,scoped,reuse] [--reuse-only] [--format env|json|text]
+//
+// --affected (D-110, owner 2026-11-01; the deploy gate passes it): releases run only the affected tests, never the whole server suite on
+// the selector's own account. Rule 4 does not apply: shared core is followed one hop (the server test files that import it or name it), a
+// change that reaches more than half of the tests runs those tests, no green record on the base ref diffs against the merge base with it,
+// and where nothing can be selected (an unknown base, no graph) MODE=error (the gate is red; --full stays a person's explicit ask). The
+// steps are always typecheck, web-build and web-tests, plus server-suite with the selected files.
 //
 // Records (<file>, from scripts/gate-record.sh list): one green gated commit per line, `<commit40> <kind> <at>` (kind full, scoped or reuse).
 // The decision, in this order:
@@ -20,7 +26,7 @@
 //      .pilot/scripts/check.sh runs when check.sh changes), plus every test that walks the repository's folders (it reads files no import
 //      names). The context-pack check runs whatever the steps (scripts/gate.sh).
 // --reuse-only stops after 2 (MODE=none when nothing can be reused): the nightly gate's "already fully gated" test.
-// Output (--format env, the default): KEY=value lines (MODE, REASON, BASE, REUSED, STEPS, FILES, CHANGED, SERVER_TESTS, SERVER_TOTAL, WEB);
+// Output (--format env, the default): KEY=value lines (MODE full|scoped|reuse|none|error, REASON, BASE, REUSED, STEPS, FILES, CHANGED, SERVER_TESTS, SERVER_TOTAL, WEB);
 // the reasons, per file, go to stderr. Exit 0 with a plan, 2 on a usage error.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { posix } from 'node:path';
@@ -311,7 +317,7 @@ const RUNS = /\.(sh|bash|mjs|cjs|py)$|^\.pilot\/[^/]+\.ya?ml$|(^|\/)Dockerfile[^
  * hop: a pipeline that runs it, a test that reads it), not further. A code file that only imports a changed one has the same text, so
  * whatever reads its text is not affected. `why` keeps one reason per reached file.
  */
-export function reach(changed, graph) {
+export function reach(changed, graph, shallow = new Set()) {
   const seen = new Map();
   const queue = [];
   const visit = (f, why, hop) => {
@@ -324,6 +330,13 @@ export function reach(changed, graph) {
   while (queue.length) {
     const [p, hop] = queue.shift();
     if (isServerTest(p) && hop > 0) continue;
+    if (shallow.has(p)) {
+      // D-110: shared core (CORE) in an affected-only gate: the server test files that import it or name it, one hop, never further (a
+      // walk through store/ or authz/ reaches nearly every test, which is the whole suite D-110 rules out for releases).
+      for (const imp of graph.importers.get(p) ?? []) if (isServerTest(imp)) visit(imp, `imports ${p}`, hop + 1);
+      for (const ref of referrers(p, graph)) if (isServerTest(ref)) visit(ref, `names ${p}`, hop + 1);
+      continue;
+    }
     for (const imp of graph.importers.get(p) ?? []) visit(imp, `imports ${p}`, hop + 1);
     if (hop === 0 || (hop === 1 && RUNS.test(p) && seen.get(p).startsWith('names '))) for (const ref of referrers(p, graph)) visit(ref, `names ${p}`, hop + 1);
   }
@@ -372,42 +385,55 @@ export function plan(opts) {
     }
   }
   if (opts.reuseOnly) return { ...out, mode: 'none', reason: 'no recorded green gate to reuse' };
+  // D-110 (--affected): never the whole suite on its own account. Where D-106 falls back to FULL, this answers ERROR (nothing could be
+  // selected: the gate is red, a person may ask for --full) or narrows (core one hop, no base record: the merge base, no "more than half").
+  const affected = Boolean(opts.affected);
+  const fallback = (reason) => (affected ? { ...out, mode: 'error', steps: [], web: false, reason } : { ...out, reason });
   // 3. The base.
   let base = opts.base ?? '';
-  if (base && !exists(repo, base)) return { ...out, reason: `the base ${base} is not here` };
+  let baseNote = '';
+  if (base && !exists(repo, base)) return fallback(`the base ${base} is not here`);
   if (!base) {
-    if (!opts.baseRef) return { ...out, reason: 'no base: no --base and no --base-ref' };
-    if (!exists(repo, opts.baseRef)) return { ...out, reason: `${opts.baseRef} is not here` };
+    if (!opts.baseRef) return fallback('no base: no --base and no --base-ref');
+    if (!exists(repo, opts.baseRef)) return fallback(`${opts.baseRef} is not here`);
     const green = new Set(records.map((r) => r.commit));
     const walk = git(repo, ['rev-list', '--max-count=1000', opts.baseRef]).split('\n').filter(Boolean);
     base = walk.find((c) => green.has(c)) ?? '';
+    if (!base && affected) {
+      // What is released (the base ref, main) and the head have in common: what the head adds over it is the change.
+      const mb = spawnSync('git', ['merge-base', head, opts.baseRef], { cwd: repo, encoding: 'utf8' });
+      base = mb.status === 0 ? mb.stdout.trim() : '';
+      if (!base) return fallback(`no green gated commit is known on ${opts.baseRef} and it shares no history with the head`);
+      baseNote = ` (no green record on ${opts.baseRef}: its merge base with the head)`;
+    }
     if (!base) return { ...out, reason: `no green gated commit is known on ${opts.baseRef} (the last 1000 commits)` };
   }
   out.base = base;
   const changed = diffNames(repo, base, head);
   out.changed = changed;
-  // 4. Full: core, graph, too wide.
+  // 4. Full: core, graph, too wide (D-106). Affected-only (D-110): core is followed one hop, to the tests that import or name it.
   const core = changed.filter((p) => CORE.some((r) => r.test(p)));
-  if (core.length) return { ...out, reason: `shared core changed: ${core.slice(0, 5).join(', ')}${core.length > 5 ? ` and ${core.length - 5} more` : ''}` };
+  if (core.length && !affected) return { ...out, reason: `shared core changed: ${core.slice(0, 5).join(', ')}${core.length > 5 ? ` and ${core.length - 5} more` : ''}` };
   try {
     ensureGraph();
   } catch (e) {
-    return { ...out, reason: `the import graph could not be built: ${e.message}` };
+    return fallback(`the import graph could not be built: ${e.message}`);
   }
   const allTests = tree.files.filter(isServerTest);
   out.serverTotal = allTests.length;
-  if (!changed.length) return { ...out, mode: 'scoped', steps: ['typecheck'], web: false, reason: `the tree is the green base's (${base.slice(0, 8)})` };
-  const reached = reach(changed, graph);
+  if (!changed.length) return { ...out, mode: 'scoped', steps: affected ? ['typecheck', 'web-build', 'web-tests'] : ['typecheck'], web: affected, reason: `the tree is the green base's (${base.slice(0, 8)})${baseNote}` };
+  const reached = reach(changed, graph, affected ? new Set(core) : undefined);
   const tests = new Set([...reached.keys()].filter((p) => isServerTest(p) && graph.fileSet.has(p)));
   for (const w of graph.walkers) if (!tests.has(w)) reached.set(w, reached.get(w) ?? 'walks the repository'), tests.add(w);
-  const web = [...reached.keys()].some((p) => p.startsWith('apps/web/'));
+  const web = affected || [...reached.keys()].some((p) => p.startsWith('apps/web/'));
   out.why = [...reached].filter(([p]) => tests.has(p) || p.startsWith('apps/web/') || changed.includes(p)).map(([p, w]) => `${p}: ${w}`);
-  if (tests.size > allTests.length / 2) return { ...out, serverTests: tests.size, reason: `the change reaches ${tests.size} of ${allTests.length} server test files` };
+  if (!affected && tests.size > allTests.length / 2) return { ...out, serverTests: tests.size, reason: `the change reaches ${tests.size} of ${allTests.length} server test files` };
   const steps = ['typecheck'];
-  if (web) steps.push('web-build', 'web-tests');
+  if (web) steps.push('web-build', 'web-tests'); // always in an affected-only gate (D-110: typecheck, web build and tests, the selection)
   if (tests.size) steps.push('server-suite');
   const files = [...tests].sort().map((p) => p.slice('apps/server/'.length));
-  return { ...out, mode: 'scoped', steps, files, web, serverTests: files.length, reason: `${changed.length} file(s) changed since ${base.slice(0, 8)}: ${files.length} of ${allTests.length} server test files${web ? ', the web build and tests' : ''}` };
+  const coreNote = affected && core.length ? `; shared core (${core.length}) followed to the tests that import or name it` : '';
+  return { ...out, mode: 'scoped', steps, files, web, serverTests: files.length, reason: `${changed.length} file(s) changed since ${base.slice(0, 8)}${baseNote}: ${files.length} of ${allTests.length} server test files${web ? ', the web build and tests' : ''}${coreNote}` };
 }
 
 function main(argv) {
@@ -425,6 +451,7 @@ function main(argv) {
     else if (a === '--format') opt.format = val();
     else if (a === '--kinds') kinds = val().split(',');
     else if (a === '--full') opt.full = true;
+    else if (a === '--affected') opt.affected = true;
     else if (a === '--reuse-only') opt.reuseOnly = true;
     else die(`unknown argument ${a}`);
   }
@@ -456,7 +483,7 @@ function main(argv) {
   try {
     p = plan(opt);
   } catch (e) {
-    p = { mode: 'full', reason: `the selection failed: ${String(e.message).split('\n')[0]}`, base: opt.base ?? '', reused: '', steps: [...ALL_STEPS], files: [], changed: [], serverTests: 0, serverTotal: 0, web: true, why: [] };
+    p = { mode: opt.affected ? 'error' : 'full', reason: `the selection failed: ${String(e.message).split('\n')[0]}`, base: opt.base ?? '', reused: '', steps: opt.affected ? [] : [...ALL_STEPS], files: [], changed: [], serverTests: 0, serverTotal: 0, web: !opt.affected, why: [] };
   }
   if (opt.format === 'json') {
     process.stdout.write(`${JSON.stringify(p, null, 1)}\n`);
