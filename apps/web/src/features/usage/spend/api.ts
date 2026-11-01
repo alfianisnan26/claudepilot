@@ -15,6 +15,7 @@ import {
   type SpikeSnoozeUntil,
 } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
+import { scopedPath } from '@/lib/orgContext';
 import { attributionUrl } from './attribution';
 
 /** Same shape as the other features' `request`: same-origin credentials, the `{ data }` / `{ error }` envelope unwrapped. */
@@ -40,7 +41,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 /** The usage-spend routes (docs/prd/claude-usage.md §21 to §26): who spent what, budgets with alerts, spike events. */
 export const usageSpendApi = {
-  summary: () => request<SpendSummary>('GET', USAGE_SPEND_API.summary),
+  /** Today, this week and this month in the org context (`?org=`: a request through its session's workspace). */
+  summary: () => request<SpendSummary>('GET', scopedPath(USAGE_SPEND_API.summary)),
   /** The last day's budget and spike alerts that are not snoozed, newest first. */
   alerts: () => request<SpendAlert[]>('GET', USAGE_SPEND_API.alerts),
   /** `done`: by ticket, only tickets closed as done in the window. */

@@ -1,10 +1,11 @@
 import { CircleAlert, MessagesSquare, Rocket, Ticket, Workflow } from 'lucide-react';
 import { CardFoot, CardList, CardRow, Unread } from '../shared/card';
 import { compactCount, shortAgo } from '../shared/format';
-import { GlanceFailed, GlanceLine, GlanceSkeleton, StaleNote } from '../shared/states';
+import { GlanceFailed, GlanceSkeleton, StaleNote } from '../shared/states';
 import { useGlance } from '../shared/store';
 import { useNow } from '../shared/useNow';
 import { needsYou, type NeedKind } from './needs';
+import { ContextLine } from '../shared/context';
 
 const ICON: Record<NeedKind, typeof Ticket> = { approval: CircleAlert, deploy: Rocket, interrupted: MessagesSquare, ci: Workflow, ticket: Ticket };
 const KIND_WORD: Record<NeedKind, string> = { approval: 'Approval', deploy: 'Deploy to approve', interrupted: 'Interrupted agent', ci: 'Failed CI run', ticket: 'Ticket for you' };
@@ -23,7 +24,7 @@ export function AttentionCard() {
     <>
       {stale && <StaleNote reload={reload} />}
       {n.items.length === 0 ? (
-        <GlanceLine>{n.unread.length ? 'Nothing found.' : 'Nothing needs you.'}</GlanceLine>
+        <ContextLine>{n.unread.length ? 'Nothing found.' : 'Nothing needs you.'}</ContextLine>
       ) : (
         <CardList label="Needs you">
           {n.items.map((i) => {

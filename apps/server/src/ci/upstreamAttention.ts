@@ -11,7 +11,7 @@ import { objectRef, workspaceRef, type AttentionItem } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
 import { redact } from '../chat/redact.js';
-import { clip, readsPersonOnly, verbFor, type AttentionSource } from '../attention/registry.js';
+import { clip, readsPersonOnly, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 import { redactSecrets } from './text.js';
 import { readState, withoutUserinfo } from './upstream.js';
 

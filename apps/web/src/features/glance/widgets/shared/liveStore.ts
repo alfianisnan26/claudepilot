@@ -2,6 +2,7 @@ import type { LiveMessage, LiveTopic } from '@portal/contracts';
 import { useEffect, useSyncExternalStore } from 'react';
 import { ApiError } from '@/lib/api';
 import { useLive, useLiveConnected } from '@/lib/live';
+import { subscribeContext } from '@/lib/orgContext';
 
 // One shared copy of something the portal answers, for every chip and card that shows it (the pattern of `useGlance` and
 // `useClaudeUsage`): loaded on first use, again when one of its live topics says so and when the live socket comes back. No timer
@@ -35,9 +36,14 @@ export interface LiveStoreOptions<T> {
   topics: readonly LiveTopic[];
   /** A topic whose push carries the data itself (`workspaces`, `usage`): fold it in without asking the portal. Null: load again. */
   apply?: (msg: LiveMessage, prev: T | null) => T | null;
+  /**
+   * Its data follows the org context (lib/orgContext, owner request 2026-11-01): `load` asks in the current context, and a switch drops what
+   * is held (never shown as the new context's) and loads again for whoever is looking. A load that started before the switch is thrown away.
+   */
+  scoped?: boolean;
 }
 
-export function createLiveStore<T>(opts: LiveStoreOptions<T>): { use: () => LiveReading<T>; reload: () => Promise<void>; reset: () => void } {
+export function createLiveStore<T>(opts: LiveStoreOptions<T>): { use: () => LiveReading<T>; reload: () => Promise<void>; reset: () => void; peek: () => T | null } {
   let snap: Snap<T> = { data: null, failed: false, denied: false, loadedAt: 0 };
   let inflight: Promise<void> | null = null;
   const listeners = new Set<() => void>();
@@ -46,24 +52,36 @@ export function createLiveStore<T>(opts: LiveStoreOptions<T>): { use: () => Live
     listeners.add(fn);
     return () => void listeners.delete(fn);
   };
+  /** Bumped by a context switch: a load of an older generation is not kept. */
+  let gen = 0;
   const reload = (): Promise<void> => {
     if (inflight) return inflight;
-    inflight = opts
+    const g = gen;
+    const p: Promise<void> = opts
       .load(snap.data)
       .then(
         (data) => {
-          snap = { data, failed: false, denied: false, loadedAt: Date.now() };
+          if (g === gen) snap = { data, failed: false, denied: false, loadedAt: Date.now() };
         },
         (e: unknown) => {
-          snap = { ...snap, failed: true, denied: e instanceof ApiError && e.status === 403 };
+          if (g === gen) snap = { ...snap, failed: true, denied: e instanceof ApiError && e.status === 403 };
         },
       )
       .finally(() => {
-        inflight = null;
+        if (inflight === p) inflight = null;
         emit();
       });
-    return inflight;
+    inflight = p;
+    return p;
   };
+  if (opts.scoped)
+    subscribeContext(() => {
+      gen++;
+      inflight = null;
+      snap = { data: null, failed: false, denied: false, loadedAt: 0 };
+      emit();
+      if (listeners.size) void reload();
+    });
   const onPush = (msg: LiveMessage) => {
     const next = opts.apply?.(msg, snap.data) ?? null;
     if (next === null) return void reload();
@@ -96,5 +114,7 @@ export function createLiveStore<T>(opts: LiveStoreOptions<T>): { use: () => Live
     return { data: s.data, failed: s.failed && !s.data, denied: s.denied && !s.data, stale: s.failed && !!s.data, reload };
   }
 
-  return { use, reload, reset };
+  /** What is held now, outside React (tests). */
+  const peek = (): T | null => snap.data;
+  return { use, reload, reset, peek };
 }

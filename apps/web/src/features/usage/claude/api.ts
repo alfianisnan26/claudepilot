@@ -2,6 +2,7 @@ import { isApiErrorBody, isApiSuccess } from '@isnanme/core';
 import { track } from '@isnanme/ui';
 import { CLAUDE_USAGE_API, type ClaudeUsage, type ClaudeUsageHistory, type ClaudeUsageReport, type SnoozeKind, type SnoozeUntil, type UsageRange } from '@portal/contracts';
 import { ApiError } from '@/lib/api';
+import { scopedPath } from '@/lib/orgContext';
 
 /** Same shape as the other features' `request`: same-origin credentials, the `{ data }` / `{ error }` envelope unwrapped. */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -26,7 +27,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const claudeUsageApi = {
   /** Every Claude's plan windows. `watch`: the Usage tab is open, so the portal reads them more often for a while. */
-  report: (watch = false) => request<ClaudeUsageReport>('GET', `${CLAUDE_USAGE_API.list}${watch ? '?watch=1' : ''}`),
+  /** Every Claude of the org context (`?org=`: a Claude through its workspace), for the quota chips and cards and the Usage tab. */
+  report: (watch = false) => request<ClaudeUsageReport>('GET', scopedPath(`${CLAUDE_USAGE_API.list}${watch ? '?watch=1' : ''}`)),
   history: (claudeId: string, range: UsageRange) => request<ClaudeUsageHistory>('GET', `${CLAUDE_USAGE_API.one(claudeId)}/history?range=${range}`),
   /** Reads one Claude now (a cooldown applies). */
   check: (claudeId: string) => request<ClaudeUsage>('POST', `${CLAUDE_USAGE_API.one(claudeId)}/check`),

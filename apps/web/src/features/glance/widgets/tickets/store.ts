@@ -10,4 +10,5 @@ export const ticketsStore = createLiveStore({
     return { items: p.items, total: p.total ?? p.items.length, counts: p.counts! };
   },
   topics: ['tickets'],
+  scoped: true,
 });

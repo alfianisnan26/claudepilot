@@ -2,9 +2,10 @@ import { cn } from '@isnanme/ui';
 import { InfoTip } from '@/components/InfoTip';
 import { LevelDot } from '../../ui';
 import { CardFoot, CardList, CardRow, Stat, Stats } from '../shared/card';
-import { GlanceFailed, GlanceLine, GlanceSkeleton, StaleNote } from '../shared/states';
+import { GlanceFailed, GlanceSkeleton, StaleNote } from '../shared/states';
 import { pctOf, workspacesView, type WorkspaceRow } from './model';
 import { workspacesStore } from './store';
+import { ContextLine } from '../shared/context';
 
 const STATUS_WORD: Record<WorkspaceRow['status'], string> = {
   creating: 'Creating',
@@ -28,7 +29,7 @@ export function WorkspacesCard() {
   const { data, failed, denied, stale, reload } = workspacesStore.use();
   if (!data) return failed ? <GlanceFailed reload={reload} denied={denied} /> : <GlanceSkeleton />;
   const v = workspacesView(data.list, data.usage);
-  if (v.total === 0) return <GlanceLine>No workspaces.</GlanceLine>;
+  if (v.total === 0) return <ContextLine>No workspaces.</ContextLine>;
   return (
     <>
       {stale && <StaleNote reload={reload} />}
