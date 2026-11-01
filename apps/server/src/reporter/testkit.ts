@@ -2,7 +2,7 @@
 // service, its widget routes on a Hono app as app.ts mounts them, a fake chat and a fake git. Fixtures that look like credentials are
 // built at runtime, never written as literals.
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { isAppError } from '@isnanme/core';
 import { REPORTER_EVIDENCE_SCHEMA, type Actor, type ChatEvent, type ReporterEvidence } from '@portal/contracts';
 import { ownerActor } from '../authz/seam.js';
@@ -75,7 +75,7 @@ export class FakeGit implements ReporterGit {
   }
 }
 
-export async function reporterHarness(opts: { now?: () => Date; release?: string; claudePlan?: ReporterDeps['claudePlan'] } = {}) {
+export async function reporterHarness(opts: { now?: () => Date; release?: string; claudePlan?: ReporterDeps['claudePlan']; visitorIp?: (c: Context) => string } = {}) {
   const h = await ticketsHarness({ now: opts.now });
   // KONF may be seeded already; OTHER is ours.
   for (const [key, name] of [['KONF', 'Konfersi'], ['OTHER', 'Other']] as const) if (!h.tickets.bucketOwner(key)) h.tickets.createBucket(UI, { key, name });
@@ -105,6 +105,7 @@ export async function reporterHarness(opts: { now?: () => Date; release?: string
       signedIn: () => (signedIn ? (ownerActor() as Actor & { userId: string }) : null),
       userLabel: () => 'Owner',
       clientKey: () => '127.0.0.1',
+      ...(opts.visitorIp ? { visitorIp: opts.visitorIp } : {}),
       release: opts.release ?? null,
       ...(opts.now ? { now: () => opts.now!().getTime() } : {}),
     }) as never,

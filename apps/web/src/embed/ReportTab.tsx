@@ -19,7 +19,7 @@ import { Annotator } from './Annotator';
 import { editorSource, uploadPlan } from './annotate';
 import { usePanel, type Capture } from './context';
 import { Icon, type IconName } from './icons';
-import { afterFiled, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
+import { afterFiled, askLeadNote, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
 import { pickTarget, proposedSummary, sentText, ticketsFor } from './model';
 import { Viewer } from './Viewer';
 import { AuthImg, Btn, Chip, Field, IconBtn, Notice, Seg, inputClass } from './ui';
@@ -374,7 +374,7 @@ function Duplicates({ shots, onAdded }: { shots: Capture[]; onAdded: (key: strin
 export function Destination({ value, onChange }: { value: ReporterReportTarget; onChange: (t: ReporterReportTarget) => void }) {
   const { targets } = usePanel();
   const usable = targets.filter((t) => t.available);
-  const reason = !targets.length ? 'No lead session is set up for this bucket.' : !usable.length ? (targets[0]?.reason ?? 'No lead session is available now.') : undefined;
+  const note = askLeadNote(targets);
   const current = value.kind === 'session' ? targets.find((t) => t.sessionId === value.sessionId) : undefined;
   return (
     <div className="flex flex-col gap-1.5">
@@ -384,9 +384,15 @@ export function Destination({ value, onChange }: { value: ReporterReportTarget; 
         onChange={(k) => onChange(k === 'ticket' ? { kind: 'ticket' } : { kind: 'session', sessionId: usable[0]!.sessionId })}
         options={[
           { value: 'ticket', label: 'Queue' },
-          { value: 'session', label: 'Ask lead now', disabled: !usable.length, hint: reason },
+          { value: 'session', label: 'Ask lead now', disabled: !usable.length, hint: note ?? undefined },
         ]}
       />
+      {/* The reason in words, not only in a title (a title never shows on a touch screen). */}
+      {note && (
+        <p data-ask-lead-note className="px-1 text-[12px] break-words text-muted">
+          {note}
+        </p>
+      )}
       {value.kind === 'session' && (
         <div className="flex min-h-11 items-center gap-2 px-1">
           <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${current?.status === 'working' ? 'bg-flame' : current?.status === 'ended' ? 'bg-line-strong' : 'bg-accent'}`} />

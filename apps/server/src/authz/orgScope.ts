@@ -10,8 +10,8 @@
 // filter (owner request 2026-11-01, metrics per org): a Claude account, a usage row, a Keep going chat and a Needs-you item through their
 // workspace (or the object they are about), so a count or a total only ever covers rows of the chosen context.
 
-import { actorUserId, isOrgId, objectRef, ticketBucketRef, workspaceRef, type Actor, type ObjectRef, type ObjectType } from '@portal/contracts';
-import { orgRoleIn, resolve } from './seam.js';
+import { ORG_SLUG_PATTERN, actorUserId, isOrgId, objectRef, ticketBucketRef, workspaceRef, type Actor, type ObjectRef, type ObjectType } from '@portal/contracts';
+import { orgIdBySlug, orgRoleIn, resolve } from './seam.js';
 
 export type OrgScope = { kind: 'personal' } | { kind: 'org'; id: string };
 
@@ -33,7 +33,10 @@ const NO_ORG: OrgScope = { kind: 'org', id: '' };
 export function effectiveOrgScope(actor: Actor, scope: OrgScope | null): OrgScope | null {
   if (scope?.kind !== 'org') return scope;
   const userId = actorUserId(actor);
-  return isOrgId(scope.id) && userId && orgRoleIn(scope.id, userId) ? scope : NO_ORG;
+  // An org's slug (`?org=konfersi`, what a person types; audit 2026-11-01) means that org's id, under the same role check: a slug of an org
+  // the caller is not in, or of none, is the one empty scope like a forged id (never an error, never a hint that the org exists).
+  const id = isOrgId(scope.id) ? scope.id : ORG_SLUG_PATTERN.test(scope.id.toLowerCase()) ? orgIdBySlug(scope.id.toLowerCase()) : null;
+  return id && userId && orgRoleIn(id, userId) ? (id === scope.id ? scope : { kind: 'org', id }) : NO_ORG;
 }
 
 /** A predicate on a row's anchor (null: the row has none, e.g. a ticket with no bucket), or null when there is nothing to narrow. */
@@ -43,9 +46,10 @@ export type AnchorFilter = (anchor: ObjectRef | null) => boolean;
  * The narrowing for `scope`, memoised per anchor for one request. Null when `scope` is null. In an org the caller is not an active member of
  * (or an id that is not an org's), every row is refused.
  */
-export function orgScopeFilter(actor: Actor, scope: OrgScope | null): AnchorFilter | null {
-  if (!scope) return null;
-  if (scope.kind === 'org' && effectiveOrgScope(actor, scope) === NO_ORG) return () => false;
+export function orgScopeFilter(actor: Actor, given: OrgScope | null): AnchorFilter | null {
+  if (!given) return null;
+  const scope = effectiveOrgScope(actor, given)!;
+  if (scope === NO_ORG) return () => false;
   const seen = new Map<string, boolean>();
   return (anchor) => {
     if (!anchor) return scope.kind === 'personal';

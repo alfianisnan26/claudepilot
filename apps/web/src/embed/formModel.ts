@@ -93,6 +93,16 @@ export function sendButton(target: ReporterReportTarget, targets: Pick<ReporterS
   return { label: `Send to ${t?.label || 'session'}`, tone: 'urgent' };
 }
 
+/**
+ * Why "Ask lead now" cannot be picked, as a line shown under the switch (a `title` alone never shows on a touch screen; audit
+ * 2026-11-01), or null when some lead session is available.
+ */
+export function askLeadNote(targets: Pick<ReporterSessionTargetStatus, 'available' | 'reason'>[]): string | null {
+  if (targets.some((t) => t.available)) return null;
+  const why = !targets.length ? 'No lead session is set up for this bucket.' : (targets[0]?.reason ?? 'No lead session is available now.');
+  return `${why} File it to the queue instead.`;
+}
+
 /** What stops a report from going: a title always; in Session mode the question too (the lead is asked something, not just shown). */
 export function reportProblem(target: ReporterReportTarget, title: string, question: string): string | null {
   if (!title.trim()) return 'Write a title.';

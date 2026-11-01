@@ -18,6 +18,11 @@ export const config = {
    */
   trustProxy: env('PORTAL_TRUST_PROXY') === 'true',
   /**
+   * Cloudflare in front of the trusted proxy (the cluster: Cloudflare's tunnel, then Traefik): the client address is CF-Connecting-IP when
+   * the hop the proxy saw is a private address (clientAddress.ts). Needs trustProxy; only for a portal reached through Cloudflare.
+   */
+  trustCloudflare: env('PORTAL_TRUST_CLOUDFLARE') === 'true',
+  /**
    * The Admin console's host (docs/prd/organizations.md §6.11, the PRD's `settings.adminHost`), e.g. admin.pilot.ai.isnan.me. Unset (or not a
    * host name): the console is off and its paths are 404 everywhere. Compared with the request's Host (X-Forwarded-Host only with trustProxy).
    */

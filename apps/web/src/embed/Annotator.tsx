@@ -11,6 +11,7 @@ import {
   canUndo,
   clearAll,
   clientToImage,
+  pointerClient,
   downWhileTyping,
   drawnScale,
   drawMark,
@@ -221,11 +222,12 @@ export function Annotator({ src, initial, onCancel, onDone }: { src: string; ini
     const size = st.current.size;
     if (!c) return { at: { x: 0, y: 0 }, k: st.current.view.scale };
     const box = c.getBoundingClientRect();
-    return { at: clientToImage({ x: e.clientX, y: e.clientY }, box, size), k: drawnScale(box, size) };
+    return { at: clientToImage(pointerClient(e), box, size), k: drawnScale(box, size) };
   };
   const local = (e: { clientX: number; clientY: number }) => {
     const r = frame.current!.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    const c = pointerClient(e);
+    return { x: c.x - r.left, y: c.y - r.top };
   };
 
   const cancelOp = useCallback(() => {
