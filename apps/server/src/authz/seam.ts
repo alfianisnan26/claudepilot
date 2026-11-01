@@ -37,6 +37,7 @@
 
 import type { IncomingMessage } from 'node:http';
 import { AppError, defineErrorCodes } from '@isnanme/core';
+import { isMemberToolDoor } from './memberToolDoors.js';
 import {
   FOUNDING_USER_ID,
   LEVEL_RANK,
@@ -299,7 +300,17 @@ export function requireToolPolicy(actor: Actor, name: string, args: Record<strin
     if (!current.can(actor, policy.verb, objectRef('platform', policy.area)).allow) throw notFound();
     return;
   }
+  // MCP tool isolation (security near miss 2026-11-01; authz/memberToolDoors.ts): a person's token (or the manager acting as the person) whose
+  // person is not a platform admin passes a tool that names no object only where it was read and listed as a door, the twin of the REST
+  // member doors. An agent's per-session token is boxed by can() and its handler instead.
+  const member = (actor.kind === 'token' || actor.kind === 'user') && !current.isPlatformAdmin(actor.userId);
+  const door = isMemberToolDoor(name);
+  if (member && policy.kind !== 'objects' && !door) {
+    console.warn(`[authz] refused tool ${name} for a member's token: not a member door`);
+    throw notFound();
+  }
   if (policy.kind !== 'objects') return;
+  let decided = 0;
   for (const check of policy.checks) {
     const raw = args[check.arg];
     const absent = raw === undefined || raw === null || raw === '' || (Array.isArray(raw) && raw.length === 0);
@@ -307,6 +318,7 @@ export function requireToolPolicy(actor: Actor, name: string, args: Record<strin
       if (check.optional) continue;
       throw notFound(check.notFound);
     }
+    decided++;
     const ids = check.many && Array.isArray(raw) ? raw : [raw];
     const poolType = check.poolTypeArg ? args[check.poolTypeArg] : undefined;
     for (const id of ids) {
@@ -315,6 +327,7 @@ export function requireToolPolicy(actor: Actor, name: string, args: Record<strin
       if (!current.can(actor, check.verb, ref).allow) throw notFound(check.notFound);
     }
   }
+  if (member && decided === 0 && !door) throw notFound();
 }
 
 /* ---------- Access changes ---------- */

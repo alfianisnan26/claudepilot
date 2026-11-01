@@ -5,7 +5,7 @@
 // URLs were cleaned when they were read.
 
 import { AppError } from '@isnanme/core';
-import { REPO_EVENT_KINDS, REPO_KINDS, workspaceRef, type RepoEvent, type RepoNode, type RepoSummary } from '@portal/contracts';
+import { REPO_EVENT_KINDS, REPO_KINDS, workspaceRef, type RepoEvent, type RepoNode, type RepoSummary, type Verb } from '@portal/contracts';
 import { actorOfPrincipal, can } from '../authz/seam.js';
 import { paginate, pageInput } from '../portalmcp/paging.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
@@ -21,11 +21,11 @@ const viewable = (ctx: PortalToolContext) => {
 
 const SOURCE = 'git';
 
-function workspaceArg(ctx: PortalToolContext, given: string | undefined): string | null {
+function workspaceArg(ctx: PortalToolContext, given: string | undefined, verb: Verb = 'view'): string | null {
   const ws = ctx.isAgent ? (given ?? ctx.workspaceId) : (given ?? null);
   if (ws === null) return null;
   if (!isWorkspaceId(ws)) throw new AppError('VALIDATION_FAILED', 'That isn’t a workspace id (<target>/<name>).', { details: { workspace_id: 'Expected <target>/<name>.' } });
-  ctx.assertWorkspace(ws);
+  ctx.assertWorkspace(ws, verb);
   return ws;
 }
 
@@ -35,11 +35,11 @@ const NO_SUCH_REPO = 'No such repository.';
  * A repository the caller may not reach is the same NOT_FOUND as one nobody has (T-980): the answer never tells a probe that an id is real.
  * `ctx.assertWorkspace` throws a PortalToolError and `workspaceOf` an AppError: both carry a code, so it is matched by code.
  */
-function repoArg(ctx: PortalToolContext, repos: ReposService, id: string, given?: string): string {
+function repoArg(ctx: PortalToolContext, repos: ReposService, id: string, given?: string, verb: Verb = 'view'): string {
   if (!REPO_ID.test(id)) throw new AppError('VALIDATION_FAILED', 'That isn’t a repository id (r_ and 12 hex characters).', { details: { id: 'Expected r_…' } });
   const ws = repos.workspaceOf(id); // NOT_FOUND when there is no such repository
   try {
-    ctx.assertWorkspace(ws);
+    ctx.assertWorkspace(ws, verb);
   } catch (e) {
     if ((e as { code?: unknown } | null)?.code === 'FORBIDDEN') throw new AppError('NOT_FOUND', NO_SUCH_REPO);
     throw e;
@@ -54,14 +54,14 @@ function repoArg(ctx: PortalToolContext, repos: ReposService, id: string, given?
  * a hash of the two), so everything after it, the lookup and the workspace check, is the one `repoArg` path for both. A path in a
  * workspace the caller may not reach is the same NOT_FOUND as a path nobody has: a probe learns nothing from which of the two it got.
  */
-function repoIdOfArgs(ctx: PortalToolContext, args: { repo_id?: string | undefined; path?: string | undefined; workspace_id?: string | undefined }): string {
+function repoIdOfArgs(ctx: PortalToolContext, args: { repo_id?: string | undefined; path?: string | undefined; workspace_id?: string | undefined }, verb: Verb = 'view'): string {
   if ((args.repo_id === undefined) === (args.path === undefined)) throw new AppError('VALIDATION_FAILED', 'Give the repository as repo_id or as path, one of the two.', { details: { repo_id: 'repo_id or path.' } });
   if (args.repo_id !== undefined) return args.repo_id;
   const path = absPath(args.path);
   if (!path) throw new AppError('VALIDATION_FAILED', 'That isn’t an absolute path of a repository folder.', { details: { path: 'Expected /… as repos_list shows it.' } });
   let ws: string | null;
   try {
-    ws = workspaceArg(ctx, args.workspace_id);
+    ws = workspaceArg(ctx, args.workspace_id, verb);
   } catch (e) {
     // ctx.assertWorkspace throws a PortalToolError, workspaceOf an AppError: both carry a code
     if ((e as { code?: unknown } | null)?.code === 'FORBIDDEN') throw new AppError('NOT_FOUND', NO_SUCH_REPO);
@@ -288,8 +288,9 @@ export function registerRepoTools(repos: ReposService, registry: ToolRegistry = 
       parent: z.string().max(400).optional().describe('An absolute folder to make it in. Default: <repository>.worktrees/.'),
     }),
     async handler(ctx, args) {
-      const id = repoIdOfArgs(ctx, args);
-      const ws = repoArg(ctx, repos, id, args.workspace_id);
+      // A worktree changes the workspace: a person's token needs operate on it (an agent: its own workspace).
+      const id = repoIdOfArgs(ctx, args, 'operate');
+      const ws = repoArg(ctx, repos, id, args.workspace_id, 'operate');
       ctx.affected(`workspace:${ws}`, `repo:${id}`);
       const made = await repos.createWorktree(id, { branch: args.branch, base: args.base, sync: args.sync, parent: args.parent }, ctx.actor, ctx.actorLabel);
       return {

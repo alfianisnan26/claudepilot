@@ -1,4 +1,5 @@
-import type { PortalAuditOutcome } from '@portal/contracts';
+import { platformRef, type PortalAuditOutcome } from '@portal/contracts';
+import { actorOfPrincipal, can, visible } from '../../authz/seam.js';
 import { z } from 'zod';
 import { pageWindow, pageInput } from '../paging.js';
 import { registerPortalTool } from '../registry.js';
@@ -35,26 +36,34 @@ export function registerPortalTools(deps: PortalToolDeps): void {
         const own = (await workspaces.list()).find((w) => w.id === ctx.workspaceId);
         return { summary: `You are session ${ctx.sessionId} in ${ctx.workspaceId}.`, you, workspace: own ? workspaceBrief(own, ctx) : null };
       }
-      const [list, targets] = await Promise.all([workspaces.list(), workspaces.targets()]);
+      // Org isolation (security near miss 2026-11-01): counts and names only over what the token's person may view; targets and the
+      // portal's own state are the platform's (a member gets none, as GET /api/workspaces/targets answers them).
+      const actor = actorOfPrincipal(ctx.principal);
+      const [allWs, allTargets] = await Promise.all([workspaces.list(), workspaces.targets()]);
+      const list = visible(actor, 'workspace', allWs, (w) => w.id);
+      const targets = visible(actor, 'target', allTargets, (t) => t.id);
+      const platform = can(actor, 'view', platformRef('system')).allow;
       const byStatus: Record<string, number> = {};
       for (const w of list) byStatus[w.status] = (byStatus[w.status] ?? 0) + 1;
       const problems = list.filter((w) => {
         const d = reconciler.row(w.id)?.status;
         return d === 'failed' || d === 'drifted' || d === 'locked' || d === 'frozen';
       });
-      const sessions = chat.list().filter((s) => !s.archivedAt);
+      const sessions = visible(actor, 'session', chat.list().filter((s) => !s.archivedAt), (s) => s.id);
       const live = sessions.filter((s) => s.state !== 'ended');
       const byState: Record<string, number> = {};
       for (const s of live) byState[s.state] = (byState[s.state] ?? 0) + 1;
       const needsInput = live.filter((s) => s.state === 'waiting').length;
       const trust = store.trust;
       return {
-        summary: `${list.length} workspaces (${byStatus.running ?? 0} running), ${live.length} live sessions${needsInput ? `, ${needsInput} need input` : ''}${problems.length ? `, ${problems.length} with delivery problems` : ''}; portal ${trust.state === 'ok' ? 'ok' : trust.state}.`,
-        portal: {
-          schema_version: store.schemaVersion,
-          trust: { state: trust.state, reasons: trust.reasons.map((r) => ({ code: r.code, message: cleanText(r.message, 300) })) },
-          ui: uiLink('/admin'),
-        },
+        summary: `${list.length} workspaces (${byStatus.running ?? 0} running), ${live.length} live sessions${needsInput ? `, ${needsInput} need input` : ''}${problems.length ? `, ${problems.length} with delivery problems` : ''}${platform ? `; portal ${trust.state === 'ok' ? 'ok' : trust.state}` : ''}.`,
+        portal: platform
+          ? {
+              schema_version: store.schemaVersion,
+              trust: { state: trust.state, reasons: trust.reasons.map((r) => ({ code: r.code, message: cleanText(r.message, 300) })) },
+              ui: uiLink('/admin'),
+            }
+          : { ui: uiLink('/admin') },
         targets: targets.map((t) => ({ id: t.id, label: t.label, kind: t.kind, available: t.available, problem: ctx.untrusted(t.problem ?? null, 'runtime') })),
         workspaces: { total: list.length, by_status: byStatus, with_delivery_problems: problems.map((w) => w.id) },
         sessions: { live: live.length, by_state: byState, needing_input: needsInput },

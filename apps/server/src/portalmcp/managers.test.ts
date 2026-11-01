@@ -13,7 +13,13 @@ import { ToolRegistry, type PortalPrincipal } from './registry.js';
 import { portalMcpHarness } from './testkit.js';
 
 // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; the toy tools here leave every check to their handler, as before.
-declareToolPolicies('managers.test', { ws_peek: { kind: 'signed-in' }, who_am_i: { kind: 'signed-in' }, big_switch: { kind: 'signed-in' } });
+// MCP tool isolation (2026-11-01): ws_peek names its workspace, so the dispatch checks it too; a signed-in tool is a member door or refused
+// to a person who is not a platform admin (and so to their manager).
+declareToolPolicies('managers.test', {
+  ws_peek: { kind: 'objects', checks: [{ type: 'workspace', verb: 'view', arg: 'id' }] },
+  who_am_i: { kind: 'signed-in' },
+  big_switch: { kind: 'signed-in' },
+});
 
 afterEach(() => clearResolvers());
 
@@ -102,9 +108,14 @@ test('over /mcp: a manager token reads as its person, a denial is the same not-f
     assert.deepEqual(other, missing, "another person's workspace reads exactly like a missing one");
     assert.match(String(other.text), /NOT_FOUND/);
 
-    const who = await h.call(m.secret, 'who_am_i');
+    // A signed-in tool that is not a member door: the manager of a person who is not a platform admin is refused like a missing object.
+    assert.match(String(errorOf(await h.call(m.secret, 'who_am_i')).text), /NOT_FOUND/);
+    // The founding user's manager reaches it: the context a tool sees.
+    h.alive.add('gm3');
+    const owners = h.module.managers.mint({ userId: 'u_owner', sessionId: 'gm3' })!;
+    const who = await h.call(owners.secret, 'who_am_i');
     assert.deepEqual(who.result?.structuredContent && { ...who.result.structuredContent, summary: undefined }, {
-      actor: 'manager:gm1',
+      actor: 'manager:gm3',
       label: 'General Manager',
       isAgent: false,
       sessionId: null,

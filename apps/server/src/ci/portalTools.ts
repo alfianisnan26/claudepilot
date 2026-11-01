@@ -118,7 +118,13 @@ export function registerCiTools(ci: CiService, sessions: CiSessionsPort | undefi
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .slice(0, limit);
       } else {
-        items = ci.list({ workspace: args.workspace_id, branch: args.branch, ticket: args.ticket, status, limit }).items;
+        // Org isolation (security near miss 2026-11-01): each run passes view for the token's person, as GET /api/ci/runs; read wider
+        // (the page's maximum) so the rows refused do not leave the page short.
+        const actor = actorOfPrincipal(ctx.principal);
+        items = ci
+          .list({ workspace: args.workspace_id, branch: args.branch, ticket: args.ticket, status, limit: 200 })
+          .items.filter((r) => can(actor, 'view', objectRef('ci_run', r.id)).allow)
+          .slice(0, limit);
       }
       return {
         summary: `${items.length} run${items.length === 1 ? '' : 's'}`,

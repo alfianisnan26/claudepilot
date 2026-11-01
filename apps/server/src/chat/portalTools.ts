@@ -143,7 +143,7 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
     handler(ctx, args) {
       const id = ctx.isAgent ? (args.session_id ?? ctx.sessionId!) : args.session_id;
       if (!id) throw new AppError('VALIDATION_FAILED', 'Say which chat with session_id.', { details: { session_id: 'Required for an admin’s token.' } });
-      ctx.assertSession(id); // an agent only as its own session
+      ctx.assertSession(id, 'operate'); // an agent only as its own session; a person's token needs operate on it
       const session = chat.rename(id, args.title, { actor: ctx.actor });
       ctx.affected(`session:${session.id}`);
       return { summary: `The chat is now called “${session.title}”.`, session_id: session.id, title: session.title };

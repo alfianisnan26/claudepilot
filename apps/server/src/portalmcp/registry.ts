@@ -1,4 +1,4 @@
-import type { PortalCallerScope, PortalScope } from '@portal/contracts';
+import type { PortalCallerScope, PortalScope, Verb } from '@portal/contracts';
 import { z } from 'zod';
 import type { UntrustedText } from './sanitize.js';
 import { declareToolTablePolicies } from '../authz/toolPolicies.js';
@@ -117,10 +117,13 @@ export interface PortalToolContext {
   readonly settings: PortalToolSettings;
   /** Aborted when the client goes away. */
   readonly signal: AbortSignal;
-  /** Throws FORBIDDEN unless the caller may act on `workspaceId` (an agent only on its own; an admin's token on any). */
-  assertWorkspace(workspaceId: string): void;
-  /** Throws FORBIDDEN unless the caller may act as `sessionId` (an agent only as its own; an admin's token as any). */
-  assertSession(sessionId: string): void;
+  /**
+   * Throws unless the caller may act on `workspaceId`: an agent only on its own (FORBIDDEN); any other token only where its person holds
+   * `verb` (default `view`) through the one can(), capped by its scope (NOT_FOUND, like a missing workspace).
+   */
+  assertWorkspace(workspaceId: string, verb?: Verb): void;
+  /** Throws unless the caller may act as `sessionId`: an agent only as its own (FORBIDDEN); any other token only with `verb` (default `view`) on it (NOT_FOUND). */
+  assertSession(sessionId: string, verb?: Verb): void;
   /** Labels text from agents, workspaces, runtimes and third parties (§14.4): cleaned, capped at 2,000 characters (`maxChars` may raise it to 8,000 for a document-sized field). */
   untrusted(text: string | null | undefined, source: string, maxChars?: number): UntrustedText | null;
   /**

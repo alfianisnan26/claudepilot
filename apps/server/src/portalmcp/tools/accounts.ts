@@ -1,6 +1,6 @@
 import { AppError } from '@isnanme/core';
 import { objectRef, type Account } from '@portal/contracts';
-import { actorOfPrincipal, can } from '../../authz/seam.js';
+import { actorOfPrincipal, can, visible } from '../../authz/seam.js';
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
 import { registerPortalTool, type PortalToolContext } from '../registry.js';
@@ -31,8 +31,10 @@ export function registerAccountTools(deps: PortalToolDeps): void {
     scope: 'read',
     input: z.object({ query: z.string().max(80).optional(), ...pageInput }),
     handler(ctx, args) {
-      const byId = new Map(accounts.overview().accounts.map((a) => [a.id, a]));
-      const all = accountPools.list().filter((p) => !args.query || p.name.toLowerCase().includes(args.query.toLowerCase()));
+      const actor = actorOfPrincipal(ctx.principal);
+      const byId = new Map(visible(actor, 'account', accounts.overview().accounts, (a) => a.id).map((a) => [a.id, a]));
+      // Org isolation (security near miss 2026-11-01): only the account pools the token's person may view.
+      const all = visible(actor, 'account_pool', accountPools.list(), (p) => p.id).filter((p) => !args.query || p.name.toLowerCase().includes(args.query.toLowerCase()));
       const page = paginate(all, args, { q: args.query });
       return {
         summary: `${page.total} account pools.`,
@@ -63,12 +65,14 @@ export function registerAccountTools(deps: PortalToolDeps): void {
     input: z.object({ state: z.enum(['ok', 'cooling', 'exhausted', 'billing', 'invalid', 'attention']).optional(), endpoint_id: z.string().max(80).optional(), ...pageInput }),
     handler(ctx, args) {
       const overview = accounts.overview();
-      const all = overview.accounts.filter((a) => (!args.state || a.health.state === args.state) && (!args.endpoint_id || a.endpointId === args.endpoint_id));
+      const actor = actorOfPrincipal(ctx.principal);
+      // Org isolation (security near miss 2026-11-01): only the accounts and endpoints the token's person may view.
+      const all = visible(actor, 'account', overview.accounts, (a) => a.id).filter((a) => (!args.state || a.health.state === args.state) && (!args.endpoint_id || a.endpointId === args.endpoint_id));
       const page = paginate(all, args, { s: args.state, e: args.endpoint_id });
       return {
         summary: `${page.total} accounts.${overview.locked ? ' The portal is locked: keys cannot be used.' : ''}`,
         accounts: page.items.map((a) => accountBrief(a, ctx)),
-        endpoints: overview.endpoints.map((e) => ({ id: e.id, name: e.name, kind: e.kind, accounts: e.accounts })),
+        endpoints: visible(actor, 'endpoint', overview.endpoints, (e) => e.id).map((e) => ({ id: e.id, name: e.name, kind: e.kind, accounts: e.accounts })),
         total: page.total,
         next_cursor: page.next_cursor,
       };

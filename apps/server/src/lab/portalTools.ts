@@ -11,14 +11,14 @@
 //
 // Counts and ids only; an experiment's name and hypothesis are a person's text and come back labelled untrusted.
 
-import { ATTRIBUTION_LEAD_BASIS, CREW_WINDOWS, LAB_STRATUM_KEYS, type Actor, type CrewFigure, type CrewProgramScore, type CrewWindowScore, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
+import { ATTRIBUTION_LEAD_BASIS, CREW_WINDOWS, LAB_STRATUM_KEYS, platformRef, type Actor, type CrewFigure, type CrewProgramScore, type CrewWindowScore, type LabTicketCost, type LabExperimentView, type LabInterval, type LabStat, type LabSummaryRow } from '@portal/contracts';
 import { fullInput } from '../portalmcp/compact.js';
 import { PortalToolError, portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { declareLabPolicies } from './authz.js';
 import type { Lab } from './index.js';
 import { parseSince } from './routes.js';
 import { ticketKeyField, ticketVisibleTo } from '../tickets/keys.js';
-import { actorOfPrincipal } from '../authz/seam.js';
+import { actorOfPrincipal, can } from '../authz/seam.js';
 
 declareLabPolicies();
 
@@ -148,6 +148,16 @@ const experimentRow = (v: LabExperimentView, ctx: PortalToolContext, lab: Lab) =
   };
 };
 
+/**
+ * MCP tool isolation (security near miss 2026-11-01): a person's or the manager's token reads the whole portal here, so only with `view` on
+ * `usage` through the one can(), as GET /api/lab/summary and /api/lab/scorecard ask (a member's token got every program before). The refusal
+ * is the dispatch's own NOT_FOUND.
+ */
+function portalReach(ctx: PortalToolContext): void {
+  if (ctx.isAgent) return;
+  if (!can(actorOfPrincipal(ctx.principal), 'view', platformRef('usage')).allow) throw new PortalToolError('NOT_FOUND', 'Not found.');
+}
+
 export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools): void {
   registry.register({
     name: 'lab_summary',
@@ -170,6 +180,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
       }
       const own = ctx.isAgent ? ctx.sessionId : null;
       if (ctx.isAgent && !own) throw new PortalToolError('FORBIDDEN', 'This token is not bound to a session.');
+      portalReach(ctx);
       // T-3070: a ticket the caller may not see (another person's bucket) reads like one that does not exist: no key, type, status or done time.
       const actor = actorOfPrincipal(ctx.principal);
       const s = lab.summary({ ...(args.period ? { period: args.period } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}), ...(own ? { sessionId: own } : {}), ticketVisible: (id) => ticketVisibleTo(id, actor) });
@@ -206,6 +217,7 @@ export function registerLabTools(lab: Lab, registry: ToolRegistry = portalTools)
     async handler(ctx, args) {
       const own = ctx.isAgent ? ctx.sessionId : null;
       if (ctx.isAgent && !own) throw new PortalToolError('FORBIDDEN', 'This token is not bound to a session.');
+      portalReach(ctx);
       const s = await lab.scorecardWithPace({ window: args.window ?? 'day', compare: args.compare ?? true, ...(args.program ? { program: args.program } : {}), ...(own ? { sessionId: own } : {}) });
       if (!s) throw new PortalToolError('NOT_FOUND', 'No such program.');
       const scope = own ? 'program' : 'portal';
