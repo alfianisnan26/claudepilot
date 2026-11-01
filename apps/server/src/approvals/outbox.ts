@@ -36,6 +36,8 @@ export function fileRefusalRequests(approvals: Approvals, store: Pick<Store, 'db
     // Only a chat of THIS workspace: a line may not name another workspace's session (its card and its message would go there).
     const session = sessionId ? approvals.chat?.get(sessionId) : null;
     if (!session || session.workspaceId !== workspaceId) continue;
+    // Owner, 2026-11-01: nothing from a session in Bypass waits on a person (an older guard may still file one): no card, only the log.
+    if (e.kind === 'guard.refusal' && (session as { mode?: string }).mode === 'bypassPermissions') continue;
     try {
       // T-3114: the service folds a repeat of a waiting refused call into its card (no new card, so it is not capped) and caps the rest.
       const a = approvals.create(

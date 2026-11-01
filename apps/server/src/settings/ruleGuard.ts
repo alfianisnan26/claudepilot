@@ -2519,6 +2519,12 @@ function refuse(input, tool, form, p, todo) {
   if (usePass(input, tool)) process.exit(0);
   audit(input, tool, form, p);
   const next = todo ? 'What to do: ' + todo + '.' : 'Propose the change as text on a ticket; the coordinator lands it.';
+  // Owner, 2026-11-01: a session in Bypass runs with nobody watching, so it never files an approval request (nobody is asked, nothing
+  // waits): the refusal tells it to change the call instead. The call itself stays refused.
+  if (input && input.permission_mode === 'bypassPermissions') {
+    process.stderr.write(MESSAGE + '. Refused: ' + form + (p ? ' (' + p + ')' : '') + '. ' + next + ' This session runs in Bypass: no person is asked and nobody will allow this call, so do not wait; change the call (write paths out plainly, split it into separate steps, or use the Edit/Write tools) and continue.\n');
+    process.exit(2);
+  }
   const id = ask(input, tool, form);
   const filed = id === 'large'
     ? ' This call is too large to file as an approval request.'

@@ -1929,3 +1929,22 @@ test('owner 2026-11-01: a session in Bypass is not held by the lane git -C check
   assert.equal(as('for r in a b; do git -C $r status; done', 'bypassPermissions').code, 0, 'Bypass: a loop variable after -C passes');
   refused(run(g, 'Write', { file_path: join(main, '.claude', 'settings.json'), content: '{}' }, { cwd: wt, env, mode: 'bypassPermissions' }), 'Bypass still cannot write Claude Code settings');
 });
+
+test('owner 2026-11-01: in Bypass a refused call files no approval request and says so; the call stays refused', () => {
+  const r = rig();
+  const res = run(r, 'Bash', { command: "echo '{}' > .claude/settings.json" }, { mode: 'bypassPermissions' });
+  refused(res, 'still refused in Bypass');
+  assert.match(res.stderr, /runs in Bypass: no person is asked/);
+  assert.doesNotMatch(res.stderr, /approval request apr-/, 'no request id offered');
+  const approvalFile = join(r.home, '.claudepilot', 'outbox', 'approval.jsonl');
+  const filed = (() => {
+    try {
+      return readFileSync(approvalFile, 'utf8').trim();
+    } catch {
+      return '';
+    }
+  })();
+  assert.equal(filed, '', 'nothing filed for a person');
+  // The same call in default mode still offers a person's pass.
+  assert.match(run(r, 'Bash', { command: "echo '{}' > .claude/settings.json" }).stderr, /approval request apr-/);
+});

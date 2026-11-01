@@ -32,11 +32,11 @@ async function harness() {
   after(() => store.close());
   const clock = { now: Date.parse('2026-10-30T08:00:00.000Z') };
   const sent: { sessionId: string; text: string }[] = [];
-  const sessions: Record<string, string> = { 'chat-a': WS, 'chat-b': WS, 'chat-c': WS, 'chat-other': 'docker/ws2' };
+  const sessions: Record<string, string> = { 'chat-a': WS, 'chat-b': WS, 'chat-c': WS, 'chat-other': 'docker/ws2', 'chat-bp': WS };
   const chat: ApprovalChat = {
     enterBypass: () => Promise.reject(new Error('not in this test')),
     get: (id) =>
-      sessions[id] ? { id, title: `Agent ${id}`, workspaceId: sessions[id]!, bypassCapable: false, mode: 'default', state: 'idle' } : null,
+      sessions[id] ? { id, title: `Agent ${id}`, workspaceId: sessions[id]!, bypassCapable: id === 'chat-bp', mode: id === 'chat-bp' ? 'bypassPermissions' : 'default', state: 'idle' } : null,
     send: async (sessionId, _uuid, text) => void sent.push({ sessionId, text }),
   };
   const delivered: string[] = [];
@@ -455,4 +455,12 @@ test('T-3206: a card folded from two sessions follows its first asker; a live re
   assert.notEqual(next.id, first.id);
   assert.equal(next.requesterSession, 'chat-b');
   assert.equal(next.count, 1);
+});
+
+test('owner 2026-11-01: a refusal from a session in Bypass makes no card (nothing waits on a person); the same line from another session does', async () => {
+  const h = await harness();
+  const line = (session: string) => ({ id: newId(), type: 'request' as const, kind: 'guard.refusal', session, payload: call('echo x > .claude/settings.json') });
+  assert.deepEqual(fileRefusalRequests(h.approvals, h.store, WS, [line('chat-bp')]), [], 'Bypass: no card');
+  assert.equal(h.approvals.pendingRows(h.clock.now).length, 0);
+  assert.equal(fileRefusalRequests(h.approvals, h.store, WS, [line('chat-a')]).length, 1, 'a default-mode session still files one');
 });
