@@ -3,7 +3,7 @@
 // answers as a missing org (404). A platform admin holds nothing on an org by being an admin (the Admin console reads `OrgsService.listAll`).
 // `org` is in the seam's RESOLVER_REQUIRED: without this resolver every org is not found (fail closed).
 
-import { ORGS_API, orgRef, type Level, type OrgRole, type OrgState, type RouteAccess, type RoutePolicies, type UserId, type Verb } from '@portal/contracts';
+import { orgRef, type Level, type OrgRole, type OrgState, type RouteAccess, type RoutePolicies, type UserId, type Verb } from '@portal/contracts';
 import { declarePolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
 
 /** The level a role gives on the org itself, by the org's state (§6.5, §6.9: a suspended org gives nothing, but its owners still see it). */
@@ -35,19 +35,19 @@ export const registerOrgResolver = (orgs: OrgLookup): void => registerResolver(o
 const org = (verb: Verb): Extract<RouteAccess, { kind: 'objects' }> => ({ kind: 'objects', checks: [{ type: 'org', verb, from: 'path', param: 'id' }] });
 
 /**
- * Every route of the module (app.ts mounts it at /api/orgs behind `requireSession`). Owner-only rules (changing owners, removing an owner) and
+ * Every route of the module (ORGS_API; app.ts mounts it at /api/orgs behind `requireSession`). Owner-only rules (changing owners, removing an owner) and
  * "guests do not see the directory" are the service's, on top of the declared level; creating needs the ability `orgs.create` or an
  * instance admin, also the service's. No route takes a bearer token: cookie only.
  */
 export const ORG_ROUTE_POLICIES: RoutePolicies = {
-  [`GET ${ORGS_API.orgs}`]: { kind: 'signed-in', filter: 'org' },
-  [`POST ${ORGS_API.orgs}`]: { kind: 'signed-in', creates: 'org', audit: 'org.created' },
-  [`GET ${ORGS_API.org(':id')}`]: org('view'),
-  [`PATCH ${ORGS_API.org(':id')}`]: { ...org('manage'), audit: 'org.updated' },
-  [`GET ${ORGS_API.members(':id')}`]: org('view'),
-  [`PATCH ${ORGS_API.member(':id', ':uid')}`]: { ...org('manage'), audit: 'org.member_role_changed' },
-  [`DELETE ${ORGS_API.member(':id', ':uid')}`]: { ...org('manage'), audit: 'org.member_removed' },
-  [`POST ${ORGS_API.leave(':id')}`]: { ...org('view'), audit: 'org.member_left' },
+  'GET /api/orgs': { kind: 'signed-in', filter: 'org' },
+  'POST /api/orgs': { kind: 'signed-in', creates: 'org', audit: 'org.created' },
+  'GET /api/orgs/:id': org('view'),
+  'PATCH /api/orgs/:id': { ...org('manage'), audit: 'org.updated' },
+  'GET /api/orgs/:id/members': org('view'),
+  'PATCH /api/orgs/:id/members/:uid': { ...org('manage'), audit: 'org.member_role_changed' },
+  'DELETE /api/orgs/:id/members/:uid': { ...org('manage'), audit: 'org.member_removed' },
+  'POST /api/orgs/:id/leave': { ...org('view'), audit: 'org.member_left' },
 };
 
 export function declareOrgPolicies(): void {

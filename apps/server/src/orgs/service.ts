@@ -160,7 +160,7 @@ export class OrgsService {
         `SELECT o.id, o.slug, o.name, o.state, o.policies, o.created_by, o.created_at, m.role FROM orgs o
          JOIN org_members m ON m.org_id = o.id AND m.user_id = ? AND m.state = 'active' ORDER BY o.name COLLATE NOCASE, o.id`,
       )
-      .all(userId) as (OrgRow & { role: OrgRole })[];
+      .all(userId) as unknown as (OrgRow & { role: OrgRole })[];
     return visible(actor, 'org', rows, (r) => r.id).map((r) => this.#view(r, r.role));
   }
 
