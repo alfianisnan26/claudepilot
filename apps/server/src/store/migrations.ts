@@ -4160,6 +4160,48 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 410,
+    name: 'organizations slice 1: owners of workspaces, vaults, sets, account pools, accounts and endpoints (P3)',
+    up(db) {
+      // docs/prd/organizations.md §13 P3 (block 410-419 of the multi-user retrofit, PLAN.md). Every object type the seam decides by ownership
+      // gets an owner: `owner_kind` ('user' | 'team' | 'org' | 'platform'; 'org' is read as unowned until organizations land, slice 3) and
+      // `owner_id`. Everything that exists was made by the one owner, so the backfill is the founding user (`u_owner`): nothing changes for
+      // today's single owner, and an admin account still holds what the founding user holds (D-82). An account pool is a `pools` row of type
+      // 'account', so it takes the pools columns.
+      // Workspaces have no row of their own (the runtime is the record): `workspace_owners` (Authorization §13) is keyed by the workspace's key
+      // (`<target>/<name>`) and carries `uid`, the stable id (`ws_…`) of the workspace it was made for, so a name reused later is a different
+      // workspace (FR10a): a row whose uid is not the live workspace's is ignored. Every live workspace the portal knows is backfilled to the
+      // founding user (`origin = 'migrated'`); one found later in a runtime with no row is unclaimed (the platform's, admins only).
+      // Templates have no table yet (workspace-templates PRD): the type fails closed in the seam until they do.
+      db.exec(`
+        CREATE TABLE workspace_owners (
+          workspace_id TEXT PRIMARY KEY,
+          uid TEXT NOT NULL,
+          owner_kind TEXT NOT NULL DEFAULT 'user' CHECK (owner_kind IN ('user', 'team', 'org', 'platform')),
+          owner_id TEXT NOT NULL DEFAULT 'u_owner',
+          created_by TEXT NOT NULL DEFAULT 'u_owner',
+          created_at TEXT NOT NULL,
+          origin TEXT NOT NULL CHECK (origin IN ('created', 'claimed', 'migrated'))
+        ) STRICT;
+        CREATE INDEX workspace_owners_owner ON workspace_owners (owner_kind, owner_id);
+      `);
+      // workspace_identities is made by 712, which a new database runs after this one: then there is nothing to backfill.
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspace_identities'").get())
+        db.exec(`
+        INSERT OR IGNORE INTO workspace_owners (workspace_id, uid, owner_kind, owner_id, created_by, created_at, origin)
+          SELECT legacy_id, id, 'user', 'u_owner', 'u_owner', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'migrated'
+          FROM workspace_identities WHERE removed_at IS NULL;
+        `);
+      for (const table of ['kg_vaults', 'pools', 'accounts', 'endpoints']) {
+        db.exec(`
+          ALTER TABLE ${table} ADD COLUMN owner_kind TEXT NOT NULL DEFAULT 'user' CHECK (owner_kind IN ('user', 'team', 'org', 'platform'));
+          ALTER TABLE ${table} ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'u_owner';
+          CREATE INDEX ${table}_owner ON ${table} (owner_kind, owner_id);
+        `);
+      }
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {

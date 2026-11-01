@@ -124,6 +124,8 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
+import { declareAllPolicies } from './authz/declarations.js';
+import { enforceRoutePolicy, useWorkspaceAlias } from './authz/routeGuard.js';
 import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
 import { cookie as cookieOf } from './workspaces/shell.js';
 import { revokeAccountTokens } from './identity/accountGate.js';
@@ -266,6 +268,8 @@ export function createApp(
   },
 ) {
   const app = new Hono<Env>();
+  // Organizations slice 1 (P4): the whole policy table, whatever was constructed; the session middleware enforces it (enforceRoutePolicy).
+  declareAllPolicies();
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
@@ -653,6 +657,8 @@ export function createApp(
     const actor = sessionActor(token);
     if (!actor) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     c.set('actor', actor);
+    // Organizations slice 1 (P4, D-82 S0): the declared policy of the route that answers, through the one can(), before its handler.
+    await enforceRoutePolicy(c);
     await next();
   });
 
@@ -898,6 +904,7 @@ export function createApp(
   const toOperateAlias = workspaceGuard('operate', aliasOf);
   // T-531 S2: the `/:ref…` routes (a stable id) ask the seam here too, before the handler, about the workspace the id resolves to.
   const refOf = (ref: string) => workspaces.resolve(ref)?.legacyId;
+  useWorkspaceAlias(refOf);
   const refToView = workspaceRefGuard('view', refOf);
   const refToOperate = workspaceRefGuard('operate', refOf);
   ws.get('/targets', async (c) => c.json(success(visible(actorOf(c), 'target', await workspaces.targets(c.req.query('fresh') === '1'), (t) => t.id))));

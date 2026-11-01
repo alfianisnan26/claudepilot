@@ -10,6 +10,7 @@ import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../po
 import type { UntrustedText } from '../portalmcp/sanitize.js';
 import type { ScheduleTriggers } from './actions.js';
 import type { Schedules } from './service.js';
+import { declareSchedulesPolicies } from './authz.js';
 
 type Said = string | UntrustedText | null;
 export type ScheduleToolRow = Omit<ScheduleRow, 'name' | 'module' | 'owner' | 'description'> & {
@@ -22,6 +23,8 @@ export type ScheduleToolRow = Omit<ScheduleRow, 'name' | 'module' | 'owner' | 'd
 const ATTENTION: ReadonlySet<ScheduleState> = new Set(['stale', 'failing']);
 
 export function registerSchedulesTools(schedules: Pick<Schedules, 'list'>, registry: ToolRegistry = portalTools): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareSchedulesPolicies();
   registry.register({
     name: 'schedules_list',
     title: 'List the schedules',
@@ -79,6 +82,8 @@ export function registerScheduleActionTools(
   triggers: ScheduleTriggers | null,
   registry: ToolRegistry = portalTools,
 ): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareSchedulesPolicies();
   /** The row with this id, when the caller may see it; for a trigger, also its record when the caller holds `verb` on it. */
   const find = (ctx: PortalToolContext, id: string, verb: 'view' | 'operate') => {
     const row = schedules.list().find((r) => r.id === id);

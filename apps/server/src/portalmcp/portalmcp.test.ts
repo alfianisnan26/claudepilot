@@ -4,6 +4,10 @@ import { AppError } from '@isnanme/core';
 import { PortalLimits } from './limits.js';
 import { PortalToolError, ToolRegistry, z } from './registry.js';
 import { portalMcpHarness, readRpc, URL_ } from './testkit.js';
+import { declareToolPolicies } from '../authz/seam.js';
+
+// Organizations slice 1 (P4): an undeclared tool is refused at dispatch; the toy tools here leave every check to their handler, as before.
+declareToolPolicies('portalmcp.test', Object.fromEntries(['echo_read', 'thing_change', 'thing_destroy', 'hostile_read', 'workspace_peek', 'agent_note', 'propose_thing', 'legacy_both', 'fixable_read', 'portal_error_read', 'boom_read', 'big_read', 'typed_read', 'session_poke'].map((n) => [n, { kind: 'signed-in' as const }])));
 
 const TAGS = String.fromCodePoint(0xe0049, 0xe0067, 0xe006e, 0xe006f, 0xe0072, 0xe0065);
 const SECRET = 'sk-ant-api03-' + 'q'.repeat(24);

@@ -2,7 +2,7 @@
 // pools of every type, and changing one type's list); each runs `workspaceGuard` with the verb below. Reading them is `view`; changing what a
 // workspace is delivered (secrets sets among them) is `manage`. The `/api/pools…` routes are not declared here yet (see T-531's report).
 
-import { poolRef, workspaceRef, type Actor, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
+import { poolRef, workspaceRef, type Actor, type RoutePolicies, type RoutePolicy, type ToolPolicies } from '@portal/contracts';
 import { can, declarePolicies, declareToolPolicies } from '../authz/seam.js';
 import { onWorkspacePath } from '../workspaces/authz.js';
 
@@ -45,6 +45,32 @@ export function declareWorkspacePoolPolicies(): void {
   declared = true;
   declarePolicies('pools', WORKSPACE_POOL_POLICIES);
   declarePoolToolPolicies();
+}
+
+/**
+ * Organizations slice 1 (P4): the `/api/pools…` routes (one set for every multi-pool type), enforced centrally (authz/routeGuard.ts) through
+ * the set's owner (authz/owners.ts, migration 410). The URL's type must be the set's own type, or it is not found. Reading a set and its
+ * previews are `view`; assigning, rolling out and making a revision current deliver it (`operate`); changing, approving, duplicating and
+ * deleting it are `manage`. Delivery itself has no routes of its own: these are its doors.
+ */
+const set = (verb: 'view' | 'operate' | 'manage'): RoutePolicy => ({ kind: 'objects', checks: [{ type: 'pool', verb, from: 'path', param: 'id', poolTypeParam: 'type' }] });
+export const POOL_POLICIES: RoutePolicies = {
+  'GET /api/pools': { kind: 'signed-in' },
+  'GET /api/pools/:type': { kind: 'signed-in', filter: 'pool' },
+  'POST /api/pools/:type': { kind: 'signed-in', creates: 'pool' },
+  'POST /api/pools/:type/preview': { kind: 'signed-in' },
+  'GET /api/pools/:type/:id': set('view'),
+  'PUT /api/pools/:type/:id': set('manage'),
+  'DELETE /api/pools/:type/:id': set('manage'),
+  'POST /api/pools/:type/:id/duplicate': set('manage'),
+  'POST /api/pools/:type/:id/preview': set('view'),
+  'POST /api/pools/:type/:id/revisions/:rev/approve': set('manage'),
+  'POST /api/pools/:type/:id/revisions/:rev/current': set('operate'),
+  'POST /api/pools/:type/:id/rollout': set('operate'),
+  'POST /api/pools/:type/:id/assign': set('operate'),
+};
+export function declarePoolRoutePolicies(): void {
+  declarePolicies('pools', POOL_POLICIES);
 }
 
 /** Declares the pool tools' access (idempotent: the same table declared twice is a no-op). Called where the tools are registered. */

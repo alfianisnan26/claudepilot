@@ -9,6 +9,10 @@ import { Portal } from '../portal.js';
 import { PlatformAudit } from './audit.js';
 import { createPlatform } from './index.js';
 import { Hono } from 'hono';
+import { declarePolicies } from '../authz/seam.js';
+
+// Organizations slice 1 (P4): a route behind the session guard needs a declaration (the central check refuses one with none).
+declarePolicies('platform.test', { 'GET /api/standin': { kind: 'signed-in' } });
 
 test('bus: validates, assigns an id and a time, fans out, skips a throwing listener, never throws', () => {
   const bus = createBus(() => new Date('2026-10-12T10:00:00Z'));

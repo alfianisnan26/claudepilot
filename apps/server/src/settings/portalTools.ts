@@ -8,6 +8,7 @@ import { SETTING_MISSING, SETTING_SECRET_SET, type ManagerSettingRow, type Setti
 import { looksLikeSecret } from '../portalmcp/sanitize.js';
 import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { Settings } from './store.js';
+import { declareSettingsPolicies } from './authz.js';
 
 /** What a denial and a missing key both answer (the seam's platform refusal says the same). */
 export const NO_SETTING = 'Not found.';
@@ -54,6 +55,8 @@ export function settingRow(s: SettingView): ManagerSettingRow {
 }
 
 export function registerSettingsTools(settings: Pick<Settings, 'view'>, registry: ToolRegistry = portalTools): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareSettingsPolicies();
   registry.register({
     name: 'settings_get',
     title: 'Read the settings',

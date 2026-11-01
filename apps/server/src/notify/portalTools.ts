@@ -8,8 +8,11 @@ import { registerPortalTool, z } from '../portalmcp/registry.js';
 import type { Destinations } from './destinations.js';
 import type { NotifyHistory } from './history.js';
 import type { NotifyPipeline } from './pipeline.js';
+import { declareNotifyPolicies } from './authz.js';
 
 export function registerNotifyTools(d: { destinations: Destinations; history: NotifyHistory; pipeline: NotifyPipeline; ceiling: () => boolean }): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareNotifyPolicies();
   registerPortalTool({
     name: 'notify_status',
     title: 'Notification status',

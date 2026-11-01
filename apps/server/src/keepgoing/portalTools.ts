@@ -12,8 +12,11 @@ import type { PlatformOwner } from '../platform/owner.js';
 import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { KeepGoingChatPort, KeepGoingEngine } from './engine.js';
 import { mayPause, parsePatch, parsePause } from './routes.js';
+import { declareKeepGoingPolicies } from './authz.js';
 
 export function registerKeepGoingTools(d: { engine: KeepGoingEngine; chat: Pick<KeepGoingChatPort, 'get'>; owner: PlatformOwner }, registry: ToolRegistry = portalTools): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareKeepGoingPolicies();
   registry.register({
     name: 'session_keepgoing_set',
     title: 'Set Keep going on a chat',

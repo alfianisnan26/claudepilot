@@ -6,11 +6,14 @@ import { registerPortalTool, PortalToolError } from '../registry.js';
 import { actorOfPrincipal } from '../../authz/seam.js';
 import { assertCanChange, labelProse, resolveWorkspace, uiLink, workspaceBrief } from './common.js';
 import type { PortalToolDeps } from './deps.js';
+import { declareWorkspacePolicies } from '../../workspaces/authz.js';
 
 const WORKSPACE_STATUSES = ['creating', 'starting', 'running', 'stopping', 'stopped', 'error'] as const;
 
 /** Workspaces over MCP (portal-mcp PRD §13.1): reads, start/stop/sync, create, and delete behind a confirmation. */
 export function registerWorkspaceTools(deps: PortalToolDeps): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareWorkspacePolicies();
   const { store, workspaces, chat, accountPools, poolService, reconciler } = deps;
 
   /** The view the UI shows: with its account pool and delivery status. */

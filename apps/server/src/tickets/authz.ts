@@ -3,7 +3,7 @@
 // checked too). The handlers ask `requireCan` for each before the service runs; the service then applies the ticket rules (who may
 // bump, which sessions can take it, the limits).
 
-import { objectRef, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
+import { objectRef, type RoutePolicies, type RoutePolicy, type ToolPolicies } from '@portal/contracts';
 import { declarePolicies, declareToolPolicies, registerResolver } from '../authz/seam.js';
 
 const ticket = (verb: 'view' | 'operate') => ({ type: 'ticket' as const, verb, from: 'path' as const, param: 'id' });
@@ -108,7 +108,30 @@ export function registerTicketBucketAuthz(tickets: { bucketOwner(key: string): s
   });
 }
 
+/**
+ * Organizations slice 1 (P4): the remaining `/api/tickets…` routes, enforced centrally (authz/routeGuard.ts). A ticket is `view` to read and
+ * `operate` to change, comment on, close or start a session on; deleting one is `manage`. The bucket checks stay in the handlers (they read
+ * the bucket of the ticket or of the body), and the lists keep what the caller may view.
+ */
+const onTicket = (verb: 'view' | 'operate' | 'manage'): RoutePolicy => ({ kind: 'objects', checks: [{ type: 'ticket', verb, from: 'path', param: 'id' }] });
+export const TICKET_ROUTE_POLICIES: RoutePolicies = {
+  'GET /api/tickets': { kind: 'signed-in', filter: 'ticket' },
+  'POST /api/tickets': { kind: 'signed-in', creates: 'ticket' },
+  'GET /api/tickets/tags': { kind: 'signed-in', filter: 'ticket' },
+  'GET /api/tickets/timeline': { kind: 'signed-in', filter: 'ticket' },
+  'GET /api/tickets/:id': onTicket('view'),
+  'GET /api/tickets/:id/brief': onTicket('view'),
+  'GET /api/tickets/:id/opening': onTicket('view'),
+  'PATCH /api/tickets/:id': onTicket('operate'),
+  'DELETE /api/tickets/:id': onTicket('manage'),
+  'POST /api/tickets/:id/close': onTicket('operate'),
+  'DELETE /api/tickets/:id/close': onTicket('operate'),
+  'POST /api/tickets/:id/comments': onTicket('operate'),
+  'POST /api/tickets/:id/session': onTicket('operate'),
+};
+
 export function declareTicketPolicies(): void {
+  declarePolicies('tickets', TICKET_ROUTE_POLICIES);
   declarePolicies('tickets', { ...TICKET_BUMP_POLICIES, ...TICKET_ATTACHMENT_POLICIES, ...TICKET_MERGE_POLICIES, ...TICKET_BUCKET_POLICIES });
   declareToolPolicies('tickets', { ...TICKET_BUMP_TOOL_POLICIES, ...TICKET_ADOPT_TOOL_POLICIES, ...TICKET_VERDICT_TOOL_POLICIES, ...TICKET_BUCKET_TOOL_POLICIES });
 }

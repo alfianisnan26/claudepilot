@@ -105,6 +105,7 @@ import { chatEligibility } from './chat/eligibility.js';
 import { hostInstaller } from './chat/install.js';
 import { attachChat } from './chat/socket.js';
 import { registerChatAuthz } from './chat/authz.js';
+import { registerOwnerResolvers } from './authz/owners.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
 import { kubeTargetRuntimes } from './workspaces/kubeTargets.js';
 import { LocalRuntime } from './workspaces/local.js';
@@ -300,6 +301,9 @@ chatController.sessionBudgetUsd = () => settingsModule.settings.get<number>(BUDG
 // Side questions (chat PRD §20): their limits and switches come from the shared settings, and a session is read through the one authorization resolver.
 chatController.btwSettings = (key) => settingsModule.settings.get(key);
 registerChatAuthz((id) => chatController.sessionFacts(id));
+// Organizations slice 1 (P3, migration 410): owners of workspaces, vaults, sets, account pools, accounts and endpoints, read on every decision;
+// their types (and CI's, and templates) become required, so a missing resolver refuses instead of answering the founding user.
+registerOwnerResolvers({ db: () => store.db, workspace: (ref) => workspaces.identities.resolve(ref) });
 chatController.agentCaps = () => ({
   maxDepth: settingsModule.settings.get<number>(AGENT_DEPTH_SETTING),
   maxChildren: settingsModule.settings.get<number>(AGENT_CHILDREN_SETTING),

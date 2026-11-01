@@ -7,6 +7,7 @@ import { costFields } from '../portalmcp/tools/common.js';
 import { portalTools, z, type PortalToolContext, type ToolRegistry } from '../portalmcp/registry.js';
 import { SPAWN_CLAUDE_HELP, WORKER_REPORTS, spawnModel, type SpawnClaudeWhy, type WorkerReport } from './agents.js';
 import { ControlTimeout } from './controller.js';
+import { declareChatToolPolicies } from './authz.js';
 
 // The chat's own tools for the Portal MCP (interface I2): the ones a session's Claude may call about itself. They are
 // bound to the session its per-session token (I8) was minted for; nothing here lets one session act on another.
@@ -124,6 +125,8 @@ const stateCounts = (list: ChatSession[]): string => {
 };
 
 export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = portalTools): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareChatToolPolicies();
   registry.register({
     name: 'session_rename_self',
     title: 'Rename this chat',

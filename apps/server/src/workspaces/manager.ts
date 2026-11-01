@@ -712,7 +712,7 @@ export class Workspaces {
     // Its identity (T-42): a new stable id, and the runtime name its container or Deployment and volume get (`ws-<12 hex>`, or the form
     // the target's runtime must use), stored and never derived from the name again. A record still holding the name is of a workspace that
     // is gone (the list above has none): it is retired.
-    const identity = this.identities.allocate(target.id, name, (stableId) => runtime.runtimeNameForNew?.(name, stableId));
+    const identity = this.identities.allocate(target.id, name, (stableId) => runtime.runtimeNameForNew?.(name, stableId), actorString(actor));
     const workspace: Workspace = {
       id,
       stableId: identity.id,

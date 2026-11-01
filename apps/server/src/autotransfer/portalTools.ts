@@ -11,11 +11,14 @@ import type { PlatformOwner } from '../platform/owner.js';
 import { portalTools, z, type ToolRegistry } from '../portalmcp/registry.js';
 import type { AutoTransferEngine } from './engine.js';
 import type { AutoStore } from './store.js';
+import { declareAutoTransferPolicies } from './authz.js';
 
 export function registerAutoTransferTools(
   d: { engine: Pick<AutoTransferEngine, 'state' | 'claudeExcluded'>; store: AutoStore; owner: PlatformOwner },
   registry: ToolRegistry = portalTools,
 ): void {
+  // Organizations slice 1 (P4): an undeclared tool is refused at dispatch; its policies are declared with it.
+  declareAutoTransferPolicies();
   registry.register({
     name: 'autotransfer_status',
     title: 'Auto move status',

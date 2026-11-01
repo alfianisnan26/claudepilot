@@ -4,7 +4,18 @@
 // session that exists, which is how the tests run the abuse cases across users.
 
 import { AppError } from '@isnanme/core';
-import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, platformRef, sessionRef, workspaceRef, type Actor, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
+import {
+  CHAT_SOCKET_PATH,
+  FOUNDING_USER_ID,
+  platformRef,
+  sessionRef,
+  workspaceRef,
+  type Actor,
+  type RoutePolicies,
+  type RoutePolicy,
+  type ToolPolicies,
+  type Verb,
+} from '@portal/contracts';
 import { can, declarePolicies, declareToolPolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
 
 /** What the resolver needs of a session; the controller answers it. */
@@ -37,7 +48,60 @@ export function sessionResolver(facts: (id: string) => SessionFacts | null): Obj
  */
 export function registerChatAuthz(facts: (id: string) => SessionFacts | null): void {
   registerResolver(sessionResolver(facts));
+  declareChatPolicies();
+}
+
+const session = (verb: Verb, audit?: string): RoutePolicy => ({ kind: 'objects', checks: [{ type: 'session', verb, from: 'path', param: 'id' }], ...(audit ? { audit } : {}) });
+const inWorkspace = (verb: Verb, from: 'body' | 'query', extra: Partial<RoutePolicy> = {}): RoutePolicy =>
+  ({ kind: 'objects', checks: [{ type: 'workspace', verb, from, param: 'workspaceId' }], ...extra }) as RoutePolicy;
+
+/**
+ * Organizations slice 1 (P4): every chat route (`/api/chat…`, app.ts), enforced centrally (authz/routeGuard.ts) before its handler. A session
+ * route needs the session (view to read; operate to drive, switch, pin, upload, end; manage to delete it or change its Bypass). Starting a
+ * session or a Claude, listing a workspace's Claudes, worktrees or trust scan name a workspace (operate, view). Lists keep what may be viewed.
+ */
+export function declareChatPolicies(): void {
   declarePolicies('chat', {
+    'GET /api/chat/sessions': { kind: 'signed-in', filter: 'session' },
+    'POST /api/chat/sessions': inWorkspace('operate', 'body', { creates: 'session' }),
+    'GET /api/chat/sessions/:id': session('view'),
+    'PATCH /api/chat/sessions/:id': session('operate'),
+    'DELETE /api/chat/sessions/:id': session('manage'),
+    'POST /api/chat/sessions/:id/switch': session('operate'),
+    'GET /api/chat/sessions/:id/switch-options': session('view'),
+    'GET /api/chat/sessions/:id/bypass': session('view'),
+    'POST /api/chat/sessions/:id/bypass': session('manage'),
+    'POST /api/chat/sessions/:id/bypass/allow': session('manage'),
+    'GET /api/chat/sessions/:id/segments': session('view'),
+    'POST /api/chat/sessions/:id/end': session('operate'),
+    'POST /api/chat/sessions/:id/archive': session('operate'),
+    'DELETE /api/chat/sessions/:id/archive': session('operate'),
+    'GET /api/chat/sessions/:id/worktree': session('view'),
+    'POST /api/chat/sessions/:id/pin': session('operate'),
+    'DELETE /api/chat/sessions/:id/pin': session('operate'),
+    'GET /api/chat/sessions/:id/models': session('view'),
+    'GET /api/chat/sessions/:id/tasks': session('view'),
+    'GET /api/chat/sessions/:id/blobs/:blobId': session('view'),
+    'GET /api/chat/sessions/:id/blobs/:blobId/preview': session('view'),
+    // A session's folder: file contents and the diff are content (FR10), so `view` on the session; uploads and their removal operate it.
+    'GET /api/chat/sessions/:id/files': session('view'),
+    'GET /api/chat/sessions/:id/files/download': session('view'),
+    'GET /api/chat/sessions/:id/diff': session('view'),
+    'GET /api/chat/sessions/:id/artifacts.zip': session('view'),
+    'POST /api/chat/sessions/:id/uploads': session('operate'),
+    'DELETE /api/chat/sessions/:id/uploads/:uploadId': session('operate'),
+    'GET /api/chat/claudes': inWorkspace('view', 'query', { filter: 'claude' }),
+    'POST /api/chat/claudes': inWorkspace('manage', 'body', { creates: 'claude' }),
+    'GET /api/chat/worktrees': inWorkspace('operate', 'query'),
+    'GET /api/chat/trust/scan': inWorkspace('operate', 'query'),
+    'POST /api/chat/trust': inWorkspace('operate', 'body'),
+    // The person's own password check (a fresh sign-in for Bypass): the person, nobody else.
+    'POST /api/chat/reauth': { kind: 'self' },
+    'GET /api/chat/policy': { kind: 'signed-in' },
+    // The audit trail keeps only entries of sessions the caller may view (the handler filters each row).
+    'GET /api/chat/audit': { kind: 'signed-in', filter: 'session' },
+    'GET /api/chat/usage': { kind: 'platform', area: 'usage', verb: 'view' },
+
     'ALL /api/chat/live': { kind: 'signed-in' },
     // The stored transcript (whole after a seq, or a page; T-376) and one event of it whole: whoever may view the session.
     'GET /api/chat/sessions/:id/events': { kind: 'objects', checks: [{ type: 'session', verb: 'view', from: 'path', param: 'id' }] },
@@ -60,6 +124,11 @@ export function registerChatAuthz(facts: (id: string) => SessionFacts | null): v
     },
     ...CHAT_RELOCATE_POLICIES,
   });
+  declareChatToolPolicies();
+}
+
+/** The chat tools' own policies (T-136, T-284); called where the tools are registered too. */
+export function declareChatToolPolicies(): void {
   declareToolPolicies('chat', CHAT_RECOVER_TOOL_POLICIES);
 }
 
