@@ -286,6 +286,8 @@ const CONTROL_TIMEOUT_MS = 15_000;
 const EXEC_TIMEOUT_MS = 30_000;
 /** Idle this long, with nothing open or running, and a session's process sleeps (PRD FR38). */
 const IDLE_SLEEP_MS = 30 * 60_000;
+/** A worker's restart that keeps an inherited Bypass waits at most this long for its parent's own restart in Bypass to settle. */
+const PARENT_RESTART_WAIT_MS = 90_000;
 /** T-417: a start or wake at a full live cap waits this long for a slot, looking again every SLOT_POLL_MS. */
 const SLOT_WAIT_MS = 15 * 60_000;
 const SLOT_POLL_MS = 1000;
@@ -767,6 +769,11 @@ export class ChatController {
   readonly #slotWaits = new Map<string, string>();
   /** T-417: the sessions whose Bypass is being put back after a wake (a retry inside it wakes it again: never twice). */
   readonly #wakeBypass = new Set<string>();
+  /**
+   * The restarts in flight that keep Bypass, by session, settled once the keep is done. Meanwhile the row reads the start mode, so a
+   * worker restarted in the same round (an MCP change restarts them all) waits for its parent's here before it asks whether it is in Bypass.
+   */
+  readonly #restartingBypass = new Map<string, Promise<void>>();
   /**
    * T-1692: a fail-closed switch out of Bypass in flight (`#leaveBypass` after `#bypassUnfinished`), by session. The gated re-entry
    * (`#keepBypass`) waits for it: each request goes out on its own exec, so a slow "out" line could reach Claude Code after the "back in"
@@ -1679,7 +1686,9 @@ export class ChatController {
     if (this.#chat.endRunningTasks(sessionId)) this.#emitTasks(sessionId); // none should be (it sleeps only when none run); never left running
     // T-1692: a top-level crew lead keeps it over a sleep as over a vanishing (`#lostLead`, T-1646): the general Konfersi lead (no live worker,
     // no workers limit, no Keep going) slept out of Bypass for good on 2026-10-20 and came back on the start mode. The wake asks every gate.
-    this.#bypassOver(sessionId, 'sleep', this.#lostLead(now));
+    // A worker in a Bypass inherited from its lead keeps it too (owner 2026-11-01, Konfersi workers woke in default): its wake asks its
+    // parent again, the same gate as at the inherit.
+    this.#bypassOver(sessionId, 'sleep', this.#lostLead(now) || this.#inheritedBypass(sessionId));
     this.#emitSession(sessionId);
   }
 
@@ -3995,6 +4004,24 @@ export class ChatController {
     const agents = this.#chat.runningTasks(sessionId).length;
     // A deliberate restart keeps Bypass (the person confirmed it for this chat), while the policy allows it and the session can.
     const keep = row.mode === 'bypassPermissions' && this.#keepsBypass(row);
+    let settled = () => {};
+    if (keep) this.#restartingBypass.set(sessionId, new Promise<void>((r) => (settled = r)));
+    try {
+      return await this.#restartKept(sessionId, why, o, row, agents, keep);
+    } finally {
+      if (keep) this.#restartingBypass.delete(sessionId);
+      settled();
+    }
+  }
+
+  async #restartKept(
+    sessionId: string,
+    why: 'mcp' | 'manual',
+    o: { interrupt: boolean; actor: string; how: 'now' | 'queue' | 'auto' | 'interrupt' },
+    row: ChatSessionRow,
+    agents: number,
+    keep: boolean,
+  ): Promise<ChatSession> {
     // T-416: only a restart of a running process skips the memory check (it needs no more than the process it stops). One that is asleep
     // or gone is a wake: checked and held as one, before anything is touched, so a refusal leaves it (and its mode) as it was (review 6310).
     const wake = row.process !== 'live';
@@ -4231,7 +4258,8 @@ export class ChatController {
                   ? 'from the parent'
                   : 'after the recovery';
     // The lead's own paths: the same extra gates (T-417, T-416 S2; PILOT-996: Keep going's re-entry within 24 hours).
-    const lead = how === 'wake' || how === 'lost' || how === 'keepgoing';
+    // A worker in an inherited Bypass is not asked the lead's gates on a wake: its parent in Bypass now is its gate (below).
+    const lead = (how === 'wake' || how === 'lost' || how === 'keepgoing') && !this.#inheritedBypass(sessionId);
     const drop = (why: string, text: string) => {
       const row = this.#chat.row(sessionId);
       if (!row || row.state === 'ended') return;
@@ -4270,9 +4298,17 @@ export class ChatController {
       // PILOT-996: a worker gets Bypass only from a parent that is in it now (never wider than its parent). PILOT-997 review 42957: on every
       // way back too (a move, a restart, a recovery, Keep going) for a session whose capability came from its parent, not only at the inherit.
       if (how === 'inherit' || this.#inheritedBypass(sessionId)) {
-        const parent = row.parent_id ? this.#chat.row(row.parent_id) : null;
-        // T-2997: the first entry asks the parent's live mode (`bypassNow`), not its row: a stale Bypass on the row hands on nothing.
-        if (!parent || parent.state === 'ended' || parent.mode !== 'bypassPermissions' || (how === 'inherit' && !this.bypassNow(parent.id)))
+        let parent = row.parent_id ? this.#chat.row(row.parent_id) : null;
+        // Its parent restarting in Bypass at the same time reads the start mode until its own keep is done (2026-11-01: an MCP change
+        // restarted a Konfersi lead and its workers together and the workers dropped to default): wait for that, then ask.
+        const parentRestart = parent ? this.#restartingBypass.get(parent.id) : undefined;
+        if (parent && parent.mode !== 'bypassPermissions' && parentRestart) {
+          await Promise.race([parentRestart, new Promise((r) => setTimeout(r, PARENT_RESTART_WAIT_MS).unref?.())]);
+          parent = this.#chat.row(parent.id);
+        }
+        // T-2997: the first entry asks the parent's live mode (`bypassNow`), not its row: a stale Bypass on the row hands on nothing. A wake
+        // asks it too (the worker slept, so nothing vouches for the parent's row since).
+        if (!parent || parent.state === 'ended' || parent.mode !== 'bypassPermissions' || ((how === 'inherit' || how === 'wake') && !this.bypassNow(parent.id)))
           return drop('parent_not_bypass', `Bypass not kept ${after}: the parent is not in Bypass now.`);
       }
       // T-1692: out of Bypass first, then back in: never two switches racing on separate execs.

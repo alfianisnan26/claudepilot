@@ -56,16 +56,24 @@ test('workerMode, modeWithin and autoModeAllowed: inherit, cap, default Auto', (
  * Answers every mode switch (with the mode asked), settings read and usage read, in the order they reach the process, until `p` settles.
  * `refuse`: the modes the process refuses to switch to (its error answer), as Claude Code does when Auto is not available to it.
  */
-async function answering<T>(s: Live, p: Promise<T>, refuse: ReadonlySet<string> = new Set()): Promise<T> {
+async function answering<T>(
+  s: Live,
+  p: Promise<T>,
+  refuse: ReadonlySet<string> = new Set(),
+  hold: (claudeSession: string, mode: string) => boolean = () => false,
+): Promise<T> {
   let done = s.ws.sends.length;
+  const later: number[] = []; // mode switches held back (`hold`), or for a process not tailed yet: tried again each round
   let settled = false;
   p.then(
     () => (settled = true),
     () => (settled = true),
   );
   while (!settled) {
-    for (; done < s.ws.sends.length; done++) {
-      const sent = s.ws.sends[done]!;
+    const due = later.splice(0);
+    for (; done < s.ws.sends.length; done++) due.push(done);
+    for (const i of due) {
+      const sent = s.ws.sends[i]!;
       const c = controls({ sends: [sent] } as unknown as Live['ws'])[0];
       if (!c) continue;
       // The lead and its workers each have a process: the answer goes to the one that asked (`send <claude session>`, `tail <claude session>`),
@@ -73,7 +81,10 @@ async function answering<T>(s: Live, p: Promise<T>, refuse: ReadonlySet<string> 
       let at = -1;
       for (let i = s.ws.tailArgs.length - 1; i >= 0 && at < 0; i--) if (s.ws.tailArgs[i]![1] === sent.args[1]) at = i;
       const tail = s.ws.tails[at];
-      if (!tail) break; // its process is not tailed yet: try again on the next round
+      if (!tail || (c.request.subtype === 'set_permission_mode' && hold(String(sent.args[1]), String(c.request.mode)))) {
+        later.push(i);
+        continue;
+      }
       if (c.request.subtype === 'set_permission_mode')
         tail.push(refuse.has(String(c.request.mode)) ? fail(c.id, `${String(c.request.mode)} mode is not available`) : ok(c.id, { mode: String(c.request.mode) }));
       else if (c.request.subtype === 'get_settings') tail.push(ok(c.id, APPLIED));
@@ -84,10 +95,10 @@ async function answering<T>(s: Live, p: Promise<T>, refuse: ReadonlySet<string> 
   return p;
 }
 
-async function rig() {
+async function rig(opts: Parameters<typeof liveSession>[0] = {}, start = false) {
   const registry = new ToolRegistry();
   const h = await portalMcpHarness({ registry });
-  const s = await liveSession();
+  const s = await liveSession(opts, start);
   s.controller.agentCaps = () => ({ maxDepth: 1, maxChildren: 5, spawnsPerHour: 20, messagesPerHour: 20 });
   registerChatTools(s.controller, registry);
   h.alive.add(s.id);
@@ -390,6 +401,57 @@ test('PILOT-997 review 43368: a Bypass lead’s own restart (Bypass kept) leaves
     assert.equal(r.s.controller.get(lead)!.mode, 'bypassPermissions', 'the lead kept Bypass across its restart');
     assert.equal(r.s.controller.get(w)!.mode, 'bypassPermissions', 'the worker kept the inherited Bypass');
     assert.deepEqual(r.s.controller.audit({ kind: 'bypass.left' }).filter((x) => x.sessionId === w).map((x) => x.detail.why), []);
+  } finally {
+    await r.done();
+  }
+});
+
+test('2026-11-01 (Konfersi): a worker restarted while its lead restarts in Bypass (an MCP change restarts both) waits for the lead and keeps its inherited Bypass', async () => {
+  const r = await rig();
+  try {
+    const lead = await bypassLead(r.s);
+    const w = await bypassWorker(r.s, lead, 'Worker');
+    const leadCsid = r.s.controller.get(lead)!.claudeSessionId!;
+    const leadAsks = () =>
+      r.s.ws.sends.filter((x) => x.args[1] === leadCsid && controls({ sends: [x] } as unknown as Live['ws'])[0]?.request.mode === 'bypassPermissions').length;
+    const before = leadAsks();
+    let held = true;
+    const round = async () => {
+      const leadRestart = r.s.controller.restart(lead);
+      // The lead's keep has asked Claude Code back into Bypass (held here): until it is answered its row reads the start mode.
+      await until(() => leadAsks() > before && r.s.controller.get(lead)!.mode !== 'bypassPermissions');
+      const workerRestart = r.s.controller.restart(w);
+      await sleep(300); // the worker reaches its own keep meanwhile
+      held = false;
+      await Promise.all([leadRestart, workerRestart]);
+    };
+    await answering(r.s, round(), new Set(), (csid, mode) => held && csid === leadCsid && mode === 'bypassPermissions');
+    assert.equal(r.s.controller.get(lead)!.mode, 'bypassPermissions', 'the lead kept Bypass');
+    assert.equal(r.s.controller.get(w)!.mode, 'bypassPermissions', 'the worker waited for its lead and kept the inherited Bypass');
+    assert.deepEqual(r.s.controller.audit({ kind: 'bypass.left' }).filter((x) => x.sessionId === w).map((x) => x.detail.why), []);
+  } finally {
+    await r.done();
+  }
+});
+
+test('2026-11-01 (Konfersi): a worker in an inherited Bypass keeps it over a sleep; its wake asks its parent, in Bypass now, and puts it back', async () => {
+  const r = await rig({ idleSleepMs: 300 }, true);
+  try {
+    const lead = await bypassLead(r.s);
+    r.s.controller.setLimits(lead, { maxWorkers: 3 }, { actor: 'ui' }); // a crew lead: its own sleep keeps its Bypass (T-417)
+    const w = await bypassWorker(r.s, lead, 'Worker');
+    await until(() => r.s.controller.get(w)!.process === 'asleep', 4000);
+    assert.deepEqual(
+      r.s.controller.audit({ kind: 'bypass.left' }).filter((x) => x.sessionId === w).map((x) => [x.detail.why, x.detail.kept ?? null]),
+      [['sleep', true]],
+    );
+    // The lead (asleep too by now, or not) messages its worker: awake and in Bypass first, as it is when it sends.
+    if (r.s.controller.get(lead)!.process === 'asleep') await answering(r.s, r.s.controller.send(lead, 'lead-wake', 'go on'));
+    assert.equal(r.s.controller.get(lead)!.mode, 'bypassPermissions');
+    await answering(r.s, r.s.controller.send(w, 'worker-wake', 'next ticket'));
+    assert.equal(r.s.controller.get(w)!.mode, 'bypassPermissions', 'back in the inherited Bypass after the wake');
+    const entered = r.s.controller.audit({ kind: 'bypass.entered' }).find((x) => x.sessionId === w)!;
+    assert.deepEqual([entered.actor, entered.detail.how], ['portal', 'wake']);
   } finally {
     await r.done();
   }
