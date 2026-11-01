@@ -3,8 +3,9 @@
 // resolver says every session is the founding user's (until `chat_sessions` records an owner); the seam already refuses another user (`u_a`) on a
 // session that exists, which is how the tests run the abuse cases across users.
 
-import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, sessionRef, workspaceRef, type ToolPolicies } from '@portal/contracts';
-import { declarePolicies, declareToolPolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
+import { AppError } from '@isnanme/core';
+import { CHAT_SOCKET_PATH, FOUNDING_USER_ID, platformRef, sessionRef, workspaceRef, type Actor, type RoutePolicies, type ToolPolicies } from '@portal/contracts';
+import { can, declarePolicies, declareToolPolicies, registerResolver, type ObjectResolver } from '../authz/seam.js';
 
 /** What the resolver needs of a session; the controller answers it. */
 export interface SessionFacts {
@@ -57,8 +58,27 @@ export function registerChatAuthz(facts: (id: string) => SessionFacts | null): v
       checks: [{ type: 'session', verb: 'operate', from: 'path', param: 'id' }],
       audit: 'session.request_clear',
     },
+    ...CHAT_RELOCATE_POLICIES,
   });
   declareToolPolicies('chat', CHAT_RECOVER_TOOL_POLICIES);
+}
+
+/**
+ * Relocation (owner request 2026-11-01): moving a session to ANOTHER workspace is the platform admin's (manage on the platform's `system`
+ * area), never a session's operator nor an agent: it changes which workspace's guard protects the chat. Audited per session by the
+ * controller (`session.relocated`). The handler asks {@link requireRelocateRight} first.
+ */
+export const CHAT_RELOCATE_POLICIES = {
+  'POST /api/chat/sessions/:id/relocate': { kind: 'platform', area: 'system', verb: 'manage', audit: 'session.relocated' },
+  'POST /api/workspaces/:target/:name/relocate-sessions': { kind: 'platform', area: 'system', verb: 'manage', audit: 'session.relocated' },
+} satisfies RoutePolicies;
+
+/** Declared where the routes are made too (the bulk route is mounted in the workspaces group, which tests build without index.ts). */
+export const declareChatRelocatePolicies = (): void => declarePolicies('chat', CHAT_RELOCATE_POLICIES);
+
+/** Relocation's door: anyone without manage on the platform's `system` area gets the answer a missing session gets (404), never a 403. */
+export function requireRelocateRight(actor: Actor): void {
+  if (!can(actor, 'manage', platformRef('system')).allow) throw new AppError('NOT_FOUND', NO_SESSION);
 }
 
 /**

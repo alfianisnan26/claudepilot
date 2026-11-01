@@ -1010,7 +1010,112 @@ export const CHAT_API = {
   switchOptions: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/switch-options`,
   /** GET: the runs of the chat on Claudes, oldest first (`ChatSegment[]`). */
   segments: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/segments`,
+  /**
+   * POST `RelocateChatRequest` (platform admin only; anyone else gets 404): move a session that is not running to another workspace and a
+   * Claude there, keeping its id and transcript. Returns `ChatRelocation`. Copies no file: see `ChatRelocationFiles`.
+   */
+  relocate: (id: string) => `/api/chat/sessions/${encodeURIComponent(id)}/relocate`,
+  /**
+   * POST `RelocateSessionsRequest` (platform admin only; anyone else gets 404): the bulk form, every session of the plan must be on this
+   * workspace (`<target>/<name>`). Each item is decided and applied on its own. Returns `RelocateSessionsResult`.
+   */
+  relocateSessions: (workspaceId: string) => `/api/workspaces/${workspaceId}/relocate-sessions`,
 } as const;
+
+/* ---------- Relocation: a session moves to another workspace (owner request 2026-11-01, decommissioning workspaces) ---------- */
+
+/** Rewrites a path prefix (`{ "/home/node/old": "/home/node/new" }`), matched on whole path segments; the longest prefix wins. */
+export type ChatCwdMap = Record<string, string>;
+/** At most this many prefixes in one `cwdMap`. */
+export const CHAT_RELOCATE_CWD_MAP_MAX = 20;
+/** At most this many sessions in one bulk plan. */
+export const CHAT_RELOCATE_PLAN_MAX = 500;
+
+export interface RelocateChatRequest {
+  /** The workspace it moves to, `<target>/<name>`. */
+  workspaceId: string;
+  /** A live Claude of that workspace (`CHAT_API.claudes`). */
+  claudeId: string;
+  /** Only when the folders differ on the new workspace (they normally do not). */
+  cwdMap?: ChatCwdMap;
+  /** Decide and count, change nothing. */
+  dryRun?: boolean;
+}
+
+export interface RelocateSessionsItem {
+  sessionId: string;
+  workspaceId: string;
+  claudeId: string;
+  cwdMap?: ChatCwdMap;
+}
+
+export interface RelocateSessionsRequest {
+  plan: RelocateSessionsItem[];
+  /** Applied to every item that has no `cwdMap` of its own. */
+  cwdMap?: ChatCwdMap;
+  dryRun?: boolean;
+}
+
+/** One copy the ops step makes between the two workspaces' home folders. The portal copies nothing itself. */
+export interface ChatRelocationCopy {
+  /** On the old workspace. */
+  from: string;
+  /** On the new workspace. */
+  to: string;
+  /** Without it the next resume fails (Claude Code has no conversation to resume) and the session reads Interrupted. */
+  required: boolean;
+  /** A folder (copy it whole, recursively), else one file. A missing source that is not required is fine. */
+  dir: boolean;
+  why: string;
+}
+
+/**
+ * What the session needs on the new workspace for its next resume (`--resume <claudeSessionId>` on a fresh log segment, in the Claude's
+ * config directory, in `cwd`). The portal's transcript (events, history, usage) lives in the portal's database and moves with the row.
+ */
+export interface ChatRelocationFiles {
+  /** The Claude Code session id the next process resumes. */
+  claudeSessionId: string;
+  copies: ChatRelocationCopy[];
+}
+
+export interface ChatRelocationSide {
+  workspaceId: string;
+  claudeId: string;
+  cwd: string;
+  worktreePath: string | null;
+}
+
+/** Rows changed (or, in a dry run, that would change), by what they are. */
+export interface ChatRelocationCounts {
+  /** chat_sessions: the workspace, the Claude, the folder. */
+  session: number;
+  /** The run going now (chat_segments with no end): its Claude and folder. Closed runs stay as history. */
+  openRun: number;
+  /** chat_worktrees records the portal keeps for this session's worktree. */
+  worktrees: number;
+  /** Portal tool tokens bound to the session on the old workspace: revoked, a new one is minted at the next start. */
+  tokensRevoked: number;
+  /** Auto move: the Claude it last saw, and open suggestions to move to a Claude of the old workspace (closed as superseded). */
+  autotransfer: number;
+}
+
+export interface ChatRelocation {
+  sessionId: string;
+  /** `would_relocate` in a dry run; `unchanged` when it is already there (running twice changes nothing and writes no audit row). */
+  status: 'relocated' | 'would_relocate' | 'unchanged' | 'refused';
+  from: ChatRelocationSide | null;
+  to: ChatRelocationSide | null;
+  counts: ChatRelocationCounts | null;
+  files: ChatRelocationFiles | null;
+  /** Why it was refused (bulk form; the single route answers with the error itself). */
+  error?: { code: string; message: string };
+}
+
+export interface RelocateSessionsResult {
+  dryRun: boolean;
+  items: ChatRelocation[];
+}
 
 export interface ChatFileEntry {
   name: string;

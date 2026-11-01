@@ -482,6 +482,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/workspaces/:target/:name/claude-version/plan` | obj(workspace view path target+name) |  |
 | `POST /api/workspaces/:target/:name/claude-version/apply` | obj(workspace manage path target+name) | audit claude.upgrade |
 | `POST /api/workspaces/:target/:name/claude-version/rollback` | obj(workspace manage path target+name) | audit claude.rollback |
+| `POST /api/workspaces/:target/:name/relocate-sessions` | platform(system,manage) | Relocation, bulk (owner request 2026-11-01): sessions that are not running move to another workspace; anyone else gets 404; audit session.relocated per session |
 | `GET /api/accounts` | in:list(account) + account pools | the overview holds only what the person may view; an API key is never returned |
 | `POST /api/accounts` | in:create(account) | owned by the creator (or a team they belong to) |
 | `POST /api/accounts/bulk` | in:create(account) | owned by the creator (or a team they belong to) |
@@ -675,6 +676,7 @@ Generated from the REAL app (`createApp` with stub services, `app.routes`: 261 r
 | `GET /api/chat/sessions/:id` | obj(session view path id) |  |
 | `POST /api/chat/sessions/:id/switch` | obj(session operate path id; claude operate body claudeId) | Move chat: the destination Claude must be usable by the person |
 | `GET /api/chat/sessions/:id/switch-options` | obj(session operate path id) | asks Claude Code |
+| `POST /api/chat/sessions/:id/relocate` | platform(system,manage) | Relocation (owner request 2026-11-01): a session that is not running moves to another workspace and a Claude there; anyone else gets the 404 of a missing session; audit session.relocated |
 | `GET /api/chat/sessions/:id/bypass` | obj(session view path id) |  |
 | `POST /api/chat/sessions/:id/bypass` | obj(session manage path id) +reauth | only the creator's opt-in; never via MCP; audit bypass.* |
 | `POST /api/chat/sessions/:id/bypass/allow` | obj(session manage path id) +reauth | only the creator's opt-in; never via MCP; audit bypass.* |

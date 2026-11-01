@@ -72,6 +72,7 @@ import type { ChatController } from './chat/controller.js';
 import { createChatFileRoutes } from './chat/fileRoutes.js';
 import { Reauth } from './chat/reauth.js';
 import { createChatMetaRoutes, createChatRoutes, createClaudeRoutes, createUsageRoutes } from './chat/routes.js';
+import { createSessionRelocateRoutes } from './chat/relocateRoutes.js';
 import { createChatTrustRoutes } from './chat/trustRoutes.js';
 import type { AccountPools } from './accounts/pools.js';
 import type { AccountsService } from './accounts/service.js';
@@ -1069,6 +1070,8 @@ export function createApp(
   if (repos) ws.route('/', createWorkspaceReposRoutes(repos));
   // Claude Code version pinning: a workspace's version, the upgrade plan, Apply, Rollback and history.
   if (claudeVersions) ws.route('/', createWorkspaceClaudeVersionRoutes(claudeVersions));
+  // Relocation, the bulk form: a plan of sessions moves off this workspace (the platform admin; chat/relocateRoutes.ts).
+  ws.route('/', createSessionRelocateRoutes(chatController));
   app.route('/api/workspaces', ws);
 
   const acc = new Hono<Env>();
