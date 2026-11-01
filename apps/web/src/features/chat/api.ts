@@ -81,7 +81,7 @@ const childrenQuery = (children?: 'end') => query({ children });
 export const chatApi = {
   /** One page of sessions, newest activity first (D-58): `next` goes back as `cursor`. */
   list: (opts: { cursor?: string | null; limit?: number; parentId?: string } = {}) =>
-    scopedList(
+    scopedList<CursorPage<ChatSession>>(
       CHAT_API.list + query({ limit: opts.limit ? String(opts.limit) : undefined, cursor: opts.cursor ?? undefined, parentId: opts.parentId }),
       (p) => request<CursorPage<ChatSession>>('GET', p),
       () => ({ items: [], next: null }),
