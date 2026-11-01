@@ -154,6 +154,8 @@ const objPart = (access: string): string | null => {
 const targetOf = (access: string): string[] => {
   const out = new Set<string>();
   for (const m of access.matchAll(/in:(list|create)\((\w+)\)/g)) out.add(`${m[1]} ${m[2]}`);
+  // `platform(area,verb)`: the platform's admins (relocate-sessions); declared as `kind: 'platform'`.
+  if (/^platform\(\w+, ?(view|operate|manage)\)/.test(access)) out.add('kind platform');
   const inner = objPart(access);
   const checks: [string, Verb][] = [];
   for (const seg of inner === null ? [] : inner.split(';').map((s) => s.trim())) {
@@ -260,6 +262,7 @@ test('the PRD reader reads the notation, and fails on what it cannot read', () =
   assert.deepEqual(targetOf('obj(workspace operate path target+name; claude manage query claude (default Claude when absent))'), ['claude manage', 'workspace operate']);
   assert.deepEqual(targetOf('obj(target operate body target; team member of body ownerTeamId when set) in:create(workspace)'), ['create workspace', 'target operate']);
   assert.deepEqual(targetOf('in:list(workspace)'), ['list workspace']);
+  assert.deepEqual(targetOf('platform(system,manage)'), ['kind platform']);
   assert.throws(() => targetOf('obj(workspace whatever path target+name)'));
 });
 

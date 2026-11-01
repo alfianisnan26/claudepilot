@@ -15,6 +15,7 @@ import {
   type EnterBypassRequest,
   type ReauthRequest,
   type RecoverChatRequest,
+  type RelocateChatRequest,
   type RestartChatRequest,
   type SwitchChatRequest,
   type UpdateChatLimitsRequest,
@@ -29,6 +30,8 @@ import { serveBlob } from './artifacts/index.js';
 import type { ChatController } from './controller.js';
 import { eventsQuery } from './eventPage.js';
 import type { Reauth } from './reauth.js';
+import { declareChatRelocatePolicies, requireRelocateRight } from './authz.js';
+import { checkCwdMap } from './relocate.js';
 
 /** The sign-in a request belongs to: `requireSession` (app.ts) put its token on the context. */
 const tokenOf = (c: Context): string | undefined => (c as unknown as Context<{ Variables: { token?: string } }>).get('token');
@@ -74,6 +77,7 @@ function childrenMode(raw: string | undefined): 'end' | undefined {
 
 /** Builds the chat-session routes around a shared {@link ChatController}. Mount under a guarded group. */
 export function createChatRoutes(controller: ChatController): Hono {
+  declareChatRelocatePolicies();
   const chat = new Hono();
 
   // GET /api/chat/sessions?limit=&cursor=&parentId= — one page of sessions, newest activity first (D-58: `{ items, next }`, 25 by default, 100 at most).
@@ -107,7 +111,30 @@ export function createChatRoutes(controller: ChatController): Hono {
     return c.json(success(keyedFor(actorOf(c))(session)));
   });
 
-  // POST /api/chat/sessions/:id/switch — confirmed move of the chat to another Claude on the same workspace (the chat stays this session).
+  // POST /api/chat/sessions/:id/relocate — owner request 2026-11-01 (decommissioning workspaces): a session that is not running moves to
+  // another workspace and a Claude there (`RelocateChatRequest` → `ChatRelocation`), keeping its id and its transcript. The platform admin
+  // only: anyone else gets the 404 of a missing session. A running session is a 409 (`details.reason: 'running'`); an unknown workspace or
+  // Claude a 422; already there: `unchanged` (no write, no audit). `dryRun` decides and counts, changing nothing.
+  // The portal copies NO file between workspaces. For the next resume the new workspace needs Claude Code's conversation, which the answer's
+  // `files.copies` names exactly (required: `<config dir>/projects/<cwd with every non-alphanumeric as ->/<claudeSessionId>.jsonl`, where
+  // the config dir is `/home/node/.claude` for a Default Claude and `/home/node/.claudepilot/claudes/<16 hex>` for another); optional: that
+  // conversation's side folder, `/home/node/.claudepilot/sessions/<claudeSessionId>/` (old log segments), `/home/node/.claudepilot/uploads/<id>/`.
+  chat.post('/:id/relocate', async (c) => {
+    requireRelocateRight(actorOf(c));
+    const req = await body<RelocateChatRequest>(c);
+    const cwdMap = checkCwdMap(req.cwdMap);
+    return c.json(
+      success(
+        await controller.relocate(
+          c.req.param('id'),
+          { workspaceId: req.workspaceId, claudeId: req.claudeId, ...(cwdMap ? { cwdMap } : {}) },
+          { dryRun: req.dryRun === true, actor: askerOf(c) },
+        ),
+      ),
+    );
+  });
+
+  // POST /api/chat/sessions/:id/switch —confirmed move of the chat to another Claude on the same workspace (the chat stays this session).
   chat.post('/:id/switch', async (c) => {
     const req = await body<SwitchChatRequest>(c);
     if (typeof req.claudeId !== 'string' || !req.claudeId.trim())

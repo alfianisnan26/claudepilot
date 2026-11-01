@@ -74,6 +74,9 @@ import {
   type ChatTaskTranscript,
   type ChatSwitchOption,
   type ChatSwitchOptions,
+  type ChatCwdMap,
+  type ChatRelocation,
+  type ChatRelocationSide,
   type ChatTransferContext,
   type ChatUsageReport,
   type CreateChatSessionRequest,
@@ -159,6 +162,8 @@ import {
   type InputState,
 } from './store.js';
 import { BtwEngine, readBtwConfig, type BtwHost } from './btw.js';
+import { claudeConfigDir, mapPath, relocationCopies } from './relocate.js';
+import { isWorkspaceId } from '../names.js';
 import { BtwStore } from './btwStore.js';
 import {
   TRANSFER_WRITE_SCRIPT,
@@ -2712,6 +2717,106 @@ export class ChatController {
       this.#tags.delete(sessionId);
       this.#emitSession(sessionId);
     }
+  }
+
+  /**
+   * Relocation (owner request 2026-11-01, decommissioning workspaces; relocate.ts): a session that is NOT running moves to another workspace
+   * and a Claude there. The chat stays this session (id, row, portal transcript); its workspace, Claude and folder change, and every row that
+   * points at where it lives follows (relocate.ts lists them). Nothing is copied between workspaces: the result's `files` says what the ops
+   * step copies for the next resume. The caller has checked the platform right (routes). `expectFrom` (the bulk form) refuses a session
+   * that is not on that workspace with the same answer as a missing one. Already there (same workspace, Claude and folders): `unchanged`,
+   * nothing written, no audit row, whatever its state. Refused: a running session (a process, a turn, a launch, a move or a side question),
+   * a General Manager, an unknown or removed target workspace or Claude.
+   */
+  async relocate(
+    rawId: string,
+    target: { workspaceId: unknown; claudeId: unknown; cwdMap?: ChatCwdMap },
+    opts: { dryRun?: boolean; actor: string; expectFrom?: string },
+  ): Promise<ChatRelocation> {
+    const sessionId = this.#chat.resolveId(typeof rawId === 'string' ? rawId : '');
+    const row = this.#chat.row(sessionId);
+    if (!row) throw new AppError('NOT_FOUND', 'No such session.');
+    if (opts.expectFrom !== undefined && !this.#chat.workspaceForms(opts.expectFrom).forms.includes(row.workspace_id))
+      throw new AppError('NOT_FOUND', 'No such session.');
+    if (this.#chat.isManager(sessionId)) throw new AppError('VALIDATION_FAILED', 'A General Manager runs in its own runtime and does not move.');
+
+    const rawWs = typeof target.workspaceId === 'string' ? target.workspaceId.trim() : '';
+    if (!rawWs) throw new AppError('VALIDATION_FAILED', 'Pick a workspace.', { details: { workspaceId: 'Required.' } });
+    const to = this.#chat.workspaceForms(rawWs);
+    const unknownWs = () => new AppError('VALIDATION_FAILED', 'That workspace doesn’t exist.', { details: { workspaceId: 'Unknown workspace.' } });
+    // QA-032: only `<target>/<name>` of plain names ever reaches a runtime or a row (a plan item is not seen by the request's id rule).
+    if (!isWorkspaceId(to.key) || to.key.toLowerCase() === MANAGER_RUNTIME_ID) throw unknownWs();
+    const [targetName] = this.#split(to.key);
+    if (!this.#workspaces.runtimeFor(targetName)) throw unknownWs();
+    if (this.workspaceExists && !(await this.workspaceExists(to.key))) throw unknownWs();
+
+    const claudeId = typeof target.claudeId === 'string' ? target.claudeId.trim() : '';
+    const dest = claudeId ? this.#chat.claude(claudeId) : null;
+    if (!dest || dest.removedAt || !to.forms.concat(to.key).includes(dest.workspaceId))
+      throw new AppError('VALIDATION_FAILED', 'Pick a Claude on that workspace.', { details: { claudeId: 'Unknown Claude.' } });
+
+    const from: ChatRelocationSide = { workspaceId: row.workspace_id, claudeId: row.claude_id ?? '', cwd: row.cwd, worktreePath: row.worktree_path ?? null };
+    const next: ChatRelocationSide = {
+      workspaceId: to.key,
+      claudeId: dest.id,
+      // Mapped on its absolute form (an old row may hold it relative to the home folder, or empty for it); untouched when no prefix matches.
+      cwd: mapPath(sessionCwd(row.cwd), target.cwdMap) === sessionCwd(row.cwd) ? row.cwd : mapPath(sessionCwd(row.cwd), target.cwdMap),
+      worktreePath: row.worktree_path ? mapPath(row.worktree_path, target.cwdMap) : null,
+    };
+    const csid = claudeSessionOf(row);
+    const files = {
+      claudeSessionId: csid,
+      copies: relocationCopies({
+        sessionId,
+        claudeSessionId: csid,
+        fromConfigDir: claudeConfigDir(this.#chat.claude(from.claudeId)?.directory),
+        toConfigDir: claudeConfigDir(dest.directory),
+        fromCwd: sessionCwd(from.cwd),
+        toCwd: sessionCwd(next.cwd),
+      }),
+    };
+    const same =
+      this.#chat.workspaceForms(row.workspace_id).key === to.key &&
+      from.claudeId === next.claudeId &&
+      from.cwd === next.cwd &&
+      from.worktreePath === next.worktreePath;
+    if (same) return { sessionId, status: 'unchanged', from, to: next, counts: null, files };
+
+    const running =
+      (row.process === 'live' && row.state !== 'ended') ||
+      (row.state !== 'ended' && ['starting', 'working', 'waiting'].includes(row.state)) ||
+      this.#moving.has(sessionId) ||
+      this.#restarting.has(sessionId) ||
+      this.#launching.has(sessionId) ||
+      this.#recovering.has(sessionId) ||
+      this.#granted.has(sessionId) ||
+      this.#slotWaits.has(sessionId) ||
+      this.#chat.sideQuestionRunning(sessionId);
+    if (running)
+      throw new AppError('CONFLICT', 'This session is running. End it, or let it go to sleep, before moving it to another workspace.', {
+        details: { reason: 'running', state: row.state, process: row.process },
+      });
+
+    const dryRun = opts.dryRun === true;
+    const counts = this.#chat.relocate(
+      {
+        sessionId,
+        claudeSessionId: csid,
+        toStored: to.stored,
+        toKey: to.key,
+        toClaudeId: next.claudeId,
+        toCwd: next.cwd,
+        toWorktreePath: next.worktreePath,
+      },
+      target.cwdMap,
+      { dryRun, audit: { workspaceId: to.key, actor: opts.actor, detail: { from, to: next, claudeSessionId: csid } } },
+    );
+    if (!dryRun) {
+      // Nothing of the old place is kept in memory for a session with no process; a folder's project rules are read again at the next start.
+      this.#emitSession(sessionId);
+      console.log(`[chat] session ${sessionId} relocated from ${from.workspaceId} to ${to.key} (Claude ${next.claudeId}) by ${opts.actor}`);
+    }
+    return { sessionId, status: dryRun ? 'would_relocate' : 'relocated', from, to: next, counts, files };
   }
 
   /** A step of the move: the chat says where it is (`switching`), and the transcript gets a progress row. */

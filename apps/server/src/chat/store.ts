@@ -4,6 +4,8 @@
 
 import type { WorkspaceRefs } from '../workspaces/identity.js';
 import type {
+  ChatCwdMap,
+  ChatRelocationCounts,
   WorkspaceClaude,
   ChatAuditEntry,
   ChatEndedFor,
@@ -33,6 +35,7 @@ import { fileRefs } from './artifacts/records.js';
 import { lineageOf, type Lineage } from './lineage.js';
 import { readEnding } from './integrity.js';
 import { redact, redactMaybe } from './redact.js';
+import { applyRelocation, hasRunningSideQuestion, type RelocateMove } from './relocate.js';
 import { COUNTED_USAGE } from './usageDelta.js';
 
 /**
@@ -1038,6 +1041,54 @@ export class ChatStore {
       ).run(next.claudeId, next.claudeSessionId, next.pid, next.startedAt, before.id);
     });
     return { row: before, segment: n };
+  }
+
+  /**
+   * Relocation (relocate.ts): a workspace reference as chat_sessions stores it, as the rest of the portal speaks it (`<target>/<name>`), and
+   * every form a row may hold for it. Without the registry (tests), the reference as given.
+   */
+  workspaceForms(ref: string): { stored: string; key: string; forms: string[] } {
+    if (!this.#refs) return { stored: ref, key: ref, forms: [ref] };
+    const stored = this.#refs.storedRef(ref) ?? ref;
+    return { stored, key: this.#refs.keyOf(stored) ?? ref, forms: this.#refs.storedForms(ref) };
+  }
+
+  /** Relocation: a side question of the session is still running (its own process). */
+  sideQuestionRunning(sessionId: string): boolean {
+    return hasRunningSideQuestion(this.#db(), this.resolveId(sessionId));
+  }
+
+  /**
+   * Relocation: applies one move and writes its audit row, together or not at all (a savepoint). A dry run applies it the same way and
+   * rolls it back, so its counts are exactly what the move would change, and nothing stays. Returns the rows changed by kind.
+   */
+  relocate(
+    move: RelocateMove,
+    cwdMap: ChatCwdMap | undefined,
+    opts: { dryRun: boolean; audit: { workspaceId: string; actor: string; detail: Record<string, unknown> } },
+  ): ChatRelocationCounts {
+    const db = this.#writable();
+    db.exec('SAVEPOINT chat_relocate');
+    let counts: ChatRelocationCounts;
+    try {
+      counts = applyRelocation(db, move, cwdMap, this.#stamp());
+      if (!opts.dryRun)
+        this.addAudit({
+          severity: 'info',
+          kind: 'session.relocated',
+          sessionId: move.sessionId,
+          workspaceId: opts.audit.workspaceId,
+          actor: opts.audit.actor,
+          detail: { ...opts.audit.detail, counts },
+        });
+    } catch (e) {
+      db.exec('ROLLBACK TO chat_relocate');
+      db.exec('RELEASE chat_relocate');
+      throw e;
+    }
+    if (opts.dryRun) db.exec('ROLLBACK TO chat_relocate');
+    db.exec('RELEASE chat_relocate');
+    return counts;
   }
 
   /** The switch didn't finish: the chat is back on the run it had (its row as it was, the new segment gone, the old one open again). */
