@@ -194,7 +194,7 @@ function Sheet({ title, onClose, children }: { title: string; onClose: () => voi
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="max-h-[90dvh] w-full overflow-y-auto overscroll-contain rounded-t-2xl bg-bg pb-[env(safe-area-inset-bottom)] outline-none sm:max-w-lg sm:rounded-2xl"
+        className="max-h-[90dvh] w-full overflow-y-auto overscroll-contain rounded-t-2xl bg-bg pb-[env(safe-area-inset-bottom)] outline-hidden sm:max-w-lg sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 flex items-center gap-2 border-b border-line bg-bg px-4">
