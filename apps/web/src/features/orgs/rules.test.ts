@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ORG_SLUG_PATTERN } from '@portal/contracts';
-import { canCreateOrg, canManageOrg, canRemoveMember, canSeeMembers, orgErrorText, roleChoices, slugFrom } from './rules';
+import {
+  canCreateOrg,
+  canManageOrg,
+  canRemoveMember,
+  canSeeMembers,
+  canSeeSignIn,
+  canSetSsoPolicy,
+  cleanRules,
+  orgErrorText,
+  outsideMembers,
+  parseFreshness,
+  roleChoices,
+  slugFrom,
+} from './rules';
 
 test('New organization shows only with the ability (an instance admin is answered with it too)', () => {
   assert.equal(canCreateOrg(null), false, 'not loaded yet: hidden');
@@ -35,6 +48,33 @@ test('the last-owner refusal reads plainly; other errors keep the server’s wor
   assert.match(orgErrorText(needsOwner, 'x'), /needs an owner/);
   assert.equal(orgErrorText(new Error('Only an owner removes an owner.'), 'x'), 'Only an owner removes an owner.');
   assert.equal(orgErrorText(null, 'Couldn’t.'), 'Couldn’t.');
+});
+
+test('Sign-in tab: owners and admins see it, only owners change Require SSO', () => {
+  assert.deepEqual((['owner', 'admin', 'member', 'guest'] as const).map(canSeeSignIn), [true, true, false, false]);
+  assert.deepEqual((['owner', 'admin', 'member', 'guest'] as const).map(canSetSsoPolicy), [true, false, false, false]);
+});
+
+test('token freshness: empty is off, whole days 1-365, anything else invalid', () => {
+  assert.equal(parseFreshness(''), null);
+  assert.equal(parseFreshness(' 7 '), 7);
+  for (const bad of ['0', '366', '1.5', '-1', 'abc', '1000']) assert.equal(parseFreshness(bad), 'invalid', bad);
+});
+
+test('outside members: emails off the VERIFIED domains, never an owner; blank group rules are dropped', () => {
+  const m = (userId: string, email: string, role: 'owner' | 'admin' | 'member' | 'guest') => ({ userId, email, displayName: userId, role, via: 'invite' as const, joinedAt: '' });
+  const d = (domain: string, state: 'pending' | 'verified' | 'lost') => ({ domain, state, record: { name: '', value: '' }, verifiedAt: null, lastCheckedAt: null, failures: 0 });
+  const members = [m('u_a', 'a@acme.test', 'admin'), m('u_b', 'b@other.test', 'member'), m('u_c', 'c@pending.test', 'member'), m('u_o', 'o@other.test', 'owner')];
+  assert.deepEqual(
+    outsideMembers(members, [d('acme.test', 'verified'), d('pending.test', 'pending')]).map((x) => x.userId),
+    ['u_b', 'u_c'],
+  );
+  assert.deepEqual(cleanRules([{ group: ' admins ', role: 'admin' }, { group: '  ', role: 'member' }]), [{ group: 'admins', role: 'admin' }]);
+});
+
+test('the lock-out guard and a taken domain read plainly', () => {
+  assert.match(orgErrorText(Object.assign(new Error('raw'), { details: { reason: 'SSO_LOCKOUT_GUARD' } }), 'x'), /locked out/);
+  assert.match(orgErrorText(Object.assign(new Error('raw'), { details: { reason: 'DOMAIN_TAKEN' } }), 'x'), /already has that domain/);
 });
 
 test('a slug made from a name fits the server’s pattern', () => {

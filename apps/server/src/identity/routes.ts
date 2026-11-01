@@ -284,7 +284,7 @@ export function identityRoutes(d: IdentityRouteDeps) {
         const account = portal.anySession(token)?.userId;
         const pid = isOrgId(org) ? sso.orgProviderId(org) : null;
         if (!token || !account || !pid || !isOrgId(org) || !d.sessionHash) return c.redirect('/login?sso_error=unavailable', 302);
-        step = { account, sessionHash: d.sessionHash(token), returnTo: `/admin/orgs/${org}` };
+        step = { account, sessionHash: d.sessionHash(token), returnTo: `/admin/orgs/${org}?tab=sign-in` };
         providerId = pid;
       } else {
         // The email's domain names the provider; `provider` is used only for an email on no provider's domain, and even then the callback
