@@ -406,6 +406,7 @@ export function Transcript({
           >
             <div ref={content} className="relative mx-auto flex w-full max-w-[720px] flex-col gap-5">
               {paging?.seeded && events.length > 0 && <PagesHead paging={paging} onRetry={onLoadOlder} />}
+              {paging && events.length === 0 && outbox.length === 0 && !live && <TranscriptEmpty loading={!paging.seeded} />}
               {storedRows}
               {outbox.map((o) => (
                 <motion.div
@@ -476,6 +477,27 @@ function measureAnchor(el: HTMLElement): Anchor {
  * The top of the transcript held (T-376): "Loading earlier" while the older page is read, Retry when it failed, "Start of the chat" once
  * the first event is held. One fixed height whatever it says, so it never moves the rows under it.
  */
+/**
+ * A transcript with nothing in it yet (UX sweep 2026-11-01: an ended chat without a message showed a blank page). While the newest page is
+ * read: a skeleton of a turn (QA A4, never a spinner); once it is in and empty: a line that says so.
+ */
+function TranscriptEmpty({ loading }: { loading: boolean }) {
+  if (loading)
+    return (
+      <div role="status" aria-label="Loading the chat" data-transcript-skeleton="" className="flex flex-col gap-4">
+        <div className="skeleton ml-auto h-10 w-2/3 rounded-2xl" />
+        <div className="skeleton h-4 w-11/12 rounded-lg" />
+        <div className="skeleton h-4 w-4/5 rounded-lg" />
+        <div className="skeleton h-4 w-3/5 rounded-lg" />
+      </div>
+    );
+  return (
+    <p data-transcript-empty="" className="py-10 text-center text-[13px] text-muted">
+      No messages yet
+    </p>
+  );
+}
+
 function PagesHead({ paging, onRetry }: { paging: ChatPaging; onRetry?: () => void }) {
   return (
     <div className="flex h-11 shrink-0 items-center justify-center text-[12px] text-muted">

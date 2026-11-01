@@ -17,7 +17,7 @@ export function AuthLayout({
 }) {
   return (
     <div className="flex min-h-dvh flex-col">
-      <header className="sticky top-0 z-10 mx-auto flex w-full max-w-5xl bg-bg items-center px-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-5 sm:px-8">
+      <header className="sticky top-0 z-10 mx-auto flex w-full max-w-5xl bg-bg items-center px-5 pt-[calc(1.25rem+var(--safe-top))] pb-5 sm:px-8">
         <Logo />
       </header>
       <main className="flex flex-1 items-start justify-center px-5 pt-4 pb-16 sm:items-center sm:pt-0">
@@ -25,7 +25,7 @@ export function AuthLayout({
           className="w-full max-w-[400px]"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, ease }}
+          transition={{ duration: 0.22, ease }}
         >
           <h1 className="text-[28px] leading-tight font-bold tracking-tight">{title}</h1>
           {subtitle && <p className="mt-1.5 text-[15px] text-muted">{subtitle}</p>}

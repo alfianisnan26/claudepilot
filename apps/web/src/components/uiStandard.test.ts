@@ -62,7 +62,18 @@ test('page scrolling: only lib/pane.ts scrolls the page, and only the app frames
   );
 });
 
+test('safe areas: the portal reads --safe-* (index.css), never env() itself, so a desktop has none (docs/prd/ui-layout.md §1)', () => {
+  // The reporter panel (embed/) is a window of its own inside an iframe with its own frame, not migrated yet (§9).
+  assert.deepEqual(hits(/env\(safe-area-inset-/).filter((f) => !f.startsWith('embed/')), []);
+});
+
+test('page headers: one row height whether or not the page has an action, so the title never moves between pages', () => {
+  assert.match(read('components/PageHeader.tsx'), /data-page-header=""[^>]*min-h-11 items-center/);
+});
+
 test('the frame: the portal scrolls one content pane on a desktop (the console checks its own frame in its own test)', () => {
   assert.match(read('components/AppShell.tsx'), /id=\{PANE_ID\}[^>]*lg:overflow-y-auto/);
+  // The pane is the containing block of absolute boxes inside it (sr-only labels): otherwise they make the document scroll on a desktop.
+  assert.match(read('components/AppShell.tsx'), /id=\{PANE_ID\}[^>]*lg:relative/);
   assert.match(read('components/AppShell.tsx'), /lg:h-dvh[^'"]*lg:overflow-hidden/);
 });

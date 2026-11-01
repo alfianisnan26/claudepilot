@@ -58,7 +58,7 @@ export function MembersSection({
 
   return (
     <section aria-labelledby="org-members">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 [&>h2]:mb-0">
         <SectionTitle
           id="org-members"
           about={

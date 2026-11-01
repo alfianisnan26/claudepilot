@@ -1,5 +1,6 @@
-import { LoadError } from '@isnanme/ui';
+import { EmptyState, LoadError } from '@isnanme/ui';
 import type { ClaudeUsage, ClaudeUsageState } from '@portal/contracts';
+import { Gauge } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '@/components/PageHeader';
 import { usageApi } from '@/lib/usage';
@@ -67,7 +68,7 @@ export function ClaudesTab() {
           ))}
         </div>
       ) : claudes.length === 0 ? (
-        <p className="py-3 text-[13px] text-muted">No Claudes yet.</p>
+        <EmptyState icon={<Gauge className="size-6" />} title="No Claudes yet" />
       ) : (
         <ul className="flex flex-col gap-3">
           {claudes.map((c) => (

@@ -247,10 +247,10 @@ export function ShellPage() {
 
   return (
     <div
-      className="fixed inset-x-0 top-0 flex h-dvh flex-col bg-[#0b0b0c] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] text-[#e6e6e6]"
+      className="fixed inset-x-0 top-0 flex h-dvh flex-col bg-[#0b0b0c] pr-[var(--safe-right)] pl-[var(--safe-left)] text-[#e6e6e6]"
       style={pinnedToViewport(viewport)}
     >
-      <header className="sticky top-0 z-10 flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 bg-[#0b0b0c] items-center gap-3 border-b border-white/10 px-2 pt-[env(safe-area-inset-top)] sm:px-3">
+      <header className="sticky top-0 z-10 flex h-[calc(3rem+var(--safe-top))] shrink-0 bg-[#0b0b0c] items-center gap-3 border-b border-white/10 px-2 pt-[var(--safe-top)] sm:px-3">
         <Link
           to="/admin/workspaces"
           aria-label="Back to workspaces"
@@ -325,12 +325,12 @@ export function ShellPage() {
       </nav>
 
       <div className="relative min-h-0 flex-1">
-        <div ref={host} className={cn('absolute inset-0 p-2', !keyBar && bottomInset && 'pb-[max(0.5rem,env(safe-area-inset-bottom))]')} />
+        <div ref={host} className={cn('absolute inset-0 p-2', !keyBar && bottomInset && 'pb-[max(0.5rem,var(--safe-bottom))]')} />
         {phase.kind === 'closed' && (
           <div
             className={cn(
               'absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-center gap-3 border-t border-white/10 bg-[#141416]/95 px-4 py-3 text-sm backdrop-blur',
-              !keyBar && bottomInset && 'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
+              !keyBar && bottomInset && 'pb-[max(0.75rem,var(--safe-bottom))]',
             )}
           >
             <span className="text-white/80">{phase.reason}</span>
@@ -347,7 +347,7 @@ export function ShellPage() {
           mods={modState}
           onKey={(data) => sendRef.current(applyMods(data))}
           onModifier={(m) => setMods({ ...mods.current, [m]: NEXT_MOD[mods.current[m]] })}
-          className={bottomInset ? 'pb-[max(0.375rem,env(safe-area-inset-bottom))]' : undefined}
+          className={bottomInset ? 'pb-[max(0.375rem,var(--safe-bottom))]' : undefined}
         />
       )}
 

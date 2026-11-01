@@ -21,14 +21,16 @@ export function CiPage() {
   const [addingRunner, setAddingRunner] = useState(false);
   const tab = useTabId(BASE, TABS);
   const toRemotes = () => navigate(`${BASE}/remotes`);
+  // One primary action per screen (QA A2): the header's, never repeated by an empty state. Runs are not made by hand, so the Runs tab has
+  // none; its empty state offers New remote while there is no remote yet (UX sweep 2026-11-01).
   const add =
-    tab === 'runners' ? (
-      <Button icon={<Plus className="size-4" />} onClick={() => setAddingRunner(true)}>
+    tab === 'runs' ? undefined : tab === 'runners' ? (
+      <Button icon={<Plus className="size-4" />} aria-label="Add runner" onClick={() => setAddingRunner(true)}>
         <span className="hidden sm:inline">Add runner</span>
         <span className="sm:hidden">Add</span>
       </Button>
     ) : (
-      <Button icon={<Plus className="size-4" />} onClick={() => (setCreating(true), tab === 'runs' && toRemotes())}>
+      <Button icon={<Plus className="size-4" />} aria-label="New remote" onClick={() => setCreating(true)}>
         <span className="hidden sm:inline">New remote</span>
         <span className="sm:hidden">New</span>
       </Button>
@@ -41,8 +43,8 @@ export function CiPage() {
         label="CI"
         tabs={[
           { id: 'runs', label: 'Runs', content: <RunsTab onNewRemote={() => (setCreating(true), toRemotes())} /> },
-          { id: 'remotes', label: 'Remotes', content: <RemotesTab creating={creating} onCloseCreate={() => setCreating(false)} onNew={() => setCreating(true)} /> },
-          { id: 'runners', label: 'Runners', content: <RunnersTab adding={addingRunner} onCloseAdd={() => setAddingRunner(false)} onAdd={() => setAddingRunner(true)} /> },
+          { id: 'remotes', label: 'Remotes', content: <RemotesTab creating={creating} onCloseCreate={() => setCreating(false)} /> },
+          { id: 'runners', label: 'Runners', content: <RunnersTab adding={addingRunner} onCloseAdd={() => setAddingRunner(false)} /> },
         ]}
       />
     </>

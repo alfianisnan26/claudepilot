@@ -28,7 +28,9 @@ export function PageHeader({
       </div>
     );
   return (
-    <div className="mb-6 flex items-end justify-between gap-4">
+    // One row height on every page (44 px, the height of an action button), the title centred in it: the title sits at the same place
+    // whether or not the page has an action (UX sweep 2026-11-01: it moved 12 px between Agents and Usage).
+    <div data-page-header="" className="mb-6 flex min-h-11 items-center justify-between gap-4">
       <div className="flex min-w-0 items-center gap-1.5">
         <h1 className="truncate text-2xl font-bold tracking-tight sm:text-[28px]">{title}</h1>
         {about}

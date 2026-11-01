@@ -16,6 +16,8 @@ never solves scrolling on its own.
 - No safe-area insets on a desktop: from 1024 px with a fine pointer the `--safe-*` variables are 0 (`index.css`). Phones and tablets
   keep them; code reads `--safe-*`, never `env()`.
 - Code that scrolls "the page" uses `scrollPageTo` / `pageScrollTop` (`lib/pane.ts`), never `window.scrollTo`.
+- The pane is `relative`: it is the containing block of absolute boxes inside it (every `sr-only` label), which otherwise made the
+  document scroll on a desktop (UX sweep 2026-11-01, `docs/qa/ux-sweep-2026-11-01.md`).
 
 ## 2. Pages of several sections: tabs
 

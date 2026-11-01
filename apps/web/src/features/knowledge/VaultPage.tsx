@@ -205,7 +205,7 @@ export function VaultPage() {
 
   return (
     <div className="fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-bg text-ink" style={pinnedToViewport(viewport)}>
-      <div className="flex min-h-0 flex-1 pt-[env(safe-area-inset-top)]">
+      <div className="flex min-h-0 flex-1 pt-[var(--safe-top)]">
         {/* The list: notes, search, tags. */}
         <section className={cn('min-h-0 w-full flex-col lg:flex lg:w-80 lg:shrink-0 lg:border-r lg:border-line', showList ? 'flex' : 'hidden')} aria-label="Vault">
           <header className="flex h-12 shrink-0 items-center gap-0.5 px-1.5 sm:px-2">
@@ -372,7 +372,7 @@ function BottomBar({ pane, graph, onPane, onGraph, onToday }: { pane: Pane | nul
     </button>
   );
   return (
-    <nav aria-label="Vault" className="flex shrink-0 border-t border-line bg-bg pb-[env(safe-area-inset-bottom)] lg:hidden">
+    <nav aria-label="Vault" className="flex shrink-0 border-t border-line bg-bg pb-[var(--safe-bottom)] lg:hidden">
       {item('Notes', Folder, pane === 'notes', () => onPane('notes'))}
       {item('Search', Search, pane === 'search', () => onPane('search'))}
       {item('Graph', Network, !!graph, onGraph)}

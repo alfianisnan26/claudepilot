@@ -93,7 +93,10 @@ function Shell() {
       </header>
       <ContextSheet open={contextSheet} onClose={() => setContextSheet(false)} />
 
-      <div id={PANE_ID} data-content-pane="" className="lg:h-full lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
+      {/* `relative`: the pane is the containing block of what is positioned inside it. Without it an absolute box with no positioned
+          ancestor (every `sr-only` label in a long list) is placed against the document and made the document scroll on a desktop
+          (UX sweep 2026-11-01: Notifications, Usage > Crew and Metrics scrolled the whole frame). */}
+      <div id={PANE_ID} data-content-pane="" className="lg:relative lg:h-full lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
         <main
           id="main"
           tabIndex={-1}
@@ -131,7 +134,13 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
           <span className="hidden text-lg lg:inline">{BRAND_NAME}</span>
         </Link>
       </div>
-      <nav aria-label="Main" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:thin] lg:px-4">
+      {/* On a short window the list scrolls under the glance chips: its last 1.5 rem fades out (only padding when it fits), so no
+          label is cut by a hard edge (UX sweep 2026-11-01: "Access" sat half under the chips at 1280 x 800). */}
+      <nav
+        aria-label="Main"
+        data-side-nav=""
+        className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-6 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1.5rem),transparent)] [scrollbar-width:thin] lg:px-4"
+      >
         <ul className="flex flex-col gap-1">
           {nav.groups.map((items, g) => (
             <Fragment key={items[0]!.group}>

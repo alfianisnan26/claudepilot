@@ -34,7 +34,7 @@ export function SessionsFull({ close }: GlanceFullProps) {
         <GlanceLine
           action={
             <Link to="/admin/sessions?new=1" onClick={close} className={buttonClass('primary', 'sm')}>
-              New session
+              New agent
             </Link>
           }
         >
