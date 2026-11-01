@@ -169,7 +169,7 @@ test('seven failed daily checks in a row make a verified domain lost (it stops r
   const rec = m.sso!.settings(person(ADMIN), beta, REDIRECT).domains.find((x) => x.domain === 'fleeting.test')!.record;
   dns.delete(rec.name);
   for (let i = 0; i < 6; i++) await m.sso!.recheckAll();
-  assert.deepEqual(state(), { state: 'verified', failures: 6 });
+  assert.deepEqual({ ...state() }, { state: 'verified', failures: 6 });
   await m.sso!.recheckAll();
   assert.equal(state().state, 'lost');
   assert.ok(store.db!.prepare("SELECT 1 FROM platform_audit WHERE kind = 'org.domain_lost'").get());
