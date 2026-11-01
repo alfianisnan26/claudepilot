@@ -4235,6 +4235,30 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 470,
+    name: 'organizations slice 4: the Admin console’s own sessions',
+    up(db) {
+      // docs/prd/organizations.md §6.11 (block 460-479). The Admin console on its own host has its own session, never the main portal's:
+      // one row per sign-in, keyed by a hash of the cookie's token (the token itself is nowhere). Times are epoch milliseconds: idle 15
+      // minutes after `last_seen_at`, absolute 2 hours after `created_at` (`expires_at`), a step-up counts 5 minutes after `reauth_at`
+      // (admin/sessions.ts). An ended row is kept (`ended_at`, `end_reason`) for the user page and the audit; old ones are swept.
+      db.exec(`
+        CREATE TABLE admin_sessions (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'as_?*'),
+          token_hash TEXT NOT NULL UNIQUE,
+          user_id TEXT NOT NULL CHECK (user_id GLOB 'u_?*'),
+          created_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          reauth_at INTEGER,
+          ended_at INTEGER,
+          end_reason TEXT
+        ) STRICT;
+        CREATE INDEX admin_sessions_user ON admin_sessions (user_id) WHERE ended_at IS NULL;
+      `);
+    },
+  },
+  {
     version: 903,
     name: 'UI reporter: annotated screenshots, the flattened image and the marks per capture and review comment (PILOT-1111 annotate)',
     up(db) {

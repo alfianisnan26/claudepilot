@@ -37,6 +37,8 @@ COPY --from=build /app/apps/server/node_modules apps/server/node_modules
 COPY --from=build /app/apps/server/dist apps/server/dist
 COPY --from=build /app/apps/web/package.json apps/web/
 COPY --from=build /app/apps/web/dist apps/web/dist
+# The Admin console bundle (docs/prd/organizations.md §6.11), served on the admin host only.
+COPY --from=build /app/apps/web/dist-admin apps/web/dist-admin
 # Docker targets build the workspace image from here the first time.
 COPY --from=build /app/images/workspace images/workspace
 RUN mkdir -p /data /secrets && chmod 700 /data /secrets

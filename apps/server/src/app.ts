@@ -31,6 +31,7 @@ import {
   type ChatEvent,
   DELEGATED_EVENTS_MAX,
   SESSION_GRANT_API,
+  SSO_API,
   type ChangeMyPasswordRequest,
   normalizeEmail,
   type SignedInAs,
@@ -123,6 +124,7 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import { createOrgRoutes, createOrgs } from './orgs/index.js';
+import { AdminHostGate, adminHostMiddleware, createAdminApp } from './admin/index.js';
 import type { Platform } from './platform/index.js';
 import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
 import { cookie as cookieOf } from './workspaces/shell.js';
@@ -210,6 +212,7 @@ export function createApp(
     appPorts,
     oidc,
     reporter,
+    adminHost = null,
   }: {
     serveWeb: boolean;
     notify?: (...topics: LiveTopic[]) => void;
@@ -263,9 +266,16 @@ export function createApp(
     oidc?: OidcClient;
     /** UI reporter (docs/prd/ui-reporter-server.md): the owner's config and evidence under /api, the widget's files, pages and panel API under /reporter/v1. */
     reporter?: { service: ReporterService; vendorDirs: string[] };
+    /** The Admin console's host (PORTAL_ADMIN_HOST, docs/prd/organizations.md §6.11); unset: the console is off. */
+    adminHost?: string | null;
   },
 ) {
   const app = new Hono<Env>();
+  // Organizations slice 4 (§6.11): FIRST, the host split. The admin host gets the console's own app (built below, once its services exist) and
+  // nothing else of the portal; the console's paths on any other host are the same 404 as an unknown route.
+  const adminGate = new AdminHostGate(adminHost, config.trustProxy);
+  let adminConsole: { fetch: (req: Request, env?: unknown) => Response | Promise<Response> } | null = null;
+  app.use(adminHostMiddleware(adminGate, () => adminConsole));
   const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
@@ -1382,11 +1392,28 @@ export function createApp(
 
   // Organizations slice 3 (docs/prd/organizations.md §10): my orgs, create (the ability orgs.create or an instance admin), members and roles.
   // The org service registers the `org` resolver: every right on an org is membership, read on every call; a non-member gets the same 404.
+  const orgsModule = createOrgs({ store });
   {
     const og = new Hono<Env>();
     og.use(requireSession);
-    og.route('/', createOrgRoutes(createOrgs({ store }).orgs));
+    og.route('/', createOrgRoutes(orgsModule.orgs));
     app.route('/api/orgs', og);
+  }
+  // Organizations slice 4 (§6.11): the Admin console, answered only on the admin host (the middleware at the top hands it those requests).
+  if (adminGate.enabled) {
+    const ssoOrigin = process.env.PORTAL_SSO_ORIGIN?.trim();
+    adminConsole = createAdminApp({
+      store,
+      gate: adminGate,
+      users,
+      revokePortalSessions: (id) => portal.revokeUser(id),
+      orgs: orgsModule.orgs,
+      abilities: orgsModule.abilities,
+      sso,
+      ssoRedirectUri: ssoOrigin ? `${ssoOrigin.replace(/\/+$/, '')}${SSO_API.callback}` : '',
+      clientKey: (c) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy),
+      consoleDir: serveWeb ? config.paths.adminDist : null,
+    }).app;
   }
 
   // Claude usage: the plan limits of each Claude, read from Claude Code itself (docs/prd/claude-usage.md).
