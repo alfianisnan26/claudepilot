@@ -95,14 +95,15 @@ before(async () => {
     [WS.kPrivate, 'ws_kprivaaaaaaa', konfersi],
   ];
   for (const [id, uid, org] of owners) {
-    const [target, name] = id.split('/');
+    const [target = '', name = ''] = id.split('/');
     db.prepare('INSERT INTO workspace_identities (id, target, name, legacy_id, created_at) VALUES (?, ?, ?, ?, ?)').run(uid, target, name, id, at);
     db.prepare("INSERT INTO workspace_owners (workspace_id, uid, owner_kind, owner_id, created_by, created_at, origin) VALUES (?, ?, 'org', ?, 'u_owner', ?, 'created')").run(id, uid, org, at);
   }
-  for (const [key, org] of [
+  const buckets: [string, string][] = [
     [BUCKET.k, konfersi],
     [BUCKET.o, other],
-  ])
+  ];
+  for (const [key, org] of buckets)
     db.prepare("INSERT INTO ticket_buckets (key, name, owner_kind, owner_id, created_at, updated_at) VALUES (?, ?, 'org', ?, ?, ?)").run(key, key, org, at, at);
   // Each org shares its API workspace and its bucket with its members (an org grant; the private workspace is shared with nobody).
   const grant = db.prepare("INSERT INTO grants (id, object_type, object_id, object_uid, subject_kind, subject_id, level, share_id, granted_by, created_at) VALUES (?, ?, ?, ?, 'org', ?, ?, 'test', 'user:u_owner', ?)");
