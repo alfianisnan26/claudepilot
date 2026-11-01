@@ -27,7 +27,8 @@ function app(s: Live, actor?: Actor) {
   const a = new Hono<{ Variables: { token: string; actor: Actor } }>();
   a.use(async (c, next) => {
     if (actor) c.set('actor', actor);
-    else c.set('token', 'signed-in');
+    // The owner as the session middleware sets them: a bare token is nobody since organizations slice 0 (no founding-user fallback).
+    else (c.set('token', 'signed-in'), c.set('actor', { kind: 'user', userId: FOUNDING_USER_ID, loginSessionId: 'legacy', via: 'ui' } as Actor));
     await next();
   });
   a.onError((e, c) =>
