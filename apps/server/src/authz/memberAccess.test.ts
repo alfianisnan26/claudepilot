@@ -59,7 +59,7 @@ const SESSIONS: Record<string, { workspaceId: string; ownerId: string | null }> 
   s_mine: { workspaceId: WS.shared, ownerId: MEMBER },
   s_owner: { workspaceId: WS.shared, ownerId: null },
 };
-const TICKETS: Record<string, string> = { 'ORG-1': 'ORG', 'OWN-1': 'OWN', 'ZZZ-1': 'ZZZ' };
+const TICKETS: Record<string, string> = { 'ORG-1': 'ORG', 'WRK-1': 'WRK', 'OWN-1': 'OWN', 'ZZZ-1': 'ZZZ' };
 const RUNS: Record<string, string> = { r_shared: WS.shared, r_own: WS.own };
 
 function addUser(id: string, role: 'admin' | 'member') {
@@ -90,7 +90,7 @@ before(async () => {
     db.prepare("INSERT INTO workspace_identities (id, target, name, legacy_id, created_at) VALUES (?, 'docker', ?, ?, ?)").run(uid, `ws-${k}`, WS[k], now);
     db.prepare("INSERT INTO workspace_owners (workspace_id, uid, owner_kind, owner_id, created_by, created_at, origin) VALUES (?, ?, ?, ?, ?, ?, 'created')").run(WS[k], uid, kind, id, FOUNDING_USER_ID, now);
   }
-  for (const [key, kind, id] of [['ORG', 'org', org], ['OWN', 'user', FOUNDING_USER_ID]] as const)
+  for (const [key, kind, id] of [['ORG', 'org', org], ['WRK', 'org', org], ['OWN', 'user', FOUNDING_USER_ID]] as const)
     db.prepare('INSERT INTO ticket_buckets (key, name, owner_kind, owner_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(key, key, kind, id, FOUNDING_USER_ID, now, now);
   registerOwnerResolvers({
     db: () => store.db,
@@ -108,6 +108,7 @@ before(async () => {
   const shareUid = (db.prepare('SELECT uid FROM workspace_owners WHERE workspace_id = ?').get(WS.shared) as { uid: string }).uid;
   grants.add(db, { ref: workspaceRef(WS.shared), uid: shareUid, subject: { kind: 'org', id: org }, level: 'operate', shareId: 'osh_test_ws', by: FOUNDING_USER_ID });
   grants.add(db, { ref: ticketBucketRef('ORG'), subject: { kind: 'org', id: org }, level: 'view', shareId: 'osh_test_bucket', by: FOUNDING_USER_ID });
+  grants.add(db, { ref: ticketBucketRef('WRK'), subject: { kind: 'org', id: org }, level: 'operate', shareId: 'osh_test_work', by: FOUNDING_USER_ID });
 });
 
 after(() => {
@@ -191,6 +192,11 @@ test('the route guard with the real seam: a member gets 404 on admin and owner r
   assert.equal(await send('POST /api/chat/sessions', '/api/chat/sessions', json({ workspaceId: WS.own })), 404);
   assert.equal(await send('POST /api/chat/sessions', '/api/chat/sessions', json({})), 404, 'no workspace named: not a door for a member');
   assert.equal(await send('POST /api/tickets/:id/session', '/api/tickets/ORG-1/session', json({ workspaceId: WS.shared })), 403, 'a view share on the bucket: no session (403, they may see it)');
+  // The bug this slice closes: operate on a ticket started its session in ANY workspace (only the ticket was declared). Fails without the
+  // workspace check in tickets/authz.ts.
+  assert.equal(await send('POST /api/tickets/:id/session', '/api/tickets/WRK-1/session', json({ workspaceId: WS.own })), 404, 'the owner’s workspace: the same 404');
+  assert.equal(await send('POST /api/tickets/:id/session', '/api/tickets/WRK-1/session', json({ workspaceId: WS.org })), 404, 'an org workspace with no share');
+  assert.equal(await send('POST /api/tickets/:id/session', '/api/tickets/WRK-1/session', json({ workspaceId: WS.shared })), 200, 'operate on both');
   assert.equal(await send('GET /api/tickets/:id', '/api/tickets/ORG-1'), 200);
   assert.equal(await send('GET /api/tickets/:id', '/api/tickets/OWN-1'), 404);
   // A new workspace needs operate on a target: the platform's.
