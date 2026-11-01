@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, openSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
@@ -121,6 +121,117 @@ test('migrating an existing database takes a backup first', async () => {
   const backups = store.listBackups();
   assert.equal(backups.length, 1);
   assert.equal(backups[0]!.kind, 'pre-migrate');
+  store.close();
+});
+
+/* ---------- Boot performance (owner request 2026-11-01): a cheaper pre-migrate copy and an integrity check after listen. ---------- */
+
+const BIG: Migration = { version: LATEST + 1, name: 'test big', up: (db) => db.exec('CREATE TABLE big (id INTEGER PRIMARY KEY, body TEXT) STRICT') };
+const NEXT: Migration = { version: LATEST + 2, name: 'test next', up: (db) => db.exec('CREATE TABLE next_t (id INTEGER) STRICT') };
+
+/** A database at LATEST + 1 with 3000 rows in `big` (its pages are the last of the file), closed cleanly. */
+async function bigDatabase(): Promise<string> {
+  const dir = tempDir();
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, BIG] });
+  const put = store.db!.prepare('INSERT INTO big (body) VALUES (?)');
+  store.db!.exec('BEGIN');
+  for (let i = 0; i < 3000; i++) put.run(`row ${i} `.padEnd(300, 'x'));
+  store.db!.exec('COMMIT');
+  store.close();
+  return dir;
+}
+
+/** Overwrites five pages near the end of the file (rows of `big`) with garbage, leaving the schema page readable. */
+function corrupt(dir: string) {
+  const file = join(dir, 'portal.db');
+  const pages = Math.floor(statSync(file).size / 4096);
+  const fd = openSync(file, 'r+');
+  for (let p = pages - 8; p < pages - 3; p++) writeSync(fd, Buffer.alloc(4096, 0xa5), 0, 4096, p * 4096);
+  closeSync(fd);
+}
+
+test('the pre-migrate backup is a checkpointed, self-contained copy that holds what was still in the write-ahead log', async () => {
+  const dir = await bigDatabase();
+  // A crashed portal's last commits, still only in the log (a second connection that never closes keeps it there).
+  const crashed = new DatabaseSync(join(dir, 'portal.db'));
+  crashed.exec("PRAGMA journal_mode = WAL; INSERT INTO big (body) VALUES ('only in the log')");
+  assert.ok(statSync(join(dir, 'portal.db-wal')).size > 0, 'the commit is in the log');
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, BIG, NEXT] });
+  crashed.close();
+  assert.equal(store.trust.state === 'frozen' ? store.trust.reasons[0]!.code : 'ok', 'ok');
+  const [b] = store.listBackups();
+  assert.equal(b!.kind, 'pre-migrate');
+  assert.equal(statSync(b!.file).mode & 0o777, 0o600);
+  assert.ok(!existsSync(`${b!.file}.part`) && !existsSync(`${b!.file}-wal`), 'one finished file, no log beside it');
+  assert.match(store.openSteps, /pre-migrate backup \d+ ms, 1 migration \d+ ms/);
+  store.close();
+  const copy = new DatabaseSync(b!.file, { readOnly: true });
+  assert.equal((copy.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode, 'delete');
+  assert.equal((copy.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, LATEST + 1, 'taken before the migration');
+  assert.equal((copy.prepare('SELECT count(*) AS n FROM big').get() as { n: number }).n, 3001);
+  assert.ok(copy.prepare("SELECT 1 FROM big WHERE body = 'only in the log'").get(), 'the logged commit is in the copy');
+  assert.equal((copy.prepare('PRAGMA quick_check').get() as { quick_check: string }).quick_check, 'ok');
+  copy.close();
+});
+
+test('the pre-migrate backup falls back to the backup API while another process holds a read open', async () => {
+  const dir = await bigDatabase();
+  const reader = new DatabaseSync(join(dir, 'portal.db'));
+  reader.exec("PRAGMA journal_mode = WAL; INSERT INTO big (body) VALUES ('logged'); BEGIN");
+  reader.prepare('SELECT count(*) FROM big').get(); // a read transaction: the log cannot be emptied
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, BIG, NEXT] });
+  reader.exec('COMMIT');
+  reader.close();
+  const [b] = store.listBackups();
+  assert.equal(b!.kind, 'pre-migrate');
+  store.close();
+  const copy = new DatabaseSync(b!.file, { readOnly: true });
+  assert.equal((copy.prepare('SELECT count(*) AS n FROM big').get() as { n: number }).n, 3001);
+  copy.close();
+});
+
+test('deferIntegrityCheck: after a clean shutdown the check runs later, off the main thread, and freezes a corrupt database', async () => {
+  const dir = await bigDatabase();
+  corrupt(dir);
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, BIG], deferIntegrityCheck: true });
+  assert.equal(store.trust.state === 'frozen' ? store.trust.reasons[0]!.code : 'ok', 'ok', 'opened without reading every page');
+  assert.equal(store.integrityDeferred, true);
+  assert.equal(store.openSteps, 'integrity check after listen');
+  const result = await store.checkIntegrity();
+  assert.notEqual(result, 'ok');
+  assert.equal(store.trust.state, 'frozen');
+  assert.ok(store.trust.reasons.some((r) => r.code === 'db-corrupt'), JSON.stringify(store.trust.reasons));
+  assert.equal(store.deliveryAllowed, false);
+  assert.equal(store.integrityDeferred, false);
+  store.close();
+
+  // A healthy database answers ok and stays trusted.
+  const fine = await bigDatabase();
+  const again = await Store.open({ dataDir: fine, secretKey: newKey(), migrations: [...MIGRATIONS, BIG], deferIntegrityCheck: true });
+  assert.equal(await again.checkIntegrity(), 'ok');
+  assert.equal(again.trust.state, 'ok');
+  again.close();
+});
+
+test('deferIntegrityCheck: after an unclean shutdown (a log left behind) the check still runs before anything else', async () => {
+  const dir = await bigDatabase();
+  corrupt(dir);
+  // What a crash leaves: a write-ahead log beside the database (an unreadable one is discarded by SQLite on open).
+  writeFileSync(join(dir, 'portal.db-wal'), Buffer.alloc(4096, 1));
+  const store = await Store.open({ dataDir: dir, secretKey: null, migrations: [...MIGRATIONS, BIG], deferIntegrityCheck: true });
+  assert.equal(store.trust.state, 'frozen');
+  assert.ok(['db-corrupt', 'db-unreadable'].includes(store.trust.reasons[0]!.code), store.trust.reasons[0]!.message);
+  assert.equal(store.db, null, 'not opened for use');
+  assert.equal(store.integrityDeferred, false);
+  store.close();
+});
+
+test('deferIntegrityCheck: a file that is not a database is still refused at open', async () => {
+  const dir = tempDir();
+  writeFileSync(join(dir, 'portal.db'), 'definitely not sqlite '.repeat(200));
+  const store = await Store.open({ dataDir: dir, secretKey: newKey(), deferIntegrityCheck: true });
+  assert.equal(store.trust.reasons[0]!.code, 'db-unreadable');
+  assert.equal(store.db, null);
   store.close();
 });
 

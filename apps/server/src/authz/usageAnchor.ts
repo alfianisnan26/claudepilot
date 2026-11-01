@@ -7,6 +7,7 @@
 // The anchor only decides which org context a row is shown in; the row itself is never rewritten.
 
 import type { DatabaseSync } from 'node:sqlite';
+import { cachedStatement } from '../store/stmtCache.js';
 
 /**
  * The shared workspaces decommissioned after the per-org migration (owner, 2026-11-01): their sessions were relocated, and the history that
@@ -54,6 +55,15 @@ export function anchorWorkspace(workspaceId: string, session: SessionPlace | nul
 export function sessionPlaces(db: () => DatabaseSync | null): (sessionId: string | null | undefined) => SessionPlace | null {
   const seen = new Map<string, SessionPlace | null>();
   let joined = true;
+  // Prepared once (stmtCache.ts; owner request 2026-11-01, performance): a month of usage names thousands of sessions, and preparing the
+  // statement for each one was most of /api/usage-spend's time on a large database.
+  const read = (d: DatabaseSync, sessionId: string): SessionPlace | null => {
+    const sql = joined
+      ? 'SELECT COALESCE(i.legacy_id, s.workspace_id) AS ws, s.cwd AS cwd FROM chat_sessions s LEFT JOIN workspace_identities i ON i.id = s.workspace_id WHERE s.id = ?'
+      : 'SELECT workspace_id AS ws, cwd FROM chat_sessions WHERE id = ?';
+    const row = cachedStatement(d, sql).get(sessionId) as { ws: string; cwd: string } | undefined;
+    return row ? { workspaceId: row.ws, cwd: row.cwd ?? '' } : null;
+  };
   return (sessionId) => {
     if (!sessionId) return null;
     if (seen.has(sessionId)) return seen.get(sessionId)!;
@@ -61,20 +71,13 @@ export function sessionPlaces(db: () => DatabaseSync | null): (sessionId: string
     const d = db();
     if (d) {
       try {
-        const row = (
-          joined
-            ? d.prepare('SELECT COALESCE(i.legacy_id, s.workspace_id) AS ws, s.cwd AS cwd FROM chat_sessions s LEFT JOIN workspace_identities i ON i.id = s.workspace_id WHERE s.id = ?')
-            : d.prepare('SELECT workspace_id AS ws, cwd FROM chat_sessions WHERE id = ?')
-        ).get(sessionId) as { ws: string; cwd: string } | undefined;
-        place = row ? { workspaceId: row.ws, cwd: row.cwd ?? '' } : null;
+        place = read(d, sessionId);
       } catch {
         // An older store without workspace_identities: read the stored form as it is (once); anything else reads as gone.
         if (joined) {
           joined = false;
-          seen.delete(sessionId);
           try {
-            const row = d.prepare('SELECT workspace_id AS ws, cwd FROM chat_sessions WHERE id = ?').get(sessionId) as { ws: string; cwd: string } | undefined;
-            place = row ? { workspaceId: row.ws, cwd: row.cwd ?? '' } : null;
+            place = read(d, sessionId);
           } catch {
             place = null;
           }

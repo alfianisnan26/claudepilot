@@ -88,6 +88,7 @@ import { registerReporterTools } from './reporter/portalTools.js';
 import { ReporterService } from './reporter/service.js';
 import { PoolService } from './pools/service.js';
 import { createApp, PLAIN_NAME } from './app.js';
+import { bootListening, bootMark } from './bootTiming.js';
 import { config } from './config.js';
 import { JsonFile } from './jsonFile.js';
 import { Portal } from './portal.js';
@@ -138,6 +139,7 @@ process.on('uncaughtException', (err) => {
 });
 
 // One portal per data dir: the database has a single writer.
+bootMark('modules loaded');
 await acquireLock(config.paths.data).catch((e: unknown) => {
   console.error(`portal: ${(e as Error).message}`);
   process.exit(1);
@@ -154,16 +156,19 @@ try {
   if (!(e instanceof SecretKeyError)) throw e;
   keyError = e.message;
 }
+bootMark('data dir lock');
 const store = await Store.open({
   dataDir: config.paths.data,
   secretKey,
   keyError,
   keySource: config.secretKey.value ? 'env' : config.secretKey.file ? 'file' : null,
+  // After a clean shutdown (a release) the whole-database check runs once the portal listens, off the main thread (store.checkIntegrity).
+  deferIntegrityCheck: true,
 });
 const { trust } = store;
 console.log(
   trust.state === 'ok'
-    ? `[store] ready (portal ${store.portalId?.slice(0, 8)}, schema ${store.schemaVersion})`
+    ? `[store] ready (portal ${store.portalId?.slice(0, 8)}, schema ${store.schemaVersion}${store.openSteps ? `; ${store.openSteps}` : ''})`
     : `[store] ${trust.state.toUpperCase()}: ${trust.reasons.map((r) => r.message).join(' ')}`,
 );
 const dailyBackup = () =>
@@ -171,10 +176,12 @@ const dailyBackup = () =>
     (file) => file && console.log(`[store] daily backup ${file}`),
     (e: unknown) => console.error(`[store] daily backup failed: ${(e as Error).message}`),
   );
-dailyBackup();
+// The first check waits 5 minutes: a portal just restarted (a release) is not slowed by a whole-database copy while it starts up.
+setTimeout(dailyBackup, 5 * 60 * 1000).unref();
 const backupTimer = setInterval(loop('store.backup', 60 * 60 * 1000, 'Daily database backup (checked hourly)').wrap(dailyBackup), 60 * 60 * 1000);
 backupTimer.unref();
 
+bootMark('store open');
 const portal = new Portal(config.serverCode, config.session.ttlMs);
 // Sign-ins survive restarts (12 hours each); only token hashes are stored.
 portal.useStore(sessionStore(store));
@@ -212,6 +219,7 @@ const workspaces = new Workspaces(
 );
 
 // Chat sessions: one controller shared by the REST routes and the chat socket.
+bootMark('runtimes, workspaces');
 const chatController = new ChatController(store, workspaces);
 chatController.installHost = hostInstaller(workspaces);
 
@@ -267,6 +275,7 @@ for (const r of runtimes) browser.guard(r);
 // With "pool MCP only" on, the browser's servers are admitted by their command lines (the folder of the plugin spelled out).
 settingsModule.lockdown.addMatcherSource((ws) => browser.service.matchers(ws));
 // Knowledge: vaults of Markdown notes the admin and agents share, with search, history and graphs.
+bootMark('pools, mcp, settings, skills, personas, browser');
 const knowledge = createKnowledge(store, { dataDir: config.paths.data, repoRoot: config.paths.root, dev: config.dev, log: console.log });
 // Tickets store their workspace as the stable id (T-42 slice 3); the graphs link by the key.
 knowledge.directory.workspaceKeyOf = (stored) => workspaces.identities.keyOf(stored);
@@ -339,6 +348,7 @@ chatController.bypassFacts = (id) => ({
 });
 pools.onTransition = (id) => void chatController.endWorkspaceSessions(id, 'Pool change in progress');
 // Reattach readers to sessions still running in workspaces, and mark the ones that died Interrupted.
+bootMark('knowledge, reconciler');
 chatController.start();
 health.onChange = (id, why, opts) => pools.accountChanged(id, why, opts);
 health.check = async (id) => void (await accounts.check(id, { manual: false }));
@@ -374,6 +384,7 @@ workspaces.hooks.beforeStop = async (id) => {
 // plugs in the runtime factory and the manager's hooks. Its live topic is bound below, once the live hub exists.
 let connectChanged: () => void = () => undefined;
 const scannedTargetIds = runtimes.map((r) => r.target.id);
+bootMark('chat controller started, outbox');
 const connect = createConnect({
   store,
   config: config.connect,
@@ -419,6 +430,7 @@ outbox.start();
 health.start();
 // Claude Code version pinning (claude-version-pinning PRD): each workspace's version next to its pin, the compatibility canary (a throwaway container, a stand-in
 // API and the real CLI), Apply and Rollback. New workspaces get the default pin; the workspace list carries each one's version brief.
+bootMark('connect, reconciler and outbox started');
 const claudeVersions = new ClaudeVersions({
   store,
   workspaces,
@@ -502,6 +514,7 @@ claudeVersions.start();
 // Portal MCP (portal-mcp PRD): the /mcp endpoint, its access tokens and audit, and the tool registry every area adds to
 // (portalmcp/registry.ts). The built-in tools are adapters over the services above; other areas register theirs here too.
 const agentUrls = internalUrlResolver({ workspaces, port: config.port, configured: config.portalMcp.internalUrl ?? null });
+bootMark('live, attention, approvals');
 const portalMcp = new PortalMcpModule(store, {
   internalUrl: config.portalMcp.internalUrl,
   // T-258: live admin tokens per label, from the shared settings (Settings → MCP).
@@ -597,6 +610,7 @@ mcpSets.oauth.claudeDirectory = (id, claudeId) => chatController.claudeOf(id, cl
 chatController.mcpServersSeen = (id, directory, servers) => mcpSets.oauth.seen(id, directory, servers).map((s) => s.name);
 // Tickets: one queue of work for people and agents; reaches chat sessions only through its adapter (tickets PRD).
 // A ticket's workspace is stored as the stable id and read as the key (T-42 slice 3).
+bootMark('portal mcp');
 const tickets = new Tickets(store, new ChatTicketSessions(chatController), {
   link: (id) => `${(config.portalMcp.uiUrl ?? `http://localhost:${config.port}`).replace(/\/+$/, '')}/admin/tickets/${id}`,
   workspaceRefs: workspaces.identities,
@@ -679,6 +693,7 @@ registerSkillTools(skills, { agentSelfEdit: () => settingsModule.settings.get<bo
 const ciSessions = new ChatSessionsAdapter(chatController, (ids) => pendingControlRequests(store.db, ids));
 // Secrets in logs: the values delivered to a workspace are taken out by value (the chat's redactor); a job's secrets are checked by name.
 const ciValues = valueRedactors((id) => exposedSecretValues(poolService, id));
+bootMark('tickets');
 const ci = new CiService(store, new WorkspacesCiHost(workspaces), {
   maxRunsPerWorkspace: config.ci.maxRunsPerWorkspace,
   maxJobsParallel: config.ci.maxJobsParallel,
@@ -714,6 +729,7 @@ ci.releaseNotes = vaultReleaseNotes(knowledge, portalActor);
 if (config.ci.enabled) ci.start();
 // Claude usage: the plan limits of each Claude, read from Claude Code itself (claude-usage PRD). Its probes run only for running
 // workspaces whose store the portal trusts; live sessions' rate-limit events arrive through `onRateLimit` (interface I12).
+bootMark('ci');
 const claudeUsage = createClaudeUsage({
   store,
   workspaces,
@@ -780,6 +796,7 @@ registerMetricsTools(lab);
 lab.start();
 // Workspace git: the repositories inside each running workspace, found by scanning and tracked each on its own, with worktrees, an audit
 // and a summary (workspace-git PRD). It reads through the chat's hardened session host; a scan never fetches.
+bootMark('claude usage, usage spend, lab');
 const repos = createRepos({
   store,
   workspaces,
@@ -853,6 +870,7 @@ const reporterSweep = setInterval(() => {
 reporterSweep.unref?.();
 // Glance widgets: what waits on a person (approvals, tickets, failed CI) and who is working, counted once for every open page; the chat
 // controller's events feed it directly, tickets and CI changes are chained onto the hooks that already tell their own pages (docs/prd/glance-widgets.md).
+bootMark('repos, reporter');
 const glance = createGlance({ chat: chatController, tickets, ci, notify: () => notify('glance'), watching: () => live.watching('glance') });
 for (const source of [tickets, ci]) {
   const was = source.onChange;
@@ -904,6 +922,7 @@ const appPorts = new AppPorts({
   sessionValid: (token) => !!portal.personSession(token),
   limits: { idleMs: config.portProxy.idleMs, socketIdleMs: config.portProxy.socketIdleMs, maxPerGrant: config.portProxy.maxPerGrant, maxPerWorkspace: config.portProxy.maxPerWorkspace },
 });
+bootMark('glance, codespaces, platform, app ports');
 const app = createApp(portal, workspaces, store, accounts, pools, reconciler, health, chatController, {
   serveWeb: !config.dev,
   notify,
@@ -937,6 +956,7 @@ const app = createApp(portal, workspaces, store, accounts, pools, reconciler, he
 const adminGate = new AdminHostGate(config.adminHost, config.trustProxy);
 if (config.adminHost && !adminGate.enabled) console.error('[portal] PORTAL_ADMIN_HOST is not a host name: the Admin console is off');
 const handleApi = getRequestListener(app.fetch);
+bootMark('app');
 const server = createServer();
 // Before the socket modules: ties their connections to the sign-in that opened them (QA-001) and drops unanswered upgrades.
 const sockets = new SocketGuard(portal, config.session.cookie);
@@ -985,6 +1005,13 @@ routeAppHostUpgrades(server, appPorts.proxy);
 routeAdminHostUpgrades(server, adminGate);
 
 server.listen(config.port, config.host, () => {
+  bootListening();
+  if (store.integrityDeferred)
+    void store.checkIntegrity().then((result) =>
+      result === 'ok'
+        ? console.log('[store] integrity check ok')
+        : console.error(`[store] FROZEN: the database failed its integrity check (${result}).`),
+    );
   const where = `http://localhost:${config.port}`;
   const code = portal.source === 'env' ? '(from PORTAL_SERVER_CODE)' : formatCode(portal.code);
   console.log(

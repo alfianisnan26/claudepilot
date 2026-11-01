@@ -15,6 +15,7 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Level, ObjectRef, UserId } from '@portal/contracts';
+import { cachedStatement } from '../store/stmtCache.js';
 import type { ResolvedObject } from './seam.js';
 
 export type GrantSubject = { kind: 'user'; id: UserId } | { kind: 'team'; id: string } | { kind: 'org'; id: string };
@@ -73,7 +74,7 @@ export class Grants {
     try {
       const args = this.#args(db, ref, userId, found);
       if (!args) return 'none';
-      const row = db.prepare(`SELECT max(rank) AS rank FROM (${ARMS})`).get(...args) as { rank?: unknown } | undefined;
+      const row = cachedStatement(db, `SELECT max(rank) AS rank FROM (${ARMS})`).get(...args) as { rank?: unknown } | undefined;
       const rank = row?.rank;
       return typeof rank === 'number' && Number.isInteger(rank) && rank >= 1 && rank <= 3 ? LEVELS[rank]! : 'none';
     } catch {
@@ -91,7 +92,7 @@ export class Grants {
     try {
       const args = this.#args(db, ref, userId, found);
       if (!args) return [];
-      return (db.prepare(`SELECT * FROM (${ARMS}) ORDER BY rank DESC, id`).all(...args) as unknown as SourceRow[]).map((r) => ({
+      return (cachedStatement(db, `SELECT * FROM (${ARMS}) ORDER BY rank DESC, id`).all(...args) as unknown as SourceRow[]).map((r) => ({
         grantId: r.id,
         level: r.level,
         shareId: r.share_id,
@@ -109,7 +110,7 @@ export class Grants {
     const orgId = found.owner?.kind === 'org' ? found.owner.id : null;
     const uid = typeof found.attrs?.uid === 'string' ? found.attrs.uid : null;
     if (orgId) {
-      const state = (db.prepare('SELECT state FROM orgs WHERE id = ?').get(orgId) as { state?: unknown } | undefined)?.state;
+      const state = (cachedStatement(db, 'SELECT state FROM orgs WHERE id = ?').get(orgId) as { state?: unknown } | undefined)?.state;
       if (state !== 'active') return null;
     }
     return [ref.type, ref.id, userId, this.#now().toISOString(), orgId, uid];
