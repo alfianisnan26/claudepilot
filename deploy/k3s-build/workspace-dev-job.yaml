@@ -12,6 +12,9 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      # The workspaces' least-privilege account (ws-isnan-jobs) may only start Jobs without a service-account token
+      # (deploy/k3s/workspace-jobs-rbac.yaml); kaniko pushes to the in-cluster registry without one.
+      automountServiceAccountToken: false
       nodeSelector:
         kubernetes.io/hostname: k3s-node2
       containers:

@@ -552,7 +552,8 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   const green = w.run('gate');
   assert.equal(green.code, 0, green.out);
   assert.match(green.out, /gate: leftover stopped claudepilot-gate-aaaaaaa-0000/);
-  assert.match(green.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,web-tests,server-suite at ${w.sha.slice(0, 7)} on registry\\.test/claudepilot/workspace:dev-1`));
+  // D-110: no server test file here covers the change (feature.txt), so the Job runs typecheck and the web build and tests only.
+  assert.match(green.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,web-tests at ${w.sha.slice(0, 7)} on registry\\.test/claudepilot/workspace:dev-1`));
   assert.match(green.out, /GATE-VERDICT: green/);
   assert.match(green.out, /gate: green at [0-9a-f]{7}/);
   const job = readFileSync(join(w.root, 'applied.yaml'), 'utf8');
@@ -589,27 +590,29 @@ test('the gate as a Job in the cluster (T-37, the default): a Secret for its lif
   assert.ok(!red.out.includes(w.token), 'a token in the job log never reaches the run log');
 });
 
-test('D-106: the gate is change-scoped from the green results in the cluster: scoped against main, reused for documents, whole when asked', () => {
+test('D-106 and D-110: only the affected tests, from the green results in the cluster: scoped against main, reused for documents, whole only when asked', () => {
   const env = { DEPLOY_GATE_IN_CLUSTER: 'true', GATE_IMAGE: 'registry.test/claudepilot/workspace:dev-1', GATE_JOB_POLL_S: '1', GATE_JOB_WAIT_S: '5' };
-  // No record: the whole gate, recorded as full.
+  // No record: D-110 never falls back to the whole suite: the change over the merge base with main, recorded as scoped.
   const w = world();
   Object.assign(w.env, env);
   const first = w.run('gate');
   assert.equal(first.code, 0, first.out);
-  assert.match(first.out, /gate: scope full: no green gated commit is known on origin\/main/);
-  assert.match(w.calls(), new RegExp(`create configmap claudepilot-gate-result-${w.sha} --from-literal=commit=${w.sha} --from-literal=kind=full `));
+  assert.match(first.out, /gate: scope scoped: 1 file\(s\) changed since [0-9a-f]{8} \(no green record on origin\/main: its merge base with the head\)/);
+  assert.match(first.out, new RegExp(`gate: base ${w.base.slice(0, 7)}, the merge base of main and the head \\(no green record on main\\)`));
+  assert.match(first.out, /: typecheck,web-build,web-tests at /, 'never the server suite on its own account');
+  assert.match(w.calls(), new RegExp(`create configmap claudepilot-gate-result-${w.sha} --from-literal=commit=${w.sha} --from-literal=kind=scoped --from-literal=base=${w.base} `));
 
-  // main's head is green: integration's code change since then runs typecheck only (nothing in this tree imports or names feature.txt).
+  // main's head is green: integration's code change since then runs typecheck and the web build and tests (nothing imports or names feature.txt).
   writeFileSync(join(w.root, 'records'), `${w.base} full 2026-10-31T00:00:00Z \n`);
   const dry = w.run('gate', { dry_run: 'true' });
   assert.equal(dry.code, 0, dry.out);
   assert.match(dry.out, new RegExp(`gate: scope scoped: 1 file\\(s\\) changed since ${w.base.slice(0, 8)}`));
   assert.match(dry.out, new RegExp(`gate: base ${w.base.slice(0, 7)}, the last green gated commit on main; changed: 1 file\\(s\\): feature\\.txt`));
-  assert.match(dry.out, /\[dry-run\] would run: scripts\/gate-job\.sh [0-9a-f]{7} typecheck\n/);
+  assert.match(dry.out, /\[dry-run\] would run: scripts\/gate-job\.sh [0-9a-f]{7} typecheck,web-build,web-tests\n/);
   const scoped = w.run('gate');
   assert.equal(scoped.code, 0, scoped.out);
-  assert.match(scoped.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck at `));
-  assert.match(readFileSync(join(w.root, 'applied.yaml'), 'utf8'), /GATE_STEPS, value: "typecheck"/);
+  assert.match(scoped.out, new RegExp(`gate job claudepilot-gate-${w.sha.slice(0, 7)}-[0-9a-f]{4}: typecheck,web-build,web-tests at `));
+  assert.match(readFileSync(join(w.root, 'applied.yaml'), 'utf8'), /GATE_STEPS, value: "typecheck,web-build,web-tests"/);
   assert.match(w.calls(), new RegExp(`--from-literal=kind=scoped --from-literal=base=${w.base} `), 'recorded as scoped, with its base');
   assert.match(scoped.out, /gate: green at [0-9a-f]{7} \(scoped\)/);
 
@@ -618,6 +621,16 @@ test('D-106: the gate is change-scoped from the green results in the cluster: sc
   assert.equal(full.code, 0, full.out);
   assert.match(full.out, /gate: scope full: asked for \(FULL\)/);
   assert.match(full.out, /: typecheck,web-build,web-tests,server-suite at /);
+
+  // D-110: a selection that can not run is red (no Job), never the whole suite.
+  rmSync(join(w.root, 'applied.yaml'));
+  writeFileSync(join(w.work, 'scripts/gate-select.mjs'), 'process.exit(3);\n');
+  const broken = w.run('gate');
+  assert.equal(broken.code, 1, broken.out);
+  assert.match(broken.out, /gate: scope error: the selection could not run/);
+  assert.match(broken.out, /gate: red at [0-9a-f]{7}: nothing could be selected .* run with full_gate=true/);
+  assert.ok(!existsSync(join(w.root, 'applied.yaml')), 'no gate Job');
+  w.git(['checkout', '-q', '--', 'scripts/gate-select.mjs'], w.work);
 
   // Integration moved by a document only: main's green result is reused, no Job runs, the reuse is recorded with the diff that justified it.
   const d = world('docs/notes.md');

@@ -410,6 +410,79 @@ test('deploy/k3s/workspace-jobs-rbac.yaml: the org workspaces’ Job accounts, n
   assert.match(gateJob, /job=claudepilot-gate-\$sha-\$\(od -An -N2 -tx1/, 'gate-job.sh still names its Job claudepilot-gate-<7 hex>-<4 hex>');
 });
 
+test('deploy/k3s/workspace-jobs-rbac.yaml: the deploy pipeline (isnan only) may build, pre-pull, watch the rollout and refresh Argo CD, and nothing wider (2026-11-01)', () => {
+  type Rule = { apiGroups: string[]; resources: string[]; resourceNames?: string[]; verbs: string[] };
+  type Pod = { automountServiceAccountToken?: boolean; serviceAccountName?: string; serviceAccount?: string; volumes?: { emptyDir?: unknown }[]; hostNetwork?: boolean; hostPID?: boolean; hostIPC?: boolean; containers: Ctr[]; initContainers?: Ctr[] };
+  type Ctr = { securityContext?: { privileged?: boolean }; envFrom?: unknown[]; env?: { name: string; valueFrom?: { secretKeyRef?: { name: string } } }[] };
+  const all = docs('deploy/k3s/workspace-jobs-rbac.yaml');
+  const isnan = 'system:serviceaccount:isnan-claudepilot:ws-isnan-jobs';
+  const konfersi = 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs';
+  const policy = all.find((d) => d.kind === 'ValidatingAdmissionPolicy' && d.metadata.name === 'claudepilot-ws-jobs-guard')!;
+  const v = (policy.spec as { validations: { expression: string }[] }).validations.map((x) => x.expression);
+  const nameRe = (resource: string) => new RegExp(/matches\('([^']+)'\)/.exec(v.find((e) => e.startsWith(`request.resource.resource != '${resource}' || variables.name.matches(`))!)![1]!);
+  const jobRe = nameRe('jobs');
+  const secretRe = nameRe('secrets');
+
+  // k3s-build.sh's Jobs and the portal's Secret pass the name rules; nothing else new does.
+  const build = readFileSync(join(REPO, 'scripts/k3s-build.sh'), 'utf8');
+  assert.match(build, /job=claudepilot-build-\$what;/);
+  assert.match(build, /create secret generic claudepilot-build /);
+  for (const what of ['portal', 'workspace', 'workspace-dev', 'browser']) {
+    const job = docs(`deploy/k3s-build/${what}-job.yaml`).find((d) => d.kind === 'Job')!;
+    assert.equal(job.metadata.name, `claudepilot-build-${what}`);
+    assert.match(job.metadata.name, jobRe, `${what}: the build Job passes the policy's name rule`);
+    // The pod-spec rules the policy enforces, read on the build Job (kaniko needs none of what they forbid).
+    const pod = (job.spec as { template: { spec: Pod } }).template.spec;
+    const ctrs = [...pod.containers, ...(pod.initContainers ?? [])];
+    assert.equal(pod.automountServiceAccountToken, false, `${what}: no service-account token`);
+    assert.ok(!pod.serviceAccountName && !pod.serviceAccount, `${what}: the default service account`);
+    assert.ok((pod.volumes ?? []).every((x) => x.emptyDir !== undefined), `${what}: emptyDir volumes only`);
+    assert.ok(!pod.hostNetwork && !pod.hostPID && !pod.hostIPC, `${what}: no host namespaces`);
+    assert.ok(ctrs.every((c) => !c.securityContext?.privileged && !(c.envFrom ?? []).length), `${what}: not privileged, no envFrom`);
+    const refs = ctrs.flatMap((c) => c.env ?? []).flatMap((e) => (e.valueFrom?.secretKeyRef ? [e.valueFrom.secretKeyRef.name] : []));
+    assert.deepEqual(refs, what === 'portal' ? ['claudepilot-build'] : [], `${what}: the only Secret a build reads is the portal's claudepilot-build`);
+  }
+  assert.match('claudepilot-build', secretRe);
+  assert.match('claudepilot-prepull-1793500000', jobRe, 'the pre-pull Job (date +%s)');
+  for (const no of ['claudepilot-build-other', 'claudepilot-build', 'claudepilot-prepull-12', 'claudepilot-portal']) assert.doesNotMatch(no, jobRe, no);
+  for (const no of ['claudepilot-build-portal', 'claudepilot-builds', 'claudepilot-portal-secrets']) assert.doesNotMatch(no, secretRe, no);
+  const keyRule = v.find((e) => e.includes('secretKeyRef'))!;
+  assert.match(keyRule, /e\.valueFrom\.secretKeyRef\.name == object\.metadata\.name \|\| \(object\.metadata\.name == 'claudepilot-build-portal' && e\.valueFrom\.secretKeyRef\.name == 'claudepilot-build'\)\)\)$/, 'one exception: the portal build Job reads claudepilot-build');
+  // Build and pre-pull: the isnan workspace only (konfersi keeps job-run's names).
+  const onlyIsnan = v.find((e) => e.includes("'^claudepilot-(build|prepull)-'"))!;
+  assert.ok(onlyIsnan.includes("variables.name == 'claudepilot-build'") && onlyIsnan.endsWith(`request.userInfo.username == '${isnan}'`) && !onlyIsnan.includes(konfersi), onlyIsnan);
+  const lib = readFileSync(join(REPO, '.pilot/scripts/lib.sh'), 'utf8');
+  assert.match(lib, /name="claudepilot-prepull-\$\(date \+%s\)"/);
+  assert.match(/prepull\(\) \{[\s\S]*?\nYAML/.exec(lib)![0], /\n {6}automountServiceAccountToken: false\n/, 'the pre-pull Job carries no token');
+
+  // Verify and rollback: `rollout status` on the portal (watch, that Deployment only), and the Argo CD refresh (patch, that Application only).
+  type RoleDoc = Doc & { rules: Rule[] };
+  const role = (ns: string) => all.find((d) => d.kind === 'Role' && d.metadata.name === 'claudepilot-ws-status-read' && d.metadata.namespace === ns) as RoleDoc;
+  assert.deepEqual(role('isnan-claudepilot').rules.filter((r) => r.verbs.includes('watch')), [{ apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['claudepilot-portal'], verbs: ['watch'] }]);
+  const argo = role('isnan-argocd').rules;
+  assert.deepEqual(argo.filter((r) => r.verbs.some((x) => !['get', 'list'].includes(x))), [{ apiGroups: ['argoproj.io'], resources: ['applications'], resourceNames: ['isnan-claudepilot'], verbs: ['patch'] }]);
+  assert.match(lib, /DEPLOY_DEPLOYMENT=\$\{DEPLOY_DEPLOYMENT:-claudepilot-portal\}/);
+  assert.match(lib, /DEPLOY_ARGO_APP=\$\{DEPLOY_ARGO_APP:-isnan-claudepilot\}/);
+  assert.match(lib, /kubectl -n "\$DEPLOY_NAMESPACE" rollout status "deploy\/\$DEPLOY_DEPLOYMENT"/);
+  assert.match(lib, /annotate application "\$DEPLOY_ARGO_APP" argocd\.argoproj\.io\/refresh=hard --overwrite/);
+  for (const d of all.filter((x) => x.kind === 'RoleBinding' && ['isnan-claudepilot', 'isnan-argocd'].includes(x.metadata.namespace!) && x.metadata.name === 'claudepilot-ws-status-read'))
+    assert.deepEqual(d.subjects?.map((s) => s.name), ['ws-isnan-jobs'], `${d.metadata.namespace}: isnan only`);
+  // The refresh guard: enforced, fail closed, for the workspace accounts; spec, operation, status and other annotations never change.
+  const guard = all.find((d) => d.kind === 'ValidatingAdmissionPolicy' && d.metadata.name === 'claudepilot-ws-argo-refresh-guard')!;
+  const gs = guard.spec as { failurePolicy: string; matchConstraints: { namespaceSelector: { matchLabels: Record<string, string> } }; matchConditions: { expression: string }[]; validations: { expression: string }[] };
+  assert.equal(gs.failurePolicy, 'Fail');
+  assert.equal(gs.matchConstraints.namespaceSelector.matchLabels['kubernetes.io/metadata.name'], 'isnan-argocd');
+  assert.ok(gs.matchConditions[0]!.expression.includes(isnan) && gs.matchConditions[0]!.expression.includes(konfersi));
+  const ge = gs.validations.map((x) => x.expression);
+  assert.ok(ge.includes("request.operation == 'UPDATE' && object.metadata.name == 'isnan-claudepilot'"));
+  assert.ok(ge.includes('object.spec == oldObject.spec'));
+  for (const f of ['object.operation', 'object.status', 'object.metadata.labels', 'object.metadata.finalizers', 'object.metadata.ownerReferences']) assert.ok(ge.some((e) => e.startsWith(`has(${f}) == has(old${f.slice(0, 1).toUpperCase()}${f.slice(1)})`)), f);
+  assert.ok(ge.some((e) => e.includes("k == 'argocd.argoproj.io/refresh' || (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations && oldObject.metadata.annotations[k] == object.metadata.annotations[k])")));
+  assert.ok(ge.some((e) => e.endsWith("in ['normal', 'hard']")));
+  const gb = all.find((d) => d.kind === 'ValidatingAdmissionPolicyBinding' && d.metadata.name === guard.metadata.name)!.spec as { policyName: string; validationActions: string[] };
+  assert.deepEqual([gb.policyName, gb.validationActions], [guard.metadata.name, ['Deny']]);
+});
+
 test('deploy/k3s-build: the heavy Jobs keep away from workspace pods in every workspace namespace', () => {
   for (const file of ['job-run.yaml', 'image-build-job.yaml', 'gate-job.yaml']) {
     const text = readFileSync(join(REPO, 'deploy/k3s-build', file), 'utf8');

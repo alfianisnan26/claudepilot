@@ -126,6 +126,8 @@ spec:
       labels: { app: claudepilot-prepull }
     spec:
       restartPolicy: Never
+      # No service-account token: the workspace's account (ws-isnan-jobs) may start no other Job (deploy/k3s/workspace-jobs-rbac.yaml).
+      automountServiceAccountToken: false
       nodeName: $node
       containers:
         - name: pull
