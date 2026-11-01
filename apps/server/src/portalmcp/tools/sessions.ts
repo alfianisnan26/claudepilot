@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { AppError, isAppError } from '@isnanme/core';
 import { APPROVAL_REASON_MAX, approvalPath, CHAT_AGENT_NAME, CHAT_MAX_WORKERS_MAX, sessionRef, workspaceRef, type ChatPermissionMode, type ChatSession } from '@portal/contracts';
 import { z } from 'zod';
-import { actorOfPrincipal, requireCan } from '../../authz/seam.js';
+import { actorOfPrincipal, requireCan, visible } from '../../authz/seam.js';
 import { WORKER_REPORTS } from '../../chat/agents.js';
 import { paginate, pageInput } from '../paging.js';
 import { PortalToolError, portalTools, type PortalToolContext, type ToolRegistry } from '../registry.js';
@@ -134,9 +134,15 @@ export function registerSessionTools(
       ...pageInput,
     }),
     handler(ctx, args) {
-      const all = chat
-        .list({ workspaceId: args.workspace_id, ticketId: args.ticket_id, ...(args.parent_id ? { parentId: args.parent_id } : {}) })
-        .filter((s) => !s.archivedAt && (args.state ? s.state === args.state : args.include_ended || s.state !== 'ended'));
+      // Org isolation (security near miss 2026-11-01): each row passes view for the token's person, as GET /api/chat/sessions.
+      const all = visible(
+        actorOfPrincipal(ctx.principal),
+        'session',
+        chat
+          .list({ workspaceId: args.workspace_id, ticketId: args.ticket_id, ...(args.parent_id ? { parentId: args.parent_id } : {}) })
+          .filter((s) => !s.archivedAt && (args.state ? s.state === args.state : args.include_ended || s.state !== 'ended')),
+        (s) => s.id,
+      );
       const page = paginate(all, args, { w: args.workspace_id, s: args.state, t: args.ticket_id, p: args.parent_id, e: args.include_ended });
       return { summary: `${page.total} sessions.`, sessions: page.items.map((s) => sessionBrief(s, ctx)), total: page.total, next_cursor: page.next_cursor };
     },
@@ -167,7 +173,7 @@ export function registerSessionTools(
       }
       // T-294: its workers, compact: the live ones first, then the ended, newest activity first within each.
       // Archived workers are left out, as session_list leaves them out.
-      const kids = chat.list({ parentId: s.id }).filter((w) => !w.archivedAt);
+      const kids = visible(actorOfPrincipal(ctx.principal), 'session', chat.list({ parentId: s.id }).filter((w) => !w.archivedAt), (w) => w.id);
       const ordered = [...kids.filter((w) => w.state !== 'ended'), ...kids.filter((w) => w.state === 'ended')];
       const live = kids.length - kids.filter((w) => w.state === 'ended').length;
       const out: Record<string, unknown> = {

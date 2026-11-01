@@ -29,7 +29,7 @@ function workspaceOf(ctx: PortalToolContext, named: string | undefined): string 
     return ctx.workspaceId;
   }
   if (!named) return null;
-  ctx.assertWorkspace(named);
+  ctx.assertWorkspace(named, 'operate');
   return named;
 }
 

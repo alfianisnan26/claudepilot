@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { isAppError } from '@isnanme/core';
-import { maskDeclaredWriteOnlyArgs, maskWriteOnlyArgs, PORTAL_AGENT_TOKEN_PREFIX, PORTAL_MANAGER_TOKEN_PREFIX, type PortalAuditOutcome } from '@portal/contracts';
+import { AppError, isAppError } from '@isnanme/core';
+import { maskDeclaredWriteOnlyArgs, maskWriteOnlyArgs, objectRef, PORTAL_AGENT_TOKEN_PREFIX, PORTAL_MANAGER_TOKEN_PREFIX, type PortalAuditOutcome } from '@portal/contracts';
 import { CLIENT_INFO_META_KEY, createMcpHandler, McpServer, type CallToolResult, type McpHttpHandler, type McpServerFactory } from '@modelcontextprotocol/server';
 import type { PortalAudit } from './audit.js';
 import { Confirmations } from './confirm.js';
@@ -17,7 +17,7 @@ import {
   type PortalToolResult,
   type ToolRegistry,
 } from './registry.js';
-import { actorOfPrincipal, requireToolPolicy } from '../authz/seam.js';
+import { actorOfPrincipal, can, requireToolPolicy } from '../authz/seam.js';
 import type { AgentAccess } from './agents.js';
 import type { ManagerTokens } from './managers.js';
 import { registerResourcesAndPrompts } from './resources.js';
@@ -470,12 +470,21 @@ export class PortalMcp {
       vaults: principal.vaults,
       settings: { sessionControl: settings.sessionControl, confirmAbove: CONFIRM_ABOVE },
       signal: sdk.mcpReq.signal,
-      assertWorkspace: (workspaceId) => {
-        if (principal.kind === 'agent' && principal.workspaceId !== workspaceId)
-          throw new PortalToolError('FORBIDDEN', `Agents can act only in their own workspace (${principal.workspaceId}).`);
+      // MCP tool isolation (security near miss 2026-11-01): any other token is its person capped by its scope, through the one can(), so a
+      // workspace or a session of another org or person reads exactly like a missing one (before, an admin's or a member's token passed).
+      assertWorkspace: (workspaceId, verb = 'view') => {
+        if (principal.kind === 'agent') {
+          if (principal.workspaceId !== workspaceId) throw new PortalToolError('FORBIDDEN', `Agents can act only in their own workspace (${principal.workspaceId}).`);
+          return;
+        }
+        if (!can(actorOfPrincipal(principal), verb, objectRef('workspace', workspaceId)).allow) throw new AppError('NOT_FOUND', 'Not found.');
       },
-      assertSession: (sessionId) => {
-        if (principal.kind === 'agent' && principal.sessionId !== sessionId) throw new PortalToolError('FORBIDDEN', 'Agents can act only as their own session.');
+      assertSession: (sessionId, verb = 'view') => {
+        if (principal.kind === 'agent') {
+          if (principal.sessionId !== sessionId) throw new PortalToolError('FORBIDDEN', 'Agents can act only as their own session.');
+          return;
+        }
+        if (!can(actorOfPrincipal(principal), verb, objectRef('session', sessionId)).allow) throw new AppError('NOT_FOUND', 'No such session.');
       },
       untrusted: (text, source, maxChars) => untrusted(text, source, Math.min(maxChars ?? 2_000, 8_000)),
       confirm: (callArgs, preview, target) => {

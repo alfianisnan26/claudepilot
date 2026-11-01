@@ -121,8 +121,10 @@ export function registerPoolTools(deps: PortalToolDeps): void {
     description: 'The pool types this portal has, what each is for, and whether pools of that type can be created or changed over MCP.',
     scope: 'read',
     input: z.object({}),
-    handler() {
-      const types = poolService.types().map((t) => ({ type: t, ...info(t), pools: poolService.list(t).length }));
+    handler(ctx) {
+      // Counts only the sets the token's person may view (org isolation).
+      const actor = actorOfPrincipal(ctx.principal);
+      const types = poolService.types().map((t) => ({ type: t, ...info(t), pools: visible(actor, 'pool', poolService.list(t), (p) => p.id, t as MultiPoolType).length }));
       return { summary: `${types.length} pool types.`, types };
     },
   });

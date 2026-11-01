@@ -26,6 +26,7 @@ import {
   ticketKeyOf,
   TICKET_BUCKET_KEY,
   TICKET_DEFAULT_BUCKET,
+  sessionRef,
   ticketBucketRef,
   type Actor,
   type UserId,
@@ -540,7 +541,9 @@ export class Tickets {
     const base = { actor: `portal-mcp:${caller.tokenId}`, userId, fromAgent: true };
     if (sessionId) {
       const s = this.sessions.get(sessionId);
-      if (!s) throw invalid('session_id', 'No such session.');
+      // MCP tool isolation (security near miss 2026-11-01): a token acts only for a session its person may operate; another person's or
+      // another org's reads like a missing one.
+      if (!s || (caller.actor && !can(caller.actor, 'operate', sessionRef(s.id)).allow)) throw invalid('session_id', 'No such session.');
       if (s.state === 'ended') throw invalid('session_id', 'That session has ended.');
       // The actor is the token, so it is named by the token's label (not the session it acts for): "MCP client “relay”" on the timeline.
       return { ...base, label: caller.label, session: s };
@@ -552,6 +555,17 @@ export class Tickets {
   #assertWrites(caller: Caller) {
     if (caller.kind === 'token' && caller.scope === 'read')
       throw new AppError('FORBIDDEN', 'This token can only read. Writing needs the operate scope.');
+  }
+
+  /**
+   * MCP tool isolation (security near miss 2026-11-01): a token changes a ticket only with the operate scope AND `operate` on its bucket for
+   * the token's person (a ticket it may only view, through a view share, stays read only).
+   */
+  #assertTokenOperates(caller: Caller, row: Row) {
+    this.#assertWrites(caller);
+    const actor = this.#actorOf(caller);
+    if (actor && !can(actor, 'operate', ticketBucketRef(row.bucket_key)).allow)
+      throw new AppError('FORBIDDEN', `${ticketIdOf(row.number)} is read only for you: changing it needs operate on its bucket.`);
   }
 
   /** The session a call means by "me" or a claim: an agent's own, or the one an admin's token named. */
@@ -615,7 +629,7 @@ export class Tickets {
    * acts on a ticket an ENDED session holds (FR9a, T-270): the caller writes the audit row for it once the write is done.
    */
   #assertCanModify(caller: Caller, row: Row, w: Writer): EndedGrant | null {
-    if (caller.kind === 'token') return (this.#assertWrites(caller), null);
+    if (caller.kind === 'token') return (this.#assertTokenOperates(caller, row), null);
     if (caller.kind !== 'agent') return null;
     const id = ticketIdOf(row.number);
     if (isTicketClosed(row.status)) throw new AppError('FORBIDDEN', `${id} is closed. A person can reopen it.`);
@@ -1372,6 +1386,11 @@ export class Tickets {
     const sessions = this.sessions
       .list({ ticketId: ticketIdOf(row.number) })
       .filter((s) => caller.kind !== 'agent' || s.workspaceId === caller.workspaceId)
+      // MCP tool isolation (2026-11-01): only the sessions the caller's person may view (another person's or org's chat on the same ticket is not shown).
+      .filter((s) => {
+        const actor = this.#actorOf(caller);
+        return !actor || caller.kind === 'agent' || can(actor, 'view', sessionRef(s.id)).allow;
+      })
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
       .map((s) => this.#sessionView(s));
     return {
@@ -1502,7 +1521,7 @@ export class Tickets {
     if (!attachment) throw new AppError('NOT_FOUND', `${ticketIdOf(row.number)} has no file ${attachmentId}.`);
     if (caller.kind === 'agent' && attachment.actor !== w.actor)
       throw new AppError('FORBIDDEN', 'Only a person or the session that attached a file can remove it.');
-    if (caller.kind === 'token') this.#assertWrites(caller);
+    if (caller.kind === 'token') this.#assertTokenOperates(caller, row);
     this.#tx(() => {
       this.#db.prepare('DELETE FROM ticket_attachments WHERE id = ?').run(attachmentId);
       this.#db.prepare('UPDATE tickets SET updated_at = ? WHERE number = ?').run(this.#now().toISOString(), row.number);

@@ -3,7 +3,7 @@ import { objectRef, poolRef, type MultiPoolType, type Workspace } from '@portal/
 import { z } from 'zod';
 import { paginate, pageInput } from '../paging.js';
 import { registerPortalTool, PortalToolError } from '../registry.js';
-import { actorOfPrincipal, can } from '../../authz/seam.js';
+import { actorOfPrincipal, can, visible } from '../../authz/seam.js';
 import { assertCanChange, labelProse, resolveWorkspace, uiLink, workspaceBrief } from './common.js';
 import type { PortalToolDeps } from './deps.js';
 import { declareWorkspacePolicies } from '../../workspaces/authz.js';
@@ -37,7 +37,9 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       ...pageInput,
     }),
     async handler(ctx, args) {
-      const all = (await workspaces.list()).map(decorate).filter((w) => (!args.target || w.target === args.target) && (!args.status || w.status === args.status) && (!args.query || w.name.includes(args.query.toLowerCase())));
+      // Org isolation (security near miss 2026-11-01): only what the token's person may view, as GET /api/workspaces (never every workspace).
+      const seen = visible(actorOfPrincipal(ctx.principal), 'workspace', await workspaces.list(), (w) => w.id);
+      const all = seen.map(decorate).filter((w) => (!args.target || w.target === args.target) && (!args.status || w.status === args.status) && (!args.query || w.name.includes(args.query.toLowerCase())));
       const page = paginate(all, args, { t: args.target, s: args.status, q: args.query });
       return { summary: `${page.total} workspaces.`, workspaces: page.items.map((w) => workspaceBrief(w, ctx)), total: page.total, next_cursor: page.next_cursor };
     },
@@ -59,9 +61,12 @@ export function registerWorkspaceTools(deps: PortalToolDeps): void {
       if (include.has('pools'))
         out.pools = poolService.assignmentsFor(w.id).map((a) => ({ type: a.type, pool_id: a.poolId, name: a.poolName, revision: a.revision, pinned_revision: a.pinnedRevision, state: a.state }));
       if (include.has('sessions'))
-        out.sessions = chat
-          .list()
-          .filter((s) => s.workspaceId === w.id && !s.archivedAt)
+        out.sessions = visible(
+          actorOfPrincipal(ctx.principal),
+          'session',
+          chat.list().filter((s) => s.workspaceId === w.id && !s.archivedAt),
+          (s) => s.id,
+        )
           .slice(0, 20)
           .map((s) => ({ id: s.id, title: ctx.untrusted(s.title, 'agent'), state: s.state, last_activity_at: s.lastActivityAt }));
       if (include.has('claudes')) out.claudes = chat.listClaudes(w.id).filter((c) => !c.removedAt).map((c) => ({ id: c.id, name: c.name }));

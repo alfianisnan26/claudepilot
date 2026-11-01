@@ -80,8 +80,12 @@ export function routeKeys(app: Hono): Set<string> {
   return keys;
 }
 
-/** Registers every family of tools the portal has (index.ts), with stand-in services, into the portal's registry; returns them all. */
-export async function registerAllTools(): Promise<PortalToolDefinition[]> {
+/**
+ * Registers every family of tools the portal has (index.ts), with stand-in services, into the portal's registry; returns them all. A family whose
+ * path is in `registeredBy` was (or is) registered by the caller with real or fake services (the MCP isolation probe), so it is skipped here.
+ */
+export async function registerAllTools(registeredBy: readonly string[] = []): Promise<PortalToolDefinition[]> {
+  for (const path of registeredBy) registered.add(path);
   const s = standIn() as never;
   const once = async (path: string, run: (m: Record<string, (...a: unknown[]) => void>) => void) => run((await import(path)) as never);
   const families: [string, (m: Record<string, (...a: unknown[]) => void>) => void][] = [
