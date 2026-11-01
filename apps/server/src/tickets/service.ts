@@ -1,5 +1,5 @@
 import { AppError } from '@isnanme/core';
-import { actorUserId, asUser, can } from '../authz/seam.js';
+import { actorUserId, agentWorkspaceOrg, asUser, can } from '../authz/seam.js';
 import type { WorkspaceRefs } from '../workspaces/identity.js';
 import { parseBucketRoutes, routeByTags } from './bucketRoutes.js';
 import {
@@ -454,6 +454,36 @@ export class Tickets {
   }
 
   /**
+   * T-3319: the agents' reach (FR9, FR41) as one rule. An agent reads and claims a ticket of its own workspace or the shared queue, and, when
+   * an ORG owns its workspace, every ticket of a bucket that same org owns, whatever workspace the ticket names (an org's agents work the
+   * org's queue). The seam still decides the bucket (`#bucketSql`, `can` with the agent's person and the org check), so this only widens the
+   * workspace rule inside the org; never into another org's bucket or a personal one.
+   */
+  #agentScopeSql(workspaceId: string): { sql: string; args: string[] } {
+    const mine = this.#inWorkspace('t.workspace_id', workspaceId);
+    const org = agentWorkspaceOrg(workspaceId);
+    if (!org) return { sql: `(t.workspace_id IS NULL OR ${mine.sql})`, args: mine.args };
+    return {
+      sql: `(t.workspace_id IS NULL OR ${mine.sql} OR t.bucket_key IN (SELECT key FROM ticket_buckets WHERE owner_kind = 'org' AND owner_id = ?))`,
+      args: [...mine.args, org],
+    };
+  }
+
+  /** The same rule for one row. */
+  #inAgentScope(row: Row, workspaceId: string): boolean {
+    if (row.workspace_id === null || this.#isIn(row, workspaceId)) return true;
+    return this.#inWorkspaceOrg(row.bucket_key, workspaceId);
+  }
+
+  /** T-3319: whether the bucket is owned by the org that owns this workspace (false for a personal workspace or bucket). */
+  #inWorkspaceOrg(bucketKey: string, workspaceId: string): boolean {
+    const org = agentWorkspaceOrg(workspaceId);
+    if (!org) return false;
+    const owner = this.bucketOwnerOf(bucketKey);
+    return owner?.kind === 'org' && owner.id === org;
+  }
+
+  /**
    * The workspace a bump must stay in: the ticket's key while its workspace lives; for a REMOVED workspace's ticket its stored id, which no
    * session's workspace is, so no session of a new workspace that took the name is offered or bumped into.
    */
@@ -587,7 +617,7 @@ export class Tickets {
     const buckets = this.#viewableBuckets(caller);
     if (buckets && !buckets.has(row.bucket_key)) return false;
     if (caller.kind !== 'agent') return true;
-    return row.workspace_id === null || this.#isIn(row, caller.workspaceId);
+    return this.#inAgentScope(row, caller.workspaceId);
   }
 
   /**
@@ -667,7 +697,7 @@ export class Tickets {
     const live = (x: TicketSessionInfo | null) => !!x && x.state !== 'ended' && !x.archivedAt;
     const workers = this.sessions.list({ workspaceId: lead.workspaceId }).filter((x) => x.parentId === lead.id && live(x));
     if (!workers.length) return null; // not a lead
-    if (!this.#isIn(row, lead.workspaceId)) return null;
+    if (!this.#isIn(row, lead.workspaceId) && !this.#inWorkspaceOrg(row.bucket_key, lead.workspaceId)) return null;
     if (row.assignee_kind === 'user') return null;
     if (row.assignee_kind === 'session' && row.assignee_ref && row.assignee_ref !== lead.id && !workers.some((x) => x.id === row.assignee_ref)) return null;
     const to = req.assignee;
@@ -1001,8 +1031,8 @@ export class Tickets {
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (caller.kind === 'agent') {
-      const mine = this.#inWorkspace('t.workspace_id', caller.workspaceId);
-      where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
+      const mine = this.#agentScopeSql(caller.workspaceId);
+      where.push(mine.sql);
       args.push(...mine.args);
     }
     // T-1857: a bucket the caller may not view is not in any list nor any count.
@@ -2166,8 +2196,8 @@ export class Tickets {
         "t.type <> 'approval'",
       ];
       const args: (string | number)[] = [];
-      const mine = this.#inWorkspace('t.workspace_id', session.workspaceId);
-      where.push(`(t.workspace_id IS NULL OR ${mine.sql})`);
+      const mine = this.#agentScopeSql(session.workspaceId);
+      where.push(mine.sql);
       args.push(...mine.args);
       // T-1857: a ticket in a bucket the caller may not view is never claimed, by id or by the queue.
       const inBuckets = this.#bucketSql(caller);
@@ -2223,6 +2253,7 @@ export class Tickets {
   /** FR9 for buckets: an agent files in, lists and reads only the buckets of its own workspace and those with no default workspace. */
   #bucketOpenTo(caller: Caller, b: BucketRow): boolean {
     if (caller.kind !== 'agent' || b.default_workspace_id === null) return true;
+    if (this.#inWorkspaceOrg(b.key, caller.workspaceId)) return true; // T-3319: the org's bucket is open to the org's agents
     return this.#refs ? this.#refs.storedForms(caller.workspaceId).includes(b.default_workspace_id) : b.default_workspace_id === caller.workspaceId;
   }
 
