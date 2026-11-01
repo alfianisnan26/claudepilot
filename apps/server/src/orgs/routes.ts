@@ -2,7 +2,7 @@
 // middleware here: app.ts mounts this under `requireSession` at /api/orgs. Who is asking comes from the seam (`actorOf`) once per request;
 // the service decides every right (the org resolver through `can()`, the owner-only rules, the ability to create).
 
-import { success } from '@isnanme/core';
+import { AppError, success } from '@isnanme/core';
 import { Hono } from 'hono';
 import type { ChangeOrgMemberRoleRequest, CreateOrgRequest, MoveToOrgRequest, OrgId, OrgTransferKind, UpdateOrgRequest } from '@portal/contracts';
 import { actorOf } from '../authz/seam.js';
@@ -22,8 +22,13 @@ async function body(c: { req: { json: () => Promise<unknown> } }): Promise<Recor
 export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService): Hono {
   const r = new Hono();
 
-  // Slice 5: before `/:id`, so the banner's path is never read as an org id.
-  if (breakGlass) r.get('/break-glass', (c) => c.json(success(breakGlass.mine(actorOf(c)))));
+  // Slice 5: before `/:id`, so the banner's path is never read as an org id. Always registered (the route table does not depend on the
+  // wiring); without the service they answer 404.
+  const bg = (): BreakGlassService => {
+    if (!breakGlass) throw new AppError('NOT_FOUND', 'Not found.');
+    return breakGlass;
+  };
+  r.get('/break-glass', (c) => c.json(success(bg().mine(actorOf(c)))));
 
   r.get('/', (c) => c.json(success(orgs.mine(actorOf(c)))));
   r.post('/', async (c) => c.json(success(orgs.create(actorOf(c), (await body(c)) as Partial<CreateOrgRequest>)), 201));
@@ -44,10 +49,8 @@ export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassServic
     return c.json(success({ left: true }));
   });
 
-  if (breakGlass) {
-    r.get('/:id/break-glass', (c) => c.json(success(breakGlass.forOrg(actorOf(c), c.req.param('id') as OrgId))));
-    r.post('/:id/break-glass/:entryId/end', (c) => c.json(success(breakGlass.endByOrgOwner(actorOf(c), c.req.param('id') as OrgId, c.req.param('entryId')))));
-  }
+  r.get('/:id/break-glass', (c) => c.json(success(bg().forOrg(actorOf(c), c.req.param('id') as OrgId))));
+  r.post('/:id/break-glass/:entryId/end', (c) => c.json(success(bg().endByOrgOwner(actorOf(c), c.req.param('id') as OrgId, c.req.param('entryId')))));
 
   return r;
 }
