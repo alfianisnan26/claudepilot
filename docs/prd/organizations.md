@@ -389,6 +389,17 @@ Steps:
 | P5 | **Per-actor filtering of every stream and search**: `/api/live` usage snapshot and nudges per user, chat socket per session `can`, knowledge search post-filtered by vault `view`, attention/glance aggregators by `visible`, triggers and notifications by `canUser` at delivery. | G9 |
 | P6 | **SSO hardening**: no auto-link of an account with a password, another link or admin; JIT never makes an instance admin without the existing acknowledgement, and never for org providers; pinned-address fetch; discovery cache keyed by `(issuer, allowPrivate)`. | G10, G11 |
 
+Status (2026-11-01, slice 1 on `feat/orgs-slice1-owners`, not merged): **P3** migration 410 (`workspace_owners` keyed by the workspace key with
+`uid` = its stable id; `owner_kind`/`owner_id` on `kg_vaults`, `pools` (sets and account pools), `accounts`, `endpoints`; everything backfilled to
+`u_owner`); resolvers in `apps/server/src/authz/owners.ts`, CI runs and remotes through their workspace (`ci/authz.ts`); registering them makes
+those types and `template` (no table yet) required. A workspace found in a runtime with no row is unclaimed (owned by `platform`: the founding
+user and admin accounts, nobody else); `owner_kind = 'org'` reads as unowned until slice 3. New workspaces record `created_by`; their owner stays
+`u_owner` until D-82 S1b. **P4** `authz/routeGuard.ts` enforces the answering route's declared policy inside the session middleware (undeclared:
+`403 NO_POLICY`); `createApp` declares the whole table (`authz/declarations.ts`); an undeclared tool is refused at dispatch. `authz/routeTable.test.ts`
+enumerates all 578 routes and 138 tools, probes every `objects`/`platform` declaration with `u_a`/`u_b`, and checks unowned = the missing 404.
+Not in slice 1: per-person filtering of lists (`filter` on vault, account, pool and repo lists is still the handler's: P5), object checks on the
+pool tools (they accept a set's name), the member's creating and owning (S1b).
+
 ### 13.2 Slices (each with its tests and a blind security review, D-82 style)
 
 | # | Slice | Tests (minimum) |

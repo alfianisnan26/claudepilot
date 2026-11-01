@@ -5,6 +5,10 @@ import { PORTAL_TOKEN_LABEL_MAX } from '@portal/contracts';
 import { z } from 'zod';
 import { ToolRegistry } from './registry.js';
 import { portalMcpHarness, URL_ } from './testkit.js';
+import { declareToolPolicies } from '../authz/seam.js';
+
+// Organizations slice 1 (P4): an undeclared tool is refused at dispatch; the toy tools here leave every check to their handler, as before.
+declareToolPolicies('tokenLabel.test', { who_am_i: { kind: 'signed-in' } });
 
 // T-6: the token's label is what the portal shows wherever the client acts, so it is required, one line of plain text, and stored as typed.
 

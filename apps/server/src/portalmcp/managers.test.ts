@@ -6,11 +6,14 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { z } from 'zod';
 import { workspaceRef, type Actor, type ObjectRef, type UserId, type Verb } from '@portal/contracts';
-import { actorOfPrincipal, can, clearResolvers, registerResolver, requireCan } from '../authz/seam.js';
+import { actorOfPrincipal, can, clearResolvers, declareToolPolicies, registerResolver, requireCan } from '../authz/seam.js';
 import { Portal } from '../portal.js';
 import { ManagerTokens } from './managers.js';
 import { ToolRegistry, type PortalPrincipal } from './registry.js';
 import { portalMcpHarness } from './testkit.js';
+
+// Organizations slice 1 (P4): an undeclared tool is refused at dispatch; the toy tools here leave every check to their handler, as before.
+declareToolPolicies('managers.test', { ws_peek: { kind: 'signed-in' }, who_am_i: { kind: 'signed-in' }, big_switch: { kind: 'signed-in' } });
 
 afterEach(() => clearResolvers());
 

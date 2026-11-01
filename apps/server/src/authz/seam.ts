@@ -13,6 +13,9 @@
 // anonymous. D-82 ("admin accounts keep full access") holds through `useAccountRoles`: an ACTIVE admin account holds, on top of its own
 // rights, what the founding user holds (role read on every use), so a second admin is themselves in every audit row and every token but loses
 // nothing; a member, a disabled or a removed account holds only its own. Slice 1 (P3) narrows that when owners and resolvers land.
+// ORGANIZATIONS SLICE 1 (P3, P4): workspaces, vaults, sets, account pools, accounts and endpoints have owners and resolvers (authz/owners.ts,
+// registered at start-up, which also marks them required: `requireResolvers`); every route's declared policy is enforced centrally by the
+// session middleware (authz/routeGuard.ts) and an undeclared route or tool is refused (NO_POLICY).
 // There are no grants, teams, roles or per-user sign-in here: the real layer (apps/server/src/authz/index.ts, work package A1) replaces the
 // implementation with `useAuthz()` and every call site keeps working, because it only ever calls what is exported below.
 //
