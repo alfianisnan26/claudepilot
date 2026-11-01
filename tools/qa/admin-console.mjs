@@ -55,6 +55,9 @@ try {
       await b.media({ dark });
       await b.goto(`${URL_}#users`, 2500);
       await b.waitFor(`document.querySelectorAll('[role=tablist] [role=tab]').length === 4`, 15_000, 'the Users tabs').catch(() => {});
+      // The same address with a fragment does not reload the page: start each pass from All.
+      if (await b.eval(`!!document.querySelector('[role=tab][data-tab=all]')`)) await b.clickSel('[role=tab][data-tab="all"]');
+      await sleep(300);
       const f = await b.eval(`(() => { const doc = document.scrollingElement; const pane = document.getElementById('console-pane'); const ps = pane ? getComputedStyle(pane).overflowY : '';
         const tabs = [...document.querySelectorAll('[role=tablist] [role=tab]')];
         return { tabs: tabs.map((e) => e.getAttribute('data-tab')), small: tabs.filter((e) => e.getBoundingClientRect().height < 43.5).length,
