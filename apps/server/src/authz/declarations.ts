@@ -25,6 +25,7 @@ import { declareKnowledgePolicies } from '../knowledge/authz.js';
 import { declareLabPolicies } from '../lab/authz.js';
 import { declareMcpPolicies } from '../mcp/authz.js';
 import { declareNotifyPolicies } from '../notify/authz.js';
+import { declareOrgPolicies } from '../orgs/authz.js';
 import { declarePersonaPolicies } from '../personas/authz.js';
 import { declarePlatformDoorPolicies } from '../platform/authz.js';
 import { declarePoolRoutePolicies, declarePoolToolPolicies, declareWorkspacePoolPolicies } from '../pools/authz.js';
@@ -78,6 +79,7 @@ export function declareAllPolicies(): void {
   declareVscodePolicies();
   declarePortalMcpPolicies();
   declareReporterPolicies();
+  declareOrgPolicies();
   declareNotifyPolicies();
   declareTriggerPolicies();
   declareSchedulesPolicies();
