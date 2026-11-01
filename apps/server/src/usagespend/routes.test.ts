@@ -9,10 +9,14 @@ import { attributionCsv, csvCell } from './csv.js';
 import { createUsageSpendRoutes } from './routes.js';
 import { HOUR, MIN, NOW, spendHarness } from './testkit.js';
 
-/** The routes as app.ts mounts them (the guard is app.ts's), with its error handler. */
+/** The routes as app.ts mounts them (the guard is app.ts's: the signed-in owner is the actor), with its error handler. */
 const appOf = (spend: Parameters<typeof createUsageSpendRoutes>[0]) => {
   const app = new Hono();
   app.onError((e, c) => (isAppError(e) ? c.json(e.toJSON(), e.status as ContentfulStatusCode) : c.json({ error: String(e) }, 500)));
+  app.use('*', async (c, next) => {
+    (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' });
+    await next();
+  });
   app.route('/api/usage-spend', createUsageSpendRoutes(spend));
   return app;
 };
