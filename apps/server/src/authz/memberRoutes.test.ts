@@ -68,7 +68,9 @@ function probe(key: string, policy: RoutePolicy, prefix: string): { url: string;
 
 test('the whole route table: a member reaches only its own objects and the listed doors; never a platform route; admins reach all, as before', async () => {
   const { app } = await buildWholeApp();
-  const keys = [...routeKeys(app)];
+  // A catch-all (`ALL /api/*`, `/connect/*`, `/mcp`) is no answering route to the guard, and a HEAD is answered by its GET: neither is a route
+  // the session middleware decides on its own.
+  const keys = [...routeKeys(app)].filter((k) => !k.startsWith('ALL ') && !k.startsWith('HEAD '));
   assert.ok(keys.length >= 550);
   clearResolvers();
   memberAndOwner();

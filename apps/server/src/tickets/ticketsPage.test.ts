@@ -184,11 +184,12 @@ test('authz: a ticket the caller may not view is in no page and no cursor names 
     seeded(h, 12);
     const all = inOrder(h, PRIORITY_ORDER);
     const mine = new Set(all.filter((_, i) => i % 2 === 0));
+    const them = app(h, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
+    // After app(): the routes register the real ticket resolver (D-82 S1a: a ticket is decided as its bucket); this test's own replaces it.
     registerResolver({
       type: 'ticket',
       resolve: (id) => ({ ref: ticketRef(id), owner: mine.has(id) ? { kind: 'user', id: 'u_a' } : { kind: 'user', id: 'u_b' } }),
     });
-    const them = app(h, { kind: 'user', userId: 'u_a', loginSessionId: 'l1', via: 'ui' });
     // T-1098: a ticket is also reached through its bucket; u_a may view the bucket, so only the ticket rule hides rows here.
     registerResolver({ type: 'ticket_bucket', resolve: (id) => ({ ref: objectRef('ticket_bucket', id), owner: { kind: 'user', id: 'u_a' } }) });
     const seen: string[] = [];

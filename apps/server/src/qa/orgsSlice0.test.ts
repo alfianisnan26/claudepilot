@@ -88,7 +88,7 @@ test('a second admin is itself on HTTP (its own audit rows) and on sockets; the 
 
     // A member is still refused the admin app (D-82 S1a), and its socket names nobody.
     const member = await t.login('third@example.com');
-    assert.equal((await t.call('GET', '/api/admin/users', undefined, member)).status, 403);
+    assert.equal((await t.call('GET', '/api/admin/users', undefined, member)).status, 404, 'D-82 S1a: a member passes the session middleware; the admin route is the same 404');
     assert.equal(actorOfSocket(t.socketReq(member), () => true).kind, 'anonymous');
   } finally {
     t.done();

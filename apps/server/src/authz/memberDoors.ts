@@ -11,6 +11,8 @@
 
 /** `METHOD /full/path` (as the route table keys it) → why a member may pass this door. */
 export const MEMBER_DOORS: Readonly<Record<string, string>> = {
+  // Who is signed in (mounted before the session middleware, any account): the account itself, never the code or the admin state.
+  'GET /api/me': 'the signed-in account itself (app.ts), answered to a member since MU2 S1a',
   // Lists that keep what the person may view (`visible`) and narrow by `?org=` (authz/orgScope.ts).
   'GET /api/workspaces': 'visible(workspace) then the org scope',
   'GET /api/workspaces/labels': 'labels of the workspaces the person may view only',
