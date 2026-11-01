@@ -9,7 +9,7 @@ import { PersonaConfiguration } from './PersonaConfiguration';
 import { PersonaEditor } from './PersonaEditor';
 
 /**
- * Personas' tab in the Pools hub (Persona PRD §15, `/admin/pools?tab=personas`): the personas, their editor
+ * Personas' tab in the Pools hub (Persona PRD §15, `/admin/pools/personas`): the personas, their editor
  * page, the workspace Configuration row and the one-persona choice in Add-ons. Saves are drafts until published.
  */
 export const personasTab = definePoolType<PersonaContent>({
@@ -32,7 +32,7 @@ export const personasTab = definePoolType<PersonaContent>({
   publishNote: (n) => `${n} workspace${n === 1 ? ' gets' : 's get'} this. Open agents re-read the instructions at their next message; the rest applies to new agents.`,
 });
 
-/** Instruction contexts' tab (Persona PRD A9, `/admin/pools?tab=contexts`): reusable instructions, assigned on their own or held by personas. */
+/** Instruction contexts' tab (Persona PRD A9, `/admin/pools/contexts`): reusable instructions, assigned on their own or held by personas. */
 export const contextsTab = definePoolType<ContextContent>({
   id: 'contexts',
   label: 'Contexts',

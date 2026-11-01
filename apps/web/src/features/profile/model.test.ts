@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { MyProfile, PortalUser, SignedInAs } from '@portal/contracts';
-import { accountView, deviceLine, initialsOf, linkResult, profileSections, signInLine } from './model';
+import { accountView, deviceLine, initialsOf, linkResult, profileReturnPath, profileSections, profileTabs, signInLine } from './model';
 
 const user: PortalUser = {
   id: 'u_a',
@@ -84,6 +84,21 @@ test('sign-in and device lines', () => {
   assert.deepEqual(deviceLine({ device: null, method: 'unknown', provider: null }), { name: 'Unknown browser', how: null });
 });
 
+test('the Profile’s tabs: Account, Sign-in, Orgs, Tokens, Preferences for an account; Account and Preferences for the server code', () => {
+  const tabs = (me: SignedInAs | null) => profileTabs(me).map((t) => [t.id, ...t.sections].join(':'));
+  const linked = profile({ signIns: [{ providerId: 'p1', provider: 'Konfersi Team', email: user.email, linkedAt: user.createdAt, lastUsedAt: null }] });
+  assert.deepEqual(tabs({ kind: 'account', user, profile: linked }), ['account:identity', 'sign-in:password:signIns:devices', 'orgs:orgs', 'tokens:tokens', 'preferences:preferences']);
+  assert.deepEqual(tabs({ kind: 'account', user }), ['account:identity', 'sign-in:password:devices', 'orgs:orgs', 'tokens:tokens', 'preferences:preferences'], 'no linked sign-ins: the tab stays for the devices');
+  assert.deepEqual(tabs({ kind: 'code' }), ['account:serverCode', 'preferences:preferences']);
+  const linkable = profile({ linkable: [{ providerId: 'sso_g', provider: 'git.isnan.me', start: '/api/auth/sso/start?for=link' }] });
+  assert.deepEqual(tabs({ kind: 'account', user, profile: linkable })[1], 'sign-in:password:signIns:devices', 'Link git.isnan.me sits in the Sign-in tab');
+  assert.deepEqual(tabs(null), [], 'loading: no tabs yet');
+  assert.deepEqual(
+    profileTabs({ kind: 'code' }).map((t) => t.label),
+    ['Account', 'Preferences'],
+  );
+});
+
 test('Profile → Link (owner request 2026-11-01): the sign-ins section shows while there is something to link; the return is read once', () => {
   const me = (p: MyProfile): SignedInAs => ({ kind: 'account', user, profile: p });
   assert.ok(!profileSections(me(profile())).includes('signIns'));
@@ -94,4 +109,10 @@ test('Profile → Link (owner request 2026-11-01): the sign-ins section shows wh
   assert.ok(bad && !bad.ok && /another/.test(bad.message));
   const odd = linkResult('?link_error=<script>');
   assert.ok(odd && !odd.ok && odd.message === 'Couldn’t link it. Try again.');
+});
+
+test('a link’s return (/profile?linked=1 or ?link_error=) opens the Sign-in tab, where Linked sign-ins are', () => {
+  assert.equal(profileReturnPath('?linked=1'), '/admin/profile/sign-in');
+  assert.equal(profileReturnPath('?link_error=state'), '/admin/profile/sign-in');
+  assert.equal(profileReturnPath(''), '/admin/profile');
 });

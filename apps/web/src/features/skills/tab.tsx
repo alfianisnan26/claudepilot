@@ -9,7 +9,7 @@ import { SkillsetEditor } from './SkillsetEditor';
 import { setSummary } from './labels';
 
 /**
- * Skillsets' tab in the Pools hub (Skillset PRD §13, `/admin/pools?tab=skills`): the sets, with the Library
+ * Skillsets' tab in the Pools hub (Skillset PRD §13, `/admin/pools/skills`): the sets, with the Library
  * and each skill's review as routes of their own (`/admin/pools/skills/library`, `…/review/:versionId`),
  * the set editor page, and the workspace Configuration row.
  */

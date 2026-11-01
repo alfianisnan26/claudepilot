@@ -50,7 +50,10 @@ const wheel = async (dy) => {
   await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: wheelX, y: 400, deltaX: 0, deltaY: dy });
   await sleep(250);
 };
-const scrollY = () => ev('Math.round(scrollY)');
+// The page's scroll offset: the content pane's on a desktop (docs/coord/UI-STANDARD.md §1: only it scrolls there), the document's on a phone.
+const PAGE = `(() => { const p = document.getElementById('main-scroll'); return p && getComputedStyle(p).overflowY === 'auto' ? p : null; })()`;
+const scrollY = () => ev(`Math.round(${PAGE}?.scrollTop ?? scrollY)`);
+const toTop = () => ev(`(${PAGE} ?? window).scrollTo(0, 0)`);
 const bodyOverflow = () => ev('document.body.style.overflow');
 
 const results = [];
@@ -66,24 +69,28 @@ async function run(c) {
   await send('Page.navigate', { url: `http://localhost:${PORT}/admin/settings` });
   check('the settings page is there', await waitFor(`document.querySelector('[aria-labelledby^="settings-"]') !== null`, 15000));
   await sleep(500);
-  check('the page is taller than the screen', (await ev('document.scrollingElement.scrollHeight - innerHeight')) > 100);
+  check('the page is taller than the screen', (await ev(`(${PAGE} ?? document.scrollingElement).scrollHeight - innerHeight`)) > 100);
 
   wheelX = await ev(`(() => { const a = document.querySelector('aside'); const l = a && getComputedStyle(a).display !== 'none' ? a.getBoundingClientRect().right : 0; return Math.round((l + innerWidth) / 2); })()`);
   check('the wheel aims at the page, not the sidebar', await ev(`!document.elementFromPoint(${wheelX}, 400)?.closest('aside')`), `x=${wheelX}`);
-  await ev('scrollTo(0, 0)');
+  await toTop();
   await wheel(400);
   const base = await scrollY();
   check('a wheel scroll moves the page', base > 0, `scrollY=${base}`);
-  await ev('scrollTo(0, 0)');
+  await toTop();
 
   // A lock nobody holds (two overlapping locks): the page cannot be scrolled by hand, and it must free itself.
   check('the kit pattern, overlapped, leaves body hidden', (await ev(STUCK)) === 'hidden');
   await wheel(400);
-  check('locked: a wheel scroll does nothing (this is what users hit)', (await scrollY()) === 0, `scrollY=${await scrollY()}`);
+  const pane = await ev(`!!${PAGE}`);
+  // On a phone the stuck lock traps the page (what users hit); on a desktop the content pane scrolls whatever body says.
+  if (pane) check('locked body: the content pane still scrolls (a desktop)', (await scrollY()) > 0, `scrollTop=${await scrollY()}`);
+  else check('locked: a wheel scroll does nothing (this is what users hit)', (await scrollY()) === 0, `scrollY=${await scrollY()}`);
+  await toTop();
   check('the lock is released by itself', await waitFor(`document.body.style.overflow === ''`, 3000));
   await wheel(400);
   check('and the page scrolls again', (await scrollY()) > 0);
-  await ev('scrollTo(0, 0)');
+  await toTop();
 
   // A lock held by an open modal stays, and goes when the modal goes.
   await ev(`(() => { const d = document.createElement('div'); d.id = 'sl-modal'; d.setAttribute('role', 'dialog'); d.setAttribute('aria-modal', 'true'); document.body.appendChild(d); document.body.style.overflow = 'hidden'; })()`);

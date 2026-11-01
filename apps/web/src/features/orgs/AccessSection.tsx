@@ -15,7 +15,7 @@ const ICON = { workspace: Box, ticket_bucket: Ticket, vault: BookOpen } as const
 /**
  * Access (docs/prd/access.md §7; replaces Sharing): owners and admins see every object (open one for who has access and why, give or end
  * access), every person (what they reach and why) and the requests inbox (approve with a level and an end, or deny). Members see the org's
- * objects with their own level (ask for more), their own access, and their requests. Guests do not see it. `?tab=access` opens here.
+ * objects with their own level (ask for more), their own access, and their requests. Guests do not see it. Its tab is `/admin/orgs/<id>/access` (the older `?tab=access` moves there).
  */
 export function AccessSection({ org, members, meId }: { org: Org; members: OrgMember[] | null; meId: string | null }) {
   const tabs = accessTabs(org.myRole);

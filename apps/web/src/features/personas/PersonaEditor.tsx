@@ -70,7 +70,7 @@ export function PersonaEditor({ value, onChange, errors, disabled, pool, name }:
             </>
           }
           right={
-            <Link to="/admin/pools?tab=contexts" className="text-[12.5px] font-semibold text-muted hover:text-ink">
+            <Link to="/admin/pools/contexts" className="text-[12.5px] font-semibold text-muted hover:text-ink">
               Manage
             </Link>
           }

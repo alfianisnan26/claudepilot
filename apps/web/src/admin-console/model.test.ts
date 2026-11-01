@@ -6,7 +6,7 @@ import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { auditSearch } from './api';
-import { AUDIT_KINDS, TABS, ago, auditDates, auditWho, oidcOutcome, oidcStartHref, settingInput, slugOf, tabFromHash } from './model';
+import { AUDIT_KINDS, TABS, USER_FILTERS, ago, auditDates, auditWho, oidcOutcome, oidcStartHref, settingInput, slugOf, tabFromHash, userShows } from './model';
 
 const src = fileURLToPath(new URL('..', import.meta.url));
 const web = fileURLToPath(new URL('../..', import.meta.url));
@@ -97,4 +97,22 @@ test('the main UI has no admin console page: no import of it, no /admin-api call
   const main = readFileSync(join(web, 'vite.config.ts'), 'utf8');
   assert.doesNotMatch(main, /admin\.html|admin-console/);
   assert.doesNotMatch(readFileSync(join(web, 'index.html'), 'utf8'), /admin-console/);
+});
+
+test('Users tabs: All, Admins, Members, Disabled; a disabled admin shows under Disabled only (owner, 2026-11-01)', () => {
+  assert.deepEqual([...USER_FILTERS], ['all', 'admins', 'members', 'disabled']);
+  const rows = [{ role: 'admin', state: 'active' }, { role: 'member', state: 'active' }, { role: 'admin', state: 'disabled' }, { role: 'member', state: 'disabled' }] as const;
+  const under = (f: (typeof USER_FILTERS)[number]) => rows.map((r, i) => (userShows(r, f) ? i : -1)).filter((i) => i >= 0);
+  assert.deepEqual(under('all'), [0, 1, 2, 3]);
+  assert.deepEqual(under('admins'), [0]);
+  assert.deepEqual(under('members'), [1]);
+  assert.deepEqual(under('disabled'), [2, 3]);
+});
+
+test('the console follows the UI standard: on a desktop only the content pane scrolls, and it draws the shared TabBar (owner, 2026-11-01)', () => {
+  const consoleSrc = readFileSync(join(src, 'admin-console', 'Console.tsx'), 'utf8');
+  assert.match(consoleSrc, /id="console-pane"[^>]*lg:overflow-y-auto/);
+  assert.match(consoleSrc, /lg:h-dvh[^'"]*lg:overflow-hidden/);
+  assert.match(readFileSync(join(src, 'admin-console', 'UsersView.tsx'), 'utf8'), /from '\.\.\/components\/TabBar'/);
+  assert.match(readFileSync(join(src, 'admin-console', 'console.css'), 'utf8'), /@source '\.\.\/components\/TabBar\.tsx'/);
 });

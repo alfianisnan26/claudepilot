@@ -10,6 +10,7 @@ import { formatBytes, formatDateTime, formatUntil, timeAgo } from '@/lib/format'
 import { ClaudesSection } from './ClaudesSection';
 import { ResourcesRow } from './ResourcesRow';
 import { VersionChip } from '@/features/claudeversion/VersionChip';
+import { sheetTab, sheetTabs, type SheetTab } from './sheetTab';
 import { usageFractions } from './usage';
 
 // The Repos tab (and the repo sheet, the timeline, the dialogs) load when the tab is first opened, not with the page.
@@ -21,7 +22,7 @@ export interface SheetBadge {
   busy?: boolean;
 }
 
-export type SheetTab = 'details' | 'repos';
+export type { SheetTab } from './sheetTab';
 
 /**
  * Everything about one workspace that the row leaves out: a bottom sheet on phones, a dialog on
@@ -62,12 +63,16 @@ export function WorkspaceSheet({
   /** The tab it opens on (the row's repositories chip opens Repos). */
   initialTab?: SheetTab;
 }) {
-  // Details, or the workspace's repositories (workspace-git PRD §16).
-  const [tab, setTab] = useState<SheetTab>(initialTab ?? 'details');
+  // Its Claudes (with the CPU and memory meters), its details, or its repositories (workspace-git PRD §16): one at a time, so the sheet does
+  // not scroll through all three (owner request 2026-11-01). Its Claudes stay listed while its target does not answer (T-515).
+  const claudesTab = w.status === 'running' || isLastKnownStatus(w.status);
+  const [tab, setTab] = useState<SheetTab | undefined>(initialTab);
   useEffect(() => {
-    if (open) setTab(initialTab ?? 'details');
+    if (open) setTab(initialTab);
   }, [open, initialTab]);
-  const onRepos = !!reposTab && tab === 'repos';
+  const has = { claudes: claudesTab, repos: !!reposTab };
+  const current = sheetTab(tab, has);
+  const tabOptions = sheetTabs(has);
   const toast = useToast();
   const name = workspaceDisplayName(w);
   // Rename (T-42): the label only. The field holds the draft; null while the dialog is closed.
@@ -129,23 +134,7 @@ export function WorkspaceSheet({
     <>
     <Dialog open={open} onClose={onClose} title={name} description={`${targetLabel} · ${status.label}`} footer={footer}>
       <div className="flex flex-col gap-5">
-        {reposTab && (
-          <Segmented<SheetTab>
-            label="Show"
-            value={tab}
-            options={[
-              { value: 'details', label: 'Details' },
-              { value: 'repos', label: 'Repos' },
-            ]}
-            onChange={setTab}
-          />
-        )}
-        {onRepos ? (
-          <Suspense fallback={<TreeSkeleton />}>
-            <ReposTab workspace={w} />
-          </Suspense>
-        ) : (
-          <>
+        {/* What is wrong shows over every tab. */}
         {problem && (
           <Notice badge={status} tone={w.status === 'error' ? 'danger' : 'neutral'}>
             {w.detail}
@@ -161,8 +150,13 @@ export function WorkspaceSheet({
             )}
           </Notice>
         )}
-
-        {running && (
+        {tabOptions.length > 1 && <Segmented<SheetTab> label="Show" value={current} options={tabOptions} onChange={setTab} />}
+        {current === 'repos' && (
+          <Suspense fallback={<TreeSkeleton />}>
+            <ReposTab workspace={w} />
+          </Suspense>
+        )}
+        {current === 'claudes' && running && (
           <div className="grid grid-cols-2 gap-4 text-[13px] text-muted">
             <Meter
               label="CPU"
@@ -190,9 +184,10 @@ export function WorkspaceSheet({
           </div>
         )}
 
-        {/* Its Claudes stay listed while its target does not answer (T-515): they live in the portal's store. */}
-        {(running || isLastKnownStatus(w.status)) && <ClaudesSection workspace={w} onLeave={onClose} />}
+        {current === 'claudes' && <ClaudesSection workspace={w} onLeave={onClose} />}
 
+        {current === 'details' && (
+          <>
         <dl className="divide-y divide-line rounded-2xl border border-line text-sm">
           <Row
             label={

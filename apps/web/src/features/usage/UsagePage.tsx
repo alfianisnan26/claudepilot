@@ -1,7 +1,6 @@
 import { LoadError, Segmented, Select, StatGrid, StatTile } from '@isnanme/ui';
 import type { ChatUsageRange, RequestsReport } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
 import { BarList } from '@/components/charts';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
@@ -9,7 +8,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { useAppContext } from '@/features/orgs/OrgsProvider';
 import { useLive } from '@/lib/live';
 import { formatCost, formatShare, formatTokens, prettyModel, slotColor, usageApi } from '@/lib/usage';
-import { UsageTabs } from './claude/UsageTabs';
+import { UsageTabs, useUsageTab } from './claude/UsageTabs';
 import { RANGE_OPTIONS, RANGE_WORDS, saveRange, savedRange } from './range';
 import { DOLLARS_FORMULA, figureTip } from './figure';
 import { ExportMenu } from './ExportMenu';
@@ -217,11 +216,10 @@ function RequestsTab({ claude, onClaude }: { claude: string; onClaude: (id: stri
 
 /** Usage: what requests cost, and (Claude usage PRD) what each Claude's plan has left. The summary strip sits above the tabs. */
 export function UsagePage() {
-  const [params] = useSearchParams();
   const [claude, setClaude] = useState('');
-  const tab = params.get('tab');
+  const tab = useUsageTab();
   // The Claude picked in the Requests filter scopes the strip while that tab shows; elsewhere the strip is every Claude.
-  const scoped = useMemo(() => (!tab || tab === 'requests' ? claude : ''), [tab, claude]);
+  const scoped = useMemo(() => (tab === 'requests' ? claude : ''), [tab, claude]);
   // Every tab and the strip read in the org context (`?org=`): a switch reads them all again, and a Claude picked in one context is let go.
   const ctx = useAppContext();
   const ctxKey = ctx.kind === 'org' ? `org:${ctx.id}` : 'personal';

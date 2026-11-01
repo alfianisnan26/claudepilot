@@ -2,6 +2,7 @@ import { Badge, Button, useToast } from '@isnanme/ui';
 import type { SessionShareOverview } from '@portal/contracts';
 import { MessageSquare, Trash2, UserRound, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { BoundedBody } from '@/components/BoundedBody';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { CAP_LABEL, endText } from '@/features/chat/ShareSessionDialog';
@@ -11,7 +12,6 @@ import { api, errorText } from '@/lib/api';
 export function AccessSection() {
   const toast = useToast();
   const [list, setList] = useState<SessionShareOverview[] | null>(null);
-  const [more, setMore] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -31,7 +31,6 @@ export function AccessSection() {
       toast(errorText(e, 'Couldn’t remove it.'), 'error');
     }
   };
-  const shown = list && !more ? list.slice(0, 10) : list;
 
   return (
     <section aria-labelledby="settings-access" data-settings-access="">
@@ -47,8 +46,8 @@ export function AccessSection() {
         ) : list.length === 0 ? (
           <p className="px-4 py-4 text-sm text-muted sm:px-5">Nothing is shared.</p>
         ) : (
-          <ul className="divide-y divide-line">
-            {shown!.map((s) => (
+          <BoundedBody><ul className="divide-y divide-line">
+            {list.map((s) => (
               <li key={s.id} className="flex min-h-14 items-center gap-2 px-4 py-2 sm:px-5">
                 <span className="min-w-0 flex-1">
                   <span className="flex min-w-0 items-center gap-1.5 font-medium">
@@ -71,12 +70,7 @@ export function AccessSection() {
                 </Button>
               </li>
             ))}
-          </ul>
-        )}
-        {list && list.length > 10 && (
-          <button type="button" onClick={() => setMore((m) => !m)} className="press min-h-11 w-full border-t border-line text-sm font-semibold text-ink-soft">
-            {more ? 'Show less' : `Show all ${list.length}`}
-          </button>
+          </ul></BoundedBody>
         )}
       </Card>
     </section>

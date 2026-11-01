@@ -3,7 +3,8 @@
 // member with a username, a picture, an org (owner) and a linked SSO sign-in. It screenshots and asserts (QA-STANDARDS A1-A9, measured):
 //   - a member's account menu shows their name, email, the Member chip and the org with its role, and a Profile link;
 //   - a server-code session's menu says "Owner (server code)" with the founder's name and the server-code InfoTip (no role guess);
-//   - the Profile lists You, Password, Linked sign-ins, Devices (this device marked), Organizations, Preferences; the server code gets its card;
+//   - the Profile's tabs (Account, Sign-in, Orgs, Tokens, Preferences) hold You, Password, Linked sign-ins, Devices (this device marked),
+//     Organizations, Preferences; the server code gets its card;
 //   - A5: every control of the menu and the Profile is at least 44 px at 390 px (a FAIL); at 1280 px only a note; A2: no sideways scroll.
 // usage: QA_PORT=3417 QA_CODE=24681372 QA_SHOTS=<dir> node tools/qa/profile.mjs   (after scripts/scratch-portal.sh start 3417)
 import { DatabaseSync } from 'node:sqlite';
@@ -108,14 +109,29 @@ try {
 
         await b.goto('/profile', 2500);
         await b.waitFor(`!!document.querySelector('[data-profile-page="${who === 'member' ? 'account' : 'code'}"]')`, 15_000, 'the profile').catch(() => {});
-        if (who === 'member') await b.waitFor(`!!document.querySelector('[data-profile-devices] li')`, 10_000, 'devices').catch(() => {});
         await sleep(600);
         s = await b.eval(MEASURE('main'));
         if (who === 'member') {
-          const want = ['You', 'Password', 'Linked sign-ins', 'Konfersi Team', 'Devices', 'This device', 'Safari on iPhone', 'Chrome on Mac', 'Organizations', 'Konfersi', 'Preferences'];
-          const missing = want.filter((w) => !s.text.includes(w));
-          check(`${t}: profile: every section`, missing.length === 0, JSON.stringify(missing));
           check(`${t}: profile: the username is filled`, await b.eval(`[...document.querySelectorAll('main input')].some((i) => i.value === 'mia.${tag}')`));
+          // The Profile's tabs (docs/prd/ui-layout.md §2): Account here, then each tab its own path; together they hold every section.
+          const tabs = await b.eval(`[...document.querySelectorAll('[role=tablist] [role=tab]')].map((e) => e.getAttribute('data-tab'))`);
+          check(`${t}: profile: the tabs`, JSON.stringify(tabs) === JSON.stringify(['account', 'sign-in', 'orgs', 'tokens', 'preferences']), JSON.stringify(tabs));
+          let text = s.text;
+          for (const id of ['sign-in', 'orgs', 'tokens', 'preferences']) {
+            await b.clickSel(`[role=tab][data-tab="${id}"]`);
+            await b.waitFor(`location.pathname === '/admin/profile/${id}'`, 5000, id).catch(() => {});
+            if (id === 'sign-in') await b.waitFor(`!!document.querySelector('[data-profile-devices] li')`, 10_000, 'devices').catch(() => {});
+            await sleep(500);
+            const m = await b.eval(MEASURE('main'));
+            text += `\n${m.text}`;
+            sizes(`${t}: profile ${id}: controls >= 44 px`, size.mobile, m.small.filter((x) => !/About/.test(x)));
+            check(`${t}: profile ${id}: no sideways scroll`, m.docScroll <= m.docClient + 1, `${m.docScroll}/${m.docClient}`);
+            if (id === 'sign-in') await b.shot(`profile-page-sign-in-${t}`);
+          }
+          const want = ['You', 'Password', 'Linked sign-ins', 'Konfersi Team', 'Devices', 'This device', 'Safari on iPhone', 'Chrome on Mac', 'Organizations', 'Konfersi', 'Preferences'];
+          const missing = want.filter((w) => !text.includes(w));
+          check(`${t}: profile: every section across the tabs`, missing.length === 0, JSON.stringify(missing));
+          await b.goto('/admin/profile', 1500);
         } else {
           check(`${t}: profile: the server-code card`, /Server code/.test(s.text) && /Use an account/.test(s.text) && !/Devices/.test(s.text), JSON.stringify(s.text.slice(0, 200)));
         }

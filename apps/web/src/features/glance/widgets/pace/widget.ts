@@ -22,7 +22,7 @@ export const paceWidget: GlanceWidget = {
   label: 'Pace',
   icon: Gauge,
   about: 'How the crew spends its quota (1 : 1 is exactly by the reset), what it used, and how many tickets it resolved, at what cost, and created per closed.',
-  href: '/admin/usage?tab=crew',
+  href: '/admin/usage/crew',
   defaultHidden: true,
   useCompact: personalOnlyHook('Pace', usePaceCompact),
   Full: PaceCard,

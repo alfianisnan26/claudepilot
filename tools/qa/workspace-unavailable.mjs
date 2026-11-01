@@ -100,13 +100,18 @@ try {
       await sleep(1200);
       const sheet = await b.eval(`(() => { const d = document.querySelector('[role=dialog]'); return { text: d?.innerText ?? '', scroll: document.documentElement.scrollWidth > document.documentElement.clientWidth }; })()`);
       check(/Default/.test(sheet.text) && /Claude/.test(sheet.text), `${tag}: the sheet lists its Claude (${JSON.stringify(sheet.text.replace(/\s+/g, ' ').slice(0, 160))})`);
-      check(/Last seen/.test(sheet.text), `${tag}: the sheet says Last seen`);
       check(!sheet.scroll, `${tag}: no horizontal scroll with the sheet open`);
       // The reason is shown once in the sheet (the banner); no ⓘ repeats it. Terminals wait (the server would refuse them at once).
       const once = await b.eval(`(() => { const d = document.querySelector('[role=dialog]'); const t = d?.innerText ?? ''; return { shown: (t.match(/Timed out/g) ?? []).length, tips: d?.querySelectorAll('button[aria-label="Why it is unavailable"]').length ?? 0, term: document.querySelector('button[aria-label^="Open a terminal as"]')?.disabled ?? null }; })()`);
       check(once.shown === 1 && once.tips === 0, `${tag}: the sheet shows the reason once (${JSON.stringify(once)})`);
       check(once.term === true, `${tag}: the terminal button is disabled while it is unavailable`);
       await b.shot(`workspace-unavailable-${tag}-sheet`);
+      // The sheet shows Claudes, Details and Repos one at a time (owner, 2026-11-01): Last seen is a row of Details.
+      await b.clickText('Details', { selector: '[role=dialog] [role=group] button, [role=dialog] [role=radio]', exact: true });
+      await sleep(500);
+      const details = await b.eval(`document.querySelector('[role=dialog]')?.innerText ?? ''`);
+      check(/Last seen/.test(details), `${tag}: Details says Last seen`);
+      await b.shot(`workspace-unavailable-${tag}-sheet-details`);
       await b.key('Escape');
       await sleep(400);
     }

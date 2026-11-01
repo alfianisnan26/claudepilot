@@ -74,3 +74,15 @@ export function auditWho(kind: string, detail: Record<string, unknown> | undefin
   const parts = [who, s(detail.method), s(detail.reason)?.replace(/_/g, ' ')].filter(Boolean);
   return parts.length ? parts.join(' · ') : null;
 }
+
+/** Users' tabs (owner, 2026-11-01: pill tabs inside each section): All, Admins, Members, Disabled. */
+export const USER_FILTERS = ['all', 'admins', 'members', 'disabled'] as const;
+export type UserFilter = (typeof USER_FILTERS)[number];
+export const USER_FILTER_LABEL: Record<UserFilter, string> = { all: 'All', admins: 'Admins', members: 'Members', disabled: 'Disabled' };
+
+/** Whether a user row shows under a tab: Admins and Members list the active ones of that role; Disabled lists every disabled account. */
+export function userShows(u: { role: 'admin' | 'member'; state: 'active' | 'disabled' }, f: UserFilter): boolean {
+  if (f === 'all') return true;
+  if (f === 'disabled') return u.state === 'disabled';
+  return u.state === 'active' && u.role === (f === 'admins' ? 'admin' : 'member');
+}

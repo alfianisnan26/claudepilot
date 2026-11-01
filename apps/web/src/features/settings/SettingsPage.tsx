@@ -1,27 +1,29 @@
 import { Button, ConfirmDialog, Dialog, LoadError, Switch, useToast } from '@isnanme/ui';
 import type { SettingChange, SettingsView, SettingValue, SettingView } from '@portal/contracts';
 import { History } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { CanaryPanel } from '@/features/claudeversion/CanaryPanel';
 import { GlanceSettingsSection } from '@/features/glance/SettingsSection';
 import { PageHeader } from '@/components/PageHeader';
+import { RoutedTabs } from '@/components/RoutedTabs';
 import { ApiError, errorText } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/format';
 import { settingsApi } from './api';
 import { AccessSection } from './AccessSection';
 import { AccountsSection } from './AccountsSection';
 import { SsoSection } from './SsoSection';
+import { SETTINGS_BASE, SETTINGS_TABS, settingsTabOf, type SettingsTabId } from './tabs';
 import { TeamsSection } from './TeamsSection';
 
 const verb = (v: SettingValue) => (v === true ? 'Turn on' : v === false ? 'Turn off' : 'Change');
 const show = (v: SettingValue | null) => (v === null ? '' : typeof v === 'boolean' ? (v ? 'On' : 'Off') : String(v));
 
 /**
- * Portal-wide settings (settings-policies PRD): every setting an area defines, in sections. A row is a label,
- * an ⓘ with what it does, and the control; nothing else. Turning a protection off (or an agent permission on)
- * asks first, in one line, and the server refuses the change without that confirmation.
+ * Portal-wide settings (settings-policies PRD): every setting an area defines, in six tabs (owner request 2026-11-01), each its own path
+ * (`/admin/settings/sessions`; tabs.ts sorts the groups into tabs). A row is a label, an ⓘ with what it does, and the control; nothing else.
+ * Turning a protection off (or an agent permission on) asks first, in one line, and the server refuses the change without that confirmation.
  */
 export function SettingsPage() {
   const toast = useToast();
@@ -62,6 +64,75 @@ export function SettingsPage() {
     else void apply(s, value);
   };
 
+  /** The server's setting groups that sort into `tab`, each a titled list of rows. */
+  const groups = (tab: SettingsTabId) => {
+    if (failed) return <LoadError onRetry={load} />;
+    if (!data)
+      return (
+        <div className="flex flex-col gap-6" aria-busy="true">
+          <div className="skeleton h-32 rounded-[24px]" />
+          <div className="skeleton h-20 rounded-[24px]" />
+        </div>
+      );
+    const shown = data.groups.filter((g) => settingsTabOf(g.id) === tab && data.settings.some((s) => s.group === g.id));
+    if (shown.length === 0) return null;
+    return (
+      <div className="flex flex-col gap-6">
+        {shown.map((g) => (
+          <section key={g.id} aria-labelledby={`settings-${g.id}`} data-settings-group={g.id}>
+            <h2 id={`settings-${g.id}`} className="mb-2 px-1 text-[13px] font-semibold text-muted">
+              {g.label}
+            </h2>
+            <Card>
+              <ul className="divide-y divide-line">
+                {data.settings
+                  .filter((s) => s.group === g.id)
+                  .map((s) => (
+                    <li key={s.key} className="flex min-h-14 items-center gap-2 px-4 py-2.5 sm:px-5">
+                      <span className="flex min-w-0 flex-1 items-center gap-1 font-semibold">
+                        <span id={`setting-${s.key}`} className="line-clamp-2 break-words">
+                          {s.label}
+                        </span>
+                        {s.help && <InfoTip label={`About ${s.label}`}>{s.help}</InfoTip>}
+                      </span>
+                      <Control setting={s} busy={busy === s.key} onChange={(v) => change(s, v)} />
+                    </li>
+                  ))}
+              </ul>
+            </Card>
+          </section>
+        ))}
+      </div>
+    );
+  };
+
+  /** What each tab holds: the server's groups, and the page's own sections where they belong. */
+  const content = (tab: SettingsTabId): ReactNode => {
+    switch (tab) {
+      case 'claude':
+        return (
+          <div className="flex flex-col gap-6">
+            <CanaryPanel />
+            {groups('claude')}
+          </div>
+        );
+      case 'people':
+        return (
+          <div className="flex flex-col gap-6">
+            <AccountsSection />
+            <TeamsSection />
+            <AccessSection />
+            <SsoSection />
+          </div>
+        );
+      case 'glance':
+        // Glance widgets: a person's preferences kept on this device, so they show even when the portal's settings could not load.
+        return <GlanceSettingsSection />;
+      default:
+        return groups(tab);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -72,60 +143,7 @@ export function SettingsPage() {
           </Button>
         }
       />
-      {failed && <LoadError onRetry={load} />}
-      {!data && !failed && (
-        <div className="flex flex-col gap-6" aria-busy="true">
-          <div className="skeleton h-32 rounded-[24px]" />
-          <div className="skeleton h-20 rounded-[24px]" />
-        </div>
-      )}
-      {data && (
-        <div className="flex flex-col gap-6">
-          {data.groups.map((g) => (
-            <section key={g.id} aria-labelledby={`settings-${g.id}`}>
-              <h2 id={`settings-${g.id}`} className="mb-2 px-1 text-[13px] font-semibold text-muted">
-                {g.label}
-              </h2>
-              <Card>
-                <ul className="divide-y divide-line">
-                  {data.settings
-                    .filter((s) => s.group === g.id)
-                    .map((s) => (
-                      <li key={s.key} className="flex min-h-14 items-center gap-2 px-4 py-2.5 sm:px-5">
-                        <span className="flex min-w-0 flex-1 items-center gap-1 font-semibold">
-                          <span id={`setting-${s.key}`} className="line-clamp-2 break-words">
-                            {s.label}
-                          </span>
-                          {s.help && <InfoTip label={`About ${s.label}`}>{s.help}</InfoTip>}
-                        </span>
-                        <Control setting={s} busy={busy === s.key} onChange={(v) => change(s, v)} />
-                      </li>
-                    ))}
-                </ul>
-              </Card>
-            </section>
-          ))}
-        </div>
-      )}
-      <div className="mt-6">
-        <AccountsSection />
-      </div>
-      <div className="mt-6">
-        <TeamsSection />
-      </div>
-      <div className="mt-6">
-        <AccessSection />
-      </div>
-      <div className="mt-6">
-        <SsoSection />
-      </div>
-      <div className="mt-6">
-        <CanaryPanel />
-      </div>
-      {/* Glance widgets: a person's preferences kept on this device, so they show even when the portal's settings could not load. */}
-      <div className="mt-6">
-        <GlanceSettingsSection />
-      </div>
+      <RoutedTabs base={SETTINGS_BASE} label="Settings" tabs={SETTINGS_TABS.map((t) => ({ ...t, content: content(t.id) }))} />
       <ConfirmDialog
         open={!!confirm}
         title={confirm ? `${verb(confirm.value)} “${confirm.setting.label}”?` : ''}

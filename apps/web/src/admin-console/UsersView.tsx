@@ -2,7 +2,8 @@ import type { AdminUserDetail, AdminUserRow } from '@portal/contracts';
 import { UserPlus } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from './api';
-import { ago } from './model';
+import { TabBar } from '../components/TabBar';
+import { ago, USER_FILTER_LABEL, USER_FILTERS, userShows, type UserFilter } from './model';
 import { btnDanger, btnPlain, btnPrimary, chip, Confirm, Empty, field, Field, InfoTip, list, Secret, Section, Sheet, useList, type Run } from './ui';
 
 /*
@@ -14,6 +15,8 @@ export function UsersView({ run, meId }: { run: Run; meId: string }) {
   const { items, reload } = useList(run, api.users);
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [show, setShow] = useState<UserFilter>('all');
+  const shown = items?.filter((u) => userShows(u, show)) ?? null;
   const [secret, setSecret] = useState<{ title: string; value: string } | null>(null);
   return (
     <Section
@@ -27,9 +30,18 @@ export function UsersView({ run, meId }: { run: Run; meId: string }) {
         </button>
       }
     >
-      <Empty items={items} />
+      {/* Pill tabs (docs/coord/UI-STANDARD.md §2), the same bar as the portal's: All, Admins, Members, Disabled with their counts. */}
+      <TabBar
+        label="Users"
+        tabs={USER_FILTERS.map((f) => ({ id: f, label: USER_FILTER_LABEL[f], badge: f === 'all' || !items ? undefined : items.filter((u) => userShows(u, f)).length || undefined, badgeTone: 'info' as const }))}
+        active={show}
+        onSelect={(id) => setShow(id as UserFilter)}
+        className="sticky top-[calc(env(safe-area-inset-top)+3rem)] z-[5] -mx-4 lg:top-0 lg:-mx-8"
+        innerClassName="px-3 lg:px-7"
+      />
+      <Empty items={shown} />
       <ul className={list}>
-        {items?.map((u) => (
+        {shown?.map((u) => (
           <li key={u.id}>
             <button type="button" className="flex min-h-14 w-full items-center gap-3 px-3 py-2 text-left" onClick={() => setOpen(u.id)}>
               <span className="min-w-0 flex-1">
