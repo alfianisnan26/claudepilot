@@ -496,7 +496,7 @@ export class SsoProviders {
   async testOrg(orgId: string): Promise<{ ok: true; authorizationEndpoint: string }> {
     const r = this.#orgRow(orgId);
     if (!r) throw new AppError('NOT_FOUND', 'No provider yet.');
-    const doc = await this.oidc.discover(r.issuer, false, true);
+    const doc = await this.oidc.discover(r.issuer, this.#privateOk(r), true);
     return { ok: true, authorizationEndpoint: doc.authorization_endpoint };
   }
 
