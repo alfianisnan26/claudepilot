@@ -9,6 +9,13 @@
 # a namespaced Role for Jobs + their pods/logs + the per-Job Secret + gate-result ConfigMaps, and a ValidatingAdmissionPolicy that
 # keeps "create Jobs" from becoming "run anything as anyone": Jobs/Secrets/ConfigMaps must carry the scripts' names, Jobs get no SA token,
 # no service account, only emptyDir volumes, no host namespaces, no privileged containers, and secretKeyRefs only to the Job's own Secret.
+#
+# The deploy pipeline (.pilot/deploy.yml, run from workspace isnan; 2026-11-01, run rmvxbbfsa6648f8 was refused at its build step): the
+# isnan workspace alone also builds the images (scripts/k3s-build.sh: Jobs claudepilot-build-{portal,workspace,workspace-dev,browser}, the
+# portal's Secret claudepilot-build, which only the Job claudepilot-build-portal may reference), pre-pulls the new portal image
+# (.pilot/scripts/lib.sh prepull: Job claudepilot-prepull-<unix seconds>), waits for the portal's rollout (watch on deployments) and asks
+# Argo CD for a refresh (patch on the one Application isnan-claudepilot, limited by claudepilot-ws-argo-refresh-guard to the refresh
+# annotation). Those Jobs keep every pod-spec rule above.
 apiVersion: v1
 kind: ServiceAccount
 metadata: {name: ws-isnan-jobs, namespace: isnan-claudepilot, labels: {app.kubernetes.io/part-of: claudepilot, claudepilot/workspace: isnan}, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
@@ -103,6 +110,8 @@ metadata: {name: claudepilot-ws-status-read, namespace: isnan-claudepilot, annot
 rules:
   - {apiGroups: [apps], resources: [deployments, replicasets], verbs: [get, list]}
   - {apiGroups: [apps], resources: [deployments/log], verbs: [get]}
+  # The deploy pipeline's verify and rollback: `kubectl rollout status deploy/claudepilot-portal` watches the Deployment.
+  - {apiGroups: [apps], resources: [deployments], resourceNames: [claudepilot-portal], verbs: [watch]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -128,6 +137,9 @@ kind: Role
 metadata: {name: claudepilot-ws-status-read, namespace: isnan-argocd, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
 rules:
   - {apiGroups: [argoproj.io], resources: [applications], verbs: [get, list]}
+  # The deploy pipeline's wait_synced (.pilot/scripts/lib.sh): `kubectl annotate application isnan-claudepilot argocd.argoproj.io/refresh=hard`.
+  # Only that Application, and only that annotation (claudepilot-ws-argo-refresh-guard below): never its spec, operation or status.
+  - {apiGroups: [argoproj.io], resources: [applications], resourceNames: [isnan-claudepilot], verbs: [patch]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -157,10 +169,13 @@ spec:
     - name: ctrs
       expression: "variables.pod == null ? [] : variables.pod.containers + (has(variables.pod.initContainers) ? variables.pod.initContainers : [])"
   validations:
-    - expression: "request.resource.resource != 'jobs' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4})$')"
-      message: "Jobs from a workspace are named by job-run.sh / gate-job.sh"
-    - expression: "request.resource.resource != 'secrets' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4})$')"
+    - expression: "request.resource.resource != 'jobs' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4}|build-(portal|workspace|workspace-dev|browser)|prepull-[0-9]{10})$')"
+      message: "Jobs from a workspace are named by job-run.sh / gate-job.sh / k3s-build.sh / the deploy pipeline's pre-pull"
+    - expression: "request.resource.resource != 'secrets' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4}|build)$')"
       message: "a workspace may only touch the per-Job Secrets"
+    # The deploy pipeline's Jobs and the build Secret (k3s-build.sh, the pre-pull): the isnan workspace only (it runs .pilot/deploy.yml).
+    - expression: "!((request.resource.resource == 'jobs' && variables.name.matches('^claudepilot-(build|prepull)-')) || (request.resource.resource == 'secrets' && variables.name == 'claudepilot-build')) || request.userInfo.username == 'system:serviceaccount:isnan-claudepilot:ws-isnan-jobs'"
+      message: "only the isnan workspace (the deploy pipeline) builds images and pre-pulls"
     # A PATCH answers with the whole Secret: only gate-job (claudepilot, isnan workspace) patches, and only its own gate Secrets, so one org
     # cannot read the other's in-flight per-Job credentials that way. konfersi never runs gate-job: its deletes stay on claudepilot-job-*.
     # (Since 2026-10-31 gate-job.sh no longer patches its Secret: it creates it owned by the suspended Job. The rule stays as it was applied.)
@@ -182,12 +197,60 @@ spec:
       message: "no privileged containers"
     - expression: "variables.ctrs.all(c, !has(c.envFrom) || size(c.envFrom) == 0)"
       message: "no envFrom"
-    - expression: "variables.ctrs.all(c, !has(c.env) || c.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef) || e.valueFrom.secretKeyRef.name == object.metadata.name))"
-      message: "secretKeyRef only to the Job's own Secret"
+    # The one exception: the portal build reads the GitHub Packages token from claudepilot-build (deploy/k3s-build/portal-job.yaml).
+    - expression: "variables.ctrs.all(c, !has(c.env) || c.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef) || e.valueFrom.secretKeyRef.name == object.metadata.name || (object.metadata.name == 'claudepilot-build-portal' && e.valueFrom.secretKeyRef.name == 'claudepilot-build')))"
+      message: "secretKeyRef only to the Job's own Secret (claudepilot-build-portal: claudepilot-build)"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata: {name: claudepilot-ws-jobs-guard, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
 spec:
   policyName: claudepilot-ws-jobs-guard
+  validationActions: [Deny]
+---
+# The Argo CD refresh the deploy pipeline asks for (patch on Application isnan-claudepilot, above): the patch may change the annotation
+# argocd.argoproj.io/refresh (normal or hard) and nothing else. Spec, operation (a sync to any revision), status, labels, finalizers,
+# owners and every other annotation stay as they are, so the patch right never becomes "deploy something else". A create or delete
+# fails the first rule (and finds no object to compare), so it is refused too (RBAC grants neither).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: {name: claudepilot-ws-argo-refresh-guard, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    matchPolicy: Equivalent
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: isnan-argocd}}
+    objectSelector: {}
+    resourceRules:
+      - {apiGroups: [argoproj.io], apiVersions: ["*"], operations: [CREATE, UPDATE, DELETE], resources: [applications], scope: "*"}
+  matchConditions:
+    - name: org-workspace-sa
+      expression: "request.userInfo.username in ['system:serviceaccount:isnan-claudepilot:ws-isnan-jobs', 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs']"
+  validations:
+    - expression: "request.operation == 'UPDATE' && object.metadata.name == 'isnan-claudepilot'"
+      message: "a workspace only refreshes the Application isnan-claudepilot"
+    - expression: "object.spec == oldObject.spec"
+      message: "the refresh never changes the Application's spec"
+    - expression: "has(object.operation) == has(oldObject.operation) && (!has(object.operation) || object.operation == oldObject.operation)"
+      message: "the refresh never starts or changes an operation"
+    - expression: "has(object.status) == has(oldObject.status) && (!has(object.status) || object.status == oldObject.status)"
+      message: "the refresh never changes the status"
+    - expression: "has(object.metadata.labels) == has(oldObject.metadata.labels) && (!has(object.metadata.labels) || object.metadata.labels == oldObject.metadata.labels)"
+      message: "the refresh never changes labels"
+    - expression: "has(object.metadata.finalizers) == has(oldObject.metadata.finalizers) && (!has(object.metadata.finalizers) || object.metadata.finalizers == oldObject.metadata.finalizers)"
+      message: "the refresh never changes finalizers"
+    - expression: "has(object.metadata.ownerReferences) == has(oldObject.metadata.ownerReferences) && (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences == oldObject.metadata.ownerReferences)"
+      message: "the refresh never changes owners"
+    - expression: "!has(object.metadata.annotations) || object.metadata.annotations.all(k, k == 'argocd.argoproj.io/refresh' || (has(oldObject.metadata.annotations) && k in oldObject.metadata.annotations && oldObject.metadata.annotations[k] == object.metadata.annotations[k]))"
+      message: "the refresh adds or changes only the annotation argocd.argoproj.io/refresh"
+    - expression: "!has(oldObject.metadata.annotations) || oldObject.metadata.annotations.all(k, k == 'argocd.argoproj.io/refresh' || (has(object.metadata.annotations) && k in object.metadata.annotations))"
+      message: "the refresh removes no other annotation"
+    - expression: "!has(object.metadata.annotations) || !('argocd.argoproj.io/refresh' in object.metadata.annotations) || object.metadata.annotations['argocd.argoproj.io/refresh'] in ['normal', 'hard']"
+      message: "argocd.argoproj.io/refresh is normal or hard"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: {name: claudepilot-ws-argo-refresh-guard, annotations: {argocd.argoproj.io/sync-options: "Delete=false,Prune=false"}}
+spec:
+  policyName: claudepilot-ws-argo-refresh-guard
   validationActions: [Deny]

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ORG_SLUG_PATTERN } from '@portal/contracts';
+import { ORG_INVITE_PATH, ORG_SLUG_PATTERN } from '@portal/contracts';
 import {
   canCreateOrg,
   canManageOrg,
@@ -9,6 +9,9 @@ import {
   canSeeSignIn,
   canSetSsoPolicy,
   cleanRules,
+  inviteCodeFrom,
+  inviteLink,
+  inviteRoleChoices,
   orgErrorText,
   outsideMembers,
   parseFreshness,
@@ -83,4 +86,31 @@ test('a slug made from a name fits the server’s pattern', () => {
     assert.ok(s.length < 2 || ORG_SLUG_PATTERN.test(s), `${name} -> ${s}`);
   }
   assert.equal(slugFrom('Konfersi Indonesia'), 'konfersi-indonesia');
+});
+
+test('invitation roles mirror the service: never owner, never above your own; a guest invites nobody', () => {
+  assert.deepEqual(inviteRoleChoices('owner'), ['admin', 'member', 'guest']);
+  assert.deepEqual(inviteRoleChoices('admin'), ['admin', 'member', 'guest']);
+  assert.deepEqual(inviteRoleChoices('member'), ['member', 'guest']);
+  assert.deepEqual(inviteRoleChoices('guest'), []);
+});
+
+test('the invitation link carries the code in the fragment, and the accept page reads it back', () => {
+  const code = ['k', 'Q', '9', '_', 'z'].join('').repeat(9);
+  const link = inviteLink('https://pilot.example.test/', code);
+  assert.equal(link, `https://pilot.example.test${ORG_INVITE_PATH}#${code}`);
+  const url = new URL(link);
+  assert.equal(url.search, '', 'nothing in the query (it would reach a server log)');
+  assert.equal(inviteCodeFrom(url.hash), code);
+  assert.equal(inviteCodeFrom(''), '');
+  assert.equal(inviteCodeFrom('#%E0%A4%A'), '', 'a broken fragment is no code');
+});
+
+test('invitation refusals read plainly', () => {
+  for (const [reason, words] of [
+    ['INVITATION_INVALID', /not valid/],
+    ['INVITATION_EXPIRED', /expired/],
+    ['INVITATION_EMAIL_MISMATCH', /another email/],
+  ] as const)
+    assert.match(orgErrorText(Object.assign(new Error('raw'), { details: { reason } }), 'x'), words);
 });

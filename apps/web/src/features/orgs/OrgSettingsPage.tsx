@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { api } from '@/lib/api';
 import { HOME } from '@/app/nav';
 import { PERSONAL } from '@/lib/orgContext';
+import { InvitationsSection } from './InvitationsSection';
 import { orgField } from './NewOrgDialog';
 import { OrgSignInTab } from './OrgSignInTab';
 import { useOrgs } from './OrgsProvider';
@@ -18,9 +19,9 @@ type Tab = 'general' | 'sign-in';
 
 /**
  * Org settings (docs/prd/organizations.md §7, slice 9): General (name; the slug is fixed) and Members (roles, remove, leave). Owners and
- * admins change things; members read; a guest sees the name and Leave only. Slice 10 adds the Sign-in tab (owners and admins; `?tab=sign-in`,
- * where a step-up returns): domains, the org's provider, Require SSO (OrgSignInTab). Teams, invitations, policies and audit come with their
- * slices (7, 8). The server decides every change; a refusal (the last owner) is shown as it comes.
+ * admins change things; members read; a guest sees the name and Leave only. Invitations (slice 8) for owners and admins. Slice 10 adds the
+ * Sign-in tab (owners and admins; `?tab=sign-in`, where a step-up returns): domains, the org's provider, Require SSO (OrgSignInTab). The
+ * server decides every change; a refusal (the last owner) is shown as it comes.
  */
 export function OrgSettingsPage() {
   const { id = '' } = useParams();
@@ -200,6 +201,8 @@ export function OrgSettingsPage() {
           </Card>
         </section>
       )}
+
+      {manage && <InvitationsSection org={org} />}
 
       <div>
         <Button variant="secondary" icon={<LogOut className="size-4" />} onClick={() => setLeaving(true)} data-org-leave="">

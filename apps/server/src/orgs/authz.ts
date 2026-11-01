@@ -55,6 +55,30 @@ export const ORG_ROUTE_POLICIES: RoutePolicies = {
   'GET /api/orgs/break-glass': { kind: 'self' },
   'GET /api/orgs/:id/break-glass': org('manage'),
   'POST /api/orgs/:id/break-glass/:entryId/end': { ...org('manage'), audit: 'org.break_glass_ended' },
+  // Slice 7 (./sharing.ts): view on the org (members and guests); the service asks the role on top (who may create or change a team, share,
+  // revoke), and a share's object (`manage` on it, asked through can()). Transcript reads are the org OWNERS' (manage declared, owner checked).
+  'GET /api/orgs/:id/teams': org('view'),
+  'POST /api/orgs/:id/teams': { ...org('view'), audit: 'org.team_created' },
+  'DELETE /api/orgs/:id/teams/:teamId': { ...org('view'), audit: 'org.team_removed' },
+  'GET /api/orgs/:id/teams/:teamId/members': org('view'),
+  'PUT /api/orgs/:id/teams/:teamId/members/:uid': { ...org('view'), audit: 'org.team_member_set' },
+  'DELETE /api/orgs/:id/teams/:teamId/members/:uid': { ...org('view'), audit: 'org.team_member_removed' },
+  'GET /api/orgs/:id/shares': org('view'),
+  'POST /api/orgs/:id/shares': { ...org('view'), audit: 'org.share_created' },
+  'DELETE /api/orgs/:id/shares/:shareId': { ...org('view'), audit: 'org.share_ended' },
+  'GET /api/orgs/:id/transcript-views': org('manage'),
+  // Slice 8 (§6.8-§6.10). Accepting names no org in the path: a signed-in person, the code and an email match, throttled (the service).
+  'POST /api/orgs/invitations/accept': { kind: 'signed-in', audit: 'org.member_joined' },
+  'GET /api/orgs/:id/invitations': org('manage'),
+  // view: a member may invite when the org's `membersMayInvite` is on; the service checks the role, the policy and the role ceiling.
+  'POST /api/orgs/:id/invitations': { ...org('view'), audit: 'org.member_invited' },
+  'DELETE /api/orgs/:id/invitations/:invitationId': { ...org('manage'), audit: 'org.invitation_revoked' },
+  // Owner-only acts, by role in the service on top of the declared level. Resume and delete are `view`: in a SUSPENDED org its owners hold
+  // only view (§6.9: they still see it, to resume or delete). Deleting is soft for 30 days (nobody sees the org meanwhile).
+  'POST /api/orgs/:id/suspend': { ...org('manage'), audit: 'org.suspended' },
+  'POST /api/orgs/:id/resume': { ...org('view'), audit: 'org.resumed' },
+  'DELETE /api/orgs/:id': { ...org('view'), audit: 'org.deleted' },
+  'GET /api/orgs/:id/audit': org('manage'),
 };
 
 /**
@@ -63,7 +87,7 @@ export const ORG_ROUTE_POLICIES: RoutePolicies = {
  * is not in answer the same 404). Each route is mounted on its object's router (workspaces, tickets, knowledge) by app.ts.
  */
 export const ORG_TRANSFER_POLICIES: RoutePolicies = {
-  'POST /api/workspaces/:ref/move-to-org': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'ref' }], audit: 'object.transferred' },
+  'POST /api/workspaces/:target/:name/move-to-org': { kind: 'objects', checks: [{ type: 'workspace', verb: 'manage', from: 'path', param: 'target+name' }], audit: 'object.transferred' },
   'POST /api/tickets/buckets/:key/move-to-org': { kind: 'objects', checks: [{ type: 'ticket_bucket', verb: 'manage', from: 'path', param: 'key' }], audit: 'object.transferred' },
   'POST /api/knowledge/vaults/:id/move-to-org': { kind: 'objects', checks: [{ type: 'vault', verb: 'manage', from: 'path', param: 'id' }], audit: 'object.transferred' },
 };

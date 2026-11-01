@@ -104,6 +104,7 @@ import { BUDGET_SETTING, CAP_TOTAL_SETTING, CAP_WORKSPACE_SETTING } from './chat
 import { chatEligibility } from './chat/eligibility.js';
 import { hostInstaller } from './chat/install.js';
 import { attachChat } from './chat/socket.js';
+import { stopSessionsOnAccessLoss } from './chat/accessStop.js';
 import { registerChatAuthz } from './chat/authz.js';
 import { registerOwnerResolvers } from './authz/owners.js';
 import { KubernetesRuntime } from './workspaces/kubernetes.js';
@@ -302,6 +303,15 @@ chatController.sessionBudgetUsd = () => settingsModule.settings.get<number>(BUDG
 // Side questions (chat PRD §20): their limits and switches come from the shared settings, and a session is read through the one authorization resolver.
 chatController.btwSettings = (key) => settingsModule.settings.get(key);
 registerChatAuthz((id) => chatController.sessionFacts(id));
+// Organizations slice 7: a workspace share that ends stops the sessions its receiver started there once they may no longer operate it.
+stopSessionsOnAccessLoss({
+  running: (workspaceId) =>
+    chatController
+      .list({ workspaceId })
+      .filter((s) => s.state !== 'ended')
+      .map((s) => ({ id: s.id, startedBy: chatController.startedByAccount(s.id) })),
+  end: (id) => chatController.end(id),
+});
 // Organizations slice 1 (P3, migration 410): owners of workspaces, vaults, sets, account pools, accounts and endpoints, read on every decision;
 // their types (and CI's, and templates) become required, so a missing resolver refuses instead of answering the founding user.
 registerOwnerResolvers({ db: () => store.db, workspace: (ref) => workspaces.identities.resolve(ref) });

@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { AppError } from '@isnanme/core';
-import { objectRef, workspaceRef, type Actor, type MoveToOrgCredential, type ObjectRef, type UserId } from '@portal/contracts';
+import { objectRef, ORGS_API, workspaceRef, type Actor, type MoveToOrgCredential, type ObjectRef, type UserId } from '@portal/contracts';
 import { Hono } from 'hono';
 import { ADMIN_ROUTE_POLICIES } from '../admin/authz.js';
 import { registerOwnerResolvers } from '../authz/owners.js';
@@ -266,4 +266,26 @@ test('the move route: the central check refuses another user’s vault exactly l
   assert.deepEqual(await post('v_alice_own'), missing);
   actor = person(DAN);
   assert.deepEqual(await post('v_dan'), missing, 'a guest: the org’s 404');
+});
+
+test('the workspace move route takes `<target>/<name>` as two segments (the contract’s path), and the central check refuses an outsider like a missing one', async () => {
+  const app = new Hono();
+  let actor: Actor = person(EVE);
+  app.use('*', async (c, next) => {
+    c.set('actor' as never, actor as never);
+    await enforceRoutePolicy(c);
+    await next();
+  });
+  app.route('/api/workspaces', createMoveToOrgRoute(m.transfers, 'workspace', '/:target/:name/move-to-org', 'target+name'));
+  app.onError((e, c) => c.json({ code: (e as AppError).code, message: (e as AppError).message }, ((e as AppError).status ?? 500) as 404));
+  const post = async (ref: string, body: object = { orgId }) => {
+    const res = await app.request(`http://localhost${ORGS_API.moveWorkspace(ref)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: res.status, body: await res.text() };
+  };
+  assert.equal(ORGS_API.moveWorkspace('docker/ws-a'), '/api/workspaces/docker/ws-a/move-to-org');
+  const missing = await post('docker/nosuch');
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await post('docker/ws-a'), missing, 'an outsider: the same 404 as a missing workspace');
+  actor = person(ALICE);
+  assert.notEqual((await post('docker/ws-a', { orgId, keepCredentials: [] })).status, 404, 'the org owner reaches the handler');
 });

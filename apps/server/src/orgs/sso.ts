@@ -7,7 +7,7 @@
 //   Public mail and hosting domains and public suffixes are refused (a built-in list; the full Public Suffix List is §12 Q4).
 // - The provider (§9.1): one per org, stored in `sso_providers` with `org_id` by identity/sso.ts (never a private network, never an
 //   unverified email, never an instance admin). It serves every domain the org holds verified. Group rules are checked here: `owner` is
-//   never mapped; a team must be a team OF THIS ORG (until teams carry an org, slice 7, no team rule is accepted).
+//   never mapped; a team must be a team OF THIS ORG (`teams.org_id`, slice 7; its triggers also keep non-members out of it).
 // - At every sign-in or step-up through it (`onSignIn`, called by identity/routes.ts): the person's last sign-in and the session's mark are
 //   written; a person not in the org joins (JIT, `via = sso_jit`) with the mapped role or `defaultJoinRole`; a member removed by an admin is
 //   not brought back (removal sticks until re-invited); an owner's role is never touched; with role rules the role follows the groups (no
@@ -297,13 +297,18 @@ export class OrgSso {
     // Teams by rule: joined when matched, left when a rule-made membership is no longer matched; manual memberships are never touched.
     const want = new Set(matched.map((r) => r.team).filter((t): t is string => !!t && this.#teamOfOrg(t, e.orgId)));
     const had = (db.prepare('SELECT team_id FROM team_members WHERE user_id = ? AND added_by = ?').all(e.userId, by) as { team_id: string }[]).map((r) => r.team_id);
-    for (const t of want)
-      db.prepare("INSERT INTO team_members (team_id, user_id, role, added_by, added_at) VALUES (?, ?, 'member', ?, ?) ON CONFLICT (team_id, user_id) DO NOTHING").run(t, e.userId, by, at);
+    for (const t of want) {
+      try {
+        db.prepare("INSERT INTO team_members (team_id, user_id, role, added_by, added_at) VALUES (?, ?, 'member', ?, ?) ON CONFLICT (team_id, user_id) DO NOTHING").run(t, e.userId, by, at);
+      } catch {
+        // slice 7's trigger: not an active member of the team's org (never here after the checks above); the sign-in goes on
+      }
+    }
     for (const t of had) if (!want.has(t)) db.prepare('DELETE FROM team_members WHERE team_id = ? AND user_id = ? AND added_by = ?').run(t, e.userId, by);
     this.#record('org.sso_signin', by, e.orgId, { userId: e.userId, joined, roleChange, matchedGroups: matched.map((r) => r.group), created: e.created });
   }
 
-  /** A team that belongs to this org. Teams carry an org from slice 7; before it (no column) no team qualifies. */
+  /** A team that belongs to this org (`teams.org_id`, slice 7). Fails closed: unreadable, no team qualifies. */
   #teamOfOrg(teamId: string, orgId: string): boolean {
     try {
       return (this.#read().prepare('SELECT org_id FROM teams WHERE id = ?').get(teamId) as { org_id?: unknown } | undefined)?.org_id === orgId;

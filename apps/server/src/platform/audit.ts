@@ -15,6 +15,8 @@ export interface AuditInput {
   actorLabel?: string | null;
   subject?: string | null;
   detail?: Record<string, unknown>;
+  /** Organizations slice 8 (§6.10): the org the row is about, so its owners and admins can read it. Default: from an `org:<id>` subject. */
+  orgId?: string | null;
 }
 
 export interface AuditFilter {
@@ -54,7 +56,7 @@ export class PlatformAudit {
     try {
       let detail = JSON.stringify(cleanDetail(e.actorLabel ? { ...e.detail, actorLabel: e.actorLabel } : e.detail));
       if (detail.length > DETAIL_MAX) detail = '{}';
-      db.prepare('INSERT INTO platform_audit (at, severity, kind, actor, user_id, subject, detail) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO platform_audit (at, severity, kind, actor, user_id, subject, detail, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
         this.now().toISOString(),
         e.severity ?? 'info',
         e.kind,
@@ -62,6 +64,7 @@ export class PlatformAudit {
         e.userId,
         e.subject?.slice(0, 200) ?? null,
         detail,
+        e.orgId ?? /^org:(org_.+)$/.exec(e.subject ?? '')?.[1] ?? null,
       );
     } catch (err) {
       console.error(`[platform] an audit row could not be written: ${(err as Error).message}`);

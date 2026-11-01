@@ -2,7 +2,7 @@
 # The gate job: scripts/gate.sh (npm ci, typecheck, web build, web tests, the server suite) on a clean copy of the run's commit, and its verdict
 # (scripts/gate-verdict.sh). By default it runs as a Job in the cluster (scripts/gate-job.sh, T-37), on CPUs other than the workspace's;
 # DEPLOY_GATE_IN_CLUSTER=false runs it here instead (always the whole gate). Input gate=false skips it; a dry run only says what it would run.
-# In the cluster it is change-scoped (D-106): see below; input full_gate=true runs the whole gate.
+# In the cluster it runs only the affected tests (D-106, narrowed by D-110): see below; only input full_gate=true runs the whole gate.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=.pilot/scripts/lib.sh
@@ -15,23 +15,33 @@ fi
 sha=$(run_sha)
 
 if [ "${DEPLOY_GATE_IN_CLUSTER:-true}" = true ]; then
-  # D-106: change-scoped. scripts/gate-select.mjs decides from the green results recorded in the cluster (scripts/gate-record.sh): reuse a
-  # green result whose tree differs only in documents nothing reads; else typecheck always, plus what the change since the last green gated
-  # commit on main reaches (web build and tests, the server test files through the import graph); the whole gate for shared core, an
-  # unknown base or graph, or input full_gate. The plan and its reasons are in the log.
+  # D-110 (owner, 2026-11-01; narrows D-106): only the affected tests, never the whole server suite on the selector's account, shared core
+  # included. scripts/gate-select.mjs --affected decides from the green results recorded in the cluster (scripts/gate-record.sh): reuse a
+  # green result whose tree differs only in documents nothing reads; else typecheck, the web build and web tests, plus the server test files
+  # the change since the last green gated commit on main reaches (the import graph; shared core one hop, to the tests that import or name it).
+  # Nothing selectable (no base, no graph) is red, never the whole suite; input full_gate (a person's explicit ask) is the one way to it.
+  # The plan and its reasons are in the log.
   ensure_origin
   records="${TMPDIR:-/tmp}/pilot-gate-records-${PILOT_RUN_ID:-local}"
   bash scripts/gate-record.sh list >"$records" 2>/dev/null || : >"$records"
   full=()
   [ "${PILOT_INPUT_FULL_GATE:-false}" = true ] && full=(--full)
-  plan=$(node scripts/gate-select.mjs --head "$sha" --base-ref "origin/$DEPLOY_MAIN" --records "$records" "${full[@]}" 2>"$records.why") || plan="MODE=full
+  plan=$(node scripts/gate-select.mjs --affected --head "$sha" --base-ref "origin/$DEPLOY_MAIN" --records "$records" "${full[@]}" 2>"$records.why") || plan="MODE=error
 REASON=the selection could not run"
   rm -f "$records"
   val() { printf '%s\n' "$plan" | sed -n "s/^$1=//p" | head -n 1; }
   mode=$(val MODE) reason=$(val REASON) base=$(val BASE) reused=$(val REUSED) steps=$(val STEPS) files=$(val FILES) changed=$(val CHANGED)
-  case $mode in full | scoped | reuse) ;; *) mode=full reason="the selection said nothing usable" ;; esac
+  case $mode in full | scoped | reuse) ;; error) ;; *) mode=error reason="the selection said nothing usable" ;; esac
+  # A full plan comes only from input full_gate (--affected never falls back to it).
+  [ "$mode" != full ] || [ ${#full[@]} -gt 0 ] || { mode=error reason="the selection answered full without full_gate"; }
   log "gate: scope $mode: $reason"
-  [ -z "$base" ] || log "gate: base $(short "$base"), the last green gated commit on $DEPLOY_MAIN; changed: $(wc -w <<<"$changed" | tr -d ' ') file(s): $(cut -c1-600 <<<"$changed")"
+  if [ "$mode" = error ]; then
+    rm -f "$records.why"
+    die "gate: red at $(short "$sha"): nothing could be selected ($reason); D-110 never runs the whole suite on its own: fix the cause, or run with full_gate=true"
+  fi
+  what="the last green gated commit on $DEPLOY_MAIN"
+  [[ $reason != *"merge base"* ]] || what="the merge base of $DEPLOY_MAIN and the head (no green record on $DEPLOY_MAIN)"
+  [ -z "$base" ] || log "gate: base $(short "$base"), $what; changed: $(wc -w <<<"$changed" | tr -d ' ') file(s): $(cut -c1-600 <<<"$changed")"
   if [ "$mode" = scoped ]; then
     log "gate: steps $steps; server test files ($(val SERVER_TESTS) of $(val SERVER_TOTAL)): $(cut -c1-1500 <<<"$files")"
     grep -v ': changed$' "$records.why" 2>/dev/null | head -n 60 | sed 's/^gate-select: /gate: why /' || true

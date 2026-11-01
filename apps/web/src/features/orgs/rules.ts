@@ -1,7 +1,19 @@
 // What the web shows to whom in organizations (docs/prd/organizations.md §6.2, §7). The server decides every right; these only keep a control
 // off the screen when the server would refuse it, so they mirror OrgsService (setRole, removeMember, leave, members) and are tested apart.
 
-import { ORG_ROLES, ORGS_ERROR_CODES, type Ability, type OrgDomain, type OrgDomainState, type OrgGroupRule, type OrgMember, type OrgRole } from '@portal/contracts';
+import {
+  ORG_INVITE_PATH,
+  ORG_ROLE_RANK,
+  ORG_ROLES,
+  ORGS_ERROR_CODES,
+  type Ability,
+  type OrgDomain,
+  type OrgDomainState,
+  type OrgGroupRule,
+  type OrgInvitationRole,
+  type OrgMember,
+  type OrgRole,
+} from '@portal/contracts';
 
 /** "New organization": an instance admin or someone holding `orgs.create` (GET /api/orgs/abilities says which). */
 export const canCreateOrg = (abilities: readonly Ability[] | null) => !!abilities?.includes('orgs.create');
@@ -26,6 +38,29 @@ export function canRemoveMember(mine: OrgRole, theirs: OrgRole, self: boolean): 
   return mine === 'admin' && theirs !== 'owner';
 }
 
+/**
+ * The roles `mine` may invite someone to (slice 8, OrgInvitations.create): never owner, never above your own; a guest invites nobody, and a
+ * member only when the org lets members invite (the server decides; the page shows the form to owners and admins).
+ */
+export function inviteRoleChoices(mine: OrgRole): OrgInvitationRole[] {
+  const all: OrgInvitationRole[] = ['admin', 'member', 'guest'];
+  if (mine === 'guest') return [];
+  return all.filter((r) => ORG_ROLE_RANK[r] <= ORG_ROLE_RANK[mine]);
+}
+
+/** The link the inviter copies: the code in the FRAGMENT, so it never reaches a server log or a request line. */
+export const inviteLink = (origin: string, code: string) => `${origin.replace(/\/+$/, '')}${ORG_INVITE_PATH}#${encodeURIComponent(code)}`;
+
+/** The code from the accept page's fragment (`#<code>`), or '' when there is none. */
+export function inviteCodeFrom(hash: string): string {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  try {
+    return decodeURIComponent(raw).trim();
+  } catch {
+    return '';
+  }
+}
+
 export const ROLE_LABEL: Record<OrgRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member', guest: 'Guest' };
 
 export const ROLE_ABOUT: Record<OrgRole, string> = {
@@ -44,6 +79,9 @@ export function orgErrorText(e: unknown, fallback: string): string {
   if (reason === ORGS_ERROR_CODES.ORG_CREATE_NOT_ALLOWED) return 'Your account can’t create organizations. An admin can allow it.';
   if (reason === ORGS_ERROR_CODES.SSO_LOCKOUT_GUARD) return 'Connect your own sign-in through the provider first (an owner), so nobody is locked out.';
   if (reason === ORGS_ERROR_CODES.DOMAIN_TAKEN) return 'Another organization, or the portal’s own sign-in, already has that domain.';
+  if (reason === ORGS_ERROR_CODES.INVITATION_INVALID) return 'This invitation is not valid. Ask for a new one.';
+  if (reason === ORGS_ERROR_CODES.INVITATION_EXPIRED) return 'This invitation has expired. Ask for a new one.';
+  if (reason === ORGS_ERROR_CODES.INVITATION_EMAIL_MISMATCH) return 'This invitation is for another email address. Sign in with that one.';
   return e instanceof Error && e.message ? e.message : fallback;
 }
 

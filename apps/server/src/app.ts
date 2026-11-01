@@ -917,6 +917,8 @@ export function createApp(
     const sweep = setInterval(() => {
       try {
         orgsModule.breakGlass.sweep();
+        // Slice 8: orgs deleted 30 days ago are purged (memberships, invitations and grants with them).
+        orgsModule.orgs.purgeDeleted();
       } catch (e) {
         console.error(`[orgs] the break-glass sweep failed: ${(e as Error).message}`);
       }
@@ -1191,7 +1193,7 @@ export function createApp(
   // Relocation, the bulk form: a plan of sessions moves off this workspace (the platform admin; chat/relocateRoutes.ts).
   ws.route('/', createSessionRelocateRoutes(chatController));
   // Organizations slice 5: Move to organization (manage on the workspace, member or up in the org).
-  ws.route('/', createMoveToOrgRoute(orgsModule.transfers, 'workspace', '/:ref/move-to-org', 'ref'));
+  ws.route('/', createMoveToOrgRoute(orgsModule.transfers, 'workspace', '/:target/:name/move-to-org', 'target+name'));
   app.route('/api/workspaces', ws);
 
   const acc = new Hono<Env>();
@@ -1449,7 +1451,7 @@ export function createApp(
   {
     const og = new Hono<Env>();
     og.use(requireSession);
-    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass));
+    og.route('/', createOrgRoutes(orgsModule.orgs, orgsModule.breakGlass, orgsModule.sharing, orgsModule.invitations));
     // Slice 10: the Sign-in tab (domains, the org's provider, requireSso).
     if (orgsModule.sso) og.route('/', createOrgSsoRoutes(orgsModule.sso, identity.redirectUri));
     app.route('/api/orgs', og);

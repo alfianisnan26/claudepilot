@@ -275,6 +275,24 @@ test('group rules at every sign-in: highest mapped role wins, demotion applies, 
   m.sso!.putProvider(person(ALICE), acme, { groupRules: [] }, REDIRECT);
 });
 
+test('team rules (teams.org_id, slice 7): only the org’s own teams; joined when matched, left when not, manual memberships untouched', async () => {
+  const eng = m.sharing.createTeam(person(ALICE), acme, { name: 'Eng' });
+  const ops = m.sharing.createTeam(person(ALICE), acme, { name: 'Ops' });
+  const foreign = m.sharing.createTeam(person(ADMIN), beta, { name: 'Beta team' });
+  assert.throws(() => m.sso!.putProvider(person(ALICE), acme, { groupRules: [{ group: 'x', team: foreign.id }] }, REDIRECT), code('VALIDATION_FAILED'), 'another org’s team');
+  m.sso!.putProvider(person(ALICE), acme, { groupRules: [{ group: 'eng', team: eng.id }, { group: 'ops', team: ops.id }] }, REDIRECT);
+  const inTeam = (teamId: string) => store.db!.prepare('SELECT added_by FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, BOB) as { added_by: string } | undefined;
+  store.db!.prepare("INSERT INTO team_members (team_id, user_id, role, added_by, added_at) VALUES (?, ?, 'member', 'account:manual', 'x')").run(ops.id, BOB);
+  await signIn(acmeProvider, { sub: 'sub-bob', email: 'bob@acme.test', groups: ['eng'] });
+  assert.equal(inTeam(eng.id)?.added_by, `sso:${acmeProvider}`, 'joined by the rule');
+  assert.equal(inTeam(ops.id)?.added_by, 'account:manual', 'a manual membership stays');
+  await signIn(acmeProvider, { sub: 'sub-bob', email: 'bob@acme.test', groups: [] });
+  assert.equal(inTeam(eng.id), undefined, 'left when no longer matched');
+  assert.equal(inTeam(ops.id)?.added_by, 'account:manual');
+  assert.equal(memberRow(acme, BOB)?.role, 'admin', 'team-only rules leave the role alone');
+  m.sso!.putProvider(person(ALICE), acme, { groupRules: [] }, REDIRECT);
+});
+
 test('step-up: links only a free identity with the account’s own email; another account’s identity is refused', async () => {
   const r = await sso.begin(acmeProvider, null, REDIRECT, { account: CONTRACTOR, sessionHash: 'h-c', returnTo: '/x' });
   idp.next = { nonce: authorizeParams(r.url).nonce, sub: 'sub-cora', email: 'cora@acme.test' };

@@ -1,7 +1,8 @@
 // Organizations (docs/prd/organizations.md): a tenant above teams. Slice 3 (§13.2 row 3) is the core: the organization, its memberships and
 // roles, the "always one active owner" invariant (service and trigger), and the per-user ABILITY `orgs.create` an instance admin grants
-// (off by default, OD-2). Slice 5: org-owned objects, Move to organization, break-glass (below). Invitations, teams in orgs, sharing to an
-// org and SSO come in later slices.
+// (off by default, OD-2). Slice 5: org-owned objects, Move to organization, break-glass (below). Slice 7: teams in orgs, shares to an org or
+// its teams, org owners and admins reading members' sessions in org workspaces (OD-3). Slice 8: invitations, suspension, deletion and the
+// org's audit. SSO comes in a later slice.
 //
 // Rights (authz.ts, object type `org`): owner and admin hold `manage` on the org, member and guest `view`, anyone else nothing, answered as a
 // missing org (404). Owner-only acts (changing owners, deleting) are checked by role in the service. Membership is read on every decision.
@@ -189,6 +190,67 @@ export interface OrgBreakGlassView {
   access: BreakGlassAccessRow[];
 }
 
+/* ---------- Invitations, suspension, deletion, the org's audit (slice 8, §6.8-§6.10) ---------- */
+
+export const ORG_INVITATION_LIMITS = {
+  /** An invitation is good for 7 days, once. */
+  ttlMs: 7 * 24 * 60 * 60_000,
+  /** Accept attempts per person per window (`auth_throttle` scope `invitation`); a wrong code counts like a right one. */
+  acceptPerWindow: 10,
+  acceptWindowMs: 15 * 60_000,
+  /** Pending invitations one org may hold at once. */
+  pendingMax: 200,
+  /** The code's length bounds (it is 43 base64url characters; anything else is not a code). */
+  codeMin: 20,
+  codeMax: 100,
+} as const;
+
+/** An org that is deleted stays `deleting` this long (it can be seen by nobody), then it is purged. */
+export const ORG_DELETE_GRACE_MS = 30 * 24 * 60 * 60_000;
+
+/** The web page that accepts an invitation; the code is in the link's FRAGMENT (`/admin/org-invite#<code>`), so it is never sent in a request line. */
+export const ORG_INVITE_PATH = '/admin/org-invite';
+
+/** Never `owner`: ownership is transferred, not invited (§6.8). */
+export type OrgInvitationRole = Exclude<OrgRole, 'owner'>;
+export type OrgInvitationState = 'pending' | 'expired';
+
+export interface CreateOrgInvitationRequest {
+  email: string;
+  role: OrgInvitationRole;
+}
+
+/** A pending (or expired, not yet used or revoked) invitation as the org's owners and admins see it. Never the code. */
+export interface OrgInvitation {
+  id: string;
+  /** Normalized (lower case). */
+  email: string;
+  role: OrgInvitationRole;
+  invitedBy: string;
+  createdAt: string;
+  expiresAt: string;
+  state: OrgInvitationState;
+}
+
+/** The answer to creating one: the code, shown ONCE (only its hash is kept). The inviter copies the link `ORG_INVITE_PATH#code`. */
+export interface CreatedOrgInvitation extends OrgInvitation {
+  code: string;
+}
+
+export interface AcceptOrgInvitationRequest {
+  code: string;
+}
+
+export interface AcceptedOrgInvitation {
+  orgId: OrgId;
+  orgName: string;
+  role: OrgInvitationRole;
+}
+
+export interface SuspendOrgRequest {
+  reason?: string;
+}
+
 /** `GET /api/orgs/abilities`: the abilities the signed-in person may use (an instance admin: every one; a token or an agent: none). */
 export interface MyAbilities {
   abilities: Ability[];
@@ -285,6 +347,73 @@ export const ORG_SSO_LIMITS = {
 
 export const ORG_DOMAIN_CHALLENGE_PREFIX = '_claudepilot-challenge.';
 export const ORG_DOMAIN_TXT_PREFIX = 'cp-verify=';
+/* ---------- Teams in an org, shares to an org or its teams, transcript reads (slice 7, §6.1, §6.4, §6.5 invariant 2) ---------- */
+
+export type OrgTeamRole = 'owner' | 'member';
+
+/** A team of an org (`teams.org_id`): names unique per org; only active members of the org may be in it. */
+export interface OrgTeam {
+  id: string;
+  orgId: OrgId;
+  name: string;
+  description: string | null;
+  members: number;
+  /** The signed-in person's role in the team, when they are in it. */
+  myRole?: OrgTeamRole;
+  createdAt: string;
+}
+
+export interface OrgTeamMember {
+  userId: UserId;
+  displayName: string;
+  role: OrgTeamRole;
+  addedAt: string;
+}
+
+export interface CreateOrgTeamRequest {
+  name: string;
+  description?: string | null;
+}
+
+export interface SetOrgTeamMemberRequest {
+  role: OrgTeamRole;
+}
+
+/** Who an org share goes to: the whole org (its active members that are not guests) or one of its teams. */
+export type OrgShareSubject = { kind: 'org' } | { kind: 'team'; teamId: string };
+
+export interface CreateOrgShareRequest {
+  target: { type: OrgTransferKind; id: string };
+  subject: OrgShareSubject;
+  /** view or operate to the org; view, operate or manage to a team (manage only by the object's owner, or an org owner or admin for an org object). */
+  level: 'view' | 'operate' | 'manage';
+  /**
+   * The person saw that a workspace shared at operate exposes the credential sets assigned to it (anyone who can operate it can read them).
+   * Required when it has any: else 409 SHARE_EXPOSES_CREDENTIALS lists them in `details.credentials`.
+   */
+  acknowledgeExposure?: boolean;
+}
+
+export interface OrgShare {
+  id: string;
+  orgId: OrgId;
+  target: { type: OrgTransferKind; id: string };
+  subject: { kind: 'org' } | { kind: 'team'; teamId: string; name: string };
+  level: 'view' | 'operate' | 'manage';
+  /** A share of the sharer's own object: it ends when the sharer leaves the org. */
+  personal: boolean;
+  createdBy: UserId;
+  createdAt: string;
+}
+
+/** One read of a member's session by an org owner or admin (OD-3): `GET /api/orgs/:id/transcript-views` (org owners); the member reads their own rows at `GET /api/platform/audit?kind=org.transcript_viewed`. */
+export interface OrgTranscriptView {
+  at: string;
+  viewer: UserId;
+  member: UserId;
+  sessionId: string;
+  workspaceId: string | null;
+}
 
 export const ORGS_API = {
   /** GET: my organizations; POST: CreateOrgRequest -> Org (needs the ability `orgs.create` or an instance admin; the creator is its first owner). */
@@ -306,7 +435,7 @@ export const ORGS_API = {
   /** Slice 5. POST: an org owner ends an open entry early. */
   endBreakGlass: (id: OrgId, entryId: string) => `/api/orgs/${id}/break-glass/${encodeURIComponent(entryId)}/end`,
   /** Slice 5. POST MoveToOrgRequest -> MoveToOrgResult: Move to organization (manage on the object, member or up in the org). */
-  moveWorkspace: (ref: string) => `/api/workspaces/${encodeURIComponent(ref)}/move-to-org`,
+  moveWorkspace: (ref: string) => `/api/workspaces/${ref.split('/').map(encodeURIComponent).join('/')}/move-to-org`,
   moveBucket: (key: string) => `/api/tickets/buckets/${encodeURIComponent(key)}/move-to-org`,
   moveVault: (id: string) => `/api/knowledge/vaults/${encodeURIComponent(id)}/move-to-org`,
   /** Slice 10. GET -> OrgSignInSettings (manage). */
@@ -323,6 +452,32 @@ export const ORGS_API = {
   ssoTest: (id: OrgId) => `/api/orgs/${id}/sso/test`,
   /** Slice 10. PUT OrgSsoPolicyRequest -> OrgSignInSettings (owners only). */
   ssoPolicy: (id: OrgId) => `/api/orgs/${id}/sso/policy`,
+  /** Slice 7. GET -> OrgTeam[] (members and up: every team; a guest: the teams they are in); POST CreateOrgTeamRequest -> OrgTeam. */
+  teams: (id: OrgId) => `/api/orgs/${id}/teams`,
+  /** Slice 7. DELETE: an org owner or admin, or a team owner (its shares end). */
+  team: (id: OrgId, teamId: string) => `/api/orgs/${id}/teams/${encodeURIComponent(teamId)}`,
+  /** Slice 7. GET -> OrgTeamMember[]. */
+  teamMembers: (id: OrgId, teamId: string) => `/api/orgs/${id}/teams/${encodeURIComponent(teamId)}/members`,
+  /** Slice 7. PUT SetOrgTeamMemberRequest (an active member of the org only); DELETE. */
+  teamMember: (id: OrgId, teamId: string, userId: UserId) => `/api/orgs/${id}/teams/${encodeURIComponent(teamId)}/members/${userId}`,
+  /** Slice 7. GET -> OrgShare[]; POST CreateOrgShareRequest -> OrgShare. */
+  shares: (id: OrgId) => `/api/orgs/${id}/shares`,
+  /** Slice 7. DELETE: revoke (the sharer, a manager of the object, or an org owner or admin). */
+  share: (id: OrgId, shareId: string) => `/api/orgs/${id}/shares/${encodeURIComponent(shareId)}`,
+  /** Slice 7. GET -> OrgTranscriptView[] (org owners). */
+  transcriptViews: (id: OrgId) => `/api/orgs/${id}/transcript-views`,
+  /** Slice 8. GET (manage) -> OrgInvitation[]; POST CreateOrgInvitationRequest -> CreatedOrgInvitation (owners, admins; members when membersMayInvite). */
+  invitations: (id: OrgId) => `/api/orgs/${id}/invitations`,
+  /** Slice 8. DELETE (manage): revoke a pending invitation at once. */
+  invitation: (id: OrgId, invitationId: string) => `/api/orgs/${id}/invitations/${encodeURIComponent(invitationId)}`,
+  /** Slice 8. POST AcceptOrgInvitationRequest -> AcceptedOrgInvitation: a signed-in person whose email is the invitation's; throttled. */
+  acceptInvitation: '/api/orgs/invitations/accept',
+  /** Slice 8. POST SuspendOrgRequest: an owner suspends the org (every right that comes from it is none until resumed). */
+  suspend: (id: OrgId) => `/api/orgs/${id}/suspend`,
+  /** Slice 8. POST: an owner resumes an org THEY suspended (one the platform admin suspended is resumed in the Admin console). */
+  resume: (id: OrgId) => `/api/orgs/${id}/resume`,
+  /** Slice 8. GET ?before&limit (manage) -> PlatformAuditEntry[]: the org's audit rows, newest first. */
+  audit: (id: OrgId) => `/api/orgs/${id}/audit`,
 } as const;
 
 export const ORGS_ERROR_CODES = {
@@ -344,5 +499,23 @@ export const ORGS_ERROR_CODES = {
   DOMAIN_REFUSED: 'DOMAIN_REFUSED',
   /** Slice 10: requireSso needs an owner who has signed in through the org's provider first (409). */
   SSO_LOCKOUT_GUARD: 'SSO_LOCKOUT_GUARD',
+  /** Org share: an operate share of a workspace with credential sets assigned, without `acknowledgeExposure` (409, details.credentials). */
+  SHARE_EXPOSES_CREDENTIALS: 'SHARE_EXPOSES_CREDENTIALS',
+  /** Org teams: only an active member of the org may be in its teams (422). */
+  TEAM_NOT_ORG_MEMBER: 'TEAM_NOT_ORG_MEMBER',
+  /** Slice 8. No such invitation, or it was used or revoked, or its org is gone or suspended (404). */
+  INVITATION_INVALID: 'INVITATION_INVALID',
+  /** Slice 8. The invitation is past its 7 days (409). */
+  INVITATION_EXPIRED: 'INVITATION_EXPIRED',
+  /** Slice 8. The signed-in account's email is not the invitation's (403). */
+  INVITATION_EMAIL_MISMATCH: 'INVITATION_EMAIL_MISMATCH',
+  /** Slice 8. The email is on a domain another org has verified: that org's IdP vouches for it (409). */
+  INVITATION_OTHER_ORG_DOMAIN: 'INVITATION_OTHER_ORG_DOMAIN',
+  /** Slice 8. The person is already an active member (409). */
+  ALREADY_MEMBER: 'ALREADY_MEMBER',
+  /** Slice 8. The org still owns objects: move them out first (409, details.owned). */
+  ORG_OWNS_OBJECTS: 'ORG_OWNS_OBJECTS',
+  /** Slice 8. The platform admin suspended it: only the Admin console resumes it (403). */
+  ORG_SUSPENDED_BY_PLATFORM: 'ORG_SUSPENDED_BY_PLATFORM',
 } as const;
 export type OrgsErrorCode = (typeof ORGS_ERROR_CODES)[keyof typeof ORGS_ERROR_CODES];
