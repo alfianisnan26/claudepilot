@@ -1,56 +1,104 @@
-import { Button, ConfirmDialog, useToast } from '@isnanme/ui';
-import { FOUNDING_USER_ID, ORG_LIMITS, type Org, type OrgMember, type OrgRole } from '@portal/contracts';
-import { LogOut, UserMinus } from 'lucide-react';
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { cn } from '@isnanme/ui';
+import { FOUNDING_USER_ID, type Org, type OrgMember } from '@portal/contracts';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useSearchParams } from 'react-router';
 import { Card } from '@/components/Card';
-import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
 import { api } from '@/lib/api';
-import { HOME } from '@/app/nav';
-import { PERSONAL } from '@/lib/orgContext';
+import { AuditSection } from './AuditSection';
+import { DangerSection } from './DangerSection';
+import { GeneralSection } from './GeneralSection';
 import { InvitationsSection } from './InvitationsSection';
-import { orgField } from './NewOrgDialog';
+import { MembersSection } from './MembersSection';
+import { ObjectsSection } from './ObjectsSection';
 import { OrgSignInTab } from './OrgSignInTab';
 import { useOrgs } from './OrgsProvider';
-import { canManageOrg, canRemoveMember, canSeeMembers, canSeeSignIn, orgErrorText, ROLE_ABOUT, ROLE_LABEL, roleChoices } from './rules';
+import { PoliciesSection } from './PoliciesSection';
+import { canSeeMembers, objectRows, orgSections, SECTION_LABEL, type OrgObjectRow, type OrgSection } from './rules';
+import { SectionTitle } from './settingsUi';
+import { SharingSection } from './SharingSection';
+import { TeamsSection } from './TeamsSection';
 
-type Tab = 'general' | 'sign-in';
+const anchor = (s: OrgSection) => `org-s-${s}`;
 
 /**
- * Org settings (docs/prd/organizations.md §7, slice 9): General (name; the slug is fixed) and Members (roles, remove, leave). Owners and
- * admins change things; members read; a guest sees the name and Leave only. Invitations (slice 8) for owners and admins. Slice 10 adds the
- * Sign-in tab (owners and admins; `?tab=sign-in`, where a step-up returns): domains, the org's provider, Require SSO (OrgSignInTab). The
- * server decides every change; a refusal (the last owner) is shown as it comes.
+ * Org settings (docs/prd/organizations.md §7, §13.9; owner request 2026-11-01): one scrolling page of sections, with a side list on wide
+ * screens and a sticky section picker on phones. Which sections show is `orgSections` (rules.ts): owners everything; admins no Policies or
+ * Danger zone; members General, Members, Teams, Objects, Sharing (and Invitations when the org lets them invite); guests General, Teams,
+ * Objects. A suspended org shows its owners General and Danger zone. The server decides every change. `?tab=sign-in` (where an SSO
+ * step-up returns) opens at Sign-in.
  */
 export function OrgSettingsPage() {
   const { id = '' } = useParams();
-  const [search, setSearch] = useSearchParams();
-  const toast = useToast();
-  const navigate = useNavigate();
-  const { reload: reloadOrgs, setContext } = useOrgs();
+  const [search] = useSearchParams();
+  const { reload: reloadOrgs } = useOrgs();
   const [org, setOrg] = useState<Org | null>(null);
   const [missing, setMissing] = useState(false);
   const [members, setMembers] = useState<OrgMember[] | null>(null);
+  const [rows, setRows] = useState<OrgObjectRow[] | null>(null);
   const [meId, setMeId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [removing, setRemoving] = useState<OrgMember | null>(null);
-  const [leaving, setLeaving] = useState(false);
+  const [active, setActive] = useState<OrgSection>('general');
 
   const load = useCallback(async () => {
     try {
       const o = await api.orgs.get(id);
       setOrg(o);
       setMissing(false);
-      if (canSeeMembers(o.myRole)) setMembers(await api.orgs.members(id));
+      if (canSeeMembers(o.myRole) && o.state === 'active') setMembers(await api.orgs.members(id));
     } catch {
       setMissing(true);
     }
   }, [id]);
+  const loadObjects = useCallback(async () => {
+    try {
+      setRows(objectRows(await api.orgs.objects(id)));
+    } catch {
+      setRows([]);
+    }
+  }, [id]);
   useEffect(() => void load(), [load]);
+  useEffect(() => {
+    if (org?.state === 'active') void loadObjects();
+  }, [org?.state, loadObjects]);
   useEffect(() => {
     void api.me().then((m) => setMeId(m.kind === 'account' ? m.user.id : FOUNDING_USER_ID), () => undefined);
   }, []);
+
+  const sections = useMemo(() => (org ? orgSections(org) : []), [org]);
+  const names = useMemo(() => new Map((members ?? []).map((m) => [m.userId, m.displayName])), [members]);
+
+  const go = useCallback((s: OrgSection) => {
+    setActive(s);
+    const el = document.getElementById(anchor(s));
+    const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    el?.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+  }, []);
+
+  // An SSO step-up returns to `?tab=sign-in`: open there once the sections are on the page.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !sections.includes('sign-in') || search.get('tab') !== 'sign-in') return;
+    opened.current = true;
+    requestAnimationFrame(() => go('sign-in'));
+  }, [sections, search, go]);
+
+  // The side list and the picker follow the section in view.
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined' || sections.length === 0) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const top = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        const key = top?.target.getAttribute('data-org-section') as OrgSection | null;
+        if (key) setActive(key);
+      },
+      { rootMargin: '-140px 0px -55% 0px' },
+    );
+    for (const s of sections) {
+      const el = document.getElementById(anchor(s));
+      if (el) obs.observe(el);
+    }
+    return () => obs.disconnect();
+  }, [sections]);
 
   if (missing)
     return (
@@ -61,226 +109,107 @@ export function OrgSettingsPage() {
     );
   if (!org) return <div className="skeleton h-40 rounded-[24px]" aria-busy="true" />;
 
-  const manage = canManageOrg(org.myRole);
-
-  const setRole = async (m: OrgMember, role: OrgRole) => {
-    setError(null);
-    try {
-      setMembers(await api.orgs.setRole(org.id, m.userId, { role }));
-      toast('Role changed');
-      if (m.userId === meId) await Promise.all([load(), reloadOrgs()]);
-    } catch (e) {
-      setError(orgErrorText(e, 'Couldn’t change the role.'));
+  const saved = (o: Org) => {
+    setOrg(o);
+    void reloadOrgs();
+  };
+  const render = (s: OrgSection) => {
+    switch (s) {
+      case 'general':
+        return <GeneralSection org={org} onSaved={saved} />;
+      case 'members':
+        return (
+          <MembersSection
+            org={org}
+            members={members}
+            meId={meId}
+            onMembers={setMembers}
+            onSelfChanged={async () => {
+              await Promise.all([load(), reloadOrgs()]);
+            }}
+            onInvite={sections.includes('invitations') ? () => go('invitations') : undefined}
+          />
+        );
+      case 'teams':
+        return <TeamsSection org={org} members={members} meId={meId} />;
+      case 'invitations':
+        return <InvitationsSection org={org} />;
+      case 'objects':
+        return <ObjectsSection org={org} rows={rows} onMoved={loadObjects} />;
+      case 'sharing':
+        return <SharingSection org={org} meId={meId} rows={rows ?? []} />;
+      case 'sign-in':
+        return (
+          <section aria-labelledby="org-signin-title">
+            <SectionTitle id="org-signin-title">Sign-in</SectionTitle>
+            {/* Keyed on requireSso, so a change made in Policies reloads it. */}
+            <OrgSignInTab key={String(org.policies?.requireSso)} org={org} members={members} />
+          </section>
+        );
+      case 'policies':
+        return <PoliciesSection org={org} onSaved={saved} />;
+      case 'audit':
+        return <AuditSection org={org} names={names} />;
+      case 'danger':
+        return <DangerSection org={org} onChanged={saved} />;
     }
   };
-  const remove = async () => {
-    const m = removing;
-    setRemoving(null);
-    if (!m) return;
-    setError(null);
-    try {
-      await api.orgs.remove(org.id, m.userId);
-      toast('Removed');
-      await load();
-    } catch (e) {
-      setError(orgErrorText(e, 'Couldn’t remove them.'));
-    }
-  };
-  const leave = async () => {
-    setLeaving(false);
-    setError(null);
-    try {
-      await api.orgs.leave(org.id);
-      setContext(PERSONAL);
-      await reloadOrgs();
-      toast('You left the organization');
-      navigate(HOME);
-    } catch (e) {
-      setError(orgErrorText(e, 'Couldn’t leave.'));
-    }
-  };
-
-  const tab: Tab = canSeeSignIn(org.myRole) && search.get('tab') === 'sign-in' ? 'sign-in' : 'general';
-  const tabs = canSeeSignIn(org.myRole) && (
-    <div role="tablist" aria-label="Org settings" className="flex gap-1 rounded-full bg-surface-2 p-1 self-start">
-      {(
-        [
-          ['general', 'General'],
-          ['sign-in', 'Sign-in'],
-        ] as const
-      ).map(([key, text]) => (
-        <button
-          key={key}
-          type="button"
-          role="tab"
-          aria-selected={tab === key}
-          data-org-tab={key}
-          onClick={() => setSearch(key === 'general' ? {} : { tab: key }, { replace: true })}
-          className={`press min-h-11 rounded-full px-4 text-sm font-semibold outline-hidden focus-visible:ring-2 focus-visible:ring-accent ${tab === key ? 'bg-surface text-ink shadow-sm' : 'text-ink-soft'}`}
-        >
-          {text}
-        </button>
-      ))}
-    </div>
-  );
-
-  if (tab === 'sign-in')
-    return (
-      <div data-org-settings="" className="flex flex-col gap-6">
-        <PageHeader title={org.name} description={`Settings of this organization. Your role: ${ROLE_ABOUT[org.myRole]}`} />
-        {tabs}
-        <OrgSignInTab org={org} members={members} />
-      </div>
-    );
 
   return (
-    <div data-org-settings="" className="flex flex-col gap-6">
-      <PageHeader title={org.name} description={`Settings of this organization. Your role: ${ROLE_ABOUT[org.myRole]}`} />
-      {tabs}
-      <General org={org} manage={manage} onSaved={(o) => (setOrg(o), void reloadOrgs())} />
-
-      {error && (
-        <p role="alert" data-org-error="" className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm font-medium [overflow-wrap:anywhere] text-danger">
-          {error}
+    <div data-org-settings="" className="flex flex-col gap-6 pb-10">
+      <PageHeader title={org.name} description="Settings of this organization. You see the sections your role may use." />
+      {org.state === 'suspended' && (
+        <p data-org-suspended="" className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm font-medium [overflow-wrap:anywhere] text-danger">
+          Suspended. Nobody can use its things until an owner resumes it.
         </p>
       )}
-
-      {canSeeMembers(org.myRole) && (
-        <section aria-labelledby="org-members">
-          <h2 id="org-members" className="mb-2 flex items-center gap-1 px-1 text-[13px] font-semibold text-muted">
-            Members
-            <InfoTip label="About members">
-              {manage
-                ? 'Change a role or remove someone. Admins change roles up to admin; only an owner changes owners. An organization always keeps an owner.'
-                : 'The people in this organization. Owners and admins change roles.'}
-            </InfoTip>
-          </h2>
-          <Card>
-            {members === null ? (
-              <div className="skeleton m-4 h-10 rounded-xl" />
-            ) : (
-              <ul className="divide-y divide-line">
-                {members.map((m) => {
-                  const self = m.userId === meId;
-                  const choices = roleChoices(org.myRole, m.role);
-                  return (
-                    <li key={m.userId} data-org-member={m.userId} className="flex min-h-14 flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 sm:px-5">
-                      <span className="min-w-0 flex-1 basis-40">
-                        <span className="block font-medium [overflow-wrap:anywhere]">
-                          {m.displayName}
-                          {self && <span className="text-muted"> (you)</span>}
-                        </span>
-                        {m.email && <span className="block text-[12.5px] [overflow-wrap:anywhere] text-muted">{m.email}</span>}
-                      </span>
-                      {choices.length > 0 ? (
-                        <select
-                          aria-label={`Role of ${m.displayName}`}
-                          value={m.role}
-                          onChange={(e) => void setRole(m, e.target.value as OrgRole)}
-                          className="h-11 min-w-28 rounded-xl border border-line bg-surface px-3 text-sm font-semibold outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
-                        >
-                          {choices.map((r) => (
-                            <option key={r} value={r}>
-                              {ROLE_LABEL[r]}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="px-2 text-sm font-semibold text-ink-soft">{ROLE_LABEL[m.role]}</span>
-                      )}
-                      {canRemoveMember(org.myRole, m.role, self) && (
-                        <Button variant="ghost" size="icon" aria-label={`Remove ${m.displayName}`} onClick={() => setRemoving(m)}>
-                          <UserMinus className="size-[18px]" />
-                        </Button>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Card>
-        </section>
-      )}
-
-      {manage && <InvitationsSection org={org} />}
-
-      <div>
-        <Button variant="secondary" icon={<LogOut className="size-4" />} onClick={() => setLeaving(true)} data-org-leave="">
-          Leave
-        </Button>
+      <div className="lg:grid lg:grid-cols-[10.5rem_minmax(0,1fr)] lg:gap-8">
+        <nav aria-label="Org settings sections" className="hidden lg:block">
+          <ul className="sticky top-6 flex flex-col gap-1">
+            {sections.map((s) => (
+              <li key={s}>
+                <button
+                  type="button"
+                  aria-current={active === s ? 'location' : undefined}
+                  data-org-nav={s}
+                  onClick={() => go(s)}
+                  className={cn(
+                    'press flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold outline-hidden focus-visible:ring-2 focus-visible:ring-accent',
+                    active === s ? 'bg-surface-2 text-ink' : 'text-ink-soft',
+                    s === 'danger' && 'text-danger',
+                  )}
+                >
+                  {SECTION_LABEL[s]}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <div className="flex min-w-0 flex-col gap-10">
+          {sections.length > 1 && (
+            <label className="sticky top-[calc(var(--safe-top)+4rem)] z-30 -mx-4 -mb-6 border-b border-line bg-bg/90 px-4 py-2 backdrop-blur-md sm:top-0 sm:-mx-6 sm:px-6 lg:hidden">
+              <span className="sr-only">Section</span>
+              <select
+                data-org-picker=""
+                value={active}
+                onChange={(e) => go(e.target.value as OrgSection)}
+                className="h-11 w-full rounded-xl border border-line bg-surface px-3 text-sm font-semibold outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                {sections.map((s) => (
+                  <option key={s} value={s}>
+                    {SECTION_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {sections.map((s) => (
+            <div key={s} id={anchor(s)} data-org-section={s} className="scroll-mt-48 sm:scroll-mt-20 lg:scroll-mt-6">
+              {render(s)}
+            </div>
+          ))}
+        </div>
       </div>
-
-      <ConfirmDialog
-        open={!!removing}
-        title="Remove member?"
-        description={removing ? `${removing.displayName} loses access to this organization.` : ''}
-        confirmLabel="Remove"
-        onConfirm={() => void remove()}
-        onClose={() => setRemoving(null)}
-      />
-      <ConfirmDialog
-        open={leaving}
-        title="Leave organization?"
-        description={`You lose access to ${org.name}.`}
-        confirmLabel="Leave"
-        onConfirm={() => void leave()}
-        onClose={() => setLeaving(false)}
-      />
     </div>
-  );
-}
-
-function General({ org, manage, onSaved }: { org: Org; manage: boolean; onSaved: (org: Org) => void }) {
-  const toast = useToast();
-  const [name, setName] = useState(org.name);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => setName(org.name), [org.name]);
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      onSaved(await api.orgs.update(org.id, { name: name.trim() }));
-      toast('Saved');
-    } catch (err) {
-      setError(orgErrorText(err, 'Couldn’t save.'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section aria-labelledby="org-general">
-      <h2 id="org-general" className="mb-2 px-1 text-[13px] font-semibold text-muted">
-        General
-      </h2>
-      <Card className="p-4 sm:p-5">
-        <form onSubmit={save} className="flex flex-col gap-3" noValidate>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-semibold text-ink-soft">Name</span>
-            <input type="text" maxLength={ORG_LIMITS.nameMax} value={name} readOnly={!manage} onChange={(e) => setName(e.target.value)} className={orgField} />
-          </label>
-          <div className="flex flex-col gap-1.5">
-            <span className="flex items-center gap-1 text-sm font-semibold text-ink-soft">
-              Slug
-              <InfoTip label="About the slug">Used in links. It can’t be changed.</InfoTip>
-            </span>
-            <span className="flex min-h-12 items-center rounded-2xl bg-surface-2 px-4 font-mono text-[14px] [overflow-wrap:anywhere]">{org.slug}</span>
-          </div>
-          {error && (
-            <p role="alert" className="text-sm font-medium [overflow-wrap:anywhere] text-danger">
-              {error}
-            </p>
-          )}
-          {manage && (
-            <Button type="submit" loading={busy} disabled={!name.trim() || name.trim() === org.name} className="self-start">
-              Save
-            </Button>
-          )}
-        </form>
-      </Card>
-    </section>
   );
 }

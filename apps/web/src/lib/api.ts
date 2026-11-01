@@ -107,8 +107,24 @@ import {
   type OrgSsoProvider,
   type OrgSsoProviderRequest,
   type UpdateOrgRequest,
+  KNOWLEDGE_API,
+  TICKET_API,
+  type BreakGlassEntry,
+  type CreateOrgTeamRequest,
+  type MoveToOrgRequest,
+  type MoveToOrgResult,
+  type OrgBreakGlassView,
+  type OrgShare,
+  type OrgTeam,
+  type OrgTeamMember,
+  type OrgTeamRole,
+  type OrgTranscriptView,
+  type PlatformAuditEntry,
+  type SuspendOrgRequest,
+  type TicketBucket,
+  type VaultSummary,
 } from '@portal/contracts';
-import { scopedList } from './orgContext';
+import { scopedList, withOrg } from './orgContext';
 
 export class ApiError extends Error {
   constructor(
@@ -305,6 +321,40 @@ export const api = {
     invite: (id: string, body: CreateOrgInvitationRequest) => request<CreatedOrgInvitation>('POST', ORGS_API.invitations(id), body),
     revokeInvitation: (id: string, invitationId: string) => request<{ revoked: true }>('DELETE', ORGS_API.invitation(id, invitationId)),
     acceptInvitation: (body: AcceptOrgInvitationRequest) => request<AcceptedOrgInvitation>('POST', ORGS_API.acceptInvitation, body),
+    suspend: (id: string, body: SuspendOrgRequest = {}) => request<Org>('POST', ORGS_API.suspend(id), body),
+    resume: (id: string) => request<Org>('POST', ORGS_API.resume(id)),
+    delete: (id: string) => request<{ deleted: true }>('DELETE', ORGS_API.org(id)),
+    /** Org settings (owner request 2026-11-01): teams, shares, the audit (with a kind prefix), transcript views and break-glass (owners). */
+    teams: (id: string) => request<OrgTeam[]>('GET', ORGS_API.teams(id)),
+    createTeam: (id: string, body: CreateOrgTeamRequest) => request<OrgTeam>('POST', ORGS_API.teams(id), body),
+    removeTeam: (id: string, teamId: string) => request<{ removed: true }>('DELETE', ORGS_API.team(id, teamId)),
+    teamMembers: (id: string, teamId: string) => request<OrgTeamMember[]>('GET', ORGS_API.teamMembers(id, teamId)),
+    setTeamMember: (id: string, teamId: string, userId: string, role: OrgTeamRole) => request<OrgTeamMember[]>('PUT', ORGS_API.teamMember(id, teamId, userId), { role }),
+    removeTeamMember: (id: string, teamId: string, userId: string) => request<{ removed: true }>('DELETE', ORGS_API.teamMember(id, teamId, userId)),
+    shares: (id: string) => request<OrgShare[]>('GET', ORGS_API.shares(id)),
+    revokeShare: (id: string, shareId: string) => request<{ revoked: true }>('DELETE', ORGS_API.share(id, shareId)),
+    audit: (id: string, q: { before?: number; kind?: string } = {}) => {
+      const qs = new URLSearchParams();
+      if (q.before) qs.set('before', String(q.before));
+      if (q.kind) qs.set('kind', q.kind);
+      qs.set('limit', '50');
+      return request<PlatformAuditEntry[]>('GET', `${ORGS_API.audit(id)}?${qs.toString()}`);
+    },
+    transcriptViews: (id: string) => request<OrgTranscriptView[]>('GET', ORGS_API.transcriptViews(id)),
+    breakGlass: (id: string) => request<OrgBreakGlassView>('GET', ORGS_API.breakGlass(id)),
+    endBreakGlass: (id: string, entryId: string) => request<BreakGlassEntry>('POST', ORGS_API.endBreakGlass(id, entryId)),
+    /** What an org owns (`scope` = its id) or what no org owns (`personal`), through the lists' `?org=` (never the app's current context). */
+    objects: async (scope: string) => {
+      const [workspaces, buckets, vaults] = await Promise.all([
+        request<Workspace[]>('GET', withOrg(WORKSPACE_API.list, scope)),
+        request<TicketBucket[]>('GET', withOrg(TICKET_API.buckets, scope)),
+        request<VaultSummary[]>('GET', withOrg(KNOWLEDGE_API.vaults, scope)),
+      ]);
+      return { workspaces, buckets, vaults };
+    },
+    moveWorkspace: (ref: string, body: MoveToOrgRequest) => request<MoveToOrgResult>('POST', ORGS_API.moveWorkspace(ref), body),
+    moveBucket: (key: string, body: MoveToOrgRequest) => request<MoveToOrgResult>('POST', ORGS_API.moveBucket(key), body),
+    moveVault: (vaultId: string, body: MoveToOrgRequest) => request<MoveToOrgResult>('POST', ORGS_API.moveVault(vaultId), body),
   },
   /** Multi-assignment pools (secrets & env, skillsets, MCP sets): one API for every type. */
   pools: {

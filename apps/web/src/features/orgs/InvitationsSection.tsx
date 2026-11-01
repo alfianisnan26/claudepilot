@@ -3,20 +3,20 @@ import type { CreatedOrgInvitation, Org, OrgInvitation, OrgInvitationRole } from
 import { Check, Copy, X } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Card } from '@/components/Card';
-import { InfoTip } from '@/components/InfoTip';
 import { api } from '@/lib/api';
 import { orgField } from './NewOrgDialog';
-import { inviteLink, inviteRoleChoices, orgErrorText, ROLE_LABEL } from './rules';
-
-const selectField = 'h-12 rounded-2xl border border-line bg-surface px-3 text-[15px] font-semibold outline-hidden focus-visible:ring-2 focus-visible:ring-accent';
+import { canListInvitations, inviteLink, inviteRoleChoices, orgErrorText, ROLE_LABEL } from './rules';
+import { selectField, SectionTitle } from './settingsUi';
 
 /**
  * Org settings, Invitations (docs/prd/organizations.md §6.8, slice 8): owners and admins invite by email with a role, copy the link once
  * (no mail is sent; the code is in the link's fragment and only its hash is kept), see pending and expired ones, and revoke one at once.
+ * Org settings (2026-11-01): a member the org lets invite (`membersMayInvite`, Org.may.invite) gets the form only; the list is the managers'.
  */
 export function InvitationsSection({ org }: { org: Org }) {
   const toast = useToast();
   const roles = inviteRoleChoices(org.myRole);
+  const listable = canListInvitations(org.myRole);
   const [list, setList] = useState<OrgInvitation[] | null>(null);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<OrgInvitationRole>('member');
@@ -26,13 +26,14 @@ export function InvitationsSection({ org }: { org: Org }) {
   const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
+    if (!listable) return;
     try {
       setList(await api.orgs.invitations(org.id));
     } catch (e) {
       setList([]);
       setError(orgErrorText(e, 'Couldn’t load the invitations.'));
     }
-  }, [org.id]);
+  }, [org.id, listable]);
   useEffect(() => void load(), [load]);
 
   const invite = async (e: FormEvent) => {
@@ -74,12 +75,9 @@ export function InvitationsSection({ org }: { org: Org }) {
 
   return (
     <section aria-labelledby="org-invitations" data-org-invitations="">
-      <h2 id="org-invitations" className="mb-2 flex items-center gap-1 px-1 text-[13px] font-semibold text-muted">
+      <SectionTitle id="org-invitations" about="Invite by email, then copy the link and send it yourself. It works once, for 7 days, and only for someone signed in with that email.">
         Invitations
-        <InfoTip label="About invitations">
-          Invite by email, then copy the link and send it yourself. It works once, for 7 days, and only for someone signed in with that email.
-        </InfoTip>
-      </h2>
+      </SectionTitle>
       <Card className="p-4 sm:p-5">
         <form onSubmit={invite} className="flex flex-col gap-3 sm:flex-row sm:items-end" noValidate>
           <label className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -119,29 +117,31 @@ export function InvitationsSection({ org }: { org: Org }) {
         )}
       </Card>
 
-      <Card className="mt-3">
-        {list === null ? (
-          <div className="skeleton m-4 h-10 rounded-xl" />
-        ) : list.length === 0 ? (
-          <p className="px-4 py-4 text-sm text-muted sm:px-5">No open invitations.</p>
-        ) : (
-          <ul className="divide-y divide-line">
-            {list.map((inv) => (
-              <li key={inv.id} data-org-invitation={inv.id} className="flex min-h-14 flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 sm:px-5">
-                <span className="min-w-0 flex-1 basis-40">
-                  <span className="block font-medium [overflow-wrap:anywhere]">{inv.email}</span>
-                  <span className={`block text-[12.5px] ${inv.state === 'expired' ? 'text-danger' : 'text-muted'}`}>
-                    {ROLE_LABEL[inv.role]} · {inv.state === 'expired' ? 'Expired' : `Until ${new Date(inv.expiresAt).toLocaleDateString()}`}
+      {listable && (
+        <Card className="mt-3">
+          {list === null ? (
+            <div className="skeleton m-4 h-10 rounded-xl" />
+          ) : list.length === 0 ? (
+            <p className="px-4 py-4 text-sm text-muted sm:px-5">No open invitations.</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {list.map((inv) => (
+                <li key={inv.id} data-org-invitation={inv.id} className="flex min-h-14 flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 sm:px-5">
+                  <span className="min-w-0 flex-1 basis-40">
+                    <span className="block font-medium [overflow-wrap:anywhere]">{inv.email}</span>
+                    <span className={`block text-[12.5px] ${inv.state === 'expired' ? 'text-danger' : 'text-muted'}`}>
+                      {ROLE_LABEL[inv.role]} · {inv.state === 'expired' ? 'Expired' : `Until ${new Date(inv.expiresAt).toLocaleDateString()}`}
+                    </span>
                   </span>
-                </span>
-                <Button variant="ghost" size="icon" aria-label={`Revoke the invitation for ${inv.email}`} onClick={() => void revoke(inv)}>
-                  <X className="size-[18px]" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+                  <Button variant="ghost" size="icon" aria-label={`Revoke the invitation for ${inv.email}`} onClick={() => void revoke(inv)}>
+                    <X className="size-[18px]" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
     </section>
   );
 }
