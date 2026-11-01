@@ -26,6 +26,8 @@ export interface RequestsDeps {
   palette: Palette;
   /** Multi-user seam: false leaves a Claude's requests out (the asking user may not use it). Absent: all. */
   allow?: (claude: ClaudeKey) => boolean;
+  /** The org context (authz/usageAnchor.ts): false leaves a request out (it counts in another context). Absent: all. */
+  rowAllow?: (row: SpendRow) => boolean;
 }
 
 const round1 = (v: number): number => Math.round(v * 10) / 10 + 0;
@@ -87,6 +89,7 @@ export function buildRequestsReport(deps: RequestsDeps, range: ChatUsageRange, o
     const ref = claudeOf(r);
     if (opts.claudeId && ref.claudeId !== opts.claudeId && ref.key !== opts.claudeId) continue;
     if (deps.allow && !deps.allow(ref)) continue;
+    if (deps.rowAllow && !deps.rowAllow(r)) continue;
     if (r.atMs < w.start) {
       addRow(prevBuckets[Math.floor((r.atMs - prevStart) / w.bucket)]!, r);
       addRow(prevTotals, r);

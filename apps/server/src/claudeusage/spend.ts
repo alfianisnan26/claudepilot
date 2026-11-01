@@ -12,6 +12,7 @@ import {
   type SpendSpeed,
   type SpendToday,
 } from '@portal/contracts';
+import { oldName } from '../authz/usageAnchor.js';
 import { COUNTED_USAGE } from '../chat/usageDelta.js';
 import type { Store } from '../store/store.js';
 
@@ -25,6 +26,8 @@ export const MIN_TODAY_SPAN_MS = 5 * MIN;
 export interface SpendRow {
   atMs: number;
   workspaceId: string;
+  /** The chat it was part of (org context: a row follows its session, authz/usageAnchor.ts); absent in hand-built rows. */
+  sessionId?: string;
   /** '' for a request recorded without a Claude (before Claudes existed, or Default). */
   claudeId: string;
   model: string;
@@ -58,11 +61,12 @@ export class SpendReader {
     try {
       const rows = db
         .prepare(
-          `SELECT at_ms, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms
+          `SELECT at_ms, session_id, workspace_id, claude_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, requests, agents, duration_ms
            FROM chat_usage WHERE at_ms >= ? AND at_ms < ? AND ${COUNTED_USAGE} ORDER BY at_ms, id`,
         )
         .all(fromMs, toMs) as {
         at_ms: number;
+        session_id: string | null;
         workspace_id: string;
         claude_id: string | null;
         model: string;
@@ -78,6 +82,7 @@ export class SpendReader {
       return rows.map((r) => ({
         atMs: r.at_ms,
         workspaceId: r.workspace_id,
+        ...(r.session_id ? { sessionId: r.session_id } : {}),
         claudeId: r.claude_id ?? '',
         model: r.model,
         input: r.input_tokens,
@@ -155,10 +160,13 @@ export class ClaudeIndex {
   resolve(row: { workspaceId: string; claudeId: string }): ClaudeKey {
     if (row.claudeId) {
       const ref = this.#byId.get(row.claudeId);
-      return { key: row.claudeId, claudeId: row.claudeId, name: ref?.name ?? 'Removed', workspaceId: ref?.workspaceId ?? row.workspaceId };
+      const workspaceId = ref?.workspaceId ?? row.workspaceId;
+      return { key: row.claudeId, claudeId: row.claudeId, name: oldName(ref?.name ?? 'Removed', workspaceId), workspaceId };
     }
     const d = this.#defaults.get(row.workspaceId);
-    return d ? { key: d.id, claudeId: d.id, name: d.name, workspaceId: d.workspaceId } : { key: `default:${row.workspaceId}`, claudeId: '', name: 'Default', workspaceId: row.workspaceId };
+    return d
+      ? { key: d.id, claudeId: d.id, name: oldName(d.name, d.workspaceId), workspaceId: d.workspaceId }
+      : { key: `default:${row.workspaceId}`, claudeId: '', name: oldName('Default', row.workspaceId), workspaceId: row.workspaceId };
   }
 }
 

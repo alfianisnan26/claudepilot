@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { byWorkspace, orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import { actorUserId, actorOf as seamActorOf } from '../authz/seam.js';
+import { anchorWorkspace, type InWorkspace } from '../authz/usageAnchor.js';
 import type { ClaudeUsageMonitor } from './service.js';
 
 /** `until` of a snooze (FR17). */
@@ -30,14 +31,26 @@ function idOf(c: Context, name: string): string | undefined {
 /** Who is asking: the signed-in person (org isolation); the monitor's seam keeps the Claudes they may use. Nobody: an empty id (nothing). */
 const actorOf = (c: Context): string => actorUserId(seamActorOf(c)) ?? '';
 
+/**
+ * The org context of a request (`?org=`: personal | an org id; authz/orgScope.ts) as a predicate on a workspace; undefined without one. The
+ * monitor anchors each request row through its session and a decommissioned workspace through its heir (authz/usageAnchor.ts).
+ */
+const inWorkspaceOf = (c: Context): InWorkspace | undefined => {
+  const inScope = orgScopeFilter(seamActorOf(c), orgScopeOf(c));
+  return inScope ? byWorkspace(inScope) : undefined;
+};
+
 export function createClaudeUsageRoutes(usage: ClaudeUsageMonitor): Hono {
   const r = new Hono();
 
-  // GET /api/claude-usage/summary?claudeId=&tz=: the summary strip (docs §20.7).
-  r.get('/summary', async (c) => c.json(success(await usage.summary({ claudeId: idOf(c, 'claudeId'), tzOffsetMin: tzOf(c), actorId: actorOf(c) }))));
+  // GET /api/claude-usage/summary?claudeId=&tz=&org=: the summary strip (docs §20.7), in the org context.
+  r.get('/summary', async (c) => c.json(success(await usage.summary({ claudeId: idOf(c, 'claudeId'), tzOffsetMin: tzOf(c), actorId: actorOf(c), inWorkspace: inWorkspaceOf(c) }))));
 
-  // GET /api/claude-usage/requests?range=&claudeId=&tz=: the Requests report with the previous period, cache split and palette slots (§20.8).
-  r.get('/requests', (c) => c.json(success(usage.requestsReport(c.req.query('range') ?? '1d', { claudeId: idOf(c, 'claudeId'), tzOffsetMin: tzOf(c), actorId: actorOf(c) }))));
+  // GET /api/claude-usage/requests?range=&claudeId=&tz=&org=: the Requests report with the previous period, cache split and palette slots
+  // (§20.8), in the org context.
+  r.get('/requests', (c) =>
+    c.json(success(usage.requestsReport(c.req.query('range') ?? '1d', { claudeId: idOf(c, 'claudeId'), tzOffsetMin: tzOf(c), actorId: actorOf(c), inWorkspace: inWorkspaceOf(c) }))),
+  );
 
   // GET /api/claude-usage/recommend?workspaceId=&from=: the Claudes a chat can move to, ranked (§20.5).
   r.get('/recommend', async (c) => {
@@ -51,7 +64,7 @@ export function createClaudeUsageRoutes(usage: ClaudeUsageMonitor): Hono {
   // GET /api/claude-usage/palette: every Claude's and model's palette slot (§20.6).
   r.get('/palette', (c) => c.json(success(usage.palette())));
 
-  // GET /api/claude-usage/export?what=requests|quota&format=csv|json&range=&claudeId=&tz=: a file (§20.9).
+  // GET /api/claude-usage/export?what=requests|quota&format=csv|json&range=&claudeId=&tz=&org=: a file (§20.9), in the org context.
   r.get('/export', async (c) => {
     const q: Partial<UsageExportQuery> = {
       what: c.req.query('what') as UsageExportQuery['what'] | undefined,
@@ -60,7 +73,7 @@ export function createClaudeUsageRoutes(usage: ClaudeUsageMonitor): Hono {
       claudeId: idOf(c, 'claudeId'),
       tz: tzOf(c),
     };
-    const file = await usage.exportFile(q, actorOf(c));
+    const file = await usage.exportFile(q, actorOf(c), inWorkspaceOf(c));
     return c.body(file.body, 200, { 'Content-Type': file.contentType, 'Content-Disposition': `attachment; filename="${file.fileName}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   });
 
@@ -68,10 +81,9 @@ export function createClaudeUsageRoutes(usage: ClaudeUsageMonitor): Hono {
   // an org id; authz/orgScope.ts) keeps the Claudes whose workspace that context owns, and their alerts; an org the caller is not in: none.
   r.get('/', async (c) => {
     const report = await usage.report({ watch: c.req.query('watch') === '1', actorId: actorOf(c) });
-    const scope = orgScopeOf(c);
-    if (!scope) return c.json(success(report));
-    const inWorkspace = byWorkspace(orgScopeFilter(seamActorOf(c), scope)!);
-    const claudes = report.claudes.filter((u) => inWorkspace(u.workspaceId));
+    const inWorkspace = inWorkspaceOf(c);
+    if (!inWorkspace) return c.json(success(report));
+    const claudes = report.claudes.filter((u) => inWorkspace(anchorWorkspace(u.workspaceId, null)));
     const kept = new Set(claudes.map((u) => u.claudeId));
     return c.json(success({ ...report, claudes, alerts: report.alerts.filter((a) => kept.has(a.claudeId)) }));
   });

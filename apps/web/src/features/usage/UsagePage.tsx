@@ -6,6 +6,7 @@ import { BarList } from '@/components/charts';
 import { Card } from '@/components/Card';
 import { InfoTip } from '@/components/InfoTip';
 import { PageHeader } from '@/components/PageHeader';
+import { useAppContext } from '@/features/orgs/OrgsProvider';
 import { useLive } from '@/lib/live';
 import { formatCost, formatShare, formatTokens, prettyModel, slotColor, usageApi } from '@/lib/usage';
 import { UsageTabs } from './claude/UsageTabs';
@@ -221,5 +222,13 @@ export function UsagePage() {
   const tab = params.get('tab');
   // The Claude picked in the Requests filter scopes the strip while that tab shows; elsewhere the strip is every Claude.
   const scoped = useMemo(() => (!tab || tab === 'requests' ? claude : ''), [tab, claude]);
-  return <UsageTabs top={<SummaryStrip claudeId={scoped} />} requests={<RequestsTab claude={claude} onClaude={setClaude} />} />;
+  // Every tab and the strip read in the org context (`?org=`): a switch reads them all again, and a Claude picked in one context is let go.
+  const ctx = useAppContext();
+  const ctxKey = ctx.kind === 'org' ? `org:${ctx.id}` : 'personal';
+  const [heldKey, setHeldKey] = useState(ctxKey);
+  if (heldKey !== ctxKey) {
+    setHeldKey(ctxKey);
+    setClaude('');
+  }
+  return <UsageTabs key={ctxKey} top={<SummaryStrip claudeId={scoped} />} requests={<RequestsTab claude={claude} onClaude={setClaude} />} />;
 }

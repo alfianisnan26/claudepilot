@@ -201,6 +201,13 @@ test('the route guard with the real seam: a member gets 404 on admin and owner r
   assert.equal(await send('GET /api/tickets/:id', '/api/tickets/OWN-1'), 404);
   // A new workspace needs operate on a target: the platform's.
   assert.equal(await send('POST /api/workspaces', '/api/workspaces', json({ target: 'docker', name: 'mine' })), 404);
+  // Owner bug 2026-11-01: a Claude's ⋯ "Auto move" sheet answered "Not found." to a member (the overview was a `self` route not listed as a
+  // door). Every auto move answer is the person's own (autotransfer/routes.ts); a Claude's settings stay behind operate on that Claude.
+  assert.equal(await send('GET /api/autotransfer', '/api/autotransfer'), 200, 'the auto move overview is the person’s own');
+  const put = (b: unknown): RequestInit => ({ method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  assert.equal(await send('PUT /api/autotransfer/prefs', '/api/autotransfer/prefs', put({ mode: null })), 200);
+  assert.equal(await send('GET /api/autotransfer/events', '/api/autotransfer/events'), 200);
+  assert.equal(await send('GET /api/autotransfer/state', '/api/autotransfer/state'), 200);
 });
 
 test('personSession: the server code, an admin and a member; never a disabled, gone or unreadable account; session() stays the admin’s', () => {
