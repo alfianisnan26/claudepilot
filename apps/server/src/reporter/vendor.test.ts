@@ -26,6 +26,10 @@ test('vendor: reporter.js and axe.js are served as scripts with a short cache', 
       assert.equal(r.status, 200, p);
       assert.match(r.headers.get('content-type') ?? '', /^text\/javascript/);
       assert.equal(r.headers.get('cache-control'), 'public, max-age=300');
+      // T-3312: readable in CORS mode from any site (the Lab workbench fetched it so and logged a CORS error on every open).
+      assert.equal(r.headers.get('access-control-allow-origin'), '*', p);
+      const again = await h.call(p, { headers: { 'if-none-match': r.headers.get('etag') ?? '' } });
+      assert.deepEqual([again.status, again.headers.get('access-control-allow-origin')], [304, '*'], `${p} revalidated`);
     }
   } finally {
     h.done();

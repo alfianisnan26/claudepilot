@@ -219,7 +219,8 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   const file = (name: 'reporter.js' | 'axe.min.js') => (c: Context) => {
     const f = vendorFile(name, deps.vendorDirs);
     if (!f) throw notFound();
-    if (c.req.header('if-none-match') === f.etag) return c.body(null, 304, { ETag: f.etag, 'Cache-Control': 'public, max-age=300' });
+    if (c.req.header('if-none-match') === f.etag)
+      return c.body(null, 304, { ETag: f.etag, 'Cache-Control': 'public, max-age=300', 'Access-Control-Allow-Origin': '*' });
     return c.body(new Uint8Array(f.bytes), 200, {
       'Content-Type': 'text/javascript; charset=utf-8',
       'Cache-Control': 'public, max-age=300',
@@ -227,6 +228,9 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
       'X-Content-Type-Options': 'nosniff',
       // A public page loads it with <script src>: it must not be refused as a cross-origin resource.
       'Cross-Origin-Resource-Policy': 'cross-origin',
+      // T-3312: a page that fetches it in CORS mode (the Lab workbench's service worker) needs this too. The same public bytes for everyone,
+      // no credentials, no secret: any origin may read it.
+      'Access-Control-Allow-Origin': '*',
     });
   };
   r.get('/reporter.js', file('reporter.js'));
