@@ -3,7 +3,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { TicketSessionState } from '@portal/contracts';
+import { FOUNDING_USER_ID, type TicketSessionState } from '@portal/contracts';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { Tickets, type Caller, type TicketsOptions } from './service.js';
@@ -75,10 +75,25 @@ export class FakeSessions implements TicketSessions {
 export const UI: Caller = { kind: 'ui' };
 
 /** An admin's token (a script, Claude Code on someone's machine). */
-export const token = (id: string, scope: 'read' | 'operate' | 'admin'): Caller => ({ kind: 'token', tokenId: id, label: `${id}-label`, scope });
+// Organizations slice 0 (review m4): a token or agent caller carries its actor (the tools pass `actorOfPrincipal`); without one the service
+// treats it as nobody. The test callers are the founding user's, as every token and session was before.
+export const token = (id: string, scope: 'read' | 'operate' | 'admin'): Caller => ({
+  kind: 'token',
+  tokenId: id,
+  label: `${id}-label`,
+  scope,
+  actor: { kind: 'token', userId: FOUNDING_USER_ID, tokenId: id, scope },
+});
 
 /** An agent's per-session token: the session and workspace it was minted for. */
-export const agent = (workspaceId: string, sessionId: string, tokenId = `agt_${sessionId}`): Caller => ({ kind: 'agent', tokenId, label: `session ${sessionId} in ${workspaceId}`, workspaceId, sessionId });
+export const agent = (workspaceId: string, sessionId: string, tokenId = `agt_${sessionId}`): Caller => ({
+  kind: 'agent',
+  tokenId,
+  label: `session ${sessionId} in ${workspaceId}`,
+  workspaceId,
+  sessionId,
+  actor: { kind: 'agent', userId: FOUNDING_USER_ID, tokenId, sessionId, workspaceId },
+});
 
 export async function ticketsHarness(
   opts: {

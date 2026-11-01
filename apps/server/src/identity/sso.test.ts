@@ -81,13 +81,18 @@ test('a first sign-in makes a member in the provider’s team; the next one find
   assert.equal(await fails(users.verify('ana@example.com', GOOD, '10.0.0.9')), 'UNAUTHORIZED');
 });
 
-test('an existing account with that email is linked, not duplicated; a disabled one is refused; no auto-create means no account', async () => {
+test('an existing account is linked by email only when nothing guards it (organizations slice 0); a disabled one is refused; no auto-create means no account', async () => {
   const { signIn, users, sso, p } = setup();
-  const pre = await users.create({ email: 'ana@example.com', password: GOOD, role: 'admin' }, 'ui');
-  const r = await signIn();
-  assert.deepEqual([r.user.id, r.created, r.linked, r.user.role], [pre.id, false, true, 'admin']);
-  await users.update(pre.id, { state: 'disabled' });
-  assert.equal(await fails(signIn()), 'sso:disabled');
+  // An admin with a password of its own is never taken over by an email match, and no second account is made for it.
+  await users.create({ email: 'ana@example.com', password: GOOD, role: 'admin' }, 'ui');
+  assert.equal(await fails(signIn()), 'sso:no_account');
+  assert.equal(users.list().length, 1);
+  // An account a provider made (no password, no link left, a member) still links, not duplicated.
+  const made = await users.createExternal('cy@example.com', 'Cy', 'member', 'sso:sso_gone');
+  const r = await signIn({ sub: 'sub-c', email: 'cy@example.com' });
+  assert.deepEqual([r.user.id, r.created, r.linked, r.user.role], [made.id, false, true, 'member']);
+  await users.update(made.id, { state: 'disabled' });
+  assert.equal(await fails(signIn({ sub: 'sub-c', email: 'cy@example.com' })), 'sso:disabled');
   sso.update(p.id, { autoCreate: false }, REDIRECT);
   assert.equal(await fails(signIn({ sub: 'sub-2', email: 'bob@example.com' })), 'sso:no_account');
 });

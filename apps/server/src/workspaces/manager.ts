@@ -18,7 +18,7 @@ import {
   type WorkspaceUsage,
 } from '@portal/contracts';
 import { workspaceRef, type Actor } from '@portal/contracts';
-import { actorString, actorUserId, ownerActor, requireCan } from '../authz/seam.js';
+import { actorString, actorUserId, requireCan } from '../authz/seam.js';
 import { redact } from '../chat/redact.js';
 import type { JsonFile } from '../jsonFile.js';
 import { PLAIN_NAME } from '../names.js';
@@ -441,7 +441,7 @@ export class Workspaces {
    * about the workspace (its `<target>/<name>`, which the seam knows), never about the string given. What does not exist and what the actor
    * may not view are the same 404.
    */
-  async get(ref: string, actor: Actor = ownerActor()): Promise<Workspace> {
+  async get(ref: string, actor: Actor): Promise<Workspace> {
     const { known, all } = await this.#authorized(ref, actor, 'view');
     const found = findWorkspace(all ?? (await this.list()), known.legacyId);
     if (!found) throw notFound();
@@ -472,7 +472,7 @@ export class Workspaces {
    * Checks a rename without making it (T-42 slice 2): who may (`operate` on the workspace, through the seam), the label's rules, and that no
    * other workspace on the target answers to it (its name, label, or a label it had). Throws the refusal; answers the label before and after.
    */
-  async planRename(ref: string, label: unknown, actor: Actor = ownerActor()): Promise<{ known: WorkspaceIdentity; from: string; to: string; unchanged: boolean }> {
+  async planRename(ref: string, label: unknown, actor: Actor): Promise<{ known: WorkspaceIdentity; from: string; to: string; unchanged: boolean }> {
     const { known } = await this.#authorized(ref, actor, 'operate');
     const to = typeof label === 'string' ? normalizeWorkspaceLabel(label) : '';
     const problem = workspaceLabelProblem(to);
@@ -492,7 +492,7 @@ export class Workspaces {
    * reference: nothing running is touched. Every form it was called by keeps resolving, and the new label too. Audited. `via`: how a Portal
    * MCP token is named in the audit row (its actor string and label).
    */
-  async rename(ref: string, label: unknown, actor: Actor = ownerActor(), via: { actor?: string; actorLabel?: string } = {}): Promise<RenameWorkspaceResult> {
+  async rename(ref: string, label: unknown, actor: Actor, via: { actor?: string; actorLabel?: string } = {}): Promise<RenameWorkspaceResult> {
     const { known, from, to, unchanged } = await this.planRename(ref, label, actor);
     if (!unchanged) {
       this.identities.relabel(known.id, to);
@@ -535,7 +535,7 @@ export class Workspaces {
   }
 
   /** The wanted values on the record, what the Deployment has, and whether a change waits for the next start. `view` on the workspace. */
-  async resourcesOf(ref: string, actor: Actor = ownerActor()): Promise<WorkspaceResources> {
+  async resourcesOf(ref: string, actor: Actor): Promise<WorkspaceResources> {
     const { known } = await this.#authorized(ref, actor, 'view');
     const access = this.#resourceAccess(known);
     const { live, replicas } = await this.#run(known.target, () => access.read(known.name));
@@ -550,7 +550,7 @@ export class Workspaces {
   async planResources(
     ref: string,
     req: Partial<UpdateWorkspaceResourcesRequest>,
-    actor: Actor = ownerActor(),
+    actor: Actor,
   ): Promise<{ known: WorkspaceIdentity; access: ResourceAccess; values: WorkspaceResourceValues; live: Partial<WorkspaceResourceValues>; replicas: number; apply: 'now' | 'next_restart'; unchanged: boolean; fit: WorkspaceResourcesFit }> {
     const { known } = await this.#authorized(ref, actor, 'operate');
     if (actor.kind === 'agent') throw new AppError('FORBIDDEN', 'An agent can’t change a workspace’s CPU and memory: the restart would end every session in it. Ask a person.');
@@ -580,7 +580,7 @@ export class Workspaces {
   async setResources(
     ref: string,
     req: Partial<UpdateWorkspaceResourcesRequest>,
-    actor: Actor = ownerActor(),
+    actor: Actor,
     via: { actor?: string; actorLabel?: string } = {},
   ): Promise<WorkspaceResources> {
     const plan = await this.planResources(ref, req, actor);
@@ -669,7 +669,7 @@ export class Workspaces {
   }
 
   /** `actor`: who asks (the route's `actorOf(c)`); creating on a target needs `operate` on it (multi-user PRD; the single-owner seam allows the owner). */
-  async create(req: Partial<CreateWorkspaceRequest>, actor: Actor = ownerActor()): Promise<Workspace> {
+  async create(req: Partial<CreateWorkspaceRequest>, actor: Actor): Promise<Workspace> {
     const name = typeof req.name === 'string' ? req.name.trim() : '';
     const problem = workspaceNameProblem(name);
     if (problem) throw new AppError('VALIDATION_FAILED', problem, { details: { name: problem } });

@@ -1,5 +1,6 @@
 import { AppError } from '@isnanme/core';
 import {
+  parseActorString,
   workspaceRef,
   type Actor,
   type CreatePortalTokenRequest,
@@ -9,6 +10,7 @@ import {
   type PortalMcpState,
   type PortalToken,
   type PortalToolInfo,
+  type UserId,
 } from '@portal/contracts';
 import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
 import { isWorkspaceId } from '../names.js';
@@ -196,9 +198,20 @@ export class PortalMcpModule {
   /**
    * Mints an admin's token. `by` is who asked (`actorString`), written in every audit row: the mint, and one `token_revoked` row per token a
    * `replace` revoked. The label rules and the cap are the admin tokens' only (T-258); agents' per-session tokens are minted by `agents.mint`.
+   * Organizations slice 0 (P2): the token is bound to `minter` (the user of the actor who asked and the email account behind it, which the
+   * routes pass), else to the person `by` names as `user:<id>`. Nothing else mints: not a token or job string, not the legacy `ui` (review
+   * m4: no default that makes a founding-user token).
    */
-  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by = 'ui', origin?: ClientTokenOrigin): CreatedPortalToken {
-    const { token, secret, replaced } = this.tokens.create(req, { maxAdminPerLabel: this.#maxActivePerLabel() }, origin);
+  createToken(req: Partial<CreatePortalTokenRequest>, url: string, by: string, origin?: ClientTokenOrigin, minter?: { ownerId: UserId; accountId?: string | null }): CreatedPortalToken {
+    const named = parseActorString(by);
+    const owner = minter?.ownerId ?? (named.kind === 'user' && !named.legacy ? named.id : null);
+    if (!owner) throw new AppError('FORBIDDEN', 'A token is made by a signed-in person.');
+    const { token, secret, replaced } = this.tokens.create(
+      req,
+      { maxAdminPerLabel: this.#maxActivePerLabel() },
+      { ownerId: owner, accountId: minter?.accountId ?? null },
+      origin,
+    );
     for (const id of replaced) {
       this.mcp.confirmations.forget(id);
       this.audit.event('token_revoked', id, { reason: 'replaced by a new token with this label', by, replacedBy: token.id });
@@ -231,7 +244,7 @@ export class PortalMcpModule {
       if (token.scope === 'read') throw new AppError('VALIDATION_FAILED', 'A read token makes no tickets: give it operate or admin.', { details: { defaultWorkspaceId: 'Not for a read token.' } });
       requireCan(actor, 'operate', workspaceRef(raw));
       if (known && !known.includes(raw)) throw new AppError('NOT_FOUND', 'No such workspace.');
-      const self = actorOfPrincipal({ kind: 'user', tokenId: token.id, scope: token.scope, workspaceId: null, sessionId: null });
+      const self = actorOfPrincipal({ kind: 'user', userId: token.ownerId, tokenId: token.id, scope: token.scope, workspaceId: null, sessionId: null });
       if (!can(self, 'operate', workspaceRef(raw)).allow) throw new AppError('FORBIDDEN', 'This token may not operate that workspace.', { details: { defaultWorkspaceId: 'Not one this token may operate.' } });
       workspaceId = raw;
     }

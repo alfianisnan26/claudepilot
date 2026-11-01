@@ -271,7 +271,7 @@ export class SsoProviders {
    * Finishes a sign-in: the account to open a session for. `binding` is the cookie `begin` set (the state and its secret half), so a code
    * that lands in another browser (login CSRF) is refused.
    */
-  async finish(q: { code?: string; state?: string; error?: string }, binding: string | undefined): Promise<{ user: PortalUser; providerId: string; created: boolean; linked: boolean }> {
+  async finish(q: { code?: string; state?: string; error?: string }, binding: string | undefined): Promise<{ user: PortalUser; providerId: string; created: boolean; linked: boolean; guarded: boolean }> {
     if (q.error) throw new SsoError('provider', 'The provider refused the sign-in.');
     const state = typeof q.state === 'string' ? q.state : '';
     const pending = state ? this.#pending.get(state) : undefined;
@@ -311,7 +311,7 @@ export class SsoProviders {
     return this.#account(r, claims);
   }
 
-  async #account(r: Row, claims: IdTokenClaims): Promise<{ user: PortalUser; providerId: string; created: boolean; linked: boolean }> {
+  async #account(r: Row, claims: IdTokenClaims): Promise<{ user: PortalUser; providerId: string; created: boolean; linked: boolean; guarded: boolean }> {
     const domains = JSON.parse(r.domains) as string[];
     const email = typeof claims.email === 'string' ? normalizeEmail(claims.email) : '';
     if (!EMAIL.test(email)) throw new SsoError('email', 'The provider gave no email address.');
@@ -337,6 +337,11 @@ export class SsoProviders {
       // mailbox the provider gave to someone else). An admin unlinks it first (removing and re-adding the provider, or the account).
       if (user && db.prepare('SELECT 1 FROM sso_identities WHERE provider_id = ? AND user_id = ? AND subject != ?').get(r.id, user.id, claims.sub))
         throw new SsoError('no_account', 'This email belongs to an account another sign-in already holds.');
+      // Organizations slice 0 (P6, organizations PRD §9.4): an email match alone never takes over an account with a password of its own, an
+      // admin (the founder included) or one any other SSO identity holds: whoever runs the IdP could otherwise sign in as them. An admin
+      // links such an account from inside the portal (later slice), or the person keeps signing in with their password.
+      if (user && !this.users.linkableByEmail(user.id))
+        throw new SsoError('no_account', 'An account with this email exists. Sign in with its password, or ask an admin to link it.');
       if (!user) {
         if (r.auto_create !== 1) throw new SsoError('no_account', 'There is no account for this email. Ask an admin.');
         const name = typeof claims.name === 'string' ? claims.name : typeof claims.preferred_username === 'string' ? claims.preferred_username : '';
@@ -352,6 +357,7 @@ export class SsoProviders {
     if (user.state !== 'active') throw new SsoError('disabled', 'This account is disabled.');
     db.prepare('UPDATE sso_identities SET last_login_at = ?, email = ? WHERE provider_id = ? AND subject = ?').run(at, email, r.id, claims.sub);
     this.users.touchLogin(user.id);
-    return { user, providerId: r.id, created, linked: newLink && !created };
+    // Review m2: a link that existed before to an account the linking rule now guards keeps working, and says so (the route audits it).
+    return { user, providerId: r.id, created, linked: newLink && !created, guarded: !newLink && this.users.guarded(user.id) };
   }
 }

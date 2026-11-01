@@ -12,6 +12,7 @@ import {
   SESSION_GRANT_API,
   SESSION_SHARE_PRESETS,
   SSO_API,
+  type Actor,
   type AddPortalTeamMemberRequest,
   type CreatePortalTeamRequest,
   type PortalTeamDetail,
@@ -33,7 +34,7 @@ import { SsoError, type SsoProviders } from './sso.js';
 import type { PortalTeams } from './teams.js';
 import type { PortalUsers } from './users.js';
 
-type Env = { Bindings: HttpBindings; Variables: { token: string } };
+type Env = { Bindings: HttpBindings; Variables: { token: string; actor: Actor } };
 
 export interface IdentityRouteDeps {
   portal: Portal;
@@ -285,6 +286,9 @@ export function identityRoutes(d: IdentityRouteDeps) {
         setCookie(c, d.cookie, token, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: Math.floor(d.ttlMs / 1000) });
         audit('portal.signin', null, { method: 'sso', providerId: r.providerId, userId: r.user.id, role: r.user.role, created: r.created, linked: r.linked });
         if (r.created) audit('account.created', r.user.id, { email: r.user.email, role: r.user.role, via: `sso:${r.providerId}` }, 'info');
+        // Review m2: an SSO link made before slice 0 to an account the linking rule now guards: allowed (refusing could lock its holder out),
+        // flagged on every such sign-in so an admin can see and unlink it.
+        if (r.guarded) audit('sso.link_guarded', r.user.id, { providerId: r.providerId, role: r.user.role }, 'medium');
         console.log(`[portal] signed in with SSO (${r.user.id}, ${r.user.role}${r.created ? ', new' : ''})`);
         return c.redirect('/', 302);
       } catch (e) {

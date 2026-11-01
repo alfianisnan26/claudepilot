@@ -60,7 +60,13 @@ import { declareVscodePolicies } from './authz.js';
 /** What the routes need of the token store: the device flow issues through the same machinery as Access → MCP (one table, one revoke). */
 export interface VscodeTokenStore {
   /** `by`: the person who approved (the token's creator in the MCP audit); `origin`: the client and its installation. */
-  create(req: { label: string; scope: 'operate'; expiresIn: typeof VSCODE_TOKEN_LIFETIME; addAnother: true }, by: string, origin: ClientTokenOrigin): { token: PortalToken; secret: string };
+  /** `minter`: the person who approved and the email account behind them (organizations slice 0: the token is theirs and stops with the account). */
+  create(
+    req: { label: string; scope: 'operate'; expiresIn: typeof VSCODE_TOKEN_LIFETIME; addAnother: true },
+    by: string,
+    origin: ClientTokenOrigin,
+    minter?: { ownerId: string; accountId?: string | null },
+  ): { token: PortalToken; secret: string };
   verify(secret: string, ip?: string): VerifyResult;
   revoke(id: string, reason?: string): boolean;
 }
@@ -78,7 +84,7 @@ export interface VscodeDeps {
     respond(id: string, requestId: string, decision: 'deny', opts?: { note?: string; actor?: string }): Promise<void>;
   };
   workspaces?: { list(): Promise<Workspace[]> };
-  tickets?: { listPage(caller: { kind: 'token'; tokenId: string; label: string; scope: 'read' }, filter: TicketFilter, args: { limit?: unknown; keep?: (t: TicketItem) => boolean }): TicketPage };
+  tickets?: { listPage(caller: { kind: 'token'; tokenId: string; label: string; scope: 'read'; actor: Actor }, filter: TicketFilter, args: { limit?: unknown; keep?: (t: TicketItem) => boolean }): TicketPage };
   usage?: { report(): Promise<ClaudeUsageReport> };
   glance?: { snapshot(actor: Actor): GlanceSnapshot };
   /** A platform audit row (names, ids and numbers only: never a token, a code or message text). */
@@ -199,7 +205,10 @@ export function createVscodeApproveRoutes(flow: DeviceFlow, deps: Pick<VscodeDep
     if (body.decision !== 'approve' && body.decision !== 'deny') throw new AppError('VALIDATION_FAILED', 'Approve or deny.');
     const code = typeof body.userCode === 'string' ? body.userCode : '';
     const p = flow.pending(code);
-    const by = actorString(actorOf(c));
+    const approver = actorOf(c);
+    const by = actorString(approver);
+    const minter =
+      approver.kind === 'user' ? { ownerId: approver.userId, accountId: approver.accountId ?? null } : undefined;
     if (!p) {
       tries.fail(key);
       throw NO_CODE();
@@ -212,7 +221,7 @@ export function createVscodeApproveRoutes(flow: DeviceFlow, deps: Pick<VscodeDep
     // The token is made now, by the person (review m1), only for this installation (m2). If making it fails, the code stays pending and
     // the person can approve again (m5).
     const issued: Issued | null = flow.approve(code, ({ client, instance }) => {
-      const { token, secret } = deps.tokens.create({ label: `${VSCODE_TOKEN_LABEL_PREFIX}${client}`, scope: 'operate', expiresIn: VSCODE_TOKEN_LIFETIME, addAnother: true }, by, { client: 'vscode', instance });
+      const { token, secret } = deps.tokens.create({ label: `${VSCODE_TOKEN_LABEL_PREFIX}${client}`, scope: 'operate', expiresIn: VSCODE_TOKEN_LIFETIME, addAnother: true }, by, { client: 'vscode', instance }, minter);
       return { token: secret, tokenId: token.id, expiresAt: token.expiresAt, label: token.label };
     });
     if (!issued) throw NO_CODE();
@@ -332,7 +341,10 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
     perToken.fail(v.token.id);
     // The seam caps a token by its scope; the device flow issues `operate`, and nothing here is ever more than that.
     const p = v.principal;
-    c.set('actor', actorOfPrincipal({ kind: 'user', tokenId: p.tokenId, scope: p.scope === 'admin' ? 'operate' : p.scope, workspaceId: null, sessionId: null }));
+    // Organizations slice 0 (P2): the person who approved the sign-in (the token's owner), not the founding user.
+    const who = actorOfPrincipal({ kind: 'user', userId: p.userId, tokenId: p.tokenId, scope: p.scope === 'admin' ? 'operate' : p.scope, workspaceId: null, sessionId: null });
+    if (who.kind === 'anonymous') throw UNAUTH();
+    c.set('actor', who);
     c.set('vscodeToken', v.token);
     await next();
   };
@@ -408,7 +420,7 @@ export function createVscodeBearerRoutes(deps: VscodeDeps): Hono<Vars> {
     };
     const keep = (x: TicketItem) => inBucket(x.bucket) && visible(a, 'ticket', [x], (y) => y.id).length > 0;
     // The open queue, most urgent first: one page of 100 (what a tree can show; the portal has the rest).
-    const page = deps.tickets.listPage({ kind: 'token', tokenId: t.id, label: t.label, scope: 'read' }, {}, { limit: 100, keep });
+    const page = deps.tickets.listPage({ kind: 'token', tokenId: t.id, label: t.label, scope: 'read', actor: a }, {}, { limit: 100, keep });
     return c.json(
       success<VscodeTicket[]>(
         page.items.map((x) => ({

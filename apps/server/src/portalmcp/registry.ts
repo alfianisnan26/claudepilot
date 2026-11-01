@@ -60,7 +60,10 @@ export interface PortalPrincipal {
    * Manager (cpmt_, T-968): it acts as the person `userId` (their can(), at use time); it is not an agent and has no workspace.
    */
   kind: 'user' | 'agent' | 'manager';
-  /** The person a `manager` token acts for. Unset for the other kinds (the seam reads the founding user for those today). */
+  /**
+   * The person the token acts for (organizations slice 0): a `manager`'s person, a `user` token's minter (`pmcp_tokens.owner_id`), an
+   * `agent`'s session starter (`u_owner` for the server code, a ticket or a trigger). A `user` token without one acts for nobody.
+   */
   userId?: string;
   tokenId: string;
   label: string;

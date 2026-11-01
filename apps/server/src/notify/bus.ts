@@ -7,7 +7,7 @@
 // reaches a destination that asked for it (`includeDetail`).
 
 import { randomBytes } from 'node:crypto';
-import { NOTIFY_KINDS, notifyToolClass, type NotifyAnswerOffer, type NotifyEvent, type NotifyKind, type NotifySubject } from '@portal/contracts';
+import { NOTIFY_KINDS, isUserId, notifyToolClass, type NotifyAnswerOffer, type NotifyEvent, type NotifyKind, type NotifySubject } from '@portal/contracts';
 import { redact } from '../chat/redact.js';
 
 export type NotifyEmit = Omit<NotifyEvent, 'id' | 'at'> & { at?: string };
@@ -22,7 +22,6 @@ export interface NotifyBus {
 const SUBJECT_TYPES = new Set<NotifySubject['type']>(['session', 'ticket', 'ci_run', 'claude', 'workspace', 'trigger', 'trigger_run', 'budget', 'portal']);
 const FACT_KEY = /^[a-zA-Z][a-zA-Z0-9_]{0,31}$/;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/;
-const USER = /^u_[a-z0-9]{1,40}$/;
 /** Characters that can hide or reorder text: controls, zero-width, bidi overrides. */
 const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]/g;
 export const FACT_MAX = 80;
@@ -73,7 +72,7 @@ export function validateEvent(e: NotifyEmit, id: string, at: string): NotifyEven
     const d = cleanDetail(e.detail.text);
     return { text: d.text, truncated: d.truncated || !!e.detail.truncated };
   })() : undefined;
-  const audience = Array.isArray(e.audience) ? [...new Set(e.audience.filter((u) => typeof u === 'string' && USER.test(u)))] : undefined;
+  const audience = Array.isArray(e.audience) ? [...new Set(e.audience.filter((u) => isUserId(u)))] : undefined;
   const answer = e.kind === 'approval' ? validOffer(e.answer) : undefined;
   const when = typeof e.at === 'string' && !Number.isNaN(Date.parse(e.at)) ? new Date(e.at).toISOString() : at;
   return {

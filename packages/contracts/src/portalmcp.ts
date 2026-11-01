@@ -88,6 +88,11 @@ export interface PortalToken {
    * made in Access -> MCP. A client token opens only its own API (`/api/vscode`); `/mcp` refuses it like an unknown token.
    */
   client?: 'vscode' | null;
+  /**
+   * Organizations slice 0 (P2): the user who minted it, whose rights it acts with (capped by its scope). Tokens from before migration 461 are
+   * the founding user's (`u_owner`). Absent from an older server.
+   */
+  ownerId?: string;
 }
 
 /** `PATCH /api/portal-mcp/tokens/:id`: a person changes a live operate or admin token. The workspace must be one they and the token may operate. */

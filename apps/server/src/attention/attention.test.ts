@@ -500,7 +500,7 @@ test('the route: signed in only, declared, filters by kind and refuses an unknow
   const app = (signedIn: boolean) => {
     const a = new Hono<{ Variables: { token: string } }>();
     a.use(async (c, next) => {
-      if (signedIn) c.set('token', 'signed-in');
+      if (signedIn) (c.set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
       await next();
     });
     a.onError((e, c) => c.json({ error: (e as { code?: string }).code ?? 'ERR' }, (e as { status?: number }).status === 401 || (e as { code?: string }).code === 'UNAUTHORIZED' ? 401 : 400));

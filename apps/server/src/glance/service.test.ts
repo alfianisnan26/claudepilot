@@ -27,22 +27,22 @@ function harness(opts: { watching?: () => boolean } = {}) {
 
 test('the snapshot is built once however many ask, and again only after something changed', () => {
   const h = harness();
-  const first = h.glance.snapshot();
+  const first = h.glance.snapshot(ownerActor());
   assert.equal(first.sessions.running, 1);
-  h.glance.snapshot();
-  h.glance.snapshot();
+  h.glance.snapshot(ownerActor());
+  h.glance.snapshot(ownerActor());
   assert.equal(h.src.reads.sessions, 1);
   h.set([session({ id: 'a', state: 'idle' })]);
-  assert.equal(h.glance.snapshot().sessions.running, 1, 'nothing said it changed: the same snapshot');
+  assert.equal(h.glance.snapshot(ownerActor()).sessions.running, 1, 'nothing said it changed: the same snapshot');
   h.glance.changed();
-  assert.equal(h.glance.snapshot().sessions.running, 0, 'changed(): the next ask builds it again');
+  assert.equal(h.glance.snapshot(ownerActor()).sessions.running, 0, 'changed(): the next ask builds it again');
   assert.equal(h.src.reads.sessions, 2);
   h.glance.stop();
 });
 
 test('a burst of changes is one build and one push, and nothing is pushed when what a page would draw is the same', async () => {
   const h = harness();
-  h.glance.snapshot();
+  h.glance.snapshot(ownerActor());
   const before = h.src.reads.sessions;
   h.set([session({ id: 'a', state: 'waiting', waiting: 1 })]);
   h.glance.changed();
@@ -66,14 +66,14 @@ test('a burst of changes is one build and one push, and nothing is pushed when w
 test('while no page watches the topic a change does no work; the next request builds it', async () => {
   let watched = false;
   const h = harness({ watching: () => watched });
-  h.glance.snapshot();
+  h.glance.snapshot(ownerActor());
   const before = h.src.reads.sessions;
   h.set([session({ id: 'a', state: 'idle' })]);
   h.glance.changed();
   await sleep(60);
   assert.equal(h.src.reads.sessions, before, 'not built');
   assert.equal(h.pushes.length, 0);
-  assert.equal(h.glance.snapshot().sessions.running, 0, 'a page that opens now gets the truth');
+  assert.equal(h.glance.snapshot(ownerActor()).sessions.running, 0, 'a page that opens now gets the truth');
   watched = true;
   h.set([session({ id: 'a', state: 'working' })]);
   h.glance.changed();
@@ -98,7 +98,7 @@ test('stop() ends the pending build and undoes what was subscribed', async () =>
 });
 
 test('the fingerprint ignores when the snapshot was built', () => {
-  const a = harness().glance.snapshot();
+  const a = harness().glance.snapshot(ownerActor());
   const b: GlanceSnapshot = { ...a, at: '2030-01-01T00:00:00.000Z' };
   assert.equal(fingerprint(a), fingerprint(b));
   assert.notEqual(fingerprint(a), fingerprint({ ...a, sessions: { ...a.sessions, running: 5 } }));
@@ -141,7 +141,7 @@ test('createGlance follows the controller: a session event pushes once, a delta 
     debounceMs: 10,
   });
   assert.equal(listeners.size, 1);
-  glance.snapshot(); // a page's first request: pushes are only for people who have asked
+  glance.snapshot(ownerActor()); // a page's first request: pushes are only for people who have asked
   const emit = (msg: ChatServerMessage) => listeners.forEach((cb) => cb('a', msg));
   emit({ type: 'delta', session: 'a', agentLabel: null, text: 'tok' });
   await sleep(60);
@@ -183,9 +183,9 @@ test('glanceSources: tickets are the ones assigned to a person, asked as the per
 
 test('GET returns the snapshot in the usual envelope', async () => {
   const h = harness();
-  h.glance.snapshot();
+  h.glance.snapshot(ownerActor());
   const app = new Hono<Vars>();
-  app.use('*', async (c, next) => (c.set('token', 't'), next())); // what requireSession does
+  app.use('*', async (c, next) => ((c.set('token', 't'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' })), next())); // what requireSession does
   app.onError((e, c) => (isAppError(e) ? c.json(e.toJSON(), e.status as ContentfulStatusCode) : c.json({ error: String(e) }, 500)));
   app.route('/api/glance', createGlanceRoutes(h.glance));
   const res = await app.request('/api/glance');
@@ -241,7 +241,7 @@ test('GET asks on behalf of the signed-in actor the seam names, and the owner fo
   const glance = new Glance(src, { notify: () => undefined, now: () => NOW });
   // What `requireSession` does today: it sets the sign-in's token on the context; the seam reads the owner from it.
   const signedIn = new Hono<Vars>();
-  signedIn.use('*', async (c, next) => (c.set('token', 't'), next()));
+  signedIn.use('*', async (c, next) => ((c.set('token', 't'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' })), next()));
   signedIn.route('/api/glance', createGlanceRoutes(glance));
   // What the real layer does later: it sets the actor itself.
   const asUserApp = new Hono<Vars>();

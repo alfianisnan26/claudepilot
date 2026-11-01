@@ -20,7 +20,7 @@ async function rig() {
   const ws = new Hono();
   // Like app.ts's session guard: the caller is the signed-in owner (the workspace routes ask the seam, T-531).
   ws.use('*', async (c, next) => {
-    (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+    ((c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
     await next();
   });
   ws.route('/', createWorkspaceReposRoutes(h.repos));

@@ -54,6 +54,7 @@ import {
   type OpenAppPortRequest,
   type OpenAppPortResult,
   type Actor,
+  FOUNDING_USER_ID,
 } from '@portal/contracts';
 import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
@@ -122,7 +123,9 @@ import type { ConnectModule } from './connect/index.js';
 import { createClaudeVersionRoutes, createWorkspaceClaudeVersionRoutes, type ClaudeVersions } from './claudeversion/index.js';
 import { createCodespacesRoutes, type Codespaces } from './codespaces/index.js';
 import type { Platform } from './platform/index.js';
-import { actorOf, actorOfPrincipal, actorString, actorUserId, ownerActor, visible } from './authz/seam.js';
+import { actorOf, actorOfPrincipal, actorString, actorUserId, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
+import { cookie as cookieOf } from './workspaces/shell.js';
+import { revokeAccountTokens } from './identity/accountGate.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
 import { identityRoutes } from './identity/routes.js';
@@ -139,7 +142,7 @@ import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, 
 import { createHeartbeatRoutes } from './schedules/heartbeat.js';
 import { portalHelpers } from './schedules/helpers.js';
 
-type Env = { Bindings: HttpBindings; Variables: { token: string } };
+type Env = { Bindings: HttpBindings; Variables: { token: string; actor: Actor } };
 
 /** Letters, digits, dot, underscore and dash, starting with a letter or digit: what a target or a workspace is ever called. */
 export { PLAIN_NAME };
@@ -281,9 +284,19 @@ export function createApp(
   }, 60 * 60_000);
   sweep.unref?.();
   /** Gap 2 (owner, 2026-10-17): account and sign-in events in the platform audit (no password, an unknown email only as a fingerprint). */
-  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info', by: string | null = null) => {
+  // Organizations slice 0 (P1): `by` is who acted (the request's actor, or the account id identity/routes.ts passes), so an admin's row names
+  // that admin as the user it acts as (`user:<id>`; the founder account is `u_owner`); null: nobody signed in (a sign-in, the server code).
+  const audit = (kind: string, subject: string | null, detail: Record<string, unknown>, severity: 'info' | 'medium' = 'info', by: Actor | string | null = null) => {
     try {
-      platform?.audit.record({ kind, actor: 'ui', userId: by, subject: subject ? `user:${subject}` : null, detail, severity });
+      let who: Actor | null = typeof by === 'string' ? { kind: 'user', userId: by, loginSessionId: 'legacy', via: 'ui' } : by;
+      if (typeof by === 'string') {
+        try {
+          who = { kind: 'user', userId: users.principalOf(by), loginSessionId: 'legacy', via: 'ui' };
+        } catch {
+          // the account as itself
+        }
+      }
+      platform?.audit.record({ kind, actor: who ? actorString(who) : 'ui', userId: who ? actorUserId(who) : null, subject: subject ? `user:${subject}` : null, detail, severity });
     } catch {
       // the audit must never break a sign-in
     }
@@ -297,6 +310,33 @@ export function createApp(
     }
   };
   const { cookie, ttlMs } = config.session;
+  /**
+   * Organizations slice 0 (P1): the person a FULL session is, set once per request by `requireSession` and read by sockets the same way. The
+   * server code is the founding user; an admin account is its OWN user id (the one account marked founder, migration 460, is `u_owner`).
+   * Null for no session or a member's (default deny, D-82). The role is read on every use (`portal.session`, and the seam through
+   * `useAccountRoles`), so a demotion or a disable takes effect at once.
+   */
+  const sessionActor = (token: string | undefined): (Actor & { kind: 'user'; userId: string }) | null => {
+    const s = token ? portal.session(token) : undefined;
+    if (!s) return null;
+    let userId = FOUNDING_USER_ID;
+    if (s.userId) {
+      try {
+        userId = users.principalOf(s.userId);
+      } catch {
+        userId = s.userId; // the database could not be read: the account as itself, never the founder
+      }
+    }
+    return { kind: 'user', userId, loginSessionId: 'legacy', via: 'ui', ...(s.userId ? { accountId: s.userId } : {}) };
+  };
+  useAccountRoles((id) => portal.roleOf(id));
+  useSocketActor((req) => {
+    try {
+      return sessionActor(cookieOf(req, cookie));
+    } catch {
+      return null;
+    }
+  });
 
   // Served over plain HTTP: no HSTS.
   // The built app also gets a CSP (csp.ts); the dev server's pages come from Vite, not from here.
@@ -608,6 +648,10 @@ export function createApp(
     const field = await hostileWorkspaceField(c);
     if (field) throw new AppError('VALIDATION_FAILED', 'A workspace is `<target>/<name>`.', { details: { [field]: 'Not a workspace.' } });
     c.set('token', token);
+    // Organizations slice 0 (P1): the signed-in person, set once; `actorOf(c)` reads it and never falls back to the owner.
+    const actor = sessionActor(token);
+    if (!actor) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    c.set('actor', actor);
     await next();
   });
 
@@ -636,7 +680,7 @@ export function createApp(
   });
   admin.delete('/app-sessions/:id', (c) => {
     const removed = appPorts?.grants.revoke(c.req.param('id')) ?? false;
-    if (removed) audit('workspace.port.closed', null, { session: c.req.param('id') }, 'info', portal.session(c.get('token'))?.userId ?? null);
+    if (removed) audit('workspace.port.closed', null, { session: c.req.param('id') }, 'info', actorOf(c));
     return c.json(success({ removed }));
   });
   admin.get('/loops', (c) => c.json(success<PortalLoop[]>(listLoops())));
@@ -647,17 +691,17 @@ export function createApp(
   admin.get('/manager', async (c) => c.json(success(await managers.status(managerOwner(c)))));
   admin.post('/manager/prepare', async (c) => {
     const st = await managers.prepare(managerOwner(c));
-    audit('manager.prepared', null, { workspaceId: st.runtime?.workspaceId ?? null }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    audit('manager.prepared', null, { workspaceId: st.runtime?.workspaceId ?? null }, 'medium', actorOf(c));
     return c.json(success(st));
   });
   admin.post('/manager/enable', async (c) => {
     const st = await managers.enable(managerOwner(c));
-    audit('manager.enabled', null, { sessionId: st.sessionId, workspaceId: st.workspaceId }, 'medium', portal.session(c.get('token'))?.userId ?? null);
+    audit('manager.enabled', null, { sessionId: st.sessionId, workspaceId: st.workspaceId }, 'medium', actorOf(c));
     return c.json(success(st));
   });
   admin.post('/manager/disable', async (c) => {
     const st = await managers.disable(managerOwner(c));
-    audit('manager.disabled', null, {}, 'info', portal.session(c.get('token'))?.userId ?? null);
+    audit('manager.disabled', null, {}, 'info', actorOf(c));
     return c.json(success(st));
   });
 
@@ -666,9 +710,16 @@ export function createApp(
 
   // T-118 MU1-min: email accounts, managed by someone already signed in (the server code or another account).
   admin.get('/users', (c) => c.json(success(users.list())));
+  /** Review M1: revokes what the account minted or started (identity/accountGate.ts), with one audit row of the counts. */
+  const endAccountTokens = (id: string, reason: string, c: Context<Env>) => {
+    const db = store.writable ? store.db : null;
+    if (!db) throw new AppError('SERVICE_UNAVAILABLE', 'The portal’s database is read-only right now.');
+    const ended = revokeAccountTokens(db, id, new Date().toISOString(), reason);
+    if (ended.pmcp + ended.reporter + ended.agent > 0) audit('account.tokens_revoked', id, { ...ended, reason }, 'medium', actorOf(c));
+  };
   admin.post('/users', async (c) => {
     const u = await users.create(await body<CreatePortalUserRequest>(c), 'ui');
-    audit('account.created', u.id, { email: u.email, role: u.role });
+    audit('account.created', u.id, { email: u.email, role: u.role }, 'info', actorOf(c));
     return c.json(success(u), 201);
   });
   admin.patch('/users/:id', async (c) => {
@@ -678,12 +729,20 @@ export function createApp(
     const u = await users.update(id, req);
     // Review #3: a password reset or a disable ends the account's sessions now (and its sockets with them).
     if (req.password !== undefined || u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) portal.revokeUser(id);
-    audit('account.updated', id, {
+    // Review M1: a disable or a demotion also ends every token the account minted and every agent of a session it started, for good.
+    if (u.state === 'disabled' || (before.role === 'admin' && u.role === 'member')) endAccountTokens(id, u.state === 'disabled' ? 'account disabled' : 'account demoted', c);
+    audit(
+      'account.updated',
+      id,
+      {
       ...(req.role && req.role !== before.role ? { role: { from: before.role, to: u.role } } : {}),
       ...(req.state && req.state !== before.state ? { state: { from: before.state, to: u.state } } : {}),
       ...(req.password !== undefined ? { password: 'reset' } : {}),
       ...(req.displayName !== undefined ? { name: true } : {}),
-    });
+      },
+      'info',
+      actorOf(c),
+    );
     return c.json(success(u));
   });
   admin.delete('/users/:id', (c) => {
@@ -694,7 +753,8 @@ export function createApp(
     teams.removeUser(id);
     sso.removeUser(id);
     portal.revokeUser(id);
-    audit('account.removed', id, { email: before.email, role: before.role });
+    endAccountTokens(id, 'account removed', c);
+    audit('account.removed', id, { email: before.email, role: before.role }, 'info', actorOf(c));
     return c.json(success({ removed: true }));
   });
   admin.post('/code', async (c) => {
@@ -1193,7 +1253,7 @@ export function createApp(
   if (portalMcp) {
     const vsDeps: VscodeDeps = {
       tokens: {
-        create: (req, by, origin) => portalMcp.createToken(req, '', by, origin),
+        create: (req, by, origin, minter) => portalMcp.createToken(req, '', by, origin, minter),
         verify: (secret, ip) => portalMcp.tokens.verify(secret, ip),
         revoke: (id, reason) => portalMcp.revokeToken(id, reason, 'vscode'),
       },
@@ -1430,7 +1490,8 @@ export function createApp(
         portalOrigin,
         signedIn: (c) => {
           const token = getCookie(c, cookie);
-          return token && portal.session(token) ? (ownerActor() as Actor & { userId: string }) : null;
+          // Organizations slice 0 (P2): the reporter token is minted for (and bound to) the person signed in, not the founding user.
+          return sessionActor(token);
         },
         userLabel: () => 'Owner',
         clientKey: (c) => clientKey(c as Context<Env>),

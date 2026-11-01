@@ -202,7 +202,7 @@ function routes(h: Awaited<ReturnType<typeof setup>>, actor?: Actor | null) {
   const app = new Hono<{ Variables: { token: string; actor: Actor } }>();
   app.use(async (c, next) => {
     if (actor) c.set('actor', actor);
-    else if (actor === undefined) c.set('token', 'signed-in');
+    else if (actor === undefined) (c.set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
     await next();
   });
   app.onError((err, c) => (isAppError(err) ? c.json({ success: false, error: { code: err.code } }, err.status as ContentfulStatusCode) : c.json({}, 500)));

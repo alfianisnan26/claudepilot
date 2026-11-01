@@ -250,7 +250,7 @@ export async function openModule(opts: { config?: Partial<ConnectConfig>; scanne
   });
   // what app.ts does: the admin routes behind the session guard, the agent-facing ones with none
   const guard = new Hono<{ Variables: { token: string } }>();
-  if (opts.signedIn !== false) guard.use(async (c, next) => (c.set('token', 'session'), next()));
+  if (opts.signedIn !== false) guard.use(async (c, next) => ((c.set('token', 'session'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' })), next()));
   guard.route('/', connect.routes() as never);
   app.route('/api/connect', guard);
   app.route('/', connect.publicRoutes() as never);

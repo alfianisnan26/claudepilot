@@ -41,8 +41,9 @@ test('levels are ordered and inclusive', () => {
 });
 
 test('user ids: the founding id and random ones are ids, anything else is not', () => {
-  for (const id of ['u_owner', 'u_a', 'u_0123456789abcdef01234567']) assert.ok(isUserId(id), id);
-  for (const id of ['', 'owner', 'ui', 'U_owner', 'u_', 'u_Owner', 'u_owner; drop', `u_${'a'.repeat(41)}`]) assert.equal(isUserId(id), false, id);
+  // An email account's id is `u_` plus 12 base64url characters (identity/users.ts): both cases, digits, `-` and `_` (organizations slice 0).
+  for (const id of ['u_owner', 'u_a', 'u_0123456789abcdef01234567', 'u_Ab3-xY_9kQ2z', 'u_Owner']) assert.ok(isUserId(id), id);
+  for (const id of ['', 'owner', 'ui', 'U_owner', 'u_', 'u_owner; drop', 'u_a.b', 'u_a/b', 'u_a b', `u_${'a'.repeat(41)}`]) assert.equal(isUserId(id), false, id);
   assert.ok(USER_ID_PATTERN.test('u_owner'));
 });
 

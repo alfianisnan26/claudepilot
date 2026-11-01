@@ -544,6 +544,8 @@ export class ChatStore {
     kind?: 'manager';
     /** T-968: whose manager it is (`u_owner` for the server code's person). */
     ownerId?: string;
+    /** Organizations slice 0 (review M2): the email account that started it (its agents act as that account and stop with it); null: none. */
+    startedByAccount?: string | null;
   }): ChatSession {
     const now = this.#stamp();
     const db = this.#writable();
@@ -582,6 +584,7 @@ export class ChatStore {
       opts.kind === 'manager' ? 'manager' : 'workspace',
       opts.ownerId ?? 'u_owner',
     );
+    if (opts.startedByAccount) db.prepare('UPDATE chat_sessions SET started_by_account = ? WHERE id = ?').run(opts.startedByAccount, opts.id);
     // Its first run: on its Claude, under its own id.
     db.prepare(`INSERT INTO chat_segments (session_id, n, claude_id, claude_session_id, cwd, started_at) VALUES (?, 1, ?, ?, ?, ?)`).run(
       opts.id,
@@ -591,6 +594,18 @@ export class ChatStore {
       now,
     );
     return this.get(opts.id)!;
+  }
+
+  /** Organizations slice 0 (review M2): the email account that started a session, or null (the server code, a ticket or trigger, or before). */
+  startedByAccount(id: string): string | null {
+    const r = this.#db().prepare('SELECT started_by_account FROM chat_sessions WHERE id = ?').get(id) as { started_by_account: string | null } | undefined;
+    return r?.started_by_account ?? null;
+  }
+
+  /** The email account a Portal MCP token was minted from (identity/accountGate.ts), for a session that token starts. */
+  tokenAccount(tokenId: string): string | null {
+    const r = this.#db().prepare("SELECT account_id FROM token_accounts WHERE kind = 'pmcp' AND token_id = ?").get(tokenId) as { account_id: string } | undefined;
+    return r?.account_id ?? null;
   }
 
   /** T-968: the person's General Manager session (the newest that is not ended), or null. */

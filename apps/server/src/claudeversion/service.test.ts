@@ -387,7 +387,8 @@ test('the cadence setting is audited as a platform act', async () => {
   h.settingListeners[0]!('something.else', 1, 2);
   const rows = h.audit.filter((a) => a.kind === 'claude.schedule_set');
   assert.equal(rows.length, 1);
-  assert.deepEqual([rows[0]!.actor, rows[0]!.detail], ['user:u_owner', { note: 'every 14 days (was 7)' }]);
+  // Review m4: the portal reacting to the setting, not the founding user (the settings store audits who changed it).
+  assert.deepEqual([rows[0]!.actor, rows[0]!.detail], ['system:claude-canary-schedule', { note: 'every 14 days (was 7)' }]);
   h.svc.stop();
   assert.equal(h.settingListeners.length, 0, 'stopped: unsubscribed');
 });

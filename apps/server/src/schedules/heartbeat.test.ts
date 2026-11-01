@@ -122,7 +122,7 @@ test("refused without a valid admin token: none, unknown, revoked, a cookie, an 
     const agent = await r.h.agentToken('docker/api-dev', 's_a');
     assert.ok(agent.secret, 'the harness minted an agent token');
     assert.equal((await r.beat(agent.secret)).status, 401, "an agent's per-session token");
-    const vscode = r.h.module.createToken({ label: 'VS Code · laptop', scope: 'operate', addAnother: true }, '', 'ui', {
+    const vscode = r.h.module.createToken({ label: 'VS Code · laptop', scope: 'operate', addAnother: true }, '', 'user:u_owner', {
       client: 'vscode',
       instance: null,
     });

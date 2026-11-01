@@ -78,7 +78,7 @@ test('near expiry the lease renews with replace: the old token is revoked, one l
   const s = await setup();
   try {
     // A crashed run left a 7-day token behind with this label: the first mint replaces it instead of meeting TOKEN_LABEL_IN_USE.
-    const leftover = s.h.module.createToken({ label: 'dev-sessions-supervisor', scope: 'admin', expiresInDays: 7 }, 'http://portal.test/mcp');
+    const leftover = s.h.module.createToken({ label: 'dev-sessions-supervisor', scope: 'admin', expiresInDays: 7 }, 'http://portal.test/mcp', 'user:u_owner');
     const lease = tokenLease({ api: s.api, label: 'dev-sessions-supervisor', now: s.clock.now });
     const first = await lease.get();
     assert.equal((await s.h.rpc(leftover.secret, 'tools/list')).status, 401, 'the leftover is revoked');
@@ -136,7 +136,7 @@ test('negative twin: an expired, a revoked and an unknown token get the same 401
 test('negative twin: a refused mint throws with the code and no token, and mints nothing', async () => {
   const s = await setup();
   try {
-    s.actAs(actorOfPrincipal({ kind: 'user', tokenId: 'ptk_r', scope: 'read', workspaceId: null, sessionId: null }));
+    s.actAs(actorOfPrincipal({ kind: 'user', userId: 'u_owner', tokenId: 'ptk_r', scope: 'read', workspaceId: null, sessionId: null }));
     const lease = tokenLease({ api: s.api, label: 'coordinator', now: s.clock.now });
     await assert.rejects(lease.get(), (e: Error) => /^no Portal MCP token for "coordinator": \S+/.test(e.message) && !e.message.includes(PORTAL_TOKEN_PREFIX));
     assert.equal(lease.id, null);

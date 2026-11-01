@@ -13,8 +13,8 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
+import { accountStanding, recordTokenAccount, tokenAccount } from '../identity/accountGate.js';
 import {
-  FOUNDING_USER_ID,
   REPORTER_LIMITS,
   REPORTER_TOKEN_PREFIX,
   TICKET_PRIORITIES,
@@ -516,6 +516,8 @@ export class ReporterService {
       this.#wdb
         .prepare('INSERT INTO reporter_tokens (id, token_hash, bucket_key, origin, actor_user, actor_label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .run(id, sha(token), key, origin, actor.userId, actorLabel, now.toISOString(), expiresAt);
+      // Review M1: the email account behind the person, so the token stops when that account is disabled, demoted or removed.
+      recordTokenAccount(this.#wdb, 'reporter', id, actor.kind === 'user' ? actor.accountId : null);
       this.#wdb
         .prepare(
           `UPDATE reporter_tokens SET revoked_at = ?, revoked_reason = 'replaced by a newer connect' WHERE id IN (
@@ -544,6 +546,7 @@ export class ReporterService {
     if (expect.origin && expect.origin !== row.origin) return null;
     const site = this.allowedSite(row.bucket_key, row.origin);
     if (!site) return null;
+    if (!accountStanding(this.#db, tokenAccount(this.#db, 'reporter', row.id)).ok) return null;
     if (!can(this.#actor(row.id, row.actor_user), 'operate', ticketBucketRef(row.bucket_key)).allow) return null;
     // Last use, at most once a minute (a panel polls).
     if (this.deps.store.writable && (!row.last_used_at || now.getTime() - Date.parse(row.last_used_at) > 60_000)) {
@@ -562,6 +565,7 @@ export class ReporterService {
       | { bucket_key: string; origin: string; actor_user: string; expires_at: string; revoked_at: string | null }
       | undefined;
     if (!row || row.revoked_at || Date.parse(row.expires_at) <= this.#now().getTime()) return false;
+    if (!accountStanding(this.#db, tokenAccount(this.#db, 'reporter', id)).ok) return false;
     return !!this.allowedSite(row.bucket_key, row.origin) && can(this.#actor(id, row.actor_user), 'operate', ticketBucketRef(row.bucket_key)).allow;
   }
 
@@ -571,8 +575,13 @@ export class ReporterService {
     return Number(r.changes) > 0;
   }
 
+  /**
+   * The person a token acts as: the user who approved it (`actor_user`), capped at operate. Organizations slice 0 (P2): a stored value that is
+   * not a user id acts for nobody (can() refuses anonymous) instead of falling back to the founding user; migration 461 backfilled the old ones.
+   */
   #actor(tokenId: string, userId: string): Actor {
-    return { kind: 'token', userId: (isUserId(userId) ? userId : FOUNDING_USER_ID) as UserId, tokenId, scope: 'operate' };
+    if (!isUserId(userId)) return { kind: 'anonymous' };
+    return { kind: 'token', userId: userId as UserId, tokenId, scope: 'operate' };
   }
 
   /** The tickets-service caller a token acts as: a token labelled with its origin, the person's rights capped at operate. */

@@ -466,6 +466,11 @@ type Dispatch = ChatDispatch;
 export interface ChatCreateOptions {
   /** `ui` (the default), `ticket:<id>`, `session:<id>` or `portal-mcp:<token id>`. */
   actor?: string;
+  /**
+   * Organizations slice 0 (review M2): the email account of the person starting it (the route's actor), null for the server code. Absent:
+   * a worker or a continued chat takes its parent's or predecessor's, a Portal MCP token's start the account that minted it, else none.
+   */
+  account?: string | null;
   /** The session that starts this one. It must exist; the multi-agent caps (depth, fan-out, rate) apply. */
   parentId?: string;
   /**
@@ -2095,6 +2100,15 @@ export class ChatController {
     }
   }
 
+  /** Organizations slice 0 (review M2): which email account a new session is started by (see `ChatCreateOptions.account`). */
+  #starterAccount(opts: ChatCreateOptions, actor: string, parentId: string | null, continuedFrom: string | null): string | null {
+    if (opts.account !== undefined) return opts.account || null;
+    const from = parentId ?? continuedFrom;
+    if (from) return this.#chat.startedByAccount(from);
+    if (actor.startsWith('portal-mcp:')) return this.#chat.tokenAccount(actor.slice('portal-mcp:'.length));
+    return null;
+  }
+
   /** Whether each session's current process was started with sub-agents on (T-294); unknown after a portal restart. */
   readonly #launchedSubagents = new Map<string, boolean>();
 
@@ -2303,6 +2317,7 @@ export class ChatController {
       ...(lead ? { lead: true } : {}),
       ...(opts.manager ? { kind: 'manager' as const, ownerId: opts.manager.ownerId, bypassCapable: false } : {}),
       ...(limits ? { maxWorkers: limits.maxWorkers, subagents: limits.subagents } : {}),
+      startedByAccount: this.#starterAccount(opts, actor, parentId ?? null, continuedFrom?.id ?? null),
     };
     let session!: ChatSession;
     if (continuedFrom) {

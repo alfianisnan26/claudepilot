@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import { clearResolvers, registerResolver } from '../authz/seam.js';
 import { peekCursor } from '../store/keyset.js';
 import { createTicketRoutes } from './routes.js';
-import { agent, ticketsHarness, UI } from './testkit.js';
+import { agent, ticketsHarness, token, UI } from './testkit.js';
 import { WAITING_TAG } from './ticketFlow.js';
 
 afterEach(() => clearResolvers());
@@ -34,7 +34,7 @@ const app = (h: H, actor: unknown = 'owner') => {
     return c.json(err.toJSON(), err.status as 404);
   });
   a.use(async (c, next) => {
-    if (actor === 'owner') (c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in');
+    if (actor === 'owner') ((c as unknown as { set(k: string, v: unknown): void }).set('token', 'signed-in'), (c as unknown as { set(k: string, v: unknown): void }).set('actor', { kind: 'user', userId: 'u_owner', loginSessionId: 'legacy', via: 'ui' }));
     else if (actor) (c as unknown as { set(k: string, v: unknown): void }).set('actor', actor);
     await next();
   });
@@ -245,7 +245,7 @@ test('an agent sees its workspace’s tickets and the shared queue, never anothe
     const raw = JSON.stringify(mineSeen);
     assert.ok(!raw.includes('secret plans') && !raw.includes('nobody else should read') && !raw.includes(theirs.id), 'nothing of the other workspace is in it');
     assert.equal(h.tickets.timeline(agent('docker/web', 'sw'), w).items.length, 2, 'the web agent sees shared and its own');
-    assert.equal(h.tickets.timeline({ kind: 'token', tokenId: 'ptk_s', label: 'x', scope: 'read' }, w).items.length, 3, 'an admin token sees all');
+    assert.equal(h.tickets.timeline(token('ptk_s', 'read'), w).items.length, 3, 'an admin token sees all');
     // An agent’s cursor is not the person’s.
     for (let i = 0; i < 4; i++) h.tickets.create(UI, { summary: `more ${i}` });
     const next = h.tickets.timeline(UI, w, { limit: 2 }).next!;
