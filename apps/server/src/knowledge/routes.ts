@@ -5,13 +5,23 @@
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { AppError, success } from '@isnanme/core';
-import { GRAPH_NODE_KINDS, type CreateVaultRequest, type GraphLens, type GraphNodeKind, type GraphQuery, type UpdateVaultRequest, type VaultImportPolicy } from '@portal/contracts';
+import { GRAPH_NODE_KINDS, vaultRef, type CreateVaultRequest, type GraphLens, type GraphNodeKind, type GraphQuery, type UpdateVaultRequest, type VaultImportPolicy } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { compress } from 'hono/compress';
 import { attachmentHeaders } from './attachments.js';
 import { KnowledgeError } from './errors.js';
 import { importZip } from './importer.js';
-import { UI_ACTOR, type KnowledgeService } from './service.js';
+import { actorOf, can } from '../authz/seam.js';
+import { UI_ACTOR, type CallerScope, type KnowledgeService } from './service.js';
+
+/**
+ * Organizations slice 2 (P5): what the signed-in person may VIEW, through the one `can()`. Lists, searches and graphs keep to it; a vault they
+ * may not view is the same not-found as a missing one.
+ */
+const viewScope = (c: Context): CallerScope => {
+  const actor = actorOf(c);
+  return { canView: (id) => can(actor, 'view', vaultRef(id)).allow };
+};
 
 async function body<T>(c: Context): Promise<Partial<T>> {
   try {
@@ -90,11 +100,11 @@ export function createKnowledgeRoutes(service: KnowledgeService) {
 
   // A graph is a few hundred kilobytes of JSON that compresses well; nothing else here is that big.
   r.use('/graph', compress());
-  r.get('/graph', (c) => c.json(success(service.graph(graphQuery(c), UI_ACTOR))));
+  r.get('/graph', (c) => c.json(success(service.graph(graphQuery(c), UI_ACTOR, viewScope(c)))));
 
   r.get('/sources', (c) => c.json(success(service.sources())));
 
-  r.get('/vaults', (c) => c.json(success(service.list())));
+  r.get('/vaults', (c) => c.json(success(service.list(viewScope(c)))));
   r.post('/vaults', async (c) => c.json(success(service.create(await body<CreateVaultRequest>(c))), 201));
 
   // A zip of a vault, raw in the body (Content-Type: application/zip). `?into=<vault>` adds to one, else a new vault is made.
@@ -213,11 +223,17 @@ export function createKnowledgeRoutes(service: KnowledgeService) {
   r.get('/vaults/:id/search', (c) =>
     c.json(
       success(
-        service.search(c.req.param('id'), q(c, 'q'), { limit: intQ(c, 'limit', 20), offset: intQ(c, 'offset', 0), tag: c.req.query('tag') || undefined, folder: c.req.query('folder') || undefined }),
+        service.search(
+          c.req.param('id'),
+          q(c, 'q'),
+          { limit: intQ(c, 'limit', 20), offset: intQ(c, 'offset', 0), tag: c.req.query('tag') || undefined, folder: c.req.query('folder') || undefined },
+          UI_ACTOR,
+          viewScope(c),
+        ),
       ),
     ),
   );
-  r.get('/vaults/:id/quick', (c) => c.json(success(service.quick(c.req.param('id'), q(c, 'q')))));
+  r.get('/vaults/:id/quick', (c) => c.json(success(service.quick(c.req.param('id'), q(c, 'q'), UI_ACTOR, viewScope(c)))));
   r.get('/vaults/:id/tags', (c) => c.json(success(service.tags(c.req.param('id'), q(c, 'prefix')))));
   r.get('/vaults/:id/health', (c) => c.json(success(service.health(c.req.param('id')))));
   r.get('/vaults/:id/recent', (c) => c.json(success(service.recent(c.req.param('id'), intQ(c, 'limit', 20)))));

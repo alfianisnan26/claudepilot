@@ -132,8 +132,10 @@ test('socket: another user\'s side question on a session is never sent to a tab 
   const t = await rig();
   const watcher = await t.connect();
   watcher.send({ type: 'subscribe', session: 'theirs' });
-  await until(() => watcher.got.some((m) => m.type === 'tasks'));
-  // u_a asks on their own session while the owner's tab watches it.
+  // Organizations slice 2 (P5): the owner's tab may not even watch u_a's session: it is answered as if the session did not exist.
+  await until(() => watcher.got.some((m) => m.type === 'removed'));
+  assert.equal(watcher.got.some((m) => m.type === 'session' || m.type === 'tasks' || m.type === 'events'), false, 'nothing of the session itself');
+  // u_a asks on their own session while the owner's tab tried to watch it.
   const A = { kind: 'user', userId: 'u_a', loginSessionId: 'x', via: 'ui' } as const;
   await t.controller.btw.ask(A, 'theirs', 'btw-theirs-0001', 'a private question');
   await until(() => !!t.ws.btwRuns[0]?.exec.written.length);
@@ -147,7 +149,7 @@ test('socket: another user\'s side question on a session is never sent to a tab 
   // And a reconnecting tab of the owner does not get it replayed either.
   const again = await t.connect();
   again.send({ type: 'subscribe', session: 'theirs' });
-  await until(() => again.got.some((m) => m.type === 'tasks'));
+  await until(() => again.got.some((m) => m.type === 'removed'));
   assert.equal(snapsOf(again.got).length, 0);
 });
 

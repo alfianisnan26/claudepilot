@@ -39,8 +39,8 @@ export interface PlatformModule {
 }
 
 export interface PlatformDeps extends Omit<NotifyDeps, 'bus' | 'owner' | 'audit' | 'publish' | 'reauthFresh'> {
-  /** The live hub's publish, for the three topics. */
-  publish?: (topic: PlatformTopic) => void;
+  /** The live hub's publish, for the three topics; `to`: only these people's tabs (organizations slice 2, P5). */
+  publish?: (topic: PlatformTopic, to?: readonly string[]) => void;
   owner?: PlatformOwner;
   /** Whether a socket's request is signed in (the live socket's own check), for presence. */
   socketAuthorized?: (req: IncomingMessage) => boolean;
@@ -73,9 +73,9 @@ export function createPlatform(deps: PlatformDeps): Platform {
   const bus = createBus(deps.now);
   const owner = deps.owner ?? seamOwner;
   const audit = new PlatformAudit(deps.store, deps.now);
-  const publish = (t: PlatformTopic) => deps.publish?.(t);
+  const publish = (t: PlatformTopic, to?: readonly string[]) => deps.publish?.(t, to);
   let reauth: (signIn: string | undefined) => boolean = () => false;
-  const notify = createNotify({ ...deps, bus, owner, audit, publish: () => publish('notify'), reauthFresh: (t) => reauth(t) });
+  const notify = createNotify({ ...deps, bus, owner, audit, publish: (to) => publish('notify', to), reauthFresh: (t) => reauth(t) });
   const hooks = new Hono();
   hooks.use(
     '*',

@@ -853,7 +853,8 @@ const platform = createPlatform({
   uiUrl: config.portalMcp.uiUrl ?? null,
   pushContact: config.notify.pushContact ?? null,
   selfOrigin: `http://localhost:${config.port}`,
-  publish: (topic) => notify(topic),
+  // Organizations slice 2 (P5): a notification's nudge goes to the tabs of the people it is for, nobody else's.
+  publish: (topic, to) => (to ? live.publish(topic, to) : notify(topic)),
   socketAuthorized: (req) => !!portal.session(cookie(req, config.session.cookie)),
 });
 live.onPresence = (connection, presence, req) => platform.presence(connection, presence, req);

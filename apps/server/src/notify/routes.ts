@@ -34,7 +34,8 @@ export interface NotifyRouteDeps {
   session: (id: string) => { id: string } | null;
   /** Whether this sign-in checked the server code recently (rotating a signing secret needs it). */
   reauthFresh: (signIn: string | undefined) => boolean;
-  publish: () => void;
+  /** "Changed, load again" on the live topic `notify`, for these people's tabs only (organizations slice 2, P5). */
+  publish: (to?: readonly string[]) => void;
 }
 
 const limit = (maxSize: number) =>
@@ -101,7 +102,7 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     if (turnedOn.length && req.confirm !== true) throw new AppError('CONFIRMATION_REQUIRED', 'Confirm: this lets a tap on a notification allow it.', { details: { turnedOn } });
     const saved = d.destinations.setPrefs(a.userId, next);
     d.audit.record({ kind: 'notify.prefs', severity: turnedOn.length ? 'medium' : 'info', actor: a.label, userId: a.userId, detail: { ...saved } });
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success<NotifyUserPrefs>(saved));
   });
 
@@ -110,7 +111,7 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     const req = await body<{ subscription: unknown; name: unknown; tz: unknown }>(c);
     const { destination, movedFrom } = d.destinations.registerPush(a.userId, req as never);
     if (movedFrom) d.audit.record({ kind: 'notify.device_moved', actor: a.label, userId: movedFrom, subject: `destination:${destination.id}`, detail: { destination: destination.id } });
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success(destination));
   });
 
@@ -119,13 +120,13 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     const a = who(c);
     const created = d.destinations.createChannel(a.userId, await body(c));
     d.audit.record({ kind: 'notify.channel', actor: a.label, userId: a.userId, subject: `destination:${created.destination.id}`, detail: { action: 'created', type: created.destination.type, host: created.destination.hint, signed: created.destination.signed, privateNetwork: created.destination.allowPrivateNetwork } });
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success(created));
   });
   r.patch('/destinations/:id', async (c) => {
     const a = who(c);
     const updated = d.destinations.update(c.req.param('id'), a.userId, await body(c));
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success(updated));
   });
   r.delete('/destinations/:id', (c) => {
@@ -134,7 +135,7 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     const dest = d.destinations.get(id, a.userId);
     d.destinations.remove(id, a.userId);
     d.audit.record({ kind: 'notify.channel', actor: a.label, userId: a.userId, subject: `destination:${id}`, detail: { action: 'removed', type: dest.type } });
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success({ ok: true }));
   });
   r.post('/destinations/:id/test', async (c) => {
@@ -166,12 +167,13 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     const a = who(c);
     const req = c.req.header('content-type')?.includes('json') ? await body<{ upTo: string }>(c) : {};
     const unread = d.history.markRead(a.userId, typeof req.upTo === 'string' ? req.upTo : null);
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success({ unread }));
   });
   r.delete('/history', (c) => {
-    d.history.clear(who(c).userId);
-    d.publish();
+    const userId = who(c).userId;
+    d.history.clear(userId);
+    d.publish([userId]);
     return c.json(success({ ok: true }));
   });
 
@@ -192,21 +194,21 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     const a = who(c);
     const m = d.mutes.create(a.userId, await body<CreateMuteRequest>(c));
     muteAudit(a, 'created', m);
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success(m));
   });
   r.delete('/mutes/:id', (c) => {
     const a = who(c);
     const m = d.mutes.remove(a.userId, c.req.param('id'));
     muteAudit(a, 'removed', m);
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success({ ok: true }));
   });
   r.delete('/mutes', (c) => {
     const a = who(c);
     const removed = d.mutes.clear(a.userId);
     muteAudit(a, 'cleared', null, { removed });
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success({ removed }));
   });
 
@@ -256,7 +258,7 @@ export function createNotifyRoutes(d: NotifyRouteDeps): Hono {
     const a = who(c);
     const req = await body<{ token: string; decision: string }>(c);
     const result = await d.actions.act({ userId: a.userId, actor: a.label, signIn: signIn(c), token: req.token, decision: req.decision });
-    d.publish();
+    d.publish([a.userId]);
     return c.json(success(result));
   });
 

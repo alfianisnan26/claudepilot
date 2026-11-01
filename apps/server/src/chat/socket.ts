@@ -5,9 +5,9 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { isAppError } from '@isnanme/core';
-import { CHAT_SOCKET_PATH, type Actor, type ChatClientMessage, type ChatServerMessage } from '@portal/contracts';
+import { CHAT_SOCKET_PATH, sessionRef, type Actor, type ChatClientMessage, type ChatServerMessage, type Verb } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { actorOfSocket, actorUserId } from '../authz/seam.js';
+import { actorOfSocket, actorUserId, can, onAccessChange, requireCan } from '../authz/seam.js';
 import type { ChatController } from './controller.js';
 
 const PING_MS = 25_000;
@@ -63,6 +63,18 @@ export function attachChat(server: Server, controller: ChatController, authorize
   function join(ws: WebSocket, actor: Actor) {
     const subscribed = new Set<string>();
     const send = (msg: ChatServerMessage) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(msg));
+    // Organizations slice 2 (P5): every message that names a session checks THIS person's right to it through the one `can()`: view to
+    // watch it (a session they may not view answers `removed`, exactly like one that does not exist), operate to send, answer or control.
+    const may = (verb: Verb, id: string) => can(actor, verb, sessionRef(id)).allow;
+    // A right taken away (a share ended, an account disabled) stops what this tab watches at once, as if each session were gone.
+    const offAccess = onAccessChange((c) => {
+      if (c.userId !== actorUserId(actor)) return;
+      for (const id of [...subscribed]) {
+        if (may('view', id)) continue;
+        subscribed.delete(id);
+        send({ type: 'removed', session: id });
+      }
+    });
     // Forward the controller's live updates (events, deltas, session, input states, tasks) for watched sessions.
     const off = controller.onEvent((sessionId, msg) => {
       if (subscribed.has(sessionId)) send(msg);
@@ -96,6 +108,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
       clearInterval(ping);
       off();
       offBtw();
+      offAccess();
     });
     ws.on('error', () => ws.terminate());
 
@@ -104,6 +117,10 @@ export function attachChat(server: Server, controller: ChatController, authorize
         case 'subscribe': {
           // A folded session's old id means the chat that took it in.
           const id = controller.resolve(msg.session);
+          if (!may('view', id)) {
+            send({ type: 'removed', session: msg.session }); // the same answer as a session that does not exist
+            return;
+          }
           subscribed.add(id);
           // Backlog first (stored events after the tab's last seq), then live updates flow via `off`. T-2589: bounded by the store's
           // HISTORY_MAX_EVENTS; a tab further behind gets the newest of them, the older ones stay in the paged read. T-2591: such a
@@ -131,6 +148,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
           return;
         case 'send':
           try {
+            requireCan(actor, 'operate', sessionRef(controller.resolve(msg.session)));
             await controller.send(msg.session, msg.uuid, msg.text, { priority: msg.priority, attachments: msg.attachments, actor: 'ui' });
             send({ type: 'ack', uuid: msg.uuid, ok: true });
           } catch (e) {
@@ -139,6 +157,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
           return;
         case 'respond':
           try {
+            requireCan(actor, 'operate', sessionRef(controller.resolve(msg.session)));
             await controller.respond(msg.session, msg.requestId, msg.decision, { note: msg.note, actor: 'ui' });
             send({ type: 'ack', uuid: msg.requestId, ok: true });
           } catch (e) {
@@ -172,6 +191,7 @@ export function attachChat(server: Server, controller: ChatController, authorize
         case 'control': {
           const key = typeof msg.uuid === 'string' && msg.uuid ? msg.uuid : String(msg.op);
           try {
+            requireCan(actor, 'operate', sessionRef(controller.resolve(msg.session)));
             // A person in the app: the one caller that may turn on Auto (for a session a person started).
             await controller.control(msg.session, msg.op, msg.args, { actor: 'ui' });
             send({ type: 'ack', uuid: key, ok: true });

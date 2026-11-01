@@ -74,7 +74,15 @@ export interface KnowledgeOptions {
 /** What a caller may see: an MCP token can be limited to some vaults. Null or missing: all. */
 export interface CallerScope {
   vaults?: string[] | null;
+  /**
+   * Organizations slice 2 (P5): whether the person behind the call may VIEW a vault (the seam's `can(actor, 'view', vaultRef(id))`). A vault
+   * they may not view is left out of lists, searches and graphs, and naming it is the same not-found as a vault that does not exist.
+   */
+  canView?: ((vaultId: string) => boolean) | null;
 }
+
+const inScope = (r: { id: string }, scope: CallerScope | null | undefined): boolean =>
+  (!scope?.vaults || scope.vaults.includes(r.id)) && (!scope?.canView || scope.canView(r.id));
 
 interface VaultRow {
   id: string;
@@ -285,7 +293,7 @@ export class KnowledgeService {
   resolve(ref: string | undefined | null, scope?: CallerScope | null): VaultRow {
     if (!this.#ready())
       throw new KnowledgeError('UNAVAILABLE', 'The portal’s database isn’t ready for notes (it is frozen, or from a newer portal).');
-    const rows = this.#rows().filter((r) => !scope?.vaults || scope.vaults.includes(r.id));
+    const rows = this.#rows().filter((r) => inScope(r, scope));
     const text = (ref ?? '').trim();
     if (!text) {
       if (rows.length === 1) return rows[0]!;
@@ -307,7 +315,7 @@ export class KnowledgeService {
 
   list(scope?: CallerScope | null): VaultSummary[] {
     return this.#rows()
-      .filter((r) => !scope?.vaults || scope.vaults.includes(r.id))
+      .filter((r) => inScope(r, scope))
       .map((r) => this.#summary(r));
   }
 
@@ -881,7 +889,7 @@ export class KnowledgeService {
       this.#access(row, actor, 'read');
       return [row];
     }
-    return this.#rows().filter((r) => (!scope?.vaults || scope.vaults.includes(r.id)) && !(this.#asAgent(actor) && r.agents === 'off'));
+    return this.#rows().filter((r) => inScope(r, scope) && !(this.#asAgent(actor) && r.agents === 'off'));
   }
 
   /**

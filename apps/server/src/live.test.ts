@@ -4,7 +4,11 @@ import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import type { LiveMessage, Workspace } from '@portal/contracts';
 import { WebSocket } from 'ws';
+import { ownerActor, useSocketActor } from './authz/seam.js';
 import { LiveHub } from './live.js';
+
+// Organizations slice 2 (P5): what a tab is sent is cut to its person, and an anonymous tab hears nothing; these tabs are the founding user's.
+useSocketActor(() => ownerActor());
 
 const ws = (name: string, status: Workspace['status'] = 'running') =>
   ({ id: `docker/${name}`, name, target: 'docker', image: '', status, detail: '', createdAt: '2026-10-10T00:00:00Z' }) as Workspace;

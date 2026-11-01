@@ -54,8 +54,8 @@ export interface PipelineDeps {
   /** The origin a push's absolute `navigate` is built on (the base URL, else this portal). */
   origin: () => string;
   contact: () => string | null;
-  /** "Changed, load again" on the live topic `notify`. */
-  publish: () => void;
+  /** "Changed, load again" on the live topic `notify`; `to`: only these people's tabs (organizations slice 2, P5), absent: everyone's. */
+  publish: (to?: readonly string[]) => void;
   now?: () => Date;
   /** Timers, injectable for tests. */
   schedule?: (ms: number, fn: () => void) => () => void;
@@ -178,7 +178,7 @@ export class NotifyPipeline {
         else this.#route(e, dest, r.userId);
       }
     }
-    this.d.publish();
+    this.d.publish(recipients.map((r) => r.userId));
   }
 
   #log(userId: string, e: NotifyEvent, dest: NotifyDestination, status: 'sent' | 'failed' | 'suppressed' | 'held', code: Parameters<NotifyHistory['log']>[1]['code'], attempts = 0, httpStatus: number | null = null) {
@@ -320,7 +320,7 @@ export class NotifyPipeline {
     }
     this.d.destinations.recordResult(dest.id, res.ok, res.error);
     this.#log(userId, e, dest, res.ok ? 'sent' : 'failed', res.error, attempt, res.status);
-    this.d.publish();
+    this.d.publish([userId]);
     return { ok: res.ok, error: res.error };
   }
 
