@@ -48,7 +48,7 @@ test('an org provider on the trust list is tested (and signs in) with private ad
            VALUES (?, 'x', ?, 'cid', NULL, '[]', 'openid email', 'member', NULL, 1, 0, 0, 0, ?, NULL, '[]', 'test', ?, ?)`,
       )
       .run(id, issuer, org, at, at);
-  for (const [id, slug] of [['org_trusted', 'trusted'], ['org_other', 'other']]) db.prepare('INSERT INTO orgs (id, slug, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)').run(id, slug, slug, 'test', at);
+  for (const [id, slug] of [['org_trusted', 'trusted'], ['org_other', 'other']] as const) db.prepare('INSERT INTO orgs (id, slug, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)').run(id, slug, slug, 'test', at);
   add('sso_trusted', 'org_trusted', 'https://auth.konfersi.com/application/o/claudepilot/');
   add('sso_other', 'org_other', 'https://idp.elsewhere.example/');
   await sso.testOrg('org_trusted');
