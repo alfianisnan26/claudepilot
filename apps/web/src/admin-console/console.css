@@ -2,6 +2,8 @@
 @import 'tailwindcss' source(none);
 @import '@isnanme/tokens/tailwind.css';
 @source './';
+/* The shared components the console draws (docs/coord/UI-STANDARD.md): one look for both apps. */
+@source '../components/TabBar.tsx';
 
 html,
 body {

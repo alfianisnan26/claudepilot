@@ -78,9 +78,9 @@ export function Console() {
   };
 
   return (
-    <div className="flex min-h-dvh flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] lg:pb-0 lg:pl-60">
+    <div data-console-frame="" className="flex min-h-dvh flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:pb-0 lg:pl-60">
       {/* Desktop (owner, 2026-11-01: "make it as sidebar"): the sections in a side bar, the account at its foot. */}
-      <aside className="fixed inset-y-0 left-0 z-10 hidden w-60 flex-col border-r border-line bg-bg pt-[env(safe-area-inset-top)] lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-10 hidden w-60 flex-col border-r border-line bg-bg lg:flex">
         <h1 className="truncate px-5 py-4 text-base font-semibold">Admin</h1>
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain px-3" aria-label="Sections">
           {TABS.map((t) => (
@@ -105,12 +105,14 @@ export function Console() {
           </button>
         </div>
       </header>
+      {/* The content pane (docs/coord/UI-STANDARD.md §1): on a desktop the only thing that scrolls, full width; on a phone the page scrolls. */}
+      <div id="console-pane" className="flex min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain">
       {error && (
-        <div role="alert" className="mx-auto mt-3 w-full max-w-5xl px-4">
+        <div role="alert" className="mx-auto mt-3 w-full max-w-5xl px-4 lg:max-w-none lg:px-8">
           <p className="break-any rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>
         </div>
       )}
-      <main className="mx-auto w-full max-w-5xl min-w-0 flex-1 px-4 py-4 lg:px-8 lg:py-6">
+      <main className="mx-auto w-full max-w-5xl min-w-0 flex-1 px-4 py-4 lg:max-w-none lg:px-8 lg:py-6">
         {tab === 'users' && <UsersView run={run} meId={me.userId} />}
         {tab === 'orgs' && <OrgsView run={run} meId={me.userId} />}
         {tab === 'workspaces' && <WorkspacesView run={run} />}
@@ -118,6 +120,7 @@ export function Console() {
         {tab === 'settings' && <SettingsView run={run} />}
         {tab === 'audit' && <AuditView run={run} />}
       </main>
+      </div>
       <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden" aria-label="Sections">
         {TABS.map((t) => (
           <TabButton key={t} tab={t} active={tab === t} onClick={() => go(t)} />
