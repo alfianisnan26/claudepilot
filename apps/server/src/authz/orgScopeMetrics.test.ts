@@ -159,7 +159,7 @@ test('glance (Sessions, Agents, Needs attention): sessions by workspace, tickets
   type Snap = { sessions: { open: number; items: { id: string }[] }; attention: { tickets: { count: number }; ci: { count: number; items: { workspaceId: string }[] }; deploys: { count: number } } };
 
   const all = await get<Snap>('/');
-  assert.equal(all.sessions.open, 2, 'today: everything she may see (org B’s session is not hers to see)');
+  assert.equal(all.sessions.open, 3, 'today: everything she may see (the founding user sees every session)');
   assert.equal(all.attention.tickets.count, 3);
   assert.equal(withins.at(-1), undefined, 'no context: the ticket count is not narrowed');
 
