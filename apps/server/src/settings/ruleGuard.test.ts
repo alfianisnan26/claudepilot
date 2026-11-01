@@ -1919,3 +1919,13 @@ test('T-713, T-980: own-worktree merge --no-edit, revert --no-edit and checkout 
   }
   assert.equal(misses.join('\n'), '');
 });
+
+test('owner 2026-11-01: a session in Bypass is not held by the lane git -C checks (no allow rules to escape); the other protections stay', () => {
+  const { g, wt, main, env } = gitCRig();
+  const as = (command: string, mode: string) => run(g, 'Bash', { command, description: 'x' }, { cwd: wt, env, mode });
+  refused(as(`git -C ${main} status`, 'default'), 'a lane in default mode: the main checkout stays refused');
+  refused(as('W=' + main + '; git -C $W status', 'dontAsk'), 'a dontAsk lane: a variable after -C stays refused');
+  assert.equal(as(`git -C ${main} status`, 'bypassPermissions').code, 0, 'Bypass: git -C on the main checkout passes');
+  assert.equal(as('for r in a b; do git -C $r status; done', 'bypassPermissions').code, 0, 'Bypass: a loop variable after -C passes');
+  refused(run(g, 'Write', { file_path: join(main, '.claude', 'settings.json'), content: '{}' }, { cwd: wt, env, mode: 'bypassPermissions' }), 'Bypass still cannot write Claude Code settings');
+});
