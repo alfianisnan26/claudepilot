@@ -118,8 +118,13 @@ try {
       await b.clickSel('[data-access-level-card="operate"]');
       await sleep(200);
       // No outline-none: the focused card shows a ring.
-      const ring = await b.eval(`(() => { const e = document.querySelector('[data-access-level-card="operate"]'); e.focus(); const st = getComputedStyle(e); return st.boxShadow !== 'none' || (st.outlineStyle !== 'none' && st.outlineWidth !== '0px'); })()`);
-      check(`${t}: Level: a focused card shows a ring`, ring === true);
+      // Keyboard focus (focus-visible): from the card to its InfoTip and back.
+      await b.focusSel('[data-access-level-card="operate"]');
+      await b.key('Tab');
+      await b.key('Tab', { modifiers: 8 });
+      await sleep(200);
+      const ring = await b.eval(`(() => { const e = document.activeElement; if (!e?.matches('[data-access-level-card]')) return 'focus on ' + (e?.tagName ?? 'nothing'); const st = getComputedStyle(e); return st.boxShadow !== 'none' || (st.outlineStyle !== 'none' && st.outlineWidth !== '0px'); })()`);
+      check(`${t}: Level: a focused card shows a ring`, ring === true, String(ring));
       await b.shot(`org-access-level-${t}`);
       await b.clickSel('[data-access-next]');
       await b.waitFor(sheet('until'), 5000, 'Until').catch(() => {});
@@ -142,7 +147,8 @@ try {
       check(`${t}: granted: the member is listed at Operate with an end`, /Quinn/.test(s.text) && /Operate/.test(s.text) && /ends in 7 d/.test(s.text), JSON.stringify(s.text.slice(0, 240)));
       if (first) await b.shot(`org-access-granted-${t}`);
       // End it again (one tap and the confirm), so the next pass starts the same.
-      await b.clickSel('[data-access-revoke]');
+      // A toast may sit over the row on a phone for a moment: the element is clicked, not a point.
+      await b.eval(`document.querySelector('[data-access-revoke]')?.click()`);
       await sleep(500);
       await b.eval(clickIn('[role=dialog] button, [role=alertdialog] button', 'End'));
       await b.waitFor(`document.querySelectorAll('[data-access-entry="user"]').length === 0`, 8000, 'ended').catch(() => {});

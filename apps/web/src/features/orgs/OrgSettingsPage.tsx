@@ -81,6 +81,8 @@ export function OrgSettingsPage() {
     if (opened.current || !tab || (tab !== 'sign-in' && tab !== 'access') || !sections.includes(tab)) return;
     opened.current = true;
     requestAnimationFrame(() => go(tab));
+    // The sections above load their lists after the page; go again once they have settled, so the section stays at the top.
+    window.setTimeout(() => go(tab), 900);
   }, [sections, search, go]);
 
   // The side list and the picker follow the section in view.

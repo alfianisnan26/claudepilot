@@ -282,7 +282,7 @@ export function AccessSheet({
                         <span className="min-w-0 flex-1">
                           <span className="block font-medium [overflow-wrap:anywhere]">{subjectText(e.subject)}</span>
                           <span className="block text-[12.5px] [overflow-wrap:anywhere] text-muted">
-                            {[e.reason.kind === 'share' ? null : reasonText(e.reason), end, share?.note].filter(Boolean).join(' · ') || 'Shared'}
+                            {[e.subject.kind === 'org_managers' ? 'By role' : e.reason.kind === 'share' ? null : reasonText(e.reason), end, share?.note].filter(Boolean).join(' · ') || 'Shared'}
                           </span>
                         </span>
                         <LevelPill level={e.level} />
