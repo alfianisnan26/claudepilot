@@ -35,6 +35,10 @@ import {
   type ChangeMyPasswordRequest,
   normalizeEmail,
   type SignedInAs,
+  type CurrentSignIn,
+  type MyWebSession,
+  type UpdateMyProfileRequest,
+  PERSONA_AVATAR,
   PORTAL_USER_API,
   type UpdatePortalUserRequest,
   type RotateCodeRequest,
@@ -63,6 +67,8 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { PortalUsers } from './identity/users.js';
+import { deviceLabel } from './identity/device.js';
+import { PortalProfiles } from './identity/profile.js';
 import { SessionGrants } from './identity/grants.js';
 import { fingerprint } from './identity/throttle.js';
 import { csrf } from 'hono/csrf';
@@ -101,7 +107,7 @@ import type { SkillsModule } from './skills/module.js';
 import { createSkillRoutes } from './skills/routes.js';
 import { createKnowledgeRoutes } from './knowledge/routes.js';
 import type { KnowledgeService } from './knowledge/service.js';
-import { createPersonaRoutes, type Personas } from './personas/index.js';
+import { createPersonaRoutes, readCapped, type Personas } from './personas/index.js';
 import { createSettingsRoutes, type SettingsModule } from './settings/index.js';
 import { createSecretsAdminRoutes } from './secrets/adminRoutes.js';
 import type { SecretRotations } from './secrets/rotation.js';
@@ -292,6 +298,10 @@ export function createApp(
   // Teams and SSO (owner, 2026-10-17): accounts in teams, sessions shared to a team, sign-in through an OpenID Connect provider by domain.
   const teams = new PortalTeams(() => store.db, () => (store.writable ? store.db : null));
   const sso = new SsoProviders(() => store.db, () => (store.writable ? store.db : null), () => store.secrets, users, teams, oidc, undefined, parseTrustedIssuers(config.orgSsoTrustedIssuers));
+  // Owner request 2026-11-01: the person's own profile (name, handle, picture), and what an SSO sign-in fills in (identity/profile.ts).
+  const profiles = new PortalProfiles(() => store.db, () => (store.writable ? store.db : null), (url, allowPrivate) =>
+    sso.oidc.fetchImage(url, allowPrivate, PERSONA_AVATAR.inputBytes),
+  );
   // Owner, 2026-11-01: an account's changes with their side effects, shared by /api/admin/users and the Admin console (identity/accountAdmin.ts).
   const accountAdmin = new AccountAdmin({ users, writable: () => (store.writable ? store.db : null), revokeSessions: (id) => portal.revokeUser(id), forget: [grants, teams, sso] });
   // Review #5: the attempt counters are swept once an hour.
@@ -467,7 +477,7 @@ export function createApp(
         throw new AppError('FORBIDDEN', 'This email signs in with SSO.', { details: { sso: 'Use the SSO button.' } });
       try {
         const user = await users.verify(email, password, key);
-        token = portal.openSession(user.id);
+        token = portal.openSession(user.id, { device: deviceLabel(c.req.header('user-agent')), method: 'password' });
         audit('portal.signin', null, { method: 'email', userId: user.id, role: user.role });
         console.log(`[portal] signed in with an email account (${user.id}, ${user.role})`);
       } catch (e) {
@@ -477,7 +487,7 @@ export function createApp(
       }
     } else {
       try {
-        token = portal.signIn(typeof code === 'string' ? code : '');
+        token = portal.signIn(typeof code === 'string' ? code : '', { device: deviceLabel(c.req.header('user-agent')), method: 'code' });
       } catch (e) {
         if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
         throw e;
@@ -539,6 +549,7 @@ export function createApp(
     // Organizations slice 10: a sign-in or step-up through an org's provider marks the session and syncs the membership (orgs/sso.ts).
     sessionHash: sessionTokenHash,
     orgSignIn: (e) => orgsModule.sso?.onSignIn(e),
+    profiles,
   });
   identity.mountPublic(app);
 
@@ -640,11 +651,81 @@ export function createApp(
     return c.json(success({ ok: true }));
   });
 
-  // MU2 S1a: who is signed in, answered to a member too (no code, no admin state).
-  app.get(PORTAL_USER_API.me, (c) => {
-    const s = portal.anySession(getCookie(c, cookie));
+  // MU2 S1a: who is signed in, answered to a member too (no code, no admin state). Owner request 2026-11-01: with the person's profile and
+  // how this browser signed in; a server-code session names the founder account (the server code acts as the founding user).
+  const currentSignIn = (token: string | undefined): CurrentSignIn => {
+    const m = portal.methodOf(token);
+    if (m === 'password' || m === 'code') return { method: m, provider: null };
+    if (m?.startsWith('sso:')) return { method: 'sso', provider: profiles.providerName(m.slice(4)) };
+    return { method: 'unknown', provider: null };
+  };
+  const signedInAs = (token: string | undefined, userId: string | null | undefined): SignedInAs =>
+    userId
+      ? { kind: 'account', user: users.get(userId), profile: profiles.profile(userId), session: currentSignIn(token) }
+      : { kind: 'code', founder: profiles.founder(), session: currentSignIn(token) };
+  /** The signed-in ACCOUNT (any role) and its token; the server code has no profile of its own. Its own id only, never one from the request. */
+  const myAccount = (c: Context<Env>) => {
+    const token = getCookie(c, cookie);
+    const s = portal.anySession(token);
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
-    return c.json(success<SignedInAs>(s.userId ? { kind: 'account', user: users.get(s.userId) } : { kind: 'code' }));
+    if (!s.userId) throw new AppError('VALIDATION_FAILED', 'The server code has no profile. Sign in with an account.');
+    return { token, userId: s.userId };
+  };
+  app.get(PORTAL_USER_API.me, (c) => {
+    const token = getCookie(c, cookie);
+    const s = portal.anySession(token);
+    if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    return c.json(success<SignedInAs>(signedInAs(token, s.userId)));
+  });
+  app.patch(PORTAL_USER_API.me, async (c) => {
+    const me = myAccount(c);
+    const req = await body<UpdateMyProfileRequest>(c);
+    profiles.update(me.userId, { displayName: req.displayName, username: req.username });
+    audit('account.profile_changed', me.userId, { by: 'self', fields: Object.keys(req).filter((k) => k === 'displayName' || k === 'username') });
+    return c.json(success<SignedInAs>(signedInAs(me.token, me.userId)));
+  });
+  // The picture: the raw bytes of an image, re-encoded (personas/avatar.ts); what is kept is the portal's PNG, not the upload.
+  app.post(PORTAL_USER_API.myAvatar, async (c) => {
+    const me = myAccount(c);
+    const avatar = await profiles.setAvatar(me.userId, await readCapped(c.req.raw, PERSONA_AVATAR.inputBytes));
+    audit('account.avatar_changed', me.userId, { by: 'self' });
+    return c.json(success({ avatar }));
+  });
+  app.delete(PORTAL_USER_API.myAvatar, (c) => {
+    const me = myAccount(c);
+    profiles.clearAvatar(me.userId);
+    audit('account.avatar_changed', me.userId, { by: 'self', removed: true });
+    return c.json(success({ avatar: null }));
+  });
+  // The account's own web sign-ins, and ending one of them (never another account's: the handle is looked up in its own list only).
+  app.get(PORTAL_USER_API.myDevices, (c) => {
+    const me = myAccount(c);
+    const list = portal.sessionsOf(me.userId, me.token).map((s): MyWebSession => {
+      const how = s.method?.startsWith('sso:') ? 'sso' : s.method === 'password' || s.method === 'code' ? s.method : 'unknown';
+      return {
+        id: s.id,
+        current: s.current,
+        device: s.device ?? null,
+        method: how,
+        provider: how === 'sso' ? profiles.providerName(s.method!.slice(4)) : null,
+        createdAt: new Date(s.createdAt).toISOString(),
+        expiresAt: new Date(s.expiresAt).toISOString(),
+      };
+    });
+    return c.json(success(list));
+  });
+  app.delete('/api/me/devices/:id', (c) => {
+    const me = myAccount(c);
+    if (!portal.revokeSessionOf(me.userId, c.req.param('id'), me.token)) throw new AppError('NOT_FOUND', 'No such sign-in.');
+    audit('account.session_revoked', me.userId, { by: 'self' });
+    return c.json(success({ removed: true }));
+  });
+  // An account's picture by its content hash: any signed-in session (the account menu, the people lists). Immutable: the hash is the name.
+  app.get('/api/users/avatars/:sha', (c) => {
+    if (!portal.anySession(getCookie(c, cookie))) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    const png = profiles.avatarPng(c.req.param('sha'));
+    if (!png) throw new AppError('NOT_FOUND', 'No such picture.');
+    return c.body(new Uint8Array(png), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
   });
 
   app.post(API.logout, (c) => {

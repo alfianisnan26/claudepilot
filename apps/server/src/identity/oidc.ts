@@ -94,8 +94,8 @@ export class OidcClient {
     private readonly resolve?: Resolver,
   ) {}
 
-  async #fetch(url: string, init: RequestInit, allowPrivate: boolean): Promise<Response> {
-    if (!this.fetchImpl) return pinnedFetch(url, init, { allowPrivate, resolve: this.resolve, maxBytes: MAX_BODY + 1, timeoutMs: TIMEOUT_MS });
+  async #fetch(url: string, init: RequestInit, allowPrivate: boolean, maxBytes = MAX_BODY + 1): Promise<Response> {
+    if (!this.fetchImpl) return pinnedFetch(url, init, { allowPrivate, resolve: this.resolve, maxBytes, timeoutMs: TIMEOUT_MS });
     await this.guard(url, allowPrivate);
     return this.fetchImpl(url, init);
   }
@@ -123,6 +123,24 @@ export class OidcClient {
       throw new AppError('BAD_GATEWAY', `The provider refused: ${code}.`);
     }
     return body;
+  }
+
+  /**
+   * The bytes of a picture the provider names in its `picture` claim (owner request 2026-11-01: the profile from the IdP), under the same
+   * SSRF rule as the provider's own calls: https only, no redirect, at most `maxBytes`. What comes back is hostile input: the caller
+   * re-encodes it (personas/avatar.ts) and keeps only that.
+   */
+  async fetchImage(url: string, allowPrivate: boolean, maxBytes: number): Promise<Buffer> {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' || u.username || u.password) throw new AppError('BAD_GATEWAY', 'The picture is not an https address.');
+    const res = await this.#fetch(url, { redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) }, allowPrivate, maxBytes + 1).catch((e: unknown) => {
+      if (e instanceof AppError) throw e;
+      throw new AppError('BAD_GATEWAY', 'The picture could not be fetched.');
+    });
+    if (!res.ok) throw new AppError('BAD_GATEWAY', `The picture answered ${res.status}.`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length > maxBytes) throw new AppError('BAD_GATEWAY', 'The picture is too large.');
+    return bytes;
   }
 
   /** The issuer's discovery document, cached ten minutes. */

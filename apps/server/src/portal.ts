@@ -15,7 +15,26 @@ export interface Session {
   expiresAt: number;
   /** The email account that signed in (T-118); absent for the server code. Its role decides what the session is (MU2 S1a). */
   userId?: string | null;
+  /** Migration 407: the browser it came from ("Safari on iPhone", identity/device.ts), for the person's Profile. */
+  device?: string | null;
+  /** Migration 407: how it signed in: `password`, `code` or `sso:<providerId>`. */
+  method?: string | null;
 }
+
+/** What a sign-in records besides the account (migration 407). */
+export interface SessionMeta {
+  device?: string | null;
+  method?: string | null;
+}
+
+/** One live session of an account, as its Profile lists it: a short handle (the first 16 hex of the token's hash), never the token. */
+export interface AccountSession extends Session {
+  id: string;
+  current: boolean;
+}
+
+/** The handle of a session in lists: enough to name it, too short to look it up by anything but this account's own list. */
+const handleOf = (hash: string) => hash.slice(0, 16);
 
 /** What an email account is now, asked on every use so a role change or a disable takes effect at once. Null: gone. */
 export type AccountRole = (userId: string) => 'admin' | 'member' | 'disabled' | 'unavailable' | null;
@@ -125,19 +144,25 @@ export class Portal {
   }
 
   /** Signs in with the code; returns the new session token. */
-  signIn(input: string): string {
+  signIn(input: string, meta: SessionMeta = {}): string {
     if (!this.#enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     if (!this.matches(input)) throw new AppError('UNAUTHORIZED', 'That code is not right.');
-    return this.openSession();
+    return this.openSession(null, meta);
   }
 
   /** A new session after a check done elsewhere (an email account, T-118). An admin account's is a full session; a member's is not. */
-  openSession(userId: string | null = null): string {
+  openSession(userId: string | null = null, meta: SessionMeta = {}): string {
     if (!this.#enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
     const token = randomBytes(32).toString('base64url');
     const now = Date.now();
     const hash = tokenHash(token);
-    const session: Session = { createdAt: now, expiresAt: now + this.ttlMs, ...(userId ? { userId } : {}) };
+    const session: Session = {
+      createdAt: now,
+      expiresAt: now + this.ttlMs,
+      ...(userId ? { userId } : {}),
+      ...(meta.device ? { device: meta.device.slice(0, 60) } : {}),
+      ...(meta.method ? { method: meta.method.slice(0, 80) } : {}),
+    };
     this.#sessions.set(hash, session);
     this.#persist((st) => st.save(hash, session));
     return token;
@@ -211,6 +236,38 @@ export class Portal {
     }
     if (any) this.onRevoked();
     this.#signedOut([userId]);
+  }
+
+  /** The live sessions of one account, newest first; `currentToken`'s is marked (the Profile's device list). */
+  sessionsOf(userId: string, currentToken?: string): AccountSession[] {
+    this.#prune();
+    const current = currentToken ? tokenHash(currentToken) : null;
+    const out: AccountSession[] = [];
+    for (const [hash, s] of this.#sessions) if (s.userId === userId) out.push({ ...s, id: handleOf(hash), current: hash === current });
+    return out.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /**
+   * Ends ONE session of an account by its handle (the Profile's "Sign out" on a device). Only that account's own sessions are looked at, so
+   * a handle of someone else's is the same `false` as one that does not exist. The current session is not ended here (sign out does that).
+   */
+  revokeSessionOf(userId: string, id: string, currentToken?: string): boolean {
+    const current = currentToken ? tokenHash(currentToken) : null;
+    for (const [hash, s] of this.#sessions) {
+      if (s.userId !== userId || handleOf(hash) !== id || hash === current) continue;
+      this.#sessions.delete(hash);
+      this.#persist((st) => st.remove(hash));
+      this.onRevoked();
+      this.#expired([userId]);
+      return true;
+    }
+    return false;
+  }
+
+  /** How the session of `token` signed in (`password`, `code`, `sso:<id>`), or null when it was not recorded. */
+  methodOf(token: string | undefined): string | null {
+    if (!token) return null;
+    return this.#sessions.get(tokenHash(token))?.method ?? null;
   }
 
   signOut(token: string) {

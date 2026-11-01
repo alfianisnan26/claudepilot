@@ -4613,6 +4613,37 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 407,
+    name: 'identity: the profile (username, avatar, what the person set themselves) and the device of each web sign-in',
+    up(db) {
+      // Owner request 2026-11-01 ("refine user information as well, and profile"; docs/prd/identity-onboarding.md "Profile"). Additive only:
+      // - users.username: an optional handle (USERNAME_PATTERN), one per username_key; email stays the sign-in.
+      // - users.avatar: the sha256 of a user_avatars row (the persona pipeline re-encodes it; a table of its own, so the persona sweep never
+      //   removes a person's picture), or null: initials.
+      // - name_locked / avatar_locked: 1 once the person (or an admin) set it, so an SSO sign-in never overwrites it. An account with a
+      //   password of its own named itself at creation: locked. avatar_source_url: the IdP picture last taken (not fetched again).
+      // - web_sessions.device ("Safari on iPhone", from the User-Agent, never the raw header) and .method (`password`, `code`, `sso:<id>`).
+      db.exec(`
+        ALTER TABLE users ADD COLUMN username TEXT CHECK (username IS NULL OR length(username) BETWEEN 3 AND 32);
+        ALTER TABLE users ADD COLUMN username_key TEXT;
+        CREATE UNIQUE INDEX users_username_key ON users (username_key) WHERE username_key IS NOT NULL;
+        ALTER TABLE users ADD COLUMN avatar TEXT CHECK (avatar IS NULL OR length(avatar) = 64);
+        ALTER TABLE users ADD COLUMN name_locked INTEGER NOT NULL DEFAULT 0 CHECK (name_locked IN (0, 1));
+        ALTER TABLE users ADD COLUMN avatar_locked INTEGER NOT NULL DEFAULT 0 CHECK (avatar_locked IN (0, 1));
+        ALTER TABLE users ADD COLUMN avatar_source_url TEXT;
+        UPDATE users SET name_locked = 1 WHERE password_set = 1;
+        CREATE TABLE user_avatars (
+          sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
+          png BLOB NOT NULL,
+          side INTEGER NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+        ALTER TABLE web_sessions ADD COLUMN device TEXT;
+        ALTER TABLE web_sessions ADD COLUMN method TEXT;
+      `);
+    },
+  },
 ];
 
 /**

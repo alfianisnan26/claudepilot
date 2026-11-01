@@ -35,8 +35,75 @@ export interface UpdatePortalUserRequest {
 export const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$/;
 export const normalizeEmail = (raw: string): string => raw.normalize('NFKC').trim().toLowerCase();
 
-/** `GET /api/me` (`SignedInAs`): who is signed in, for a member too: `{ kind: 'code' }` or `{ kind: 'account', user: PortalUser }`. */
-export type SignedInAs = { kind: 'code' } | { kind: 'account'; user: PortalUser };
+/* ---------- Who is signed in, and the person's own profile (owner request 2026-11-01: "refine user information as well, and profile") ---------- */
+
+/** How this browser signed in: an email and password, an SSO provider (its name), or the server code. `unknown`: before migration 407. */
+export interface CurrentSignIn {
+  method: 'password' | 'sso' | 'code' | 'unknown';
+  /** The provider's name for `sso` ("Konfersi Team"), else null. */
+  provider: string | null;
+}
+
+/** An SSO identity linked to the account: one provider's subject. */
+export interface LinkedSignIn {
+  providerId: string;
+  /** The provider's name, or "A removed provider". */
+  provider: string;
+  /** The email the provider gave at the last sign-in. */
+  email: string;
+  linkedAt: string;
+  lastUsedAt: string | null;
+}
+
+/** Enough to recognise a person: the account menu's line, the founder shown on a server-code session. */
+export interface PersonSummary {
+  displayName: string;
+  email: string;
+  username: string | null;
+  /** The avatar's URL (`PORTAL_USER_API.avatar(sha)`), or null: initials are drawn. */
+  avatar: string | null;
+}
+
+/** The signed-in account as its own Profile shows it. Never a hash, never another person's data. */
+export interface MyProfile extends PersonSummary {
+  id: string;
+  role: 'admin' | 'member';
+  /** The one account that is the founding user (`users.founder`). */
+  founder: boolean;
+  /** It has a password of its own (a password change is offered); an SSO-made account has none until an admin sets one. */
+  passwordSet: boolean;
+  /** SSO identities linked to it. */
+  signIns: LinkedSignIn[];
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+/**
+ * `GET /api/me` (`SignedInAs`): who is signed in, for a member too. `profile`, `founder` and `session` are absent from an older server.
+ * A server-code session names the founder account when one exists (the server code acts as the founding user), else `founder` is null.
+ */
+export type SignedInAs =
+  | { kind: 'code'; founder?: PersonSummary | null; session?: CurrentSignIn }
+  | { kind: 'account'; user: PortalUser; profile?: MyProfile; session?: CurrentSignIn };
+
+/** `PATCH /api/me`: the person's own name and handle. Only what is given changes; `username: null` clears it. */
+export interface UpdateMyProfileRequest {
+  displayName?: string;
+  username?: string | null;
+}
+
+/** One live web sign-in of the account (a browser), for its Profile. `id` is a short handle, never the token or its hash. */
+export interface MyWebSession {
+  id: string;
+  /** This browser. */
+  current: boolean;
+  /** "Safari on iPhone", or null when it was not recorded. */
+  device: string | null;
+  method: CurrentSignIn['method'];
+  provider: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
 
 /** `POST /api/me/password`: change your own password; the other sessions of the account end. */
 export interface ChangeMyPasswordRequest {
@@ -45,8 +112,17 @@ export interface ChangeMyPasswordRequest {
 }
 
 export const PORTAL_USER_API = {
+  /** GET `SignedInAs`; PATCH `UpdateMyProfileRequest` -> `SignedInAs` (an account only; the server code has no profile). */
   me: '/api/me',
   myPassword: '/api/me/password',
+  /** POST the raw bytes of a PNG, JPEG or WebP (at most 3 MB) -> `{ avatar }`; DELETE -> `{ avatar: null }`. An account only. */
+  myAvatar: '/api/me/avatar',
+  /** GET `MyWebSession[]`: the account's live web sign-ins. */
+  myDevices: '/api/me/devices',
+  /** DELETE: end one of them (not the current one: sign out does that). */
+  myDevice: (id: string) => `/api/me/devices/${encodeURIComponent(id)}`,
+  /** GET: an account's avatar by its content hash (any signed-in session; a PNG). */
+  avatar: (sha: string) => `/api/users/avatars/${sha}`,
   /** GET: `PortalUser[]`. POST `CreatePortalUserRequest`: the new `PortalUser`. Signed in only. */
   list: '/api/admin/users',
   /** PATCH `UpdatePortalUserRequest`: `PortalUser`. DELETE: remove it. Signed in only. */
