@@ -337,6 +337,26 @@ test('orgs: the list shows owners and needs-owner; recover owner needs step-up a
   assert.equal(after_[0]!.needsOwner, false);
 });
 
+test('orgs: suspend and resume need the step-up, write their audit rows, and the owner cannot resume what the console suspended (slice 8)', async () => {
+  const p = portal(ADMIN_HOST);
+  const owner: Actor = { kind: 'user', userId: memberId as `u_${string}`, loginSessionId: 't', via: 'ui' };
+  abilities.grant({ kind: 'user', userId: adminId as `u_${string}`, loginSessionId: 't', via: 'ui' }, memberId as `u_${string}`, 'orgs.create');
+  const org = orgs.create(owner, { name: 'Acme', slug: 'acme' });
+  const { cookie } = await p.signIn();
+  const suspend = () => p.call('POST', `/admin-api/orgs/${org.id}/suspend`, { cookie, body: { reason: 'abuse report' } });
+  assert.equal((await suspend()).json?.error?.code, 'REAUTH_REQUIRED');
+  await p.call('POST', '/admin-api/session/step-up', { cookie, body: { password: PASSWORD } });
+  assert.equal((await suspend()).status, 200);
+  assert.equal(orgs.stateOf(org.id), 'suspended');
+  assert.equal((await suspend()).status, 409, 'already suspended');
+  assert.throws(() => orgs.resume(owner, org.id, { by: 'owner' }), (e: unknown) => e instanceof AppError && e.code === 'FORBIDDEN');
+  assert.equal((await p.call('POST', `/admin-api/orgs/${org.id}/resume`, { cookie, body: {} })).status, 200);
+  assert.equal(orgs.stateOf(org.id), 'active');
+  assert.equal((await p.call('POST', '/admin-api/orgs/org_nosuch/suspend', { cookie, body: {} })).status, 404);
+  assert.equal(JSON.parse(auditKinds('org.suspended')[0]!.detail).by, 'platform');
+  assert.equal(auditKinds('org.resumed').length, 1);
+});
+
 test('audit: filters by kind prefix and severity, newest first', async () => {
   const p = portal(ADMIN_HOST);
   const { cookie } = await p.signIn();

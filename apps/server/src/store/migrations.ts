@@ -4359,6 +4359,47 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 468,
+    name: 'organizations slice 8: invitations to an organization (single use, 7 days, the code hashed)',
+    up(db) {
+      // docs/prd/organizations.md §6.8, §8. One row per invitation: the email (normalized), the role (never owner), the sha256 of the code
+      // (the code itself lives only in the link's fragment the inviter copies), who invited, when it ends (7 days). It is used once
+      // (`used_at`, `used_by`) or revoked (`revoked_at`); the row stays for the audit. `teams` is kept for teams in orgs (slice 7).
+      db.exec(`
+        CREATE TABLE org_invitations (
+          id TEXT PRIMARY KEY CHECK (id GLOB 'oinv_?*'),
+          org_id TEXT NOT NULL REFERENCES orgs (id) ON DELETE CASCADE,
+          email_key TEXT NOT NULL CHECK (length(email_key) BETWEEN 3 AND 254),
+          role TEXT NOT NULL CHECK (role IN ('admin', 'member', 'guest')),
+          teams TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(teams)),
+          code_hash TEXT NOT NULL UNIQUE CHECK (length(code_hash) = 64),
+          invited_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used_at TEXT,
+          used_by TEXT,
+          revoked_at TEXT
+        ) STRICT;
+        CREATE INDEX org_invitations_pending ON org_invitations (org_id, email_key) WHERE used_at IS NULL AND revoked_at IS NULL;
+      `);
+    },
+  },
+  {
+    version: 469,
+    name: 'organizations slice 8: who suspended an org, and the org of a platform audit row',
+    up(db) {
+      // docs/prd/organizations.md §6.9, §6.10. `orgs.suspended_by`: 'owner' (an owner may resume it) or 'platform' (only the Admin console
+      // resumes it); NULL while active. `platform_audit.org_id`: the org a row is about, so an org's owners and admins read their rows
+      // (GET /api/orgs/:id/audit); the rows written before it are filled from their `org:<id>` subject.
+      db.exec(`
+        ALTER TABLE orgs ADD COLUMN suspended_by TEXT CHECK (suspended_by IS NULL OR suspended_by IN ('owner', 'platform'));
+        ALTER TABLE platform_audit ADD COLUMN org_id TEXT;
+        UPDATE platform_audit SET org_id = substr(subject, 5) WHERE subject GLOB 'org:org_?*';
+        CREATE INDEX platform_audit_org ON platform_audit (org_id, id) WHERE org_id IS NOT NULL;
+      `);
+    },
+  },
+  {
     version: 470,
     name: 'organizations slice 4: the Admin console’s own sessions',
     up(db) {

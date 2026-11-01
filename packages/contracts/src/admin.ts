@@ -54,6 +54,9 @@ export const ADMIN_API = {
   orgs: '/admin-api/orgs',
   /** POST `AdminRecoverOwnerRequest` (step-up): makes an active account the owner of an org that has none. */
   recoverOwner: (id: OrgId) => `/admin-api/orgs/${u(id)}/recover-owner`,
+  /** Slice 8. POST `{ reason? }` (step-up): suspends an org (its owners cannot resume it themselves); `resume` brings it back. */
+  suspendOrg: (id: OrgId) => `/admin-api/orgs/${u(id)}/suspend`,
+  resumeOrg: (id: OrgId) => `/admin-api/orgs/${u(id)}/resume`,
   /**
    * Slice 5 (§6.7, OD-4). POST `StartBreakGlassRequest` (step-up) -> `BreakGlassEntry`: one hour of `manage` on the org's content in the main
    * portal, never on personal objects; notifies the org's owners. DELETE: ends the caller's open entry on that org early.

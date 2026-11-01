@@ -5,7 +5,9 @@
 import { AppError, success } from '@isnanme/core';
 import { Hono, type Context } from 'hono';
 import type {
+  AcceptOrgInvitationRequest,
   ChangeOrgMemberRoleRequest,
+  CreateOrgInvitationRequest,
   CreateOrgRequest,
   CreateOrgShareRequest,
   CreateOrgTeamRequest,
@@ -16,6 +18,7 @@ import type {
 } from '@portal/contracts';
 import { actorOf } from '../authz/seam.js';
 import type { BreakGlassService } from './breakGlass.js';
+import type { OrgInvitations } from './invitations.js';
 import type { OrgsService } from './service.js';
 import type { OrgSharing } from './sharing.js';
 import type { OrgTransfers } from './transfer.js';
@@ -29,8 +32,14 @@ async function body(c: { req: { json: () => Promise<unknown> } }): Promise<Recor
   }
 }
 
-export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService, sharing?: OrgSharing): Hono {
+export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassService, sharing?: OrgSharing, invitations?: OrgInvitations): Hono {
   const r = new Hono();
+  const inv = (): OrgInvitations => {
+    if (!invitations) throw new AppError('NOT_FOUND', 'Not found.');
+    return invitations;
+  };
+  // Slice 8, before `/:id`: accepting is not about an org id the caller names (the code names it).
+  r.post('/invitations/accept', async (c) => c.json(success(inv().accept(actorOf(c), (await body(c)) as Partial<AcceptOrgInvitationRequest>))));
 
   // Slice 5: before `/:id`, so the banner's path is never read as an org id. Always registered (the route table does not depend on the
   // wiring); without the service they answer 404.
@@ -60,6 +69,27 @@ export function createOrgRoutes(orgs: OrgsService, breakGlass?: BreakGlassServic
     orgs.leave(actorOf(c), c.req.param('id'));
     return c.json(success({ left: true }));
   });
+
+  // Slice 8 (§6.8-§6.10): invitations, suspension, deletion, the org's audit. The service decides who (owner-only acts by role).
+  r.get('/:id/invitations', (c) => c.json(success(inv().list(actorOf(c), c.req.param('id')))));
+  r.post('/:id/invitations', async (c) => c.json(success(inv().create(actorOf(c), c.req.param('id'), (await body(c)) as Partial<CreateOrgInvitationRequest>)), 201));
+  r.delete('/:id/invitations/:invitationId', (c) => {
+    inv().revoke(actorOf(c), c.req.param('id'), c.req.param('invitationId'));
+    return c.json(success({ revoked: true }));
+  });
+  r.post('/:id/suspend', async (c) => {
+    orgs.suspend(actorOf(c), c.req.param('id'), { by: 'owner', reason: (await body(c)).reason });
+    return c.json(success(orgs.get(actorOf(c), c.req.param('id'))));
+  });
+  r.post('/:id/resume', (c) => {
+    orgs.resume(actorOf(c), c.req.param('id'), { by: 'owner' });
+    return c.json(success(orgs.get(actorOf(c), c.req.param('id'))));
+  });
+  r.delete('/:id', (c) => {
+    orgs.delete(actorOf(c), c.req.param('id'));
+    return c.json(success({ deleted: true }));
+  });
+  r.get('/:id/audit', (c) => c.json(success(orgs.audit(actorOf(c), c.req.param('id'), { before: c.req.query('before'), limit: c.req.query('limit') }))));
 
   r.get('/:id/break-glass', (c) => c.json(success(bg().forOrg(actorOf(c), c.req.param('id') as OrgId))));
   r.post('/:id/break-glass/:entryId/end', (c) => c.json(success(bg().endByOrgOwner(actorOf(c), c.req.param('id') as OrgId, c.req.param('entryId')))));

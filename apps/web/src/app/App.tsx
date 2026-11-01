@@ -20,6 +20,7 @@ import { NotificationsPage } from '@/features/notify/NotificationsPage';
 import { NotifyRoot } from '@/features/notify/Root';
 import { LoginPage } from '@/features/auth/LoginPage';
 import { connectReturnPath } from '@/features/auth/next';
+import { OrgInvitePage } from '@/features/orgs/OrgInvitePage';
 import { OrgSettingsPage } from '@/features/orgs/OrgSettingsPage';
 import { PoolsHub } from '@/features/pools/PoolsHub';
 import { SettingsPage } from '@/features/settings/SettingsPage';
@@ -144,6 +145,8 @@ function Pages() {
         <Route path="settings" element={<SettingsPage />} />
         {/* Org settings (organizations §7): its own page per org, reached from the context switcher. */}
         <Route path="orgs/:id" element={<OrgSettingsPage />} />
+        {/* Accepting an organization invitation (slice 8): the code is in the link's fragment. */}
+        <Route path="org-invite" element={<OrgInvitePage />} />
         {/* The VS Code extension's sign-in: a person approves the code their editor shows (T-1974). */}
         <Route path="vscode" element={<VscodePage />} />
       </Route>
@@ -216,7 +219,8 @@ function SignedInOnly({ children }: { children: ReactNode }) {
   const location = useLocation();
   if (state.status === 'loading') return <Splash />;
   if (state.status === 'unreachable') return <Unreachable />;
-  if (state.status === 'out') return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
+  // The fragment comes along (kept in router state, never sent to the server): an invitation link opened signed out still works after sign-in.
+  if (state.status === 'out') return <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />;
   // MU2 S1a: a member account has no access to the admin app yet.
   if (state.status === 'member') return <MemberPage />;
   return children;
