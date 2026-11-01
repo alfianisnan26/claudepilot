@@ -123,6 +123,9 @@ export interface AttributionQuery {
   done?: boolean;
 }
 
+/** The org context as the summary applies it: whether a workspace (null: none, e.g. a budget on everything) is in it. */
+export type InWorkspace = (workspaceId: string | null) => boolean;
+
 export class UsageSpend {
   readonly #store: SpendStore;
   readonly #sinks = new Set<(alert: SpendAlert) => void>();
@@ -197,10 +200,10 @@ export class UsageSpend {
   }
 
   /** What the actor's visible requests used over [fromMs, toMs): the SQL sum for the owner, the filtered rows for anyone behind a rule. */
-  #totals(actorId: string, fromMs: number, toMs: number): ChatUsageTotals {
-    if (!this.o.visible) return this.#store.sum({ kind: 'all', id: null }, fromMs, toMs);
+  #totals(actorId: string, fromMs: number, toMs: number, inWorkspace?: InWorkspace): ChatUsageTotals {
+    if (!this.o.visible && !inWorkspace) return this.#store.sum({ kind: 'all', id: null }, fromMs, toMs);
     const t = zeroTotals();
-    for (const r of this.#visibleRows(actorId, this.#store.usageRows(fromMs, toMs))) addRow(t, r);
+    for (const r of this.#visibleRows(actorId, this.#store.usageRows(fromMs, toMs))) if (!inWorkspace || inWorkspace(r.workspaceId)) addRow(t, r);
     return { ...t, costUsd: roundUsd(t.costUsd) };
   }
 
@@ -652,13 +655,14 @@ export class UsageSpend {
   /* ---------- Alerts and the summary ---------- */
 
   /** The last day's alerts that are not snoozed, newest first (a new device is not told old news: only the current period's budget alerts). */
-  alerts(actorId: string = OWNER_ACTOR): SpendAlert[] {
+  alerts(actorId: string = OWNER_ACTOR, inWorkspace?: InWorkspace): SpendAlert[] {
     const now = this.#now();
     const out: SpendAlert[] = [];
     const tz = this.timezone;
     for (const b of this.#store.budgets()) {
       const m = b.mark;
       if (!m || m.quiet || !b.enabled || now - m.atMs > ALERT_WINDOW_MS || !this.#sees(actorId, 'budget', b.id)) continue;
+      if (inWorkspace && !inWorkspace(this.#budgetWorkspace(b.scope))) continue;
       if (b.snoozedUntilMs !== null && b.snoozedUntilMs > now) continue;
       const bounds = periodBounds(b.period, tz, now);
       if (m.periodStartMs !== bounds.start) continue; // told for a period that is over
@@ -666,21 +670,25 @@ export class UsageSpend {
     }
     const snoozes = this.#store.spikeSnoozes(now);
     for (const e of this.#visibleSpikes(actorId, this.#store.spikesSince(now - ALERT_WINDOW_MS))) {
-      if (!e.alerted || snoozes.has(e.subject)) continue;
+      if (!e.alerted || snoozes.has(e.subject) || (inWorkspace && !inWorkspace(e.workspaceId))) continue;
       out.push(this.#spikeAlert(e));
     }
     return out.sort((a, b) => b.at.localeCompare(a.at));
   }
 
-  summary(actorId: string = OWNER_ACTOR): SpendSummary {
+  /**
+   * Today, this week and this month, the budgets' levels, the last day's spikes and the alerts. `inWorkspace` (the org context, owner request
+   * 2026-11-01): only usage rows, spikes and budgets of the workspaces it keeps (a budget on everything has no workspace: Personal only).
+   */
+  summary(actorId: string = OWNER_ACTOR, inWorkspace?: InWorkspace): SpendSummary {
     const now = this.#now();
     const tz = this.timezone;
-    const states = this.budgets(actorId).budgets;
+    const states = this.budgets(actorId).budgets.filter((s) => !inWorkspace || inWorkspace(this.#budgetWorkspace(s.budget.scope)));
     const live = states.filter((s) => s.budget.enabled);
     return {
-      today: this.#totals(actorId, periodBounds('day', tz, now).start, now + 1),
-      week: this.#totals(actorId, periodBounds('week', tz, now).start, now + 1),
-      month: this.#totals(actorId, periodBounds('month', tz, now).start, now + 1),
+      today: this.#totals(actorId, periodBounds('day', tz, now).start, now + 1, inWorkspace),
+      week: this.#totals(actorId, periodBounds('week', tz, now).start, now + 1, inWorkspace),
+      month: this.#totals(actorId, periodBounds('month', tz, now).start, now + 1, inWorkspace),
       timezone: tz,
       budgets: {
         total: states.length,
@@ -689,8 +697,8 @@ export class UsageSpend {
         exhausted: live.filter((s) => s.level === 'exhausted').length,
         paused: live.filter((s) => s.paused).length,
       },
-      spikes24h: this.#visibleSpikes(actorId, this.#store.spikesSince(now - DAY)).length,
-      alerts: this.alerts(actorId),
+      spikes24h: this.#visibleSpikes(actorId, this.#store.spikesSince(now - DAY)).filter((e) => !inWorkspace || inWorkspace(e.workspaceId)).length,
+      alerts: this.alerts(actorId, inWorkspace),
       now: iso(now),
     };
   }

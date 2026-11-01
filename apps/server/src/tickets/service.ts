@@ -975,8 +975,11 @@ export class Tickets {
     return rows.map((r) => this.#item(r, tags.get(r.number) ?? []));
   }
 
-  /** The SQL a caller's filters and visibility come to. */
-  #where(caller: Caller, f: TicketFilter, forCounts = false): { sql: string; args: (string | number)[] } {
+  /**
+   * The SQL a caller's filters and visibility come to. `within` (the org context, authz/orgScope.ts): only tickets in these buckets, in the
+   * list and in every count; absent, no narrowing.
+   */
+  #where(caller: Caller, f: TicketFilter, forCounts = false, within?: readonly string[]): { sql: string; args: (string | number)[] } {
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (caller.kind === 'agent') {
@@ -987,6 +990,7 @@ export class Tickets {
     // T-1857: a bucket the caller may not view is not in any list nor any count.
     const inBuckets = this.#bucketSql(caller);
     if (inBuckets) (where.push(inBuckets.sql), args.push(...inBuckets.args));
+    if (within) (where.push(within.length ? `t.bucket_key IN (${within.map(() => '?').join(',')})` : '0'), args.push(...within));
     if (forCounts) return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
     if (f.bucket) (where.push('t.bucket_key = ?'), args.push(f.bucket.trim().toUpperCase()));
     const statuses = f.status?.filter((s) => (TICKET_STATUSES as readonly string[]).includes(s));
@@ -1030,8 +1034,8 @@ export class Tickets {
     return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', args };
   }
 
-  counts(caller: Caller): TicketCounts {
-    const { sql, args } = this.#where(caller, {}, true);
+  counts(caller: Caller, within?: readonly string[]): TicketCounts {
+    const { sql, args } = this.#where(caller, {}, true, within);
     const byStatus = Object.fromEntries(TICKET_STATUSES.map((s) => [s, 0])) as Record<TicketStatus, number>;
     for (const r of this.#db.prepare(`SELECT t.status AS status, count(*) AS n FROM tickets t ${sql} GROUP BY t.status`).all(...args) as {
       status: TicketStatus;
@@ -1059,8 +1063,8 @@ export class Tickets {
     return { byStatus, byBucket, needsYou, unassigned, orphans, total: Object.values(byStatus).reduce((a, b) => a + b, 0) };
   }
 
-  list(caller: Caller, filter: TicketFilter = {}): TicketList {
-    const { sql, args } = this.#where(caller, filter);
+  list(caller: Caller, filter: TicketFilter = {}, within?: readonly string[]): TicketList {
+    const { sql, args } = this.#where(caller, filter, false, within);
     const limit = Math.min(Math.max(Math.trunc(filter.limit ?? 100), 1), LIST_MAX);
     const offset = Math.max(Math.trunc(filter.offset ?? 0), 0);
     const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
@@ -1075,7 +1079,7 @@ export class Tickets {
         .all(...args) as unknown as Row[]
     ).map((r) => this.#keyed(r));
     const total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...args) as { n: number }).n;
-    return { items: this.#items(rows), total, counts: this.counts(caller) };
+    return { items: this.#items(rows), total, counts: this.counts(caller, within) };
   }
 
   /**
@@ -1088,9 +1092,9 @@ export class Tickets {
   listPage(
     caller: Caller,
     filter: TicketFilter = {},
-    args: { cursor?: string | undefined; limit?: unknown; keep?: (t: TicketItem) => boolean } = {},
+    args: { cursor?: string | undefined; limit?: unknown; keep?: (t: TicketItem) => boolean; within?: readonly string[] } = {},
   ): TicketPage {
-    const { sql, args: sqlArgs } = this.#where(caller, filter);
+    const { sql, args: sqlArgs } = this.#where(caller, filter, false, args.within);
     const limit = clampLimit(args.limit);
     const closedOnly = !!filter.status?.length && filter.status.every((s) => isTicketClosed(s));
     const kind = closedOnly ? 'closed' : filter.sort === 'newest' ? 'newest' : 'priority';
@@ -1159,7 +1163,7 @@ export class Tickets {
     const out: TicketPage = { items: page.map((x) => x.item), next: nextAt ? cursorAfter(scope, nextAt.key, nextAt.num) : null };
     if (!args.cursor) {
       out.total = (this.#db.prepare(`SELECT count(*) AS n FROM tickets t ${sql}`).get(...sqlArgs) as { n: number }).n;
-      out.counts = this.counts(caller);
+      out.counts = this.counts(caller, args.within);
     }
     return out;
   }
@@ -2291,6 +2295,11 @@ export class Tickets {
   }
 
   /** Every bucket the caller may file in (an agent: its workspace's and the open ones), by key. The routes filter by `view` on top. */
+  /** Every bucket key a ticket can be in (the buckets, and any key a ticket still carries without one): what `within` is picked from. */
+  bucketKeys(): string[] {
+    return (this.#db.prepare('SELECT key AS k FROM ticket_buckets UNION SELECT DISTINCT bucket_key AS k FROM tickets').all() as { k: string }[]).map((r) => r.k);
+  }
+
   buckets(caller: Caller): TicketBucket[] {
     const open = new Map(
       (this.#db.prepare(`SELECT bucket_key AS k, count(*) AS n FROM tickets WHERE status IN (${OPEN_SQL}) GROUP BY bucket_key`).all() as { k: string; n: number }[]).map(

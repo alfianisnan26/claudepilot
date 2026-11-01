@@ -4,12 +4,14 @@
 import { AppError, success } from '@isnanme/core';
 import { ATTENTION_SNOOZE_MAX_MIN, isAttentionKind, type AttentionSnoozeRequest } from '@portal/contracts';
 import { Hono } from 'hono';
+import { orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import { actorOf } from '../authz/seam.js';
 import type { AttentionRegistry } from './registry.js';
 
 export function createAttentionRoutes(registry: AttentionRegistry): Hono {
   const r = new Hono();
-  // GET /api/attention?kind=&limit=&offset=: what waits on the asker, counted by kind, one page of it.
+  // GET /api/attention?kind=&limit=&offset=&org=: what waits on the asker, counted by kind, one page of it. `?org=` (personal | an org id)
+  // keeps only the items anchored in that context (authz/orgScope.ts); an org the asker is not in answers an empty list.
   r.get('/', (c) => {
     const actor = actorOf(c);
     if (actor.kind === 'anonymous') throw new AppError('UNAUTHORIZED', 'Sign in again.');
@@ -17,7 +19,7 @@ export function createAttentionRoutes(registry: AttentionRegistry): Hono {
     if (kind && !isAttentionKind(kind)) throw new AppError('VALIDATION_FAILED', 'Unknown kind.', { details: { kind: 'Unknown kind.' } });
     const chosen = kind && isAttentionKind(kind) ? kind : null;
     const num = (v: string | undefined) => (v === undefined || v === '' ? undefined : Number(v));
-    return c.json(success(registry.list(actor, { kind: chosen, limit: num(c.req.query('limit')), offset: num(c.req.query('offset')) })));
+    return c.json(success(registry.list(actor, { kind: chosen, limit: num(c.req.query('limit')), offset: num(c.req.query('offset')), inScope: orgScopeFilter(actor, orgScopeOf(c)) })));
   });
   // POST /api/attention/snooze { kind, id, minutes? }: Later for the signed-in person (an hour by default, 0 brings it back). Not a decision.
   r.post('/snooze', async (c) => {

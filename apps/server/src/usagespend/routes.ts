@@ -3,6 +3,8 @@
 
 import { AppError, success } from '@isnanme/core';
 import { Hono, type Context } from 'hono';
+import { byWorkspace, orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
+import { actorOf as seamActorOf } from '../authz/seam.js';
 import { OWNER_ACTOR, UI_OWNER, type Who } from './actor.js';
 import { attributionCsv } from './csv.js';
 import type { UsageSpend } from './service.js';
@@ -25,8 +27,12 @@ async function body(c: Context): Promise<Record<string, unknown>> {
 export function createUsageSpendRoutes(spend: UsageSpend): Hono {
   const r = new Hono();
 
-  // GET /api/usage-spend: today, this week and this month, the budgets' levels, spikes of the last day, and the alerts.
-  r.get('/', (c) => c.json(success(spend.summary(actorOf(c)))));
+  // GET /api/usage-spend[?org=]: today, this week and this month, the budgets' levels, spikes of the last day, and the alerts. `?org=` (personal |
+  // an org id; authz/orgScope.ts): only the usage of the workspaces that context owns (a request through its session's workspace).
+  r.get('/', (c) => {
+    const inScope = orgScopeFilter(seamActorOf(c), orgScopeOf(c));
+    return c.json(success(spend.summary(actorOf(c), inScope ? byWorkspace(inScope) : undefined)));
+  });
 
   // GET /api/usage-spend/alerts: the last day's alerts that are not snoozed.
   r.get('/alerts', (c) => c.json(success(spend.alerts(actorOf(c)))));

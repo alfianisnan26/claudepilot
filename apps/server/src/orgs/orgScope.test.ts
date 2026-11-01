@@ -144,6 +144,7 @@ before(async () => {
     bucketOwnerOf,
     keyOf: () => null,
     buckets: () => (['ORG', 'OWN', 'OTH'] as const).map((key) => ({ key })),
+    bucketKeys: () => ['ORG', 'OWN', 'OTH'],
     listPage: (_v: unknown, _f: unknown, args: { keep: (t: { id: string; bucket?: string }) => boolean }) => ({ items: TICKETS.filter(args.keep), next: null }),
   } as unknown as Tickets);
 

@@ -30,7 +30,7 @@ import {
 } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import { actorOf, actorUserId, can, refusal, requireCan, visible } from '../authz/seam.js';
-import { orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
+import { bucketsInScope, orgScopeFilter, orgScopeOf } from '../authz/orgScope.js';
 import { declareTicketPolicies, registerTicketBucketAuthz } from './authz.js';
 import { setTicketKeyLookup } from './keys.js';
 import type { Caller, Tickets } from './service.js';
@@ -141,10 +141,12 @@ export function createTicketRoutes(tickets: Tickets): Hono {
     // the last row shown, so a cursor never names a hidden ticket. A bad cursor, or one made for another filter, is a 400.
     const actor = actorOf(c);
     const seen = viewerOf(actor, filter);
-    // `?org=` (organizations §7): a ticket belongs to its bucket's org; it only narrows, after `view`.
+    // `?org=` (organizations §7): a ticket belongs to its bucket's org; it only narrows, after `view`. `within` narrows page 1's `total`
+    // and `counts` the same way (the Home card's numbers, owner request 2026-11-01).
     const inScope = orgScopeFilter(actor, orgScopeOf(c));
     const keep = inScope ? (t: { id: string; bucket?: string }) => seen(t) && inScope(t.bucket ? ticketBucketRef(t.bucket) : null) : seen;
-    return c.json(success(tickets.listPage(viewer(c), filter, { cursor: q.cursor || undefined, limit: q.limit, keep })));
+    const within = inScope ? bucketsInScope(tickets.bucketKeys(), inScope) : undefined;
+    return c.json(success(tickets.listPage(viewer(c), filter, { cursor: q.cursor || undefined, limit: q.limit, keep, within })));
   });
 
   app.post('/', async (c) => {

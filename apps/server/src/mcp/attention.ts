@@ -3,10 +3,10 @@
 // not something waiting on them. Class: third-party code. Risk: kind, host or package, private network yes or no, the secret slots by NAME
 // (a slot's value never exists here). Who decides: manage on the entry (the approve route's level), through the seam.
 
-import { objectRef, type AttentionItem, type McpEntryKind, type McpSlot, type McpVersionSpec } from '@portal/contracts';
+import { objectRef, type McpEntryKind, type McpSlot, type McpVersionSpec } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, whoOf, verbFor, type AttentionSource } from '../attention/registry.js';
+import { clip, present, whoOf, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   id: string;
@@ -75,8 +75,9 @@ export function mcpAttentionSource(db: () => DatabaseSync | null): AttentionSour
       return rows
         .filter((r) => can(actor, verbFor(scope, 'manage'), objectRef('mcp_entry', r.entry_id)).allow)
         .map(
-          (r): AttentionItem => ({
+          (r): AnchoredItem => ({
             kind: 'mcp_version',
+            anchor: objectRef('mcp_entry', r.entry_id),
             id: r.id,
             title: `${clip(r.display_name, 80)} ${clip(r.version, 30)}`,
             who: present([whoOf(r.proposed_by, r.session_title)]),

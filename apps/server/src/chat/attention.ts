@@ -3,11 +3,11 @@
 // waited this long blocks an agent and goes on the list. Class: a gate. Risk: the tool and what it asks, in the controller's own redacted
 // summary (never the full text approved on). Who decides: operate on the session (the chat socket's own check when it is answered).
 
-import { ATTENTION_TOOL_WAIT_MS, sessionRef, type AttentionItem } from '@portal/contracts';
+import { ATTENTION_TOOL_WAIT_MS, sessionRef, workspaceRef } from '@portal/contracts';
 import { CHAT_SOCKET_PATH } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, sessionWho, verbFor, type AttentionSource } from '../attention/registry.js';
+import { clip, present, sessionWho, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   session_id: string;
@@ -41,8 +41,9 @@ export function toolApprovalAttentionSource(db: () => DatabaseSync | null): Atte
       return rows
         .filter((r) => can(actor, verbFor(scope, 'operate'), sessionRef(r.session_id)).allow)
         .map(
-          (r): AttentionItem => ({
+          (r): AnchoredItem => ({
             kind: 'tool_approval',
+            anchor: workspaceRef(r.workspace_id),
             id: `${r.session_id}/${r.request_id}`,
             title: clip(r.title, 80) || `Use ${clip(r.tool_name, 40) || 'a tool'}`,
             who: present([sessionWho(r.session_id, r.session_title), r.agent_label ? { label: clip(r.agent_label, 40), link: null } : null]),

@@ -1,8 +1,8 @@
 // Needs you (T-146): every pending approval is one item for a person, so it shows in the app's list, the phone deck and (attention/notify.ts)
 // a Web Push. The item links the request's own page, where the card shows the exact payload and Allow and Deny (POST .../allow).
 
-import { APPROVAL_KIND_LABEL, APPROVALS_API, approvalPath, isRefusalKind, type AttentionItem } from '@portal/contracts';
-import { clip, isPerson, present, readsPersonOnly, sessionWho, type AttentionSource } from '../attention/registry.js';
+import { APPROVAL_KIND_LABEL, APPROVALS_API, approvalPath, isRefusalKind, workspaceRef } from '@portal/contracts';
+import { clip, isPerson, present, readsPersonOnly, sessionWho, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 import { APPROVAL_KIND_DEFS } from './kinds.js';
 import type { Approvals } from './service.js';
 
@@ -15,11 +15,13 @@ export function approvalAttentionSource(approvals: Pick<Approvals, 'pendingRows'
       // A title quotes names an agent wrote (a session title, a secret name): a person sees them quoted; an agent reading with `see` gets
       // the kind's label only, so no agent's words reach another agent through this list (review nit 1, T-2867).
       const person = isPerson(actor);
-      return approvals.pendingRows(now).map((a): AttentionItem => {
+      return approvals.pendingRows(now).map((a): AnchoredItem => {
         const def = APPROVAL_KIND_DEFS[a.kind];
         const count = a.count ?? 1;
         return {
           kind: 'approval',
+          // The org context: a request belongs to the workspace it came from (none: Personal).
+          anchor: a.workspace ? workspaceRef(a.workspace) : null,
           id: a.id,
           title: person ? clip(def.title(a.payload, approvals.deps), 120) : `${APPROVAL_KIND_LABEL[a.kind]} request`,
           who: present([sessionWho(a.requesterSession, a.requesterTitle) ?? { label: 'Portal', link: null }]),

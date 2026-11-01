@@ -2,10 +2,10 @@
 // hash) has no decision yet, `needs_review` in the library. An agent's proposal is the same thing with who asked and why. Class:
 // third-party code. Risk: the scan's result (risk level, scripts, network, hooks, how many findings). Who decides: manage on the version.
 
-import { objectRef, type AttentionItem, type SkillRisk } from '@portal/contracts';
+import { objectRef, type SkillRisk } from '@portal/contracts';
 import type { DatabaseSync } from 'node:sqlite';
 import { can } from '../authz/seam.js';
-import { clip, present, whoOf, verbFor, type AttentionSource } from '../attention/registry.js';
+import { clip, present, whoOf, verbFor, type AnchoredItem, type AttentionSource } from '../attention/registry.js';
 
 interface Row {
   id: string;
@@ -68,8 +68,9 @@ export function skillAttentionSource(db: () => DatabaseSync | null): AttentionSo
       return rows
         .filter((r) => can(actor, verbFor(scope, 'manage'), objectRef('skill_version', r.id)).allow)
         .map(
-          (r): AttentionItem => ({
+          (r): AnchoredItem => ({
             kind: 'skill_version',
+            anchor: objectRef('skill_version', r.id),
             id: r.id,
             title: clip(r.name, 80),
             who: present([r.actor ? whoOf(r.actor, r.session_title) : r.source_label ? { label: clip(r.source_label, 60), link: null } : null]),

@@ -6,9 +6,11 @@
 //   - `?org=<orgId>`: only rows whose anchor that org owns, and only when the caller holds an active role in that active org; an org they are
 //     not in, a suspended one, or a value that is not an org id answers an empty list (never an error, never wider).
 // The anchor is the object that carries the owner: a workspace, a ticket bucket or a vault itself; a session, a CI run or a CI remote through
-// its workspace (the seam resolver's `parent`); a ticket through its bucket.
+// its workspace (the seam resolver's `parent`); a ticket through its bucket. The Home dashboard's summaries and the glance rail use the same
+// filter (owner request 2026-11-01, metrics per org): a Claude account, a usage row, a Keep going chat and a Needs-you item through their
+// workspace (or the object they are about), so a count or a total only ever covers rows of the chosen context.
 
-import { actorUserId, isOrgId, objectRef, type Actor, type ObjectRef, type ObjectType } from '@portal/contracts';
+import { actorUserId, isOrgId, objectRef, ticketBucketRef, workspaceRef, type Actor, type ObjectRef, type ObjectType } from '@portal/contracts';
 import { orgRoleIn, resolve } from './seam.js';
 
 export type OrgScope = { kind: 'personal' } | { kind: 'org'; id: string };
@@ -21,6 +23,19 @@ export function orgScopeOf(c: { req: { query(name: string): string | undefined }
   return { kind: 'org', id: raw.slice(0, 100) };
 }
 
+/** The one org scope that keeps nothing: what an org the caller is not in comes to. */
+const NO_ORG: OrgScope = { kind: 'org', id: '' };
+
+/**
+ * `scope` as the caller may use it: an org they hold no active role in (left, suspended, never in) or a value that is not an org id becomes
+ * the one empty org scope, so a cache keyed by the scope stays bounded however many ids a caller makes up.
+ */
+export function effectiveOrgScope(actor: Actor, scope: OrgScope | null): OrgScope | null {
+  if (scope?.kind !== 'org') return scope;
+  const userId = actorUserId(actor);
+  return isOrgId(scope.id) && userId && orgRoleIn(scope.id, userId) ? scope : NO_ORG;
+}
+
 /** A predicate on a row's anchor (null: the row has none, e.g. a ticket with no bucket), or null when there is nothing to narrow. */
 export type AnchorFilter = (anchor: ObjectRef | null) => boolean;
 
@@ -30,10 +45,7 @@ export type AnchorFilter = (anchor: ObjectRef | null) => boolean;
  */
 export function orgScopeFilter(actor: Actor, scope: OrgScope | null): AnchorFilter | null {
   if (!scope) return null;
-  if (scope.kind === 'org') {
-    const userId = actorUserId(actor);
-    if (!isOrgId(scope.id) || !userId || !orgRoleIn(scope.id, userId)) return () => false;
-  }
+  if (scope.kind === 'org' && effectiveOrgScope(actor, scope) === NO_ORG) return () => false;
   const seen = new Map<string, boolean>();
   return (anchor) => {
     if (!anchor) return scope.kind === 'personal';
@@ -50,3 +62,15 @@ export function orgScopeFilter(actor: Actor, scope: OrgScope | null): AnchorFilt
 
 /** The anchor of a child object (session, CI run, CI remote): its parent as the seam resolves it; null when it has none or is gone. */
 export const parentAnchor = (type: ObjectType, id: string): ObjectRef | null => resolve(objectRef(type, id))?.parent ?? null;
+
+/** A scope as a cache or cursor key: '' for none, 'personal', or 'org:<id>'. */
+export const orgScopeKey = (scope: OrgScope | null): string => (!scope ? '' : scope.kind === 'org' ? `org:${scope.id}` : 'personal');
+
+/** A row in scope by its workspace (a usage row, a Claude account, a Keep going chat); no workspace is an anchor of none (personal). */
+export const byWorkspace =
+  (inScope: AnchorFilter) =>
+  (workspaceId: string | null | undefined): boolean =>
+    inScope(workspaceId ? workspaceRef(workspaceId) : null);
+
+/** The ticket bucket keys in scope, for the ticket service's `within` (its list, its total and its counts alike). */
+export const bucketsInScope = (keys: readonly string[], inScope: AnchorFilter): string[] => keys.filter((k) => inScope(ticketBucketRef(k)));

@@ -21,7 +21,9 @@ import {
   type GlanceSnapshot,
   type GlanceTicket,
   type TicketItem,
+  workspaceRef,
 } from '@portal/contracts';
+import type { AnchorFilter } from '../authz/orgScope.js';
 
 /**
  * Where the snapshot reads from: one function per kind of object, each on behalf of an actor (the authorization seam's `Actor`). The
@@ -34,12 +36,15 @@ export interface GlanceSources {
   requests(actor: Actor, sessionId: string): ChatRequest[];
   /** One session's sub-agents and background tasks that are running (T-2368: never its history), for a session `actor` may see. */
   runningTasks(actor: Actor, sessionId: string): ChatTask[];
-  /** Tickets waiting on `actor` (assigned to a person and not closed): all of them counted, the top few listed. */
-  tickets(actor: Actor): { count: number; items: TicketItem[] };
+  /**
+   * Tickets waiting on `actor` (assigned to a person and not closed): all of them counted, the top few listed. `inScope` (the org context,
+   * authz/orgScope.ts): only tickets whose bucket it keeps, in the count too; null: no narrowing. The same for the two below (a run by its workspace).
+   */
+  tickets(actor: Actor, inScope?: AnchorFilter | null): { count: number; items: TicketItem[] };
   /** Failed CI runs `actor` may see that still stand (see `failedRuns`): all of them counted, the top few listed. */
-  failedRuns(actor: Actor, now: number): { count: number; items: CiRunSummary[] };
+  failedRuns(actor: Actor, now: number, inScope?: AnchorFilter | null): { count: number; items: CiRunSummary[] };
   /** Runs `actor` may see that hold a deploy job for a person's approval (see `waitingDeploys`): all counted, the newest few listed. */
-  deploys(actor: Actor): { count: number; items: CiRunSummary[] };
+  deploys(actor: Actor, inScope?: AnchorFilter | null): { count: number; items: CiRunSummary[] };
 }
 
 /** A line of untrusted or long text, whitespace folded and cut with an ellipsis. */
@@ -246,11 +251,16 @@ function read<T>(fn: () => T, unreadable: T, log?: (what: string, e: unknown) =>
   }
 }
 
-export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log?: (what: string, e: unknown) => void): GlanceSnapshot {
+/**
+ * The snapshot for `actor`. `inScope` (the org context, authz/orgScope.ts; owner request 2026-11-01): a session by its workspace, a ticket by
+ * its bucket and a CI run by its workspace, so every block (and every count) covers only that context; null: everything the actor may see.
+ */
+export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log?: (what: string, e: unknown) => void, inScope: AnchorFilter | null = null): GlanceSnapshot {
   // The sessions are read once and shared by the three blocks that need them.
   let sessions: ChatSession[] | null = null;
   try {
     sessions = src.sessions(actor);
+    if (inScope) sessions = sessions.filter((s) => inScope(s.workspaceId ? workspaceRef(s.workspaceId) : null));
   } catch (e) {
     log?.('sessions', e);
   }
@@ -269,7 +279,7 @@ export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log
   const approvals = list ? read(() => approvalsBlock(list, (id) => src.requests(actor, id)), noApprovals, log, 'approvals') : noApprovals;
   const tickets = read(
     () => {
-      const t = src.tickets(actor);
+      const t = src.tickets(actor, inScope);
       return { ok: true, count: t.count, items: t.items.slice(0, GLANCE_LIMITS.tickets).map(ticketOf) };
     },
     { ok: false, count: 0, items: [] as GlanceTicket[] },
@@ -278,7 +288,7 @@ export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log
   );
   const ci = read(
     () => {
-      const c = src.failedRuns(actor, now);
+      const c = src.failedRuns(actor, now, inScope);
       return { ok: true, count: c.count, items: c.items.slice(0, GLANCE_LIMITS.ci).map(ciOf) };
     },
     { ok: false, count: 0, items: [] as GlanceCiRun[] },
@@ -287,7 +297,7 @@ export function buildSnapshot(src: GlanceSources, actor: Actor, now: number, log
   );
   const deploys = read(
     () => {
-      const d = src.deploys(actor);
+      const d = src.deploys(actor, inScope);
       return { ok: true, count: d.count, items: d.items.slice(0, GLANCE_LIMITS.deploys).map(deployOf) };
     },
     { ok: false, count: 0, items: [] as GlanceDeploy[] },

@@ -3,6 +3,7 @@
 // tabs ask for it, and pages are told only when what one shows is different, so a busy session's stream of events costs nothing.
 
 import type { Actor, GlanceSnapshot } from '@portal/contracts';
+import { effectiveOrgScope, orgScopeFilter, orgScopeKey, type OrgScope } from '../authz/orgScope.js';
 import { actorString, actorUserId } from '../authz/seam.js';
 import { buildSnapshot, type GlanceSources } from './build.js';
 
@@ -24,8 +25,8 @@ export class Glance {
   readonly #opts: GlanceOptions;
   /** The snapshot of each actor who has asked (by `actorKey`), until something changes. */
   readonly #cache = new Map<string, GlanceSnapshot>();
-  /** Every actor who has asked: whose snapshot a change has to compare before it pushes. */
-  readonly #actors = new Map<string, Actor>();
+  /** Every actor (and the context they asked in) who has asked: whose snapshot a change has to compare before it pushes. */
+  readonly #actors = new Map<string, { actor: Actor; scope: OrgScope | null }>();
   /** What the last push described, per actor, to push again only when something differs. */
   readonly #announced = new Map<string, string>();
   #timer: NodeJS.Timeout | undefined;
@@ -37,11 +38,16 @@ export class Glance {
     this.#opts = opts;
   }
 
-  /** `actor`'s snapshot, built again if a source changed since it was. */
-  snapshot(actor: Actor): GlanceSnapshot {
-    const key = actorKey(actor);
-    this.#actors.set(key, actor);
-    return this.#cache.get(key) ?? this.#build(key, actor);
+  /**
+   * `actor`'s snapshot, built again if a source changed since it was. `scope` is the request's `?org=` (authz/orgScope.ts): Personal or one
+   * org, kept apart in the cache; null is everything the actor may see (today's behaviour).
+   */
+  snapshot(actor: Actor, asked: OrgScope | null = null): GlanceSnapshot {
+    // An org the asker is not in is one empty scope, so made-up ids do not grow the cache.
+    const scope = effectiveOrgScope(actor, asked);
+    const key = `${actorKey(actor)}|${orgScopeKey(scope)}`;
+    this.#actors.set(key, { actor, scope });
+    return this.#cache.get(key) ?? this.#build(key, actor, scope);
   }
 
   /** A source changed (a session's state, a request, a task, a ticket, a CI run). Cheap: the work is debounced. */
@@ -67,8 +73,8 @@ export class Glance {
     for (const undo of this.#undo.splice(0)) undo();
   }
 
-  #build(key: string, actor: Actor): GlanceSnapshot {
-    const snap = buildSnapshot(this.#sources, actor, (this.#opts.now ?? Date.now)(), this.#opts.log);
+  #build(key: string, actor: Actor, scope: OrgScope | null): GlanceSnapshot {
+    const snap = buildSnapshot(this.#sources, actor, (this.#opts.now ?? Date.now)(), this.#opts.log, orgScopeFilter(actor, scope));
     this.#cache.set(key, snap);
     return snap;
   }
@@ -77,8 +83,8 @@ export class Glance {
     if (this.#opts.watching && !this.#opts.watching()) return;
     // Every actor who has asked is compared with what was last said about them; one push tells the pages, and each page asks for its own.
     let different = false;
-    for (const [key, actor] of this.#actors) {
-      const now = fingerprint(this.#cache.get(key) ?? this.#build(key, actor));
+    for (const [key, { actor, scope }] of this.#actors) {
+      const now = fingerprint(this.#cache.get(key) ?? this.#build(key, actor, scope));
       if (now !== this.#announced.get(key)) {
         this.#announced.set(key, now);
         different = true;
