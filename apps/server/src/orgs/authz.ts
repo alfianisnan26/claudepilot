@@ -42,6 +42,8 @@ const org = (verb: Verb): Extract<RouteAccess, { kind: 'objects' }> => ({ kind: 
 export const ORG_ROUTE_POLICIES: RoutePolicies = {
   'GET /api/orgs': { kind: 'signed-in', filter: 'org' },
   'POST /api/orgs': { kind: 'signed-in', creates: 'org', audit: 'org.created' },
+  // The signed-in person's own abilities (slice 9: the switcher's "New organization"); it names nothing about anyone else.
+  'GET /api/orgs/abilities': { kind: 'signed-in' },
   'GET /api/orgs/:id': org('view'),
   'PATCH /api/orgs/:id': { ...org('manage'), audit: 'org.updated' },
   'GET /api/orgs/:id/members': org('view'),

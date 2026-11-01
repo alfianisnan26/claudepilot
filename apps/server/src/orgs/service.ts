@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { AppError } from '@isnanme/core';
 import {
+  ABILITIES,
   FOUNDING_USER_ID,
   ORG_LIMITS,
   ORG_POLICY_DEFAULTS,
@@ -29,6 +30,7 @@ import {
   orgRef,
   type Actor,
   type AdminOrgSummary,
+  type MyAbilities,
   type Org,
   type OrgId,
   type OrgMember,
@@ -174,6 +176,12 @@ export class OrgsService {
       )
       .all(userId) as unknown as (OrgRow & { role: OrgRole })[];
     return visible(actor, 'org', rows, (r) => r.id).map((r) => this.#view(r, r.role));
+  }
+
+  /** The abilities the actor may use, for the web's "New organization" (§6.11). A person only: a token or an agent gets none (they cannot create). */
+  myAbilities(actor: Actor): MyAbilities {
+    if (actor.kind !== 'user') return { abilities: [] };
+    return { abilities: ABILITIES.filter((a) => this.#abilities.may(actor.userId, a)) };
   }
 
   get(actor: Actor, id: OrgId): Org {

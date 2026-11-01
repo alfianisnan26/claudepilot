@@ -153,6 +153,47 @@ test('POST /api/orgs over HTTP: 403 without the ability, 201 with it', async () 
   assert.deepEqual(((await (await app.request('/api/orgs')).json()) as { data: unknown[] }).data, [], 'not in the list either');
 });
 
+test('GET /api/orgs/abilities: a person reads their own (none by default, the row once granted, every one as an instance admin); tokens and agents none', async () => {
+  let who: Actor = person(BOB);
+  const app = new Hono<{ Variables: { actor: Actor } }>();
+  app.use(async (c, next) => {
+    c.set('actor', who);
+    await next();
+  });
+  app.route('/api/orgs', createOrgRoutes(orgs));
+  app.onError((e, c) => c.json({ code: (e as AppError).code }, ((e as AppError).status ?? 500) as 404));
+  const read = async () => {
+    const res = await app.request('/api/orgs/abilities');
+    assert.equal(res.status, 200, 'not read as an org id');
+    return ((await res.json()) as { data: { abilities: string[] } }).data.abilities;
+  };
+  assert.deepEqual(await read(), []);
+  abilities.grant(person(ADMIN), BOB, 'orgs.create');
+  assert.deepEqual(await read(), ['orgs.create']);
+  who = person(ADMIN);
+  assert.deepEqual(await read(), ['orgs.create'], 'an instance admin holds every ability without a row');
+  for (const a of [token(BOB), agent(BOB), person(OFF)]) {
+    who = a;
+    assert.deepEqual(await read(), [], a.kind);
+  }
+  assert.deepEqual(ORG_ROUTE_POLICIES['GET /api/orgs/abilities'], { kind: 'signed-in' });
+});
+
+test('a forged ?org= never widens the org list: a non-member naming an org still reads only their own', async () => {
+  const org = aliceOrg();
+  const app = new Hono<{ Variables: { actor: Actor } }>();
+  app.use(async (c, next) => {
+    c.set('actor', person(CAROL));
+    await next();
+  });
+  app.route('/api/orgs', createOrgRoutes(orgs));
+  for (const q of [`?org=${org.id}`, `?org=${encodeURIComponent(org.slug)}`, '?org=*', `?org=${org.id}&org=${org.id}`]) {
+    const res = await app.request(`/api/orgs${q}`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(((await res.json()) as { data: unknown[] }).data, [], q);
+  }
+});
+
 test('an org is 404 for every non-member, the platform admin and the founding user included; agents are boxed out', () => {
   const org = aliceOrg();
   for (const u of [CAROL, ADMIN, FOUNDING_USER_ID]) {
