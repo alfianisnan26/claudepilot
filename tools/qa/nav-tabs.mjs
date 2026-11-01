@@ -164,7 +164,9 @@ try {
   await b.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: 0 } }).catch(() => {});
   await b.media({ dark: false });
   await b.goto('/admin/home', 800);
-  await b.eval(`(() => { try { const k = 'claudepilot.glance.u_owner'; const s = JSON.parse(localStorage.getItem(k) || '{}'); s.places = { ...(s.places || {}), dock: true }; s.dockOpen = false; localStorage.setItem(k, JSON.stringify(s)); } catch {} })()`);
+  // The glance layout is saved per person on the server (D-111 D6): turn the dock on there, unpinned.
+  const saved = await call('PUT', '/api/layouts/glance', { layout: { places: { header: true, dock: true, list: true, composer: true }, dockOpen: false } });
+  check('the dock is turned on in the saved layout', saved.status === 200 || saved.status === 204, `${saved.status} ${saved.text}`);
   await b.goto('/admin/home', 2500);
   const handle = await b.eval(`!!document.querySelector('[data-dock=handle]')`);
   check('dock: a handle on the edge, no panel', handle && !(await b.eval(`!!document.querySelector('[data-dock=overlay], [data-dock=column]')`)));
