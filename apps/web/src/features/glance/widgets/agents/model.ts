@@ -4,18 +4,18 @@ import { chipCount, listWords, shortSpan } from '../shared/format';
 import type { Readings } from '../shared/readings';
 import { SESSION_WORD } from '../sessions/model';
 
-// The Agents widget's logic, apart from React so it can be tested (docs/prd/glance-widgets.md §6.3).
+// The Workers widget's logic, apart from React so it can be tested (docs/prd/glance-widgets.md §6.3).
 
 /**
  * The chip: how many agents work (workers a session started, and sub-agents running inside sessions; a parent shown for context is not
  * one), amber while any of them waits for an answer.
  */
 export function agentsCompact({ data, failed, stale }: Readings): GlanceCompact {
-  if (!data) return failed ? { value: '-', level: 'unknown', title: 'Agents: not available', stale: true } : { value: null, level: 'unknown', title: 'Agents: loading', loading: true };
+  if (!data) return failed ? { value: '-', level: 'unknown', title: 'Workers: not available', stale: true } : { value: null, level: 'unknown', title: 'Workers: loading', loading: true };
   const a = data.agents;
-  if (!a.ok) return { value: '-', level: 'unknown', title: 'Agents: could not be read', stale };
+  if (!a.ok) return { value: '-', level: 'unknown', title: 'Workers: could not be read', stale };
   const level: GlanceLevel = a.waiting > 0 ? 'warn' : a.running > 0 ? 'ok' : 'idle';
-  const title = `Agents: ${a.running ? listWords([`${a.running} running`, a.waiting ? `${a.waiting} waiting for you` : null]) : 'none running'}`;
+  const title = `Workers: ${a.running ? listWords([`${a.running} running`, a.waiting ? `${a.waiting} waiting for you` : null]) : 'none running'}`;
   return { value: chipCount(a.running), level, title, stale };
 }
 

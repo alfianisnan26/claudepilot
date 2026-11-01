@@ -17,6 +17,6 @@ export const attentionWidget: GlanceWidget = {
   useCompact: useAttentionCompact,
   Card: lazy(() => import('./Card').then((m) => ({ default: m.AttentionCard }))),
   cardLabel: 'Needs you',
-  cardAbout: 'Everything waiting on a person, the most blocking first: approvals (an agent is stopped on each), deploys to approve, interrupted agents, CI runs that failed and have not run since, and tickets assigned to you. Answer an approval in its agent or under Attention, where its whole text is shown.',
+  cardAbout: 'The first things on the Needs you page, in its order: what only a person may decide (production deploys, outside code, agents stuck on an approval, questions to you). Show all opens the page.',
   Full: lazy(() => import('./Full').then((m) => ({ default: m.AttentionFull }))),
 };

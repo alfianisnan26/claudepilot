@@ -75,7 +75,7 @@ export function AgentsFull({ close }: GlanceFullProps) {
     <>
       {stale && <StaleNote reload={reload} />}
       {steadyRows.length === 0 ? (
-        <GlanceLine>No agents running.</GlanceLine>
+        <GlanceLine>No workers running.</GlanceLine>
       ) : (
         <div {...bind}>
           <GlanceList label="Agents">
