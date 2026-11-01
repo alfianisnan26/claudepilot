@@ -143,7 +143,6 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
             role="dialog"
             aria-label="Context"
             tabIndex={-1}
-            data-focus-container
             initial={{ opacity: 0, scale: 0.97, y: -4 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.1 } }}
