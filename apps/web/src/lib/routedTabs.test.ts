@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SETTINGS_BASE, SETTINGS_TABS, settingsTabOf } from '../features/settings/tabs';
-import { pageKey, resolveTab, shownTabs, SIDE_NAV_MIN, tabHref, tabLayout, tabSegment, type TabDef } from './routedTabs';
+import { pageKey, resolveTab, shownTabs, tabHref, tabSegment, type TabDef } from './routedTabs';
 
 const TABS: TabDef[] = [
   { id: 'general', label: 'General' },
@@ -60,11 +60,6 @@ test('a legacy ?tab= link moves to the sub-route with its other parameters', () 
   assert.equal(resolveTab(shownTabs(TABS, { admin: false }), BASE, '/admin/settings', '?tab=people').redirect, '/admin/settings', 'a member’s legacy link to an admin tab: the first tab');
 });
 
-test('a long list of sections goes to a side nav on a wide screen', () => {
-  assert.equal(tabLayout(SIDE_NAV_MIN - 1), 'bar');
-  assert.equal(tabLayout(SIDE_NAV_MIN), 'side');
-  assert.equal(tabLayout(10), 'side');
-});
 
 test('a tabbed page keeps one frame across its tabs; other paths keep their own', () => {
   assert.equal(pageKey('/admin/settings'), '/admin/settings');
@@ -82,7 +77,6 @@ test('Settings: six tabs, every server group has one, an unknown group lands in 
     SETTINGS_TABS.map((t) => t.id),
     ['general', 'agents', 'sessions', 'claude', 'people', 'glance'],
   );
-  assert.equal(tabLayout(SETTINGS_TABS.length), 'bar');
   assert.ok(SETTINGS_TABS.every((t) => t.adminOnly), 'the whole page is a platform area');
   assert.deepEqual(shownTabs(SETTINGS_TABS, { admin: false }), []);
   assert.equal(SETTINGS_BASE, '/admin/settings');

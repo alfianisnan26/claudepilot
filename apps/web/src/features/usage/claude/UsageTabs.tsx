@@ -19,7 +19,7 @@ export const useUsageTab = () => useTabId(BASE, IDS);
 
 /**
  * The Usage page's tabs, each its own path (`/admin/usage/claudes`; owner request 2026-11-01): what requests cost (the page as it was), what
- * each Claude's plan has left, who spent what, the budgets and the spikes, the lab. Eight tabs: a side nav on a wide screen, a bar that
+ * each Claude’s plan has left, who spent what, the budgets and the spikes, the lab. Eight tabs in a bar that
  * scrolls sideways on a phone (RoutedTabs). Inside a tab the page headers turn slim (`hub`), like the Pools hub.
  */
 export function UsageTabs({ requests, top }: { requests: ReactNode; top?: ReactNode }) {

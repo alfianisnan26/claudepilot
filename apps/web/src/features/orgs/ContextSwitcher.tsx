@@ -5,7 +5,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
-import { LogoMark } from '@/components/LogoMark';
 import { PERSONAL } from '@/lib/orgContext';
 import { NewOrgDialog } from './NewOrgDialog';
 import { useOrgs } from './OrgsProvider';
@@ -22,25 +21,60 @@ export function OrgMark({ org, className }: { org: Pick<Org, 'name'>; className?
 
 const settingsPath = (id: string) => `/admin/orgs/${id}`;
 
-/**
- * The context switcher (docs/prd/organizations.md §7). `sidebar`: the top-left row of the desktop side bar, in place of the logo: the mark and
- * the current context (Personal or the org) with a chevron, opening a list below it. `icon`: the phone bar's icon-only button, opening the
- * same list in a sheet. The list: Personal, each org (its role in an ⓘ), then New organization (when allowed) and Org settings (in an org).
- */
-export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
-  const { orgs, abilities, context, currentOrg, setContext } = useOrgs();
-  const [open, setOpen] = useState(false);
+/** The list of a switcher with what it needs: picking a context, New organization (and its dialog), Org settings. */
+function useContextList(close: () => void) {
+  const { orgs, abilities, context, setContext } = useOrgs();
   const [creating, setCreating] = useState(false);
+  const navigate = useNavigate();
+  const list = (
+    <ContextList
+      orgs={orgs}
+      current={context.kind === 'org' ? context.id : null}
+      mayCreate={canCreateOrg(abilities)}
+      onPick={(id) => {
+        setContext(id ? { kind: 'org', id } : PERSONAL);
+        close();
+      }}
+      onNew={() => {
+        close();
+        setCreating(true);
+      }}
+      onSettings={close}
+    />
+  );
+  const newDialog = (
+    <NewOrgDialog
+      open={creating}
+      onClose={() => setCreating(false)}
+      onCreated={(org) => {
+        setCreating(false);
+        setContext({ kind: 'org', id: org.id });
+        navigate(settingsPath(org.id));
+      }}
+    />
+  );
+  return { list, newDialog };
+}
+
+/**
+ * The context switcher (docs/prd/organizations.md §7; owner, 2026-11-01): a compact row at the foot of the desktop side bar, right above the
+ * account, with the current context's mark and name and a chevron (the mark alone on the slim rail), opening the list upwards. The list:
+ * Personal, each org (its role in an ⓘ), then Org settings (in an org) and New organization (when allowed). On a phone the same list is a
+ * sheet opened from the account menu (`ContextSheet`).
+ */
+export function ContextSwitcher() {
+  const { currentOrg } = useOrgs();
+  const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const panelId = useId();
-  const navigate = useNavigate();
   const label = currentOrg?.name ?? 'Personal';
+  const { list, newDialog } = useContextList(() => setOpen(false));
 
-  // The desktop panel closes on a tap outside or Escape (focus back to the button), like the account menu.
+  // The panel closes on a tap outside or Escape (focus back to the button), like the account menu.
   useEffect(() => {
-    if (!open || variant !== 'sidebar') return;
+    if (!open) return;
     const onDown = (e: PointerEvent) => {
       const t = e.target as Element | null;
       // An ⓘ's note is rendered into <body>: a tap on it is not "outside".
@@ -57,66 +91,10 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
       document.removeEventListener('pointerdown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open, variant]);
+  }, [open]);
   useEffect(() => {
-    if (open && variant === 'sidebar') panel.current?.focus({ preventScroll: true });
-  }, [open, variant]);
-
-  const list = (
-    <ContextList
-      orgs={orgs}
-      current={context.kind === 'org' ? context.id : null}
-      mayCreate={canCreateOrg(abilities)}
-      onPick={(id) => {
-        setContext(id ? { kind: 'org', id } : PERSONAL);
-        setOpen(false);
-      }}
-      onNew={() => {
-        setOpen(false);
-        setCreating(true);
-      }}
-      onSettings={() => setOpen(false)}
-    />
-  );
-
-  const newDialog = (
-    <NewOrgDialog
-      open={creating}
-      onClose={() => setCreating(false)}
-      onCreated={(org) => {
-        setCreating(false);
-        setContext({ kind: 'org', id: org.id });
-        navigate(settingsPath(org.id));
-      }}
-    />
-  );
-
-  if (variant === 'icon')
-    return (
-      <>
-        <button
-          ref={trigger}
-          type="button"
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-label={`Context: ${label}`}
-          title={label}
-          data-context-switcher="icon"
-          onClick={() => setOpen(true)}
-          // Where the logo was (it takes no more room): 44 px to tap, the mark aligned with the page's gutter.
-          className="press -ml-2 inline-flex size-11 shrink-0 items-center justify-center rounded-xl hover:bg-surface-2"
-        >
-          <span className="relative">
-            <LogoMark className="size-7" />
-            {currentOrg && <OrgMark org={currentOrg} className="absolute -right-1.5 -bottom-1.5 size-[18px] bg-surface text-[9px] ring-2 ring-bg" />}
-          </span>
-        </button>
-        <Dialog open={open} onClose={() => setOpen(false)} title="Context" size="sm">
-          {list}
-        </Dialog>
-        {newDialog}
-      </>
-    );
+    if (open) panel.current?.focus({ preventScroll: true });
+  }, [open]);
 
   return (
     <div ref={ref} className="relative w-full">
@@ -130,13 +108,16 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
         title={label}
         data-context-switcher="sidebar"
         onClick={() => setOpen((v) => !v)}
-        className="press flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl p-1.5 text-left hover:bg-surface-2 lg:justify-start lg:px-2"
+        className="press flex min-h-11 w-full items-center justify-center gap-3 rounded-2xl p-1 text-left outline-hidden hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent lg:justify-start lg:px-2"
       >
-        <span className="relative shrink-0">
-          <LogoMark className="size-8" />
-          {currentOrg && <OrgMark org={currentOrg} className="absolute -right-1.5 -bottom-1.5 size-5 bg-surface text-[10px] ring-2 ring-bg" />}
-        </span>
-        <span className="hidden min-w-0 flex-1 truncate text-[15px] font-extrabold tracking-tight lg:block">{label}</span>
+        {currentOrg ? (
+          <OrgMark org={currentOrg} className="size-9 text-[14px]" />
+        ) : (
+          <span aria-hidden="true" className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-ink-soft">
+            <UserRound className="size-[18px]" />
+          </span>
+        )}
+        <span className="hidden min-w-0 flex-1 truncate text-sm font-semibold lg:block">{label}</span>
         <ChevronsUpDown aria-hidden="true" className="hidden size-4 shrink-0 text-muted lg:block" />
       </button>
       <AnimatePresence>
@@ -147,11 +128,11 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
             role="dialog"
             aria-label="Context"
             tabIndex={-1}
-            initial={{ opacity: 0, scale: 0.97, y: -4 }}
+            initial={{ opacity: 0, scale: 0.97, y: 4 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.1 } }}
             transition={{ duration: 0.14 }}
-            className="absolute top-full left-0 z-50 mt-1 max-h-[70dvh] w-64 origin-top-left overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-1.5 shadow-lift outline-hidden"
+            className="absolute bottom-full left-0 z-50 mb-2 max-h-[70dvh] w-64 origin-bottom-left overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-1.5 shadow-lift outline-hidden"
           >
             {list}
           </motion.div>
@@ -159,6 +140,19 @@ export function ContextSwitcher({ variant }: { variant: 'sidebar' | 'icon' }) {
       </AnimatePresence>
       {newDialog}
     </div>
+  );
+}
+
+/** The phone's switcher: the same list in a sheet, opened from the account menu's Context row. */
+export function ContextSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { list, newDialog } = useContextList(onClose);
+  return (
+    <>
+      <Dialog open={open} onClose={onClose} title="Context" size="sm">
+        {list}
+      </Dialog>
+      {newDialog}
+    </>
   );
 }
 

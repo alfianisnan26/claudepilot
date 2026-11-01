@@ -1,7 +1,7 @@
 // A page's tabs as sub-routes (owner request 2026-11-01: "properly use tabbed menus, so not bloated in a single page"). Every long page is a
 // title and a tab bar; each tab is its own path (`/admin/settings/sessions`), so back/forward and deep links work and only the open tab's
 // content mounts (and asks for its data). Pure, so the routing and who-sees-what are tested without a browser; `components/RoutedTabs.tsx`
-// draws it.
+// draws it as a bar of pill tabs under the title (the Usage pattern), one section at a time.
 
 export interface TabDef {
   id: string;
@@ -12,16 +12,10 @@ export interface TabDef {
   adminOnly?: boolean;
 }
 
-/** From this many tabs on, a wide screen lists them in a side nav beside the content instead of a bar over it. */
-export const SIDE_NAV_MIN = 7;
-
 /** The tabs this person sees, in order. */
 export function shownTabs<T extends TabDef>(tabs: readonly T[], who: { admin: boolean }): T[] {
   return tabs.filter((t) => !t.hidden && (who.admin || !t.adminOnly));
 }
-
-/** `bar`: a tab bar under the title (and always on a phone). `side`: a side nav on a wide screen, for a long list of sections. */
-export const tabLayout = (count: number): 'bar' | 'side' => (count >= SIDE_NAV_MIN ? 'side' : 'bar');
 
 const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
 

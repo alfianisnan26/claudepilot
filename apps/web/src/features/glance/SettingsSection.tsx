@@ -12,7 +12,7 @@ const PLACES: { id: GlancePlacement; label: string; about: string }[] = [
   { id: 'header', label: 'Header', about: 'The strip in the phone’s top bar and at the foot of the sidebar.' },
   { id: 'list', label: 'Agents page', about: 'A labelled row above the Agents list (not repeated on a phone while the header strip shows).' },
   { id: 'composer', label: 'Composer', about: 'A small row above the message box in an agent.' },
-  { id: 'dock', label: 'Side dock', about: 'From 1280 px wide: a rail of chips on the right edge. Open it to see every widget in full; it then makes room instead of covering the page.' },
+  { id: 'dock', label: 'Side dock', about: 'On a desktop: a handle on the right edge; hover or tap it to see every widget in full. Pin it to keep it open as a column of its own (from 1280 px).' },
 ];
 
 /**

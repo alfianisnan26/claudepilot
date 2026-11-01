@@ -121,6 +121,18 @@
   /* Where the session screen's floating header (52 px) ends: what sits under it (the transcript's first line, the btw sheet) starts here. */
   --session-header-bottom: calc(var(--bar-top) + 52px);
 }
+/*
+ * A desktop has no notch or home indicator (owner, 2026-11-01: "safe area is unnecessary on desktop"): a wide window with a fine pointer
+ * keeps none, whatever the browser reports (an installed desktop app can report a title-bar inset). A tablet (touch) keeps its insets.
+ */
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+  :root {
+    --safe-top: 0px;
+    --safe-right: 0px;
+    --safe-bottom: 0px;
+    --safe-left: 0px;
+  }
+}
 
 /*
  * Under the status bar: a frosted band the page scrolls under. A black-translucent status bar draws WHITE text in both themes, so

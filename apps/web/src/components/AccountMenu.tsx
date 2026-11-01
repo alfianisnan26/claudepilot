@@ -1,5 +1,5 @@
 import { cn, Segmented, useTheme, type ThemeChoice } from '@isnanme/ui';
-import { LogOut, UserRound } from 'lucide-react';
+import { ChevronsUpDown, LogOut, UserRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
@@ -35,9 +35,10 @@ export const SERVER_CODE_NOTE = 'The server code is the break-glass sign-in: it 
 
 /**
  * Who is signed in, the theme, the Profile and sign out (owner request 2026-11-01: an account shows the person, the server code says it is
- * the server code). `row` sits at the foot of the sidebar and opens upward; `avatar` is the round button in the phone app bar.
+ * the server code). `row` sits at the foot of the sidebar and opens upward; `avatar` is the round button in the phone app bar, where it also
+ * holds the Context row (`onContext` opens the org switcher's sheet; owner, 2026-11-01).
  */
-export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avatar' | 'row'; onLogout: () => void }) {
+export function AccountMenu({ variant = 'avatar', onLogout, onContext }: { variant?: 'avatar' | 'row'; onLogout: () => void; onContext?: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -138,6 +139,18 @@ export function AccountMenu({ variant = 'avatar', onLogout }: { variant?: 'avata
             >
               <UserRound className="size-4" /> Profile
             </Link>
+            {onContext && (
+              <button
+                type="button"
+                data-context-switcher="menu"
+                aria-label={`Context: ${currentOrg?.name ?? 'Personal'}`}
+                onClick={() => (setOpen(false), onContext())}
+                className="flex min-h-11 w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-sm font-medium text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+              >
+                <ChevronsUpDown className="size-4" />
+                <span className="min-w-0 flex-1 truncate">{currentOrg?.name ?? 'Personal'}</span>
+              </button>
+            )}
             <div className="my-1 h-px bg-line" />
             <div className="px-2.5 py-2">
               <p id="theme-label" className="mb-2 text-[12px] font-semibold text-muted">

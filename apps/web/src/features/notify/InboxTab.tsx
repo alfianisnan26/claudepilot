@@ -9,6 +9,7 @@ import { timeAgo } from '@/lib/format';
 import { useLive } from '@/lib/live';
 import { notifyApi } from './api';
 import { bodyText, dayLabel } from './inbox';
+import { scrollPageTo } from '@/lib/pane';
 import { MuteDialog } from './MuteDialog';
 import { loadNotifyOverview, patchOverview, useNotifyOverview } from './store';
 
@@ -93,7 +94,7 @@ export function InboxTab() {
     for (const i of pending) shown.current.add(i.id);
     setItems((cur) => [...pending, ...(cur ?? [])]);
     setPending([]);
-    window.scrollTo({ top: 0 });
+    scrollPageTo(0);
   };
 
   const open = (i: NotifyHistoryItem) => {

@@ -21,7 +21,7 @@ import { TeamsSection } from './TeamsSection';
 
 /**
  * Org settings (docs/prd/organizations.md §7, §13.9; owner request 2026-11-01): a tab per section, each its own path
- * (`/admin/orgs/<id>/members`; General at `/admin/orgs/<id>`), a side nav on a wide screen and a bar on a phone (RoutedTabs). Which sections
+ * (`/admin/orgs/<id>/members`; General at `/admin/orgs/<id>`), one at a time under a bar of pill tabs (RoutedTabs). Which sections
  * show is `orgSections` (rules.ts): owners everything; admins no Policies or Danger zone; members General, Members, Teams, Objects, Access (and
  * Invitations when the org lets them invite); guests General, Teams, Objects. A suspended org shows its owners General and Danger zone. The
  * server decides every change. The older `?tab=sign-in` (where an SSO step-up returns) and `?tab=access` (an access request's notification)

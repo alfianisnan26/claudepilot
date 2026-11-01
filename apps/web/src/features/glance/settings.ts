@@ -21,7 +21,7 @@ export interface GlanceSettings {
   quotaMode: 'active' | 'all';
   /** Percent of a plan window used at and above which Quota reads warn and critical (default: the portal's alert levels). */
   thresholds: { warn: number; critical: number };
-  /** The dock shows every widget's full form in a panel, instead of a rail of chips. */
+  /** The dock is pinned: a column of its own beside the content (from 1280 px) instead of auto-hiding behind a handle on the right edge. */
   dockOpen: boolean;
   /** The installed app's icon shows the needs-attention count (where the platform has badges). */
   appBadge: boolean;

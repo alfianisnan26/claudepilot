@@ -3,20 +3,21 @@ import { motion } from 'motion/react';
 import { Ellipsis } from 'lucide-react';
 import { Fragment, Suspense, useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router';
-import { navFor, type NavItem } from '@/app/nav';
+import { HOME, navFor, type NavItem } from '@/app/nav';
 import { GlanceDock } from '@/features/glance/Dock';
 import { NavBadge } from '@/features/notify/NavBadge';
 import { AttentionBadge, AttentionRoot } from '@/features/attention/Root';
-import { ContextSwitcher, OrgMark } from '@/features/orgs/ContextSwitcher';
+import { ContextSheet, ContextSwitcher } from '@/features/orgs/ContextSwitcher';
 import { OrgsProvider, useOrgs } from '@/features/orgs/OrgsProvider';
-import { GlanceStrip } from '@/features/glance/Strip';
+import { GlanceStrip, useHasStrip } from '@/features/glance/Strip';
+import { PANE_ID, scrollPane } from '@/lib/pane';
 import { api } from '@/lib/api';
 import { serializeContext } from '@/lib/orgContext';
 import { workbenchPage } from '@/lib/panels';
 import { pageKey } from '@/lib/routedTabs';
 import { isAdminState, useAuth } from '@/lib/auth';
 import { AccountMenu } from './AccountMenu';
-import { InfoTip } from './InfoTip';
+import { BRAND_NAME, Logo, LogoMark } from './Logo';
 
 /** This person's navigation: a member's has no platform areas (D-82 S1a). */
 function useNav() {
@@ -40,10 +41,16 @@ export function AppShell() {
 function Shell() {
   const { logout } = useAuth();
   // The context (Personal or an org, §7): pages wait for it once, then remount when it changes, so every list asks again in the new one.
-  const { orgs, context, currentOrg } = useOrgs();
+  const { orgs, context } = useOrgs();
   const { pathname } = useLocation();
-  // A Workbench page (T-158) gets the whole width (no centred column), less padding under it (it ends at the window's bottom), and
-  // stays mounted across its own sub-paths: opening a ticket beside the board must not remount (and refetch) the board.
+  const [contextSheet, setContextSheet] = useState(false);
+  // The phone bar names pilot beside its mark unless glance chips need the room.
+  const hasHeaderStrip = useHasStrip('header');
+  const key = workbenchPage(pathname) ?? pageKey(pathname);
+  // A new page starts at the top of the content pane (a desktop; on a phone the document scrolls as before).
+  useEffect(() => scrollPane()?.scrollTo({ top: 0 }), [key]);
+  // A Workbench page (T-158) gets less padding under it (it ends at the window's bottom), and stays mounted across its own sub-paths:
+  // opening a ticket beside the board must not remount (and refetch) the board.
   const workbench = workbenchPage(pathname);
   // A phone tab bar only earns its place with two or more sections.
   const showTabBar = useNav().items.length > 1;
@@ -51,7 +58,17 @@ function Shell() {
   useEffect(() => void api.workspaces.labels().catch(() => undefined), []);
 
   return (
-    <div className={cn('min-h-dvh pb-10 sm:pl-20 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]', workbench ? 'sm:pb-6' : 'sm:pb-16', showTabBar && 'pb-[calc(var(--tabbar-h)+1.5rem)]')}>
+    // The app frame (owner, 2026-11-01: "immersive, the best desktop-sized app experience"). From 1024 px the frame is the window: the side
+    // bar and the dock are fixed, the content takes all the width between them, and ONLY the content pane (#main-scroll) scrolls; the
+    // document never does. Below that the document scrolls as it always has (lib/viewport.ts pins it on a phone).
+    <div
+      data-app-frame=""
+      className={cn(
+        'min-h-dvh pb-10 sm:pl-20 lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:pb-0 lg:pl-64 xl:pr-[var(--glance-dock-w,0px)]',
+        workbench ? 'sm:pb-6' : 'sm:pb-16',
+        showTabBar && 'pb-[calc(var(--tabbar-h)+1.5rem)]',
+      )}
+    >
       {/* The first Tab stop: past the sidebar and the account menu, to the page. */}
       <a
         href="#main"
@@ -62,34 +79,36 @@ function Shell() {
       <Sidebar pathname={pathname} onLogout={() => void logout()} />
 
       <header className="sticky top-0 z-40 border-b border-line bg-bg/80 pt-[var(--safe-top)] backdrop-blur-md sm:hidden">
-        <div className="mx-auto flex h-16 max-w-4xl items-center gap-6 px-4">
-          {/* The context switcher in place of the logo, icon only (organizations §7; the side bar does the same on wider screens). */}
-          <ContextSwitcher variant="icon" />
+        <div className="flex h-16 items-center gap-6 px-4">
+          <Logo to={HOME} label={!hasHeaderStrip} />
           <div className="ml-auto flex items-center gap-1.5">
             <GlanceStrip placement="header" />
-            <AccountMenu onLogout={() => void logout()} />
+            {/* The org switcher is a row of the account menu on a phone (owner, 2026-11-01), opening its sheet. */}
+            <AccountMenu onLogout={() => void logout()} onContext={() => setContextSheet(true)} />
           </div>
         </div>
       </header>
+      <ContextSheet open={contextSheet} onClose={() => setContextSheet(false)} />
 
-      <main id="main" tabIndex={-1} data-focus-container className={cn('mx-auto px-4 pt-6 outline-none sm:px-6 sm:pt-10', !workbench && 'max-w-4xl')}>
-        {/* Enter-only page transition: navigation never waits for an exit animation. */}
-        <motion.div
-          key={`${serializeContext(context)} ${workbench ?? pageKey(pathname)}`}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.22, ease }}
+      <div id={PANE_ID} data-content-pane="" className="lg:h-full lg:overflow-y-auto lg:overscroll-contain lg:[scrollbar-gutter:stable]">
+        <main
+          id="main"
+          tabIndex={-1}
+          data-focus-container
+          className={cn('px-4 pt-6 outline-none sm:px-6 sm:pt-10 lg:px-8 lg:pt-8', workbench ? 'lg:pb-6' : 'lg:pb-16')}
         >
-          {currentOrg && !pathname.startsWith('/admin/orgs/') && <OrgScopeNote name={currentOrg.name} />}
-          {orgs === null ? (
-            <div className="skeleton h-40 rounded-[24px]" aria-busy="true" />
-          ) : (
-            <Suspense fallback={<div className="skeleton h-40 rounded-[24px]" aria-busy="true" />}>
-              <Outlet />
-            </Suspense>
-          )}
-        </motion.div>
-      </main>
+          {/* Enter-only page transition: navigation never waits for an exit animation. */}
+          <motion.div key={`${serializeContext(context)} ${key}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, ease }}>
+            {orgs === null ? (
+              <div className="skeleton h-40 rounded-[24px]" aria-busy="true" />
+            ) : (
+              <Suspense fallback={<div className="skeleton h-40 rounded-[24px]" aria-busy="true" />}>
+                <Outlet />
+              </Suspense>
+            )}
+          </motion.div>
+        </main>
+      </div>
 
       {showTabBar && <TabBar pathname={pathname} />}
       <GlanceDock />
@@ -102,9 +121,12 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
   const nav = useNav();
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-20 flex-col border-r border-line bg-bg sm:flex lg:w-64">
-      {/* The context switcher sits where the logo was (owner, 2026-11-01): the mark, the current context, a chevron. */}
-      <div className="flex h-16 shrink-0 items-center px-3 lg:px-4">
-        <ContextSwitcher variant="sidebar" />
+      {/* pilot's own mark and name on top (owner, 2026-11-01); the context switcher sits at the foot, above the account. */}
+      <div className="flex h-16 shrink-0 items-center justify-center px-3 lg:justify-start lg:px-5">
+        <Link to={HOME} aria-label={BRAND_NAME} className="inline-flex min-h-11 items-center gap-2 rounded-lg font-extrabold tracking-tight outline-hidden focus-visible:ring-2 focus-visible:ring-accent">
+          <LogoMark className="size-8" />
+          <span className="hidden text-lg lg:inline">{BRAND_NAME}</span>
+        </Link>
       </div>
       <nav aria-label="Main" className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-4 [scrollbar-width:thin] lg:px-4">
         <ul className="flex flex-col gap-1">
@@ -142,7 +164,8 @@ function Sidebar({ pathname, onLogout }: { pathname: string; onLogout: () => voi
         </ul>
       </nav>
       <GlanceStrip placement="header" layout="rail" side="right" className="shrink-0 flex-col justify-center px-3 pb-1 lg:flex-row lg:px-4" />
-      <div className="border-t border-line p-3 lg:p-4">
+      <div className="flex flex-col gap-1 border-t border-line p-3 lg:p-4">
+        <ContextSwitcher />
         <AccountMenu variant="row" onLogout={onLogout} />
       </div>
     </aside>
@@ -267,16 +290,5 @@ function MoreList({ pathname, onPick }: { pathname: string; onPick: () => void }
         </Fragment>
       ))}
     </ul>
-  );
-}
-
-/** In an org context the lists show only what the org owns: the org's name above the page, and why a list may be empty in its InfoTip. */
-function OrgScopeNote({ name }: { name: string }) {
-  return (
-    <div data-org-scope-note="" className="mb-4 flex min-w-0 items-center gap-2 text-[13px] font-semibold text-muted">
-      <OrgMark org={{ name }} className="size-5 text-[10px]" />
-      <span className="min-w-0 truncate">{name}</span>
-      <InfoTip label="About this organization’s lists">Lists show only what this organization owns. Switch to Personal to see your own things.</InfoTip>
-    </div>
   );
 }
