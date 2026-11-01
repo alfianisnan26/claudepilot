@@ -6,6 +6,8 @@
 // context a list answers empty without asking, so an org context never shows personal objects as if they were the org's. Turning it on is
 // one line here; the server must then read `?org=` and never widen a list by it (its API test, slice 5).
 
+import { isOrgId } from '@portal/contracts';
+
 /** Personal, or an org by id (`org_…`). */
 export type AppContext = { kind: 'personal' } | { kind: 'org'; id: string };
 
@@ -23,13 +25,12 @@ export interface ContextStorage {
   removeItem(key: string): void;
 }
 
-const ORG_ID = /^org_[A-Za-z0-9_-]{1,64}$/;
 
 /** Parses what was stored; anything else (garbage, an old shape, a non-org id) is Personal. */
 export function parseContext(raw: string | null): AppContext {
   if (!raw || raw === 'personal') return PERSONAL;
   const id = raw.startsWith('org:') ? raw.slice(4) : '';
-  return ORG_ID.test(id) ? { kind: 'org', id } : PERSONAL;
+  return isOrgId(id) ? { kind: 'org', id } : PERSONAL;
 }
 
 export const serializeContext = (ctx: AppContext) => (ctx.kind === 'org' ? `org:${ctx.id}` : 'personal');
