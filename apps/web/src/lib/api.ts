@@ -289,6 +289,8 @@ export const api = {
     // Every list teaches the labels (T-42), so places that only hold a workspace id name it by its label.
     list: () =>
       scopedList<Workspace[]>(WORKSPACE_API.list, (p) => request<Workspace[]>('GET', p)).then((list) => (rememberWorkspaceLabels(list), list)),
+    /** One workspace by id, whatever the app's context (`?org=` filters only the lists): the General Manager's own runtime, say. */
+    get: (id: string) => request<Workspace>('GET', WORKSPACE_API.one(id)),
     /** The labels of renamed workspaces (T-42), learned once at the app's start. */
     labels: () => request<Record<string, string>>('GET', WORKSPACE_API.labels).then((map) => (rememberWorkspaceLabelMap(map), map)),
     /** Renames a workspace: its label only (T-42); nothing running is touched. */

@@ -69,7 +69,9 @@ export function ManagerMode({ onBack }: { onBack: () => void }) {
     try {
       const s = await api.managerStatus();
       setSt(s);
-      if (s.runtime?.status === 'running' && !s.enabled) setWs((await api.workspaces.list()).find((w) => w.id === s.runtime?.workspaceId) ?? null);
+      // Its runtime by id: the list is filtered to the app's org (D-111), and the manager's own workspace belongs to none, so in an org it was
+      // never found and its Claudes (where you sign one in) never showed (2026-11-02, Kohilabs).
+      if (s.runtime?.status === 'running' && !s.enabled) setWs(await api.workspaces.get(s.runtime.workspaceId).catch(() => null));
     } catch (e) {
       toast(errorText(e, 'Couldn’t read the manager.'), 'error');
     }
