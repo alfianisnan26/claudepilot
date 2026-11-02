@@ -13,7 +13,7 @@
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
-import { accountStanding, recordTokenAccount, tokenAccount } from '../identity/accountGate.js';
+import { accountActive, recordTokenAccount, tokenAccount } from '../identity/accountGate.js';
 import {
   REPORTER_LIMITS,
   REPORTER_TOKEN_PREFIX,
@@ -546,7 +546,7 @@ export class ReporterService {
     if (expect.origin && expect.origin !== row.origin) return null;
     const site = this.allowedSite(row.bucket_key, row.origin);
     if (!site) return null;
-    if (!accountStanding(this.#db, tokenAccount(this.#db, 'reporter', row.id)).ok) return null;
+    if (!accountActive(this.#db, tokenAccount(this.#db, 'reporter', row.id))) return null;
     if (!can(this.#actor(row.id, row.actor_user), 'operate', ticketBucketRef(row.bucket_key)).allow) return null;
     // Last use, at most once a minute (a panel polls).
     if (this.deps.store.writable && (!row.last_used_at || now.getTime() - Date.parse(row.last_used_at) > 60_000)) {
@@ -565,7 +565,7 @@ export class ReporterService {
       | { bucket_key: string; origin: string; actor_user: string; expires_at: string; revoked_at: string | null }
       | undefined;
     if (!row || row.revoked_at || Date.parse(row.expires_at) <= this.#now().getTime()) return false;
-    if (!accountStanding(this.#db, tokenAccount(this.#db, 'reporter', id)).ok) return false;
+    if (!accountActive(this.#db, tokenAccount(this.#db, 'reporter', id))) return false;
     return !!this.allowedSite(row.bucket_key, row.origin) && can(this.#actor(id, row.actor_user), 'operate', ticketBucketRef(row.bucket_key)).allow;
   }
 

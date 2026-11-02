@@ -28,6 +28,22 @@ export function accountStanding(db: DatabaseSync | null | undefined, accountId: 
   }
 }
 
+/**
+ * 2026-11-02 (Konfersi): the reporter's Connect lets any signed-in person mint a token for a bucket they may operate (a member too, D-82), so
+ * its use asks only that the account is still there and active; the person's rights on the bucket are asked by `can()` on every call.
+ * `accountStanding` (admins only) refused every token a member minted: Connect worked, then every call answered 404 and the panel signed out.
+ * No account (the server code, a token from before 462) passes, as there. A database that cannot be read answers no (fail closed).
+ */
+export function accountActive(db: DatabaseSync | null | undefined, accountId: string | null | undefined): boolean {
+  if (!accountId) return true;
+  try {
+    const r = db?.prepare('SELECT state FROM users WHERE id = ?').get(accountId) as { state: string } | undefined;
+    return !!r && r.state === 'active';
+  } catch {
+    return false;
+  }
+}
+
 /** The account a token was minted from, or null (the server code, or a token from before 462). */
 export function tokenAccount(db: DatabaseSync | null | undefined, kind: TokenKind, tokenId: string): string | null {
   const r = db?.prepare('SELECT account_id FROM token_accounts WHERE kind = ? AND token_id = ?').get(kind, tokenId) as { account_id: string } | undefined;
