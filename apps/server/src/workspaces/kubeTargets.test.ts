@@ -485,6 +485,31 @@ test('deploy/k3s/workspace-jobs-rbac.yaml: the deploy pipeline (isnan only) may 
   assert.deepEqual([gb.policyName, gb.validationActions], [guard.metadata.name, ['Deny']]);
 });
 
+test('T-3332: image-build.sh Jobs pass the workspace guard; konfersi may push only to registry.cloudflare.com and touch only its own build Secret', () => {
+  const all = docs('deploy/k3s/workspace-jobs-rbac.yaml');
+  const konfersi = 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs';
+  const policy = all.find((d) => d.kind === 'ValidatingAdmissionPolicy' && d.metadata.name === 'claudepilot-ws-jobs-guard')!;
+  const v = (policy.spec as { validations: { expression: string }[] }).validations.map((x) => x.expression);
+  const nameRe = (resource: string) => new RegExp(/matches\('([^']+)'\)/.exec(v.find((e) => e.startsWith(`request.resource.resource != '${resource}' || variables.name.matches(`))!)![1]!);
+  const script = readFileSync(join(REPO, 'scripts/image-build.sh'), 'utf8');
+  assert.match(script, /job=claudepilot-image-build-\$\(od -An -N4 -tx1/, 'image-build.sh names its Job (and Secret) claudepilot-image-build-<8 hex>');
+  for (const re of [nameRe('jobs'), nameRe('secrets')]) {
+    assert.match('claudepilot-image-build-0a1b2c3d', re);
+    for (const no of ['claudepilot-image-build-0a1b2c3', 'claudepilot-image-build-xyz', 'claudepilot-image-build-0a1b2c3d-x']) assert.doesNotMatch(no, re, no);
+  }
+  const kSecret = v.find((e) => e.includes(konfersi) && e.startsWith("request.resource.resource != 'secrets'"))!;
+  assert.ok(kSecret.endsWith("variables.name.startsWith('claudepilot-job-') || variables.name.matches('^claudepilot-image-build-[0-9a-f]{8}$')"), kSecret);
+  const kPush = v.find((e) => e.includes(konfersi) && e.includes('--destination'))!;
+  assert.ok(kPush.includes("a.startsWith('--destination=registry.cloudflare.com/')"), kPush);
+  assert.ok(kPush.includes("!variables.name.startsWith('claudepilot-image-build-')"), 'only image-build Jobs carry a destination');
+  // The Job template: its only non-emptyDir volume is its own Secret, so the volume rule allows exactly that.
+  const vol = v.find((e) => e.includes('variables.pod.volumes.all('))!;
+  assert.ok(vol.endsWith("variables.pod.volumes.all(v, has(v.emptyDir) || (has(v.secret) && v.secret.secretName == object.metadata.name))"), vol);
+  const job = readFileSync(join(REPO, 'deploy/k3s-build/image-build-job.yaml'), 'utf8');
+  assert.match(job, /secret: \{secretName: __NAME__,/, 'the docker config is the Job\'s own Secret');
+  assert.match(job, /"--destination=__PUSH__"/);
+});
+
 test('deploy/k3s-build: the heavy Jobs keep away from workspace pods in every workspace namespace', () => {
   for (const file of ['job-run.yaml', 'image-build-job.yaml', 'gate-job.yaml']) {
     const text = readFileSync(join(REPO, 'deploy/k3s-build', file), 'utf8');

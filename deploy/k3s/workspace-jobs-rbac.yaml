@@ -169,9 +169,9 @@ spec:
     - name: ctrs
       expression: "variables.pod == null ? [] : variables.pod.containers + (has(variables.pod.initContainers) ? variables.pod.initContainers : [])"
   validations:
-    - expression: "request.resource.resource != 'jobs' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4}|build-(portal|workspace|workspace-dev|browser)|prepull-[0-9]{10})$')"
-      message: "Jobs from a workspace are named by job-run.sh / gate-job.sh / k3s-build.sh / the deploy pipeline's pre-pull"
-    - expression: "request.resource.resource != 'secrets' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4}|build)$')"
+    - expression: "request.resource.resource != 'jobs' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4}|build-(portal|workspace|workspace-dev|browser)|prepull-[0-9]{10}|image-build-[0-9a-f]{8})$')"
+      message: "Jobs from a workspace are named by job-run.sh / gate-job.sh / k3s-build.sh / image-build.sh / the deploy pipeline's pre-pull"
+    - expression: "request.resource.resource != 'secrets' || variables.name.matches('^claudepilot-(job-[0-9a-f]{8}|gate-[0-9a-f]{7}-[0-9a-f]{4}|build|image-build-[0-9a-f]{8})$')"
       message: "a workspace may only touch the per-Job Secrets"
     # The deploy pipeline's Jobs and the build Secret (k3s-build.sh, the pre-pull): the isnan workspace only (it runs .pilot/deploy.yml).
     - expression: "!((request.resource.resource == 'jobs' && variables.name.matches('^claudepilot-(build|prepull)-')) || (request.resource.resource == 'secrets' && variables.name == 'claudepilot-build')) || request.userInfo.username == 'system:serviceaccount:isnan-claudepilot:ws-isnan-jobs'"
@@ -181,16 +181,22 @@ spec:
     # (Since 2026-10-31 gate-job.sh no longer patches its Secret: it creates it owned by the suspended Job. The rule stays as it was applied.)
     - expression: "request.resource.resource != 'secrets' || request.operation != 'UPDATE' || (request.userInfo.username == 'system:serviceaccount:isnan-claudepilot:ws-isnan-jobs' && variables.name.startsWith('claudepilot-gate-'))"
       message: "only gate-job (isnan workspace) patches Secrets, and only claudepilot-gate-*"
-    - expression: "request.resource.resource != 'secrets' || request.userInfo.username != 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs' || variables.name.startsWith('claudepilot-job-')"
-      message: "the konfersi workspace touches only claudepilot-job-* Secrets"
+    # T-3332 (2026-11-02): Konfersi's compute stg deploy builds its container image with image-build.sh (kaniko) and pushes it to Cloudflare's
+    # registry with its own credential; that Job's Secret (the push and clone credential) is the only other Secret it may touch.
+    - expression: "request.resource.resource != 'secrets' || request.userInfo.username != 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs' || variables.name.startsWith('claudepilot-job-') || variables.name.matches('^claudepilot-image-build-[0-9a-f]{8}$')"
+      message: "the konfersi workspace touches only claudepilot-job-* and claudepilot-image-build-* Secrets"
+    # ...and it never pushes into this cluster's registry (registry.int.isnan.me, its in-cluster service): every image-build Job of konfersi
+    # names Cloudflare's registry as its destination, so it cannot replace a ClaudePilot image.
+    - expression: "request.resource.resource != 'jobs' || request.operation == 'DELETE' || request.userInfo.username != 'system:serviceaccount:isnan-claudepilot:ws-konfersi-jobs' || !variables.name.startsWith('claudepilot-image-build-') || variables.ctrs.all(c, !has(c.args) || c.args.all(a, !a.startsWith('--destination') || a.startsWith('--destination=registry.cloudflare.com/')))"
+      message: "the konfersi workspace builds images only for registry.cloudflare.com"
     - expression: "request.resource.resource != 'configmaps' || variables.name.startsWith('claudepilot-gate-result-')"
       message: "a workspace may only touch gate-result ConfigMaps"
     - expression: "variables.pod == null || (has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false)"
       message: "Jobs from a workspace set automountServiceAccountToken: false"
     - expression: "variables.pod == null || ((!has(variables.pod.serviceAccountName) || variables.pod.serviceAccountName in ['', 'default']) && (!has(variables.pod.serviceAccount) || variables.pod.serviceAccount in ['', 'default']))"
       message: "Jobs from a workspace run as the default service account"
-    - expression: "variables.pod == null || !has(variables.pod.volumes) || variables.pod.volumes.all(v, has(v.emptyDir))"
-      message: "Jobs from a workspace use emptyDir volumes only"
+    - expression: "variables.pod == null || !has(variables.pod.volumes) || variables.pod.volumes.all(v, has(v.emptyDir) || (has(v.secret) && v.secret.secretName == object.metadata.name))"
+      message: "Jobs from a workspace use emptyDir volumes only, or their own per-Job Secret (image-build.sh's registry config)"
     - expression: "variables.pod == null || !((has(variables.pod.hostNetwork) && variables.pod.hostNetwork) || (has(variables.pod.hostPID) && variables.pod.hostPID) || (has(variables.pod.hostIPC) && variables.pod.hostIPC))"
       message: "no host namespaces"
     - expression: "variables.ctrs.all(c, !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false)"
