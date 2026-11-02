@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FLOW_ACTOR, FLOW_PREFIX } from '@portal/contracts';
-import { headOf, selfTestAt, type FlowPrView } from './engine.js';
+import { headOf, selfTestAt, slowRoundLine, type FlowPrView } from './engine.js';
 import { giteaPrPort } from './index.js';
 import { parsePrograms } from './programs.js';
 import { LEAD_A, LEAD_B, LEAD_C, rig, sha } from './testkit.js';
@@ -1134,4 +1134,32 @@ test('T-3198: an outside ticket recorded merged with its head and no PR (a fast-
   const all = r.chat.sent.map((m) => m.text).join('\n');
   assert.doesNotMatch(all, /#null|#undefined/);
   assert.match(all, /- T-3007 \(KONF-3007\) claudepilot\/portal$/m, 'its other repo still has no PR');
+});
+
+test('2026-11-02: a slow round says where its time went (port calls timed, names and numbers only)', async () => {
+  const r = rig();
+  crew(r);
+  r.tickets.add(20, { holder: 'wb' });
+  const logged: string[] = [];
+  const log = console.log;
+  const list = r.chat.list.bind(r.chat);
+  // A list read that takes 1.1 s makes the round slow.
+  r.chat.list = (f: { parentId?: string; ticketId?: string }) => {
+    const end = performance.now() + 1100;
+    while (performance.now() < end);
+    return list(f);
+  };
+  console.log = (...a: unknown[]) => void logged.push(a.join(' '));
+  try {
+    await r.engine.round();
+  } finally {
+    console.log = log;
+  }
+  const line = logged.find((l) => l.startsWith('[flow] slow round '));
+  assert.ok(line, logged.join(' | '));
+  assert.match(line!, /^\[flow\] slow round \d+ ms: chat\.list \d+ ms x\d+/);
+  assert.equal(
+    slowRoundLine(3412.4, new Map([['chat.list', [2100.2, 95] as const], ['tickets.comments', [640, 88] as const], ['tickets.list', [12, 2] as const]])),
+    '[flow] slow round 3412 ms: chat.list 2100 ms x95, tickets.comments 640 ms x88, tickets.list 12 ms x2',
+  );
 });

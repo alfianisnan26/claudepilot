@@ -65,6 +65,14 @@ import { flowOn, flowPaused, flowProgramsRaw, flowThresholds, type FlowSettingsR
 import { trimState, type FlowState, type FlowStatePort } from './store.js';
 
 export const FLOW_ROUND_MS = 5 * 60_000;
+/** A round longer than this logs where its time went (`slowRoundLine`). */
+export const ROUND_SLOW_MS = 1000;
+
+/** `[flow] slow round 3412 ms: chat.list 2100 ms x95, tickets.comments 640 ms x88, ...`: the six costliest port calls, names and numbers only. */
+export function slowRoundLine(ms: number, spent: ReadonlyMap<string, readonly [number, number]>): string {
+  const top = [...spent].sort((a, b) => b[1][0] - a[1][0]).slice(0, 6);
+  return `[flow] slow round ${Math.round(ms)} ms: ${top.map(([k, [t, n]]) => `${k} ${Math.round(t)} ms x${n}`).join(', ') || 'no port calls'}`;
+}
 const MIN = 60_000;
 
 /** A Bypass audit record of a session (the chat controller's trail, newest first). */
@@ -232,8 +240,32 @@ export class FlowEngine {
   #timer: (() => void) | null = null;
   #running: Promise<number> | null = null;
 
+  /** Time spent in each port call of the running round (`tickets.list` -> [ms, calls]), for the slow-round line. */
+  readonly #spent = new Map<string, [number, number]>();
+
   constructor(deps: FlowDeps) {
-    this.#d = deps;
+    // 2026-11-02: a Konfersi round blocked the portal for 3-4 s every 5 minutes. Each port call is timed, so a round over a second says
+    // where its time went.
+    this.#d = { ...deps, tickets: this.#timed(deps.tickets, 'tickets'), chat: this.#timed(deps.chat, 'chat') };
+  }
+
+  #timed<T extends object>(port: T, name: string): T {
+    return new Proxy(port, {
+      get: (target, prop, receiver) => {
+        const v = Reflect.get(target, prop, receiver) as unknown;
+        if (typeof v !== 'function') return v;
+        return (...args: unknown[]) => {
+          const t0 = performance.now();
+          try {
+            return (v as (...a: unknown[]) => unknown).apply(target, args);
+          } finally {
+            const key = `${name}.${String(prop)}`;
+            const was = this.#spent.get(key) ?? [0, 0];
+            this.#spent.set(key, [was[0] + performance.now() - t0, was[1] + 1]);
+          }
+        };
+      },
+    });
   }
 
   start(): void {
@@ -264,6 +296,17 @@ export class FlowEngine {
   }
 
   async #round(): Promise<number> {
+    const t0 = performance.now();
+    this.#spent.clear();
+    try {
+      return await this.#roundBody();
+    } finally {
+      const ms = performance.now() - t0;
+      if (ms > ROUND_SLOW_MS) console.log(slowRoundLine(ms, this.#spent));
+    }
+  }
+
+  async #roundBody(): Promise<number> {
     if (!flowOn(this.#d.settings) || !this.#d.store.writable) return 0;
     const now = this.#d.clock.now();
     const st = trimState(this.#d.store.load(), now);
