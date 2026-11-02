@@ -213,7 +213,8 @@ if (ws.local.enabled)
 const workspaces = new Workspaces(
   runtimes,
   new JsonFile(`${config.paths.data}/pending-creates.json`, []),
-  {},
+  // 2026-11-02: one list serves every caller for 2 s (the Dashboard, CI and usage polls listed every target per request).
+  { listCacheMs: 2000 },
   new WorkspaceIdentities(store),
   new JsonFile(`${config.paths.data}/last-known-workspaces.json`, {}),
 );

@@ -51,6 +51,12 @@ export interface CheckTiming {
   ttlMs?: number;
   timeoutMs?: number;
   listTimeoutMs?: number;
+  /**
+   * 2026-11-02: how long one `list()` answer serves every caller (0: none, each call lists). The Dashboard's widgets, CI's repos and the
+   * usage card each list every target through the Kubernetes API on every poll; with a few pages open that kept the portal's event loop
+   * busy for seconds (the Kubernetes client parses every pod and deployment). Concurrent calls always share the one in flight.
+   */
+  listCacheMs?: number;
 }
 
 /** A target's last good list (T-515): what its runtime last answered, and when. Kept in memory and on disk, per target id. */
@@ -115,6 +121,9 @@ export class Workspaces {
   readonly #ttlMs: number;
   readonly #timeoutMs: number;
   readonly #listTimeoutMs: number;
+  readonly #listCacheMs: number;
+  /** The list in flight or answered within `listCacheMs`; any change through this manager drops it. */
+  #listed: { at: number; answer: Promise<Workspace[]> } | null = null;
   /** Per target: its last good list (T-515), read from disk at the start so a restart during an outage keeps it too. */
   readonly #lastGood = new Map<string, LastKnownList>();
   /** When each target's last good list was last written, and the list then (to write only when it changed, or a minute on). */
@@ -165,6 +174,7 @@ export class Workspaces {
     this.#ttlMs = timing.ttlMs ?? CHECK_TTL_MS;
     this.#timeoutMs = timing.timeoutMs ?? CHECK_TIMEOUT_MS;
     this.#listTimeoutMs = timing.listTimeoutMs ?? LIST_TIMEOUT_MS;
+    this.#listCacheMs = timing.listCacheMs ?? 0;
     const stored = lastKnown?.read() ?? {};
     for (const [id, entry] of Object.entries(stored && typeof stored === 'object' ? stored : {})) {
       if (entry && typeof entry.at === 'string' && Array.isArray(entry.workspaces)) {
@@ -201,7 +211,7 @@ export class Workspaces {
     this.#lastWritten.delete(targetId);
     if (this.#lastGood.delete(targetId)) this.#saveLastKnown();
     this.#runtimeListeners.forEach((fn) => fn(targetId, null));
-    this.hooks.changed?.();
+    (this.#dropList(), this.hooks.changed?.());
   }
 
   /** Called when a runtime is added or replaced (with it) or removed (null): delivery follows its start events. */
@@ -224,7 +234,7 @@ export class Workspaces {
     this.#checking.delete(id);
     if (runtime.watch) this.#watching.set(id, runtime.watch(() => this.hooks.changed?.()));
     this.#runtimeListeners.forEach((fn) => fn(id, runtime));
-    this.hooks.changed?.();
+    (this.#dropList(), this.hooks.changed?.());
   }
 
   #unwatch(id: string) {
@@ -327,7 +337,7 @@ export class Workspaces {
     this.#checking.delete(targetId);
     const now = await this.#check(runtime);
     if (this.#runtimes.get(targetId) !== runtime) return;
-    if (now.available !== was) this.hooks.changed?.();
+    if (now.available !== was) (this.#dropList(), this.hooks.changed?.());
     // Creates that waited for this target since the restart go on now.
     if (now.available) {
       const waiting = [...this.#pending.values()].filter((w) => w.target === targetId && this.#awaitingTarget.has(w.id));
@@ -337,6 +347,24 @@ export class Workspaces {
   }
 
   async list(): Promise<Workspace[]> {
+    if (this.#listCacheMs <= 0) return this.#listNow();
+    const now = Date.now();
+    if (this.#listed && now - this.#listed.at < this.#listCacheMs) return this.#listed.answer;
+    const listed = { at: now, answer: this.#listNow() };
+    this.#listed = listed;
+    // A failed list is never served again; an answer is, until it is older than the cache time (measured from when it was asked).
+    listed.answer.catch(() => {
+      if (this.#listed === listed) this.#listed = null;
+    });
+    return listed.answer;
+  }
+
+  /** Something changed (a create, a start, a stop, a removal, a target's reachability): the next `list()` asks the runtimes again. */
+  #dropList(): void {
+    this.#listed = null;
+  }
+
+  async #listNow(): Promise<Workspace[]> {
     // One deadline per target for the check AND the list together (T-515): a first check that takes 4 s must not leave 8 s more for the list.
     const deadline = Date.now() + this.#listTimeoutMs;
     const lists = await Promise.all([...this.#runtimes.values()].map((r) => this.#listTarget(r, deadline)));
@@ -505,7 +533,7 @@ export class Workspaces {
         detail: { workspace: known.legacyId, from, to },
       });
       console.log(`[workspaces] ${known.legacyId} (${known.id}) renamed`);
-      this.hooks.changed?.();
+      (this.#dropList(), this.hooks.changed?.());
     }
     return { id: known.legacyId, stableId: known.id, name: known.name, label: workspaceDisplayName({ name: known.name, label: known.label ?? undefined }), previous: from };
   }
@@ -629,7 +657,7 @@ export class Workspaces {
       : restarted ? `applied, the pod restarts${applied?.refused ? ` (in-place resize not used: ${applied.refused})` : ''}`
       : 'applied';
     console.log(`[workspaces] ${known.legacyId} resources ${said}`);
-    this.hooks.changed?.();
+    (this.#dropList(), this.hooks.changed?.());
     return this.#resourcesView(known, outcome === 'applied' ? values : live, replicas, { fit, outcome, ...(applied ? { how: applied.how, resizeRefused: applied.refused } : {}) });
   }
 
@@ -674,6 +702,7 @@ export class Workspaces {
    * create there); without one, the creator personally (the founding user when no person is behind the actor).
    */
   async create(req: Partial<CreateWorkspaceRequest>, actor: Actor, owner?: NewWorkspaceOwner): Promise<Workspace> {
+    this.#dropList();
     const name = typeof req.name === 'string' ? req.name.trim() : '';
     const problem = workspaceNameProblem(name);
     if (problem) throw new AppError('VALIDATION_FAILED', problem, { details: { name: problem } });
@@ -755,7 +784,7 @@ export class Workspaces {
     void runtime
       .create({ name, cpus, memoryMb, claudeVersion: workspace.claude?.pinned ?? undefined, ...(node ? { node } : {}), ...(runtimeName ? { runtimeName } : {}) }, (detail) => {
         workspace.detail = detail;
-        this.hooks.changed?.();
+        (this.#dropList(), this.hooks.changed?.());
       })
       .then(
         () => {
@@ -775,13 +804,13 @@ export class Workspaces {
   #setPending(w: Workspace) {
     this.#pending.set(w.id, w);
     this.#save();
-    this.hooks.changed?.();
+    (this.#dropList(), this.hooks.changed?.());
   }
 
   #deletePending(id: string) {
     this.#awaitingTarget.delete(id);
     if (this.#pending.delete(id)) this.#save();
-    this.hooks.changed?.();
+    (this.#dropList(), this.hooks.changed?.());
   }
 
   #save() {
@@ -793,16 +822,18 @@ export class Workspaces {
   }
 
   async start(target: string, name: string) {
+    this.#dropList();
     this.#refuseIfUnavailable(target);
     try {
       await this.#applyPendingResources(target, name);
       return await this.#run(target, (r) => r.start(name));
     } finally {
-      this.hooks.changed?.();
+      (this.#dropList(), this.hooks.changed?.());
     }
   }
 
   async stop(target: string, name: string) {
+    this.#dropList();
     this.#refuseIfUnavailable(target);
     // Events written just before a stop are pulled first (foundation PRD §8); never blocks a stop long.
     const pull = this.hooks.beforeStop?.(workspaceId(target, name)).catch(() => undefined);
@@ -810,7 +841,7 @@ export class Workspaces {
     try {
       return await this.#run(target, (r) => r.stop(name));
     } finally {
-      this.hooks.changed?.();
+      (this.#dropList(), this.hooks.changed?.());
     }
   }
 
@@ -819,6 +850,7 @@ export class Workspaces {
    * written just before are pulled first, like a stop. Only the Runtime knows how; a target without it says so.
    */
   async recreate(target: string, name: string, image: string, progress: (detail: string) => void, opts?: { label?: string }) {
+    this.#dropList();
     const runtime = this.#runtime(target);
     this.#refuseIfUnavailable(target);
     if (!runtime.recreate) throw new AppError('CONFLICT', 'This target can’t recreate a workspace from another image.');
@@ -827,11 +859,12 @@ export class Workspaces {
     try {
       return await this.#run(target, (r) => r.recreate!(name, image, progress, opts));
     } finally {
-      this.hooks.changed?.();
+      (this.#dropList(), this.hooks.changed?.());
     }
   }
 
   async remove(target: string, name: string) {
+    this.#dropList();
     const id = workspaceId(target, name);
     // A create that waits for its target to come back has not started here: removing it forgets it (whatever the target already made shows up in its list when it returns).
     if (this.#awaitingTarget.has(id)) {
@@ -847,7 +880,7 @@ export class Workspaces {
     try {
       await this.#run(target, (r) => r.remove(name));
     } finally {
-      this.hooks.changed?.();
+      (this.#dropList(), this.hooks.changed?.());
     }
     // Its identity stays on record, removed: the id is never given again, and the name is free for another workspace (T-42).
     this.identities.retire(target, name);
