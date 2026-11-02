@@ -872,7 +872,8 @@ reporterSweep.unref?.();
 // Glance widgets: what waits on a person (approvals, tickets, failed CI) and who is working, counted once for every open page; the chat
 // controller's events feed it directly, tickets and CI changes are chained onto the hooks that already tell their own pages (docs/prd/glance-widgets.md).
 bootMark('repos, reporter');
-const glance = createGlance({ chat: chatController, tickets, ci, notify: () => notify('glance'), watching: () => live.watching('glance') });
+// 2026-11-02: a snapshot is rebuilt at most every 5 s per asker (each build reads every session and asks can() of each).
+const glance = createGlance({ chat: chatController, tickets, ci, notify: () => notify('glance'), watching: () => live.watching('glance'), minRebuildMs: 5000 });
 for (const source of [tickets, ci]) {
   const was = source.onChange;
   source.onChange = () => (was?.(), glance.changed());

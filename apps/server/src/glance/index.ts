@@ -22,6 +22,8 @@ export interface GlanceDeps {
   watching?: () => boolean;
   /** How long a burst of changes is gathered into one build (tests shorten it). */
   debounceMs?: number;
+  /** How young a snapshot is answered again after a change (service.ts `minRebuildMs`); the portal passes 5 s. */
+  minRebuildMs?: number;
 }
 
 /** What a session's controller says that a glance widget shows: a state change, a request asked or answered, a task, a deletion. Deltas and the rest are not it. */
@@ -34,6 +36,7 @@ export function createGlance(deps: GlanceDeps): Glance {
     notify: deps.notify,
     watching: deps.watching,
     debounceMs: deps.debounceMs,
+    ...(deps.minRebuildMs ? { minRebuildMs: deps.minRebuildMs } : {}),
     log: (what, e) => console.error(`[glance] reading ${what} failed: ${(e as Error).message}`),
   });
   glance.onStop(deps.chat.onEvent((_id, msg) => changesGlance(msg) && glance.changed()));

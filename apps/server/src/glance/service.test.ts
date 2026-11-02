@@ -259,3 +259,32 @@ test('GET asks on behalf of the signed-in actor the seam names, and the owner fo
   assert.equal((await bare.request('/api/glance', { headers: { 'x-test-user': 'u_b' } })).status, 401);
   glance.stop();
 });
+
+test('2026-11-02: with minRebuildMs a change rebuilds at most once per window, and the pages are still told once it may rebuild', async () => {
+  let sessions: ChatSession[] = [session({ id: 'a', state: 'working' })];
+  const src = sources({});
+  src.sessions = () => (src.reads.sessions++, sessions);
+  const clock = { t: NOW };
+  const pushes: number[] = [];
+  const glance = new Glance(src, { notify: () => pushes.push(clock.t), debounceMs: 5, now: () => clock.t, minRebuildMs: 60, watching: () => true });
+  try {
+    assert.equal(glance.snapshot(OWNER).sessions.running, 1);
+    sessions = [session({ id: 'a', state: 'idle' })];
+    glance.changed();
+    assert.equal(glance.snapshot(OWNER).sessions.running, 1, 'younger than the window: the same snapshot, not rebuilt');
+    assert.equal(src.reads.sessions, 1);
+    clock.t += 61;
+    assert.equal(glance.snapshot(OWNER).sessions.running, 0, 'past the window: rebuilt with the change');
+    assert.equal(src.reads.sessions, 2);
+    // A change inside the window is pushed once it may be rebuilt (the follow-up push), never lost.
+    sessions = [session({ id: 'a', state: 'working' })];
+    glance.changed();
+    await sleep(20);
+    clock.t += 61;
+    await sleep(120);
+    assert.ok(pushes.length >= 1, 'the pages were told');
+    assert.equal(glance.snapshot(OWNER).sessions.running, 1);
+  } finally {
+    glance.stop();
+  }
+});

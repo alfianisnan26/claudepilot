@@ -18,13 +18,21 @@ export interface GlanceOptions {
   now?: () => number;
   debounceMs?: number;
   log?: (what: string, e: unknown) => void;
+  /**
+   * 2026-11-02: a snapshot younger than this is answered again after a change (0: every change rebuilds, as before). A build reads every
+   * session and asks can() of each; with the Konfersi crews something changes every second, and each change rebuilt every asker's
+   * snapshot: 1-2 s of a blocked event loop every few seconds. A change still reaches the pages, at most this much later.
+   */
+  minRebuildMs?: number;
 }
 
 export class Glance {
   readonly #sources: GlanceSources;
   readonly #opts: GlanceOptions;
   /** The snapshot of each actor who has asked (by `actorKey`), until something changes. */
-  readonly #cache = new Map<string, GlanceSnapshot>();
+  readonly #cache = new Map<string, { snap: GlanceSnapshot; at: number }>();
+  /** When a source last changed; a cached snapshot built before it is old (rebuilt once `minRebuildMs` allows). */
+  #changedAt = -Infinity;
   /** Every actor (and the context they asked in) who has asked: whose snapshot a change has to compare before it pushes. */
   readonly #actors = new Map<string, { actor: Actor; scope: OrgScope | null }>();
   /** What the last push described, per actor, to push again only when something differs. */
@@ -47,12 +55,14 @@ export class Glance {
     const scope = effectiveOrgScope(actor, asked);
     const key = `${actorKey(actor)}|${orgScopeKey(scope)}`;
     this.#actors.set(key, { actor, scope });
-    return this.#cache.get(key) ?? this.#build(key, actor, scope);
+    const hit = this.#cache.get(key);
+    return hit && this.#usable(hit) ? hit.snap : this.#build(key, actor, scope);
   }
 
   /** A source changed (a session's state, a request, a task, a ticket, a CI run). Cheap: the work is debounced. */
   changed(): void {
-    this.#cache.clear();
+    this.#changedAt = this.#clock();
+    if (!this.#opts.minRebuildMs) this.#cache.clear();
     if (this.#timer || this.#stopped) return;
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
@@ -73,9 +83,19 @@ export class Glance {
     for (const undo of this.#undo.splice(0)) undo();
   }
 
+  #clock(): number {
+    return (this.#opts.now ?? Date.now)();
+  }
+
+  /** Built after the last change, or younger than `minRebuildMs`. */
+  #usable(hit: { at: number }): boolean {
+    return hit.at > this.#changedAt || this.#clock() - hit.at < (this.#opts.minRebuildMs ?? 0);
+  }
+
   #build(key: string, actor: Actor, scope: OrgScope | null): GlanceSnapshot {
-    const snap = buildSnapshot(this.#sources, actor, (this.#opts.now ?? Date.now)(), this.#opts.log, orgScopeFilter(actor, scope));
-    this.#cache.set(key, snap);
+    const at = this.#clock();
+    const snap = buildSnapshot(this.#sources, actor, at, this.#opts.log, orgScopeFilter(actor, scope));
+    this.#cache.set(key, { snap, at });
     return snap;
   }
 
@@ -83,14 +103,25 @@ export class Glance {
     if (this.#opts.watching && !this.#opts.watching()) return;
     // Every actor who has asked is compared with what was last said about them; one push tells the pages, and each page asks for its own.
     let different = false;
+    let later = false;
     for (const [key, { actor, scope }] of this.#actors) {
-      const now = fingerprint(this.#cache.get(key) ?? this.#build(key, actor, scope));
+      const hit = this.#cache.get(key);
+      // Too young to rebuild yet, but older than the change: told on a later push, once it may be rebuilt.
+      if (hit && hit.at <= this.#changedAt && this.#usable(hit)) later = true;
+      const now = fingerprint(hit && this.#usable(hit) ? hit.snap : this.#build(key, actor, scope));
       if (now !== this.#announced.get(key)) {
         this.#announced.set(key, now);
         different = true;
       }
     }
     if (different) this.#opts.notify();
+    if (later && !this.#timer && !this.#stopped) {
+      this.#timer = setTimeout(() => {
+        this.#timer = undefined;
+        this.#push();
+      }, this.#opts.minRebuildMs ?? 0);
+      this.#timer.unref();
+    }
   }
 }
 
