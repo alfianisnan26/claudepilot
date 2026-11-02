@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import type { ChatController } from '../chat/controller.js';
 import { pendingControlRequests, PENDING_CONTROL_FRESH_MS } from '../chat/liveControls.js';
 import { ChatStore } from '../chat/store.js';
-import { freshStore } from '../chat/testkit.js';
+import { freshStore, liveSession } from '../chat/testkit.js';
 import { deployChatsLine, DeployChatsWatch, pendingOf } from './deployChats.js';
 import { ChatSessionsAdapter, type CiAttachedChat } from './sessions.js';
 
@@ -72,7 +72,11 @@ test('the adapter lists only chats attached to a live process, with their open c
     { id: 'ended', state: 'ended', process: 'live', workspaceId: 'w', claudeId: 'c1', mode: 'default', claudeSessionId: 'cs-3' },
     { id: 'live-2', state: 'idle', process: 'live', workspaceId: 'w', claudeId: 'c2', mode: 'plan', claudeSessionId: 'cs-4' },
   ];
-  const controller = { list: () => sessions } as unknown as ChatController;
+  // The controller's live rows (attachedLive: process live, not ended); the full decorated list is never read for this.
+  const controller = {
+    attachedLive: () => sessions.filter((s) => s.state !== 'ended' && s.process === 'live'),
+    list: () => assert.fail('attached() must not build the decorated session list'),
+  } as unknown as ChatController;
   let asked: string[] = [];
   const a = new ChatSessionsAdapter(controller, (ids) => ((asked = ids), new Map([['live-2', 3]])));
   assert.deepEqual(a.attached(), [
@@ -115,5 +119,23 @@ test('open control requests: the portal\'s asked lines still sending and fresh, 
   } finally {
     store.close();
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('2026-11-02: attachedLive gives the same chats as the decorated list filtered to live processes, read from the rows alone', async () => {
+  const s = await liveSession();
+  try {
+    const ended = await s.controller.create({ workspaceId: 'docker/ws1', title: 'Ended' });
+    await s.controller.end(ended.id).catch(() => undefined);
+    const fromList = s.controller
+      .list({})
+      .filter((x) => x.state !== 'ended' && x.process === 'live')
+      .map((x) => ({ id: x.id, workspaceId: x.workspaceId, claudeId: x.claudeId, mode: x.mode, claudeSessionId: x.claudeSessionId }));
+    assert.ok(fromList.some((x) => x.id === s.id), 'the live chat is in it');
+    const sort = <T extends { id: string }>(a: T[]) => [...a].sort((x, y) => x.id.localeCompare(y.id));
+    assert.deepEqual(sort(s.controller.attachedLive()), sort(fromList));
+    assert.ok(!s.controller.attachedLive().some((x) => x.id === ended.id), 'an ended chat is not attached');
+  } finally {
+    await s.done();
   }
 });

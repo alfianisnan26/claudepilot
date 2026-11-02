@@ -1694,6 +1694,18 @@ export class ChatController {
 
   /* ---------- Reads (delegated to the store) ---------- */
 
+  /**
+   * The chats attached to a live process, read straight from their rows: no decoration and no General Manager (as `list` leaves it out).
+   * CI's deploy record (T-277) asks this every tick while a deploying job runs; `list` decorated every session ever made for it, which
+   * blocked the event loop for seconds at a time (2026-11-02, Konfersi's stg deploys run all day).
+   */
+  attachedLive(): { id: string; workspaceId: string; claudeId: string; mode: string; claudeSessionId: string }[] {
+    return this.#chat
+      .liveRows()
+      .filter((r) => (r as { kind?: string }).kind !== 'manager')
+      .map((r) => ({ id: r.id, workspaceId: r.workspace_id, claudeId: r.claude_id ?? '', mode: r.mode, claudeSessionId: claudeSessionOf(r) }));
+  }
+
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
     return this.#chat.list(this.#byTicket(filter)).map((s) => this.#decorate(s));

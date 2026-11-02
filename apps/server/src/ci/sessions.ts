@@ -70,7 +70,7 @@ export class ChatSessionsAdapter implements CiSessionsPort {
   ) {}
 
   attached(): CiAttachedChat[] {
-    const live = this.chat.list({}).filter((s) => s.state !== 'ended' && s.process === 'live');
+    const live = this.chat.attachedLive();
     const open = this.pending ? this.pending(live.map((s) => s.id)) : null;
     return live.map((s) => ({ id: s.id, workspaceId: s.workspaceId, claudeId: s.claudeId, mode: s.mode, tail: s.claudeSessionId, pending: open ? (open.get(s.id) ?? 0) : null }));
   }
