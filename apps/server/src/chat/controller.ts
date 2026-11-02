@@ -286,6 +286,16 @@ const CONTROL_TIMEOUT_MS = 15_000;
 const EXEC_TIMEOUT_MS = 30_000;
 /** Idle this long, with nothing open or running, and a session's process sleeps (PRD FR38). */
 const IDLE_SLEEP_MS = 30 * 60_000;
+/**
+ * Owner 2026-11-02 ("harus auto heal ... gak boleh ada yang manual"): a session a workspace outage interrupted (its relaunch could not reach
+ * the workspace) is resumed by the portal, every HEAL_EVERY_MS, backing off per session up to HEAL_BACKOFF_MAX_MS, for HEAL_WINDOW_MS after
+ * the interruption. Only those: a person's stop, an integrity end or a refusal is never resumed by it.
+ */
+const HEAL_EVERY_MS = 60_000;
+const HEAL_BACKOFF_MAX_MS = 10 * 60_000;
+const HEAL_WINDOW_MS = 2 * 60 * 60_000;
+/** The reasons a workspace outage leaves (workspaces/manager.ts `unavailable`, the exec layer's timeouts). */
+const OUTAGE_REASON = /isn[’']t answering|can[’']t run now|Timed out|unreachable|ECONNREFUSED|ETIMEDOUT/i;
 /** A worker's restart that keeps an inherited Bypass waits at most this long for its parent's own restart in Bypass to settle. */
 const PARENT_RESTART_WAIT_MS = 90_000;
 /** T-417: a start or wake at a full live cap waits this long for a slot, looking again every SLOT_POLL_MS. */
@@ -769,6 +779,11 @@ export class ChatController {
   readonly #slotWaits = new Map<string, string>();
   /** T-417: the sessions whose Bypass is being put back after a wake (a retry inside it wakes it again: never twice). */
   readonly #wakeBypass = new Set<string>();
+  /** The outage healer's backoff, by session: tries so far and when it may try again. */
+  readonly #healing = new Map<string, { tries: number; nextAt: number }>();
+  #healTimer: ReturnType<typeof setInterval> | undefined;
+  /** How often the outage healer looks (0: never; tests call `healInterrupted` themselves). */
+  healEveryMs = HEAL_EVERY_MS;
   /**
    * The restarts in flight that keep Bypass, by session, settled once the keep is done. Meanwhile the row reads the start mode, so a
    * worker restarted in the same round (an MCP change restarts them all) waits for its parent's here before it asks whether it is in Bypass.
@@ -1308,6 +1323,46 @@ export class ChatController {
     this.#liveness = setInterval(() => void this.#tick(), this.#livenessMs);
     this.#liveness.unref?.();
     void this.#tick();
+    if (this.healEveryMs > 0) {
+      this.#healTimer = setInterval(() => void this.healInterrupted().catch(() => undefined), this.healEveryMs);
+      this.#healTimer.unref?.();
+    }
+  }
+
+  /**
+   * The outage healer (owner 2026-11-02): resumes each session an outage interrupted within HEAL_WINDOW_MS, one try per session per backoff
+   * step. A session that was in Bypass (its newest Bypass record an entry, never a leave) gets that Bypass recorded as kept, so the resume
+   * puts it back the way a vanished process gets it back (`#keepBypass('lost')`): every gate is asked again (the policy, a lead's own entry
+   * by a person, a worker's parent in Bypass now). Returns the ids it tried.
+   */
+  async healInterrupted(now = Date.now()): Promise<string[]> {
+    if (this.#closed) return [];
+    const tried: string[] = [];
+    let rows: ChatSessionRow[];
+    try {
+      rows = this.#chat.interruptedSince(new Date(now - HEAL_WINDOW_MS).toISOString());
+    } catch {
+      return tried;
+    }
+    for (const [id] of this.#healing) if (!rows.some((r) => r.id === id)) this.#healing.delete(id);
+    for (const row of rows) {
+      if (!OUTAGE_REASON.test(row.ended_reason ?? '') || this.#busy.has(row.id) || this.#launching.has(row.id)) continue;
+      const h = this.#healing.get(row.id) ?? { tries: 0, nextAt: 0 };
+      if (now < h.nextAt) continue;
+      this.#healing.set(row.id, { tries: h.tries + 1, nextAt: now + Math.min(HEAL_EVERY_MS * 2 ** h.tries, HEAL_BACKOFF_MAX_MS) });
+      tried.push(row.id);
+      try {
+        const last = this.#chat.audit({ kind: 'bypass', sessionId: row.id, limit: 1 })[0];
+        if (row.bypass_capable === 1 && last?.kind === 'bypass.entered')
+          this.#chat.addAudit({ severity: 'info', kind: 'bypass.left', sessionId: row.id, workspaceId: row.workspace_id, actor: 'portal', detail: { why: 'stopped', kept: true, heal: true } });
+        this.#note(row.id, 'The workspace answers again: resuming.');
+        await this.#resume(row.id, 'portal');
+        this.#chat.addAudit({ severity: 'info', kind: 'session.healed', sessionId: row.id, workspaceId: row.workspace_id, actor: 'portal', detail: { tries: h.tries + 1 } });
+      } catch {
+        // still down, or refused: the next round tries again after the backoff
+      }
+    }
+    return tried;
   }
 
   /** Stops the background work and the readers. The processes keep running; the next `start` reattaches. */
@@ -1317,6 +1372,8 @@ export class ChatController {
     void this.btw.shutdown();
     if (this.#liveness) clearInterval(this.#liveness);
     this.#liveness = undefined;
+    if (this.#healTimer) clearInterval(this.#healTimer);
+    this.#healTimer = undefined;
     for (const timer of this.#idleTimers.values()) clearTimeout(timer);
     this.#idleTimers.clear();
     // T-102: a boundary re-check must not run on a closed store (it did after a test's teardown).

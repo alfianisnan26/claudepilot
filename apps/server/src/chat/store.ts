@@ -830,6 +830,13 @@ export class ChatStore {
     this.#moveCrewChannel(from, to);
   }
 
+  /** Interrupted sessions with no process whose interruption began at or after `since` (the outage healer reads these). */
+  interruptedSince(since: string): ChatSessionRow[] {
+    return (
+      this.#db().prepare(`SELECT * FROM chat_sessions WHERE state = 'interrupted' AND process = 'gone' AND state_since >= ? AND kind != 'manager'`).all(since) as ChatSessionRow[]
+    ).map((r) => this.#keyed(r));
+  }
+
   /** Sessions whose process should be running (for liveness checks and reattaching after a restart). */
   liveRows(): ChatSessionRow[] {
     return (this.#db().prepare(`SELECT * FROM chat_sessions WHERE process = 'live' AND state != 'ended'`).all() as ChatSessionRow[]).map(

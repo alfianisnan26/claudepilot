@@ -11,6 +11,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
+import { AppError } from '@isnanme/core';
+import { ChatStore } from './store.js';
 import { APPLIED, controls, init, line, liveSession, ok, sleep, until, USAGE_API_KEY, type Live } from './testkit.js';
 
 const notes = (s: Live, id: string) => s.controller.history(id).flatMap((e) => (e.kind === 'system' && e.text ? [e.text] : []));
@@ -392,6 +394,59 @@ test('T-1692 gates: a lead whose Bypass a person turned off before its sleep sta
     const { moved, bypassAsked } = await moveAsleep(s, lead.id);
     assert.equal(moved.mode, 'default');
     assert.equal(bypassAsked, false, 'the move puts nothing back');
+  } finally {
+    await s.done();
+  }
+});
+
+/* ---------- Owner 2026-11-02: the outage healer ("harus auto heal, gak boleh ada yang manual") ---------- */
+
+/** The aftermath of a relaunch that could not reach its workspace: no process, Interrupted, the outage's reason, the start mode. */
+function interruptedByOutage(s: Live, id: string) {
+  new ChatStore(s.store).patchSession(id, { process: 'gone', state: 'interrupted', endedReason: 'docker isn’t answering (Timed out), so this can’t run now. Try again when it is back.', mode: 'default' });
+}
+
+test('2026-11-02: a session an outage interrupted is resumed by the healer once the workspace answers; a person’s stop is never resumed by it', async () => {
+  const s = await liveSession();
+  try {
+    let down = true;
+    const exec = s.ws.exec.bind(s.ws);
+    s.ws.exec = (async (...a: Parameters<typeof exec>) => {
+      if (down) throw new AppError('SERVICE_UNAVAILABLE', 'docker isn’t answering (Timed out), so this can’t run now. Try again when it is back.');
+      return exec(...a);
+    }) as typeof s.ws.exec;
+    interruptedByOutage(s, s.id);
+    assert.deepEqual(await s.controller.healInterrupted(), [s.id], 'tried while still down');
+    assert.equal(s.controller.get(s.id)!.state, 'interrupted', 'still down: still Interrupted');
+    assert.deepEqual(await s.controller.healInterrupted(), [], 'backing off: not again at once');
+    down = false;
+    assert.deepEqual(await s.controller.healInterrupted(Date.now() + 5 * 60_000), [s.id], 'after the backoff, tried again');
+    await until(() => s.controller.get(s.id)!.process === 'live', 4000);
+    assert.equal(s.controller.audit({ kind: 'session.healed' })[0]?.sessionId, s.id);
+
+    // Interrupted for another reason (a person's stop, an integrity end): never resumed by the healer.
+    new ChatStore(s.store).patchSession(s.id, { process: 'gone', state: 'interrupted', endedReason: 'Stopped by you.' });
+    assert.deepEqual(await s.controller.healInterrupted(Date.now() + 60 * 60_000), []);
+  } finally {
+    await s.done();
+  }
+});
+
+test('2026-11-02: a lead in Bypass that an outage interrupted gets Bypass back at the heal, through the gated lost path', async () => {
+  const s = await liveSession({}, true);
+  try {
+    s.controller.healEveryMs = 0;
+    s.controller.controlTimeoutMs = 150;
+    policy(s);
+    const lead = await inBypass(s, { maxWorkers: 3 });
+    interruptedByOutage(s, lead.id);
+    const tried = await answering(s, s.controller.healInterrupted());
+    assert.deepEqual(tried, [lead.id]);
+    await answering(s, until(() => s.controller.get(lead.id)!.mode === 'bypassPermissions', 4000));
+    const left = s.controller.audit({ kind: 'bypass.left', sessionId: lead.id })[0]!;
+    assert.deepEqual([left.detail.why, left.detail.kept, left.detail.heal], ['stopped', true, true], 'the outage recorded as a kept pause');
+    const entered = s.controller.audit({ kind: 'bypass.entered', sessionId: lead.id })[0]!;
+    assert.deepEqual([entered.actor, entered.detail.how], ['portal', 'lost'], 'put back through the lost path, every gate asked');
   } finally {
     await s.done();
   }
