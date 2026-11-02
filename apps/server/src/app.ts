@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { slowRequests } from './slowRequests.js';
 import { dirname, relative } from 'node:path';
 import type { HttpBindings } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -293,6 +294,8 @@ export function createApp(
   },
 ) {
   const app = new Hono<Env>();
+  // A request over a second says which one it was (slowRequests.ts): route, query names, status, time; never ids, values or content.
+  app.use(slowRequests());
   // Organizations slice 4 (§6.11): FIRST, the host split. The admin host gets the console's own app (built below, once its services exist) and
   // nothing else of the portal; the console's paths on any other host are the same 404 as an unknown route.
   const adminGate = new AdminHostGate(adminHost, config.trustProxy);
