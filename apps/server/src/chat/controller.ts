@@ -1706,6 +1706,11 @@ export class ChatController {
       .map((r) => ({ id: r.id, workspaceId: r.workspace_id, claudeId: r.claude_id ?? '', mode: r.mode, claudeSessionId: claudeSessionOf(r) }));
   }
 
+  /** The newest session that continues `id` (its `continued_from`), or null: one indexed read (the flow's crew walks ask it each round). */
+  continuationOf(id: string): string | null {
+    return this.#chat.continuationOf(id);
+  }
+
   /** Sessions, newest activity first; optionally one workspace's, one ticket's, or one parent's children. */
   list(filter: { workspaceId?: string; ticketId?: string; parentId?: string } = {}): ChatSession[] {
     return this.#chat.list(this.#byTicket(filter)).map((s) => this.#decorate(s));

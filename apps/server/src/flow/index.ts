@@ -25,6 +25,7 @@ interface ControllerLike {
   audit(filter: { kind?: string; sessionId?: string; limit?: number }): ChatAuditEntry[];
   stoppedByPerson?(id: string): boolean;
   agentCaps?: () => AgentCaps;
+  continuationOf?(id: string): string | null;
 }
 
 interface TicketsLike {
@@ -45,6 +46,9 @@ export function flowChatPort(raw: unknown): FlowChatPort | null {
     get: (id) => ctl.get(id),
     list: (f) => ctl.list(f),
     continuationOf: (id) => {
+      // 2026-11-02: the controller's indexed read. The fallback decorated the workspace's whole session list per call: 15 calls took 2.9 s
+      // of a Konfersi round and blocked the portal every 5 minutes.
+      if (typeof ctl.continuationOf === 'function') return ctl.continuationOf(id);
       const s = ctl.get(id);
       if (!s) return null;
       const next = ctl
