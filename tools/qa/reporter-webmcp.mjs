@@ -440,6 +440,9 @@ const EXPECTED = [
   );
 
   // Settings lists the grant with its scope and expiry.
+  // A filed report opens its ticket card (the tabs hide there): back to the tabs first.
+  const back = f.getByRole('button', { name: 'Back' }).first();
+  if (await back.isVisible().catch(() => false)) await back.click();
   await f.getByRole('tab', { name: 'Settings' }).click();
   const settingsRow = f.getByRole('region', { name: 'Agent auto-approve' });
   check(
