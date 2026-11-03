@@ -44,7 +44,15 @@ import { ReportTab } from './ReportTab';
 import { TicketsTab } from './TicketsTab';
 import { Btn, Notice } from './ui';
 import { GROUP_LABEL, grantFor, indicatorText, liveGrants, type AskAnswer } from './agentGrants';
-import { modelContextOf, registerTools, reporterTools, toolsAllowed, type ReporterToolDeps, type ToolApproval, type ToolAsk } from './webmcp';
+import {
+  modelContextOf,
+  registerTools,
+  reporterTools,
+  toolsAllowed,
+  type ReporterToolDeps,
+  type ToolApproval,
+  type ToolAsk,
+} from './webmcp';
 
 const BUCKET = /^[A-Z]{2,6}$/;
 const POLL_MS = 30_000;
@@ -810,7 +818,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
  * Allow once (the default answer), or auto-approve this group of tools for this sign-in or for this site; nothing is pre-selected. Esc, the
  * backdrop or no answer in two minutes is Deny.
  */
-function AgentAsk({ ask, onAnswer, caps }: { ask: ToolAsk; onAnswer: (a: AskAnswer) => void; caps: { reports: number; actions: number } | null }) {
+function AgentAsk({
+  ask,
+  onAnswer,
+  caps,
+}: {
+  ask: ToolAsk;
+  onAnswer: (a: AskAnswer) => void;
+  caps: { reports: number; actions: number } | null;
+}) {
   const group = GROUP_LABEL[ask.group];
   const cap = caps ? (ask.group === 'file' ? `${caps.reports} reports` : `${caps.actions} comments and screenshot additions`) : null;
   return (

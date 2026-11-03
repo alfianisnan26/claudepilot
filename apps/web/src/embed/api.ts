@@ -235,7 +235,13 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
       });
   };
 
-  async function call<T>(method: string, path: string, body?: unknown, raw?: { blob: Blob; headers: Record<string, string> }, extra: Record<string, string> = {}): Promise<T> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    raw?: { blob: Blob; headers: Record<string, string> },
+    extra: Record<string, string> = {},
+  ): Promise<T> {
     let res: Response;
     const withToken = !!opts.token() && path !== R.connectClaim && !path.startsWith(R.status);
     try {
@@ -277,7 +283,10 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
     comments: async (key) => listOf<ReporterTicketComment>(await call('GET', fill(R.ticketComments, { key })), 'items'),
     reply: (key, body, grant) => call('POST', fill(R.ticketComments, { key }), { body }, undefined, viaGrant(grant)),
     agentGrants: async () => {
-      const v = await call<{ items?: ReporterAgentGrant[]; caps?: { reports: number; actions: number } } | ReporterAgentGrant[]>('GET', R.agentGrants);
+      const v = await call<{ items?: ReporterAgentGrant[]; caps?: { reports: number; actions: number } } | ReporterAgentGrant[]>(
+        'GET',
+        R.agentGrants,
+      );
       return Array.isArray(v) ? { items: v, caps: null } : { items: v.items ?? [], caps: v.caps ?? null };
     },
     grantAgent: (req) => call('POST', R.agentGrants, req),

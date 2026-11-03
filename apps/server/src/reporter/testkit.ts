@@ -90,7 +90,16 @@ export async function reporterHarness(
   for (const [key, name] of [['KONF', 'Konfersi'], ['OTHER', 'Other']] as const) if (!h.tickets.bucketOwner(key)) h.tickets.createBucket(UI, { key, name });
   const chat = new FakeChat();
   const git = new FakeGit();
-  const service = new ReporterService({ store: h.store, tickets: h.tickets, chat, git, now: opts.now, sdkVersion: () => '1.0.0', ...(opts.claudePlan ? { claudePlan: opts.claudePlan } : {}), ...(opts.agentCaps ? { agentCaps: opts.agentCaps } : {}) });
+  const service = new ReporterService({
+    store: h.store,
+    tickets: h.tickets,
+    chat,
+    git,
+    now: opts.now,
+    sdkVersion: () => '1.0.0',
+    ...(opts.claudePlan ? { claudePlan: opts.claudePlan } : {}),
+    ...(opts.agentCaps ? { agentCaps: opts.agentCaps } : {}),
+  });
   service.updateConfig(
     'KONF',
     {

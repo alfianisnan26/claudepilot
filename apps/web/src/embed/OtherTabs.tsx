@@ -175,7 +175,19 @@ export function KnowledgeTab() {
 const HOTKEY_LABEL: Record<keyof Hotkeys, string> = { report: 'Report', crop: 'Crop', callouts: 'Callouts', panel: 'Panel' };
 
 export function SettingsTab() {
-  const { calloutsVisible, setCalloutsVisible, hotkeys, setHotkeys, coarse, signOut, actorLabel, status, sdkVersion, agentGrants, revokeAgentGrant } = usePanel();
+  const {
+    calloutsVisible,
+    setCalloutsVisible,
+    hotkeys,
+    setHotkeys,
+    coarse,
+    signOut,
+    actorLabel,
+    status,
+    sdkVersion,
+    agentGrants,
+    revokeAgentGrant,
+  } = usePanel();
   const grants = liveGrants(agentGrants ?? []);
   const [recording, setRecording] = useState<keyof Hotkeys | null>(null);
   return (

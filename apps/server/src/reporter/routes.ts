@@ -368,7 +368,23 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   /* ----- The panel API (bearer) ----- */
 
   const api = new Hono<Vars>();
-  const guarded = ['/me', '/tickets', '/tickets/*', '/reviews', '/reviews/*', '/duplicates', '/events', '/session-targets', '/observed-build', '/sessions', '/sessions/*', '/knowledge', '/knowledge/*', '/agent-grants', '/agent-grants/*'];
+  const guarded = [
+    '/me',
+    '/tickets',
+    '/tickets/*',
+    '/reviews',
+    '/reviews/*',
+    '/duplicates',
+    '/events',
+    '/session-targets',
+    '/observed-build',
+    '/sessions',
+    '/sessions/*',
+    '/knowledge',
+    '/knowledge/*',
+    '/agent-grants',
+    '/agent-grants/*',
+  ];
   for (const p of guarded) api.use(p, async (c, next) => {
     // '/tickets' and '/tickets/*' may both match one path: the token is checked (and counted) once.
     if (c.get('reporter')) return next();
@@ -413,19 +429,31 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   api.post('/agent-grants', json, async (c) => {
     const x = ctxOf(c);
     const g = service.grantAgent(x, await jsonBody(c));
-    deps.audit?.('reporter.agent_grant_made', { bucket: x.bucketKey, origin: x.origin, grantId: g.id, group: g.group, scope: g.scope, expiresAt: g.expiresAt, tokenId: x.id }, `reporter:${x.actorUser}`);
+    deps.audit?.(
+      'reporter.agent_grant_made',
+      { bucket: x.bucketKey, origin: x.origin, grantId: g.id, group: g.group, scope: g.scope, expiresAt: g.expiresAt, tokenId: x.id },
+      `reporter:${x.actorUser}`,
+    );
     return c.json(success(g), 201);
   });
   api.delete('/agent-grants', (c) => {
     const x = ctxOf(c);
     const n = service.revokeAgentGrant(x, null);
-    deps.audit?.('reporter.agent_grant_revoked', { bucket: x.bucketKey, origin: x.origin, grantId: 'all', revoked: n, tokenId: x.id }, `reporter:${x.actorUser}`);
+    deps.audit?.(
+      'reporter.agent_grant_revoked',
+      { bucket: x.bucketKey, origin: x.origin, grantId: 'all', revoked: n, tokenId: x.id },
+      `reporter:${x.actorUser}`,
+    );
     return c.json(success({ revoked: n }));
   });
   api.delete('/agent-grants/:id', (c) => {
     const x = ctxOf(c);
     const n = service.revokeAgentGrant(x, c.req.param('id'));
-    deps.audit?.('reporter.agent_grant_revoked', { bucket: x.bucketKey, origin: x.origin, grantId: c.req.param('id'), revoked: n, tokenId: x.id }, `reporter:${x.actorUser}`);
+    deps.audit?.(
+      'reporter.agent_grant_revoked',
+      { bucket: x.bucketKey, origin: x.origin, grantId: c.req.param('id'), revoked: n, tokenId: x.id },
+      `reporter:${x.actorUser}`,
+    );
     return c.json(success({ revoked: n }));
   });
   /** The grant an auto-approved call names, checked (or null: the person allowed it in the sheet, or no agent at all). */
@@ -436,7 +464,11 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   const autoDone = (c: Context<Vars>, grantId: string, group: ReporterAgentGroup, tool: string, ticket: string) => {
     const x = ctxOf(c);
     service.recordAgentUse(x, grantId, group, tool);
-    deps.audit?.('reporter.agent_auto_approved', { bucket: x.bucketKey, origin: x.origin, who: x.actorUser, whoLabel: x.actorLabel, tool, grantId, ticket, tokenId: x.id }, `reporter:${x.actorUser}`);
+    deps.audit?.(
+      'reporter.agent_auto_approved',
+      { bucket: x.bucketKey, origin: x.origin, who: x.actorUser, whoLabel: x.actorLabel, tool, grantId, ticket, tokenId: x.id },
+      `reporter:${x.actorUser}`,
+    );
   };
 
   const query = (c: Context): ReporterTicketQuery => {

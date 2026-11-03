@@ -420,7 +420,10 @@ export class ReporterService {
   /** The caps an auto-approval is held to, per person per hour. */
   agentCaps(): { reports: number; actions: number } {
     const n = (v: number | undefined, d: number) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : d);
-    return { reports: n(this.deps.agentCaps?.reports, REPORTER_LIMITS.agentReportsPerHour), actions: n(this.deps.agentCaps?.actions, REPORTER_LIMITS.agentActionsPerHour) };
+    return {
+      reports: n(this.deps.agentCaps?.reports, REPORTER_LIMITS.agentReportsPerHour),
+      actions: n(this.deps.agentCaps?.actions, REPORTER_LIMITS.agentActionsPerHour),
+    };
   }
 
   /**
@@ -437,7 +440,15 @@ export class ReporterService {
   }
 
   #grantView(r: AgentGrantRow): ReporterAgentGrant {
-    return { id: r.id, group: r.grp, scope: r.scope, bucketKey: r.bucket_key, origin: r.origin, createdAt: r.created_at, expiresAt: r.expires_at };
+    return {
+      id: r.id,
+      group: r.grp,
+      scope: r.scope,
+      bucketKey: r.bucket_key,
+      origin: r.origin,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+    };
   }
 
   agentGrants(ctx: ReporterTokenCtx): ReporterAgentGrant[] {
@@ -461,8 +472,20 @@ export class ReporterService {
         )
         .run(now.toISOString(), ctx.actorUser, ctx.bucketKey, ctx.origin, b.group as string, b.scope as string, ctx.id);
       this.#wdb
-        .prepare('INSERT INTO reporter_agent_grants (id, bucket_key, origin, actor_user, grp, scope, token_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, ctx.bucketKey, ctx.origin, ctx.actorUser, b.group as string, b.scope as string, b.scope === 'session' ? ctx.id : null, now.toISOString(), expiresAt);
+        .prepare(
+          'INSERT INTO reporter_agent_grants (id, bucket_key, origin, actor_user, grp, scope, token_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(
+          id,
+          ctx.bucketKey,
+          ctx.origin,
+          ctx.actorUser,
+          b.group as string,
+          b.scope as string,
+          b.scope === 'session' ? ctx.id : null,
+          now.toISOString(),
+          expiresAt,
+        );
     });
     return this.#grantView(this.#db.prepare('SELECT * FROM reporter_agent_grants WHERE id = ?').get(id) as unknown as AgentGrantRow);
   }
@@ -479,7 +502,9 @@ export class ReporterService {
 
   /** Sign-out: the token's session grants end with it (they could not be used anyway: the token is gone). */
   revokeSessionGrants(tokenId: string): void {
-    this.#wdb.prepare("UPDATE reporter_agent_grants SET revoked_at = ? WHERE token_id = ? AND scope = 'session' AND revoked_at IS NULL").run(this.#iso(), tokenId);
+    this.#wdb
+      .prepare("UPDATE reporter_agent_grants SET revoked_at = ? WHERE token_id = ? AND scope = 'session' AND revoked_at IS NULL")
+      .run(this.#iso(), tokenId);
   }
 
   /**
@@ -489,13 +514,24 @@ export class ReporterService {
    */
   useAgentGrant(ctx: ReporterTokenCtx, rawId: string, group: ReporterAgentGroup): string {
     const g = this.#grantRows(ctx).find((r) => r.id === rawId && r.grp === group);
-    if (!g) throw new AppError('CONFIRMATION_REQUIRED', 'This auto-approval does not apply here (revoked, expired, another site or sign-in). Ask the person.');
+    if (!g)
+      throw new AppError(
+        'CONFIRMATION_REQUIRED',
+        'This auto-approval does not apply here (revoked, expired, another site or sign-in). Ask the person.',
+      );
     const kind = group === 'file' ? 'report' : 'action';
     const cap = kind === 'report' ? this.agentCaps().reports : this.agentCaps().actions;
     const since = new Date(this.#now().getTime() - HOUR).toISOString();
-    const used = (this.#db.prepare('SELECT count(*) AS n FROM reporter_agent_uses WHERE actor_user = ? AND kind = ? AND at > ?').get(ctx.actorUser, kind, since) as { n: number }).n;
+    const used = (
+      this.#db
+        .prepare('SELECT count(*) AS n FROM reporter_agent_uses WHERE actor_user = ? AND kind = ? AND at > ?')
+        .get(ctx.actorUser, kind, since) as { n: number }
+    ).n;
     if (used >= cap)
-      throw new AppError('LIMIT_REACHED', `Auto-approve allows ${cap} ${kind === 'report' ? 'reports' : 'comments and screenshot additions'} an hour. Ask the person.`);
+      throw new AppError(
+        'LIMIT_REACHED',
+        `Auto-approve allows ${cap} ${kind === 'report' ? 'reports' : 'comments and screenshot additions'} an hour. Ask the person.`,
+      );
     return g.id;
   }
 
@@ -508,7 +544,9 @@ export class ReporterService {
   /** Tags a ticket of this bucket `webmcp-auto` (an auto-approved comment or screenshot addition on it). */
   tagAgentAuto(ctx: ReporterTokenCtx, ref: string): void {
     const t = this.#ticketRow(ctx, ref);
-    const tags = (this.#db.prepare('SELECT tag FROM ticket_tags WHERE ticket_number = ?').all(t.number) as { tag: string }[]).map((r) => r.tag);
+    const tags = (this.#db.prepare('SELECT tag FROM ticket_tags WHERE ticket_number = ?').all(t.number) as { tag: string }[]).map(
+      (r) => r.tag,
+    );
     if (tags.includes(REPORTER_AGENT_AUTO_TAG)) return;
     this.deps.tickets.update(this.#caller(ctx), ticketIdOf(t.number), { tags: [...tags, REPORTER_AGENT_AUTO_TAG] });
     this.#changed();
