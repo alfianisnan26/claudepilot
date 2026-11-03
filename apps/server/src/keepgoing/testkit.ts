@@ -76,6 +76,8 @@ export class KgChat extends FakeChat implements KeepGoingChatPort {
   /** PILOT-996: the controller's Bypass put-back, when a test installs it (absent: Keep going only reports). */
   bypassSeenAt?: (id: string) => string | null;
   restoreBypass?: (id: string) => Promise<boolean>;
+  /** PILOT-1129: the standing Bypass policy covers the chat (a test installs it). */
+  standingFor?: (id: string) => boolean;
   /** T-3189: the sessions this one started (by `parentId`). */
   children(id: string): ChatSession[] {
     return [...this.sessions.values()].filter((s) => s.parentId === id);

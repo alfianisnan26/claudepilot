@@ -63,6 +63,13 @@ export function SettingsView({ run }: { run: Run }) {
 function SettingControl({ s, onChange }: { s: SettingView; onChange: (v: SettingValue) => void }) {
   const [text, setText] = useState(String(s.value));
   useEffect(() => setText(String(s.value)), [s.value]);
+  // PILOT-1129: set in the deploy manifest, read-only here.
+  if (s.fixedBy)
+    return (
+      <span className="text-[13px] [overflow-wrap:anywhere]">
+        {String(s.value) || 'Off'} <span className="text-muted">({s.fixedBy})</span>
+      </span>
+    );
   if (s.type === 'boolean') return <input type="checkbox" className="size-6" aria-label={s.label} checked={s.value === true} onChange={(e) => onChange(e.target.checked)} />;
   if (s.choices)
     return (

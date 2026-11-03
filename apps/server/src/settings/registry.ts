@@ -45,6 +45,11 @@ export interface SettingDef<T extends SettingValue = SettingValue> {
   choices?: string[];
   /** A check of its own on save: why the value is refused, or null. `get` reads the other settings as they are now. */
   validate?: (value: T, get: (key: string) => unknown) => string | null;
+  /**
+   * PILOT-1129: a read-only row whose value lives outside the store (the deploy manifest): `value` is read each time, `by` names where it
+   * is set (an env name). The page shows it, nothing changes it here.
+   */
+  fixed?: { value: () => T; by: string };
 }
 
 const KEY = /^[a-z][a-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$/;

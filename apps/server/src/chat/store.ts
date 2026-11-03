@@ -37,6 +37,7 @@ import { readEnding } from './integrity.js';
 import { redact, redactMaybe } from './redact.js';
 import { applyRelocation, hasRunningSideQuestion, type RelocateMove } from './relocate.js';
 import { COUNTED_USAGE } from './usageDelta.js';
+import { standingBypass } from './standingBypass.js';
 
 /**
  * The folder a session runs in: its stored folder made absolute (from the home folder) and tidied, or
@@ -930,6 +931,8 @@ export class ChatStore {
       archivedAt: row.archived_at ?? null,
       pinnedAt: row.pinned_at ?? null,
       bypassCapable: row.bypass_capable === 1,
+      // PILOT-1129: the workspace's standing Bypass policy covers it (the badge); the controller still checks the global switch.
+      ...(standingBypass.applies(row.workspace_id) ? { standingBypass: true } : {}),
       claudeSessionId: claudeSessionOf(row),
       previousClaudes: this.#previousClaudes(row),
       switching: null,

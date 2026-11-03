@@ -32,6 +32,8 @@ export interface SettingView {
   choices?: string[];
   /** Sort order within the group. */
   order: number;
+  /** PILOT-1129: read-only here: the value is set outside the portal (the env name of the deploy manifest that sets it). */
+  fixedBy?: string;
   updatedAt: string | null;
   updatedBy: string | null;
 }

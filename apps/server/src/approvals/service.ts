@@ -26,6 +26,7 @@ import {
   type ApprovalStatus,
 } from '@portal/contracts';
 import { findSecret } from '../portalmcp/sanitize.js';
+import { STANDING_BYPASS_DECIDER } from '../chat/standingBypass.js';
 import { mayDecide, mayDecideOn, NO_APPROVAL } from './authz.js';
 import {
   APPROVAL_KIND_DEFS,
@@ -314,7 +315,10 @@ export class Approvals {
           "SELECT * FROM approvals WHERE kind = ? AND payload = ? AND requester_session IS ? AND status = 'pending' AND expires_at > ? ORDER BY created_at, id LIMIT 1",
         )
         .get(req.kind, json, requester?.sessionId ?? null, this.#iso()) as Row | undefined;
-      if (waiting) return this.#toApproval(waiting);
+      if (waiting) {
+        this.#standing(waiting.id, payload);
+        return this.#toApproval(waiting);
+      }
     }
     // T-3114: a refused call waits 30 minutes at most (a day buried the real asks), whatever the asker says.
     const refusal = isRefusalKind(req.kind);
@@ -361,7 +365,65 @@ export class Approvals {
         this.#iso(now + ttl * 60_000),
       );
     this.#o.changed?.();
+    if (req.kind === 'session.bypass') this.#standing(id, payload);
     return this.#toApproval(this.#row(id)!);
+  }
+
+  /** Standing allows started and not yet settled (tests wait on them). */
+  readonly #standingRuns = new Set<Promise<unknown>>();
+
+  /** PILOT-1129: a session.bypass card for a session under the standing policy is allowed by the portal at once (in the background). */
+  #standing(id: string, payload: Record<string, unknown>): void {
+    const sessionId = String(payload.sessionId ?? '');
+    if (!sessionId || this.chat?.standingFor?.(sessionId) !== true || !this.chat.enterBypassStanding) return;
+    const run = this.allowStanding(id).catch((e) => this.#o.log?.(`standing allow of ${id}`, e));
+    this.#standingRuns.add(run);
+    void run.finally(() => this.#standingRuns.delete(run));
+  }
+
+  /** Waits for the standing allows in flight (tests). */
+  async standingSettled(): Promise<void> {
+    while (this.#standingRuns.size) await Promise.all([...this.#standingRuns]);
+  }
+
+  /**
+   * PILOT-1129: allows one pending session.bypass card by the standing policy (owner): no person and no server code; the claim records
+   * `decided_by` = "standing policy (owner)", the Bypass entry is audited by the controller (policy standing, the approval id), and the asking
+   * session is told. Null when the card is not one the policy covers (or no longer pending).
+   */
+  async allowStanding(id: string): Promise<Approval | null> {
+    const row = this.#row(id);
+    if (!row || row.kind !== 'session.bypass' || row.status !== 'pending' || row.expires_at <= this.#iso()) return null;
+    const sessionId = String((JSON.parse(row.payload) as { sessionId?: unknown }).sessionId ?? '');
+    const chat = this.chat;
+    if (!chat?.enterBypassStanding || chat.standingFor?.(sessionId) !== true) return null;
+    const at = this.#iso();
+    const claimed = this.#db()
+      .prepare("UPDATE approvals SET status = 'allowed', decided_by = ?, decided_at = ? WHERE id = ? AND status = 'pending' AND expires_at > ?")
+      .run(STANDING_BYPASS_DECIDER, at, id, at);
+    if (Number(claimed.changes) !== 1) return null;
+    let result: ApprovalResult;
+    try {
+      const s = await chat.enterBypassStanding(sessionId, { actor: 'portal:standing', via: { approvalId: id } });
+      result = { ok: s.mode === 'bypassPermissions', message: s.mode === 'bypassPermissions' ? 'Bypass is on.' : 'Bypass did not turn on.', output: { mode: s.mode } };
+    } catch (e) {
+      result = { ok: false, message: e instanceof AppError ? e.message : 'Bypass could not be turned on.', output: { code: e instanceof AppError ? e.code : 'ERROR' } };
+    }
+    this.#db().prepare('UPDATE approvals SET result = ? WHERE id = ?').run(JSON.stringify(result), id);
+    this.#o.changed?.();
+    const out = this.#toApproval(this.#row(id)!);
+    await this.#tell(out, `${result.ok ? 'Allowed' : 'Allowed, but it did not run'} by the standing policy (owner): ${result.message}`);
+    return out;
+  }
+
+  /** PILOT-1129 at startup: every pending session.bypass card of a session the standing policy covers is allowed. Returns how many. */
+  async allowStandingPending(): Promise<number> {
+    const rows = this.#db()
+      .prepare("SELECT id FROM approvals WHERE kind = 'session.bypass' AND status = 'pending' AND expires_at > ? ORDER BY created_at, id")
+      .all(this.#iso()) as { id: string }[];
+    let n = 0;
+    for (const r of rows) if (await this.allowStanding(r.id)) n++;
+    return n;
   }
 
   /** How many requests of these kinds wait (pending, not expired) for one session: the outbox's cap (T-2885). */

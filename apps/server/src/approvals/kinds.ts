@@ -31,6 +31,10 @@ export interface ApprovalChat {
   send(sessionId: string, uuid: string, text: string, opts: { actor: string; actorLabel: string; priority: 'next' | 'later' }): Promise<unknown>;
   /** The server code re-check of the signed-in person (Bypass needs it fresh). Absent: nothing that needs it can be allowed. */
   reauth?: { fresh(token: string | undefined): boolean };
+  /** PILOT-1129: the workspace's standing Bypass policy covers the session (then the portal answers its session.bypass request itself). */
+  standingFor?(id: string): boolean;
+  /** PILOT-1129: Bypass on by the standing policy, no person (audited `bypass.entered`, policy standing). */
+  enterBypassStanding?(id: string, req: { actor?: string; via?: { approvalId: string } }): Promise<ChatSession>;
 }
 
 /** What the pools service gives the approvals module (pool.secret_set): the same calls pool_secret_set makes. */

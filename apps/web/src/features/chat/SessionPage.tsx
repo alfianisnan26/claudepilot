@@ -530,14 +530,18 @@ export function SessionPage({ sessionId, onBack }: { sessionId?: string; onBack?
                 <button
                   type="button"
                   onClick={() => void leaveBypass()}
-                  aria-label="Bypass is on. Turn it off"
-                  title="Bypass is on: Claude runs every tool without asking. Deny rules still apply. Tap to turn it off."
+                  aria-label={session?.standingBypass ? 'Bypass is on by the standing policy. Turn it off' : 'Bypass is on. Turn it off'}
+                  title={
+                    session?.standingBypass
+                      ? 'Bypass is on by the owner’s standing policy for this workspace: the portal puts it back when it is off. Deny rules still apply.'
+                      : 'Bypass is on: Claude runs every tool without asking. Deny rules still apply. Tap to turn it off.'
+                  }
                   className="press inline-flex size-11 shrink-0 items-center justify-center rounded-full text-danger hover:bg-danger-soft sm:w-auto sm:hover:bg-transparent"
                 >
                   {/* From 640 px the red pill is 36 px high inside a 44 px target. */}
                   <span className="inline-flex items-center gap-1 sm:h-9 sm:rounded-full sm:bg-danger sm:px-2.5 sm:text-[12.5px] sm:font-semibold sm:text-white sm:dark:text-bg">
                     <ShieldAlert className="size-[18px] sm:size-3.5" aria-hidden="true" />
-                    <span className="hidden sm:inline">Bypass</span>
+                    <span className="hidden sm:inline">{session?.standingBypass ? 'Bypass · standing' : 'Bypass'}</span>
                     <X className="hidden size-3.5 sm:block" aria-hidden="true" />
                   </span>
                 </button>

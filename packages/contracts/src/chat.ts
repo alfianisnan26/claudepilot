@@ -204,6 +204,8 @@ export interface ChatSession {
   subagents?: boolean;
   /** The session was started with, or restarted for, Bypass permissions: only then can the person turn it on (FR20). */
   bypassCapable: boolean;
+  /** PILOT-1129: its workspace is under the owner's standing Bypass policy (env PORTAL_BYPASS_STANDING_WORKSPACES): Bypass is put back by the portal. */
+  standingBypass?: boolean;
   /** The Claude Code session of the run going now. A chat that moved to another Claude has had several; this id is the portal's own, for every one of them. */
   claudeSessionId: string;
   /** The other Claudes this chat ran on before its current one, oldest first. */

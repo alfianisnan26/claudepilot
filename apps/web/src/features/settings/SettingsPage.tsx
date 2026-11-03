@@ -161,6 +161,14 @@ export function SettingsPage() {
 
 /** The control at the end of a row: a switch for on/off, a small field for a number or a text. */
 function Control({ setting, busy, onChange }: { setting: SettingView; busy: boolean; onChange: (v: SettingValue) => void }) {
+  // PILOT-1129: a value set outside the portal (the deploy manifest): shown, never edited here.
+  if (setting.fixedBy)
+    return (
+      <span className="max-w-64 text-right text-[13px] [overflow-wrap:anywhere] text-ink-soft" title={`Set by ${setting.fixedBy} in the deploy manifest`}>
+        {String(setting.value) || 'Off'}
+        <span className="block text-[12px] text-muted">{setting.fixedBy}</span>
+      </span>
+    );
   if (setting.type === 'boolean') return <Switch label={setting.label} checked={setting.value === true} disabled={busy} onChange={onChange} />;
   if (setting.choices) return <Choice setting={setting} choices={setting.choices} busy={busy} onChange={onChange} />;
   return <ValueField key={String(setting.value)} setting={setting} busy={busy} onCommit={onChange} />;

@@ -47,10 +47,26 @@ export class Settings {
   get<T extends SettingValue = SettingValue>(key: string): T {
     const def = settingDef(key);
     if (!def) throw new Error(`No setting named ${key}.`);
+    if (def.fixed) return def.fixed.value() as T;
     return (this.#stored(key)?.value ?? def.default) as T;
   }
 
   #view(def: SettingDef): SettingView {
+    if (def.fixed)
+      return {
+        key: def.key,
+        group: def.group,
+        label: def.label,
+        help: def.help ?? null,
+        confirmText: null,
+        type: def.type,
+        value: def.fixed.value(),
+        default: def.default,
+        order: def.order ?? 100,
+        updatedAt: null,
+        updatedBy: null,
+        fixedBy: def.fixed.by,
+      };
     const s = this.#stored(def.key);
     return {
       key: def.key,
@@ -80,6 +96,7 @@ export class Settings {
   set(key: string, value: unknown, opts: { actor: string; confirm?: boolean }): SettingView {
     const def = settingDef(key);
     if (!def) throw new AppError('NOT_FOUND', 'No such setting.');
+    if (def.fixed) throw new AppError('CONFLICT', `${def.label} is set in the deploy manifest (${def.fixed.by}), not here.`);
     if (typeof value !== def.type) throw invalid('value', `Send a ${def.type}.`);
     if (def.type === 'number' && !Number.isFinite(value as number)) throw invalid('value', 'Send a finite number.');
     if (def.type === 'number' && ((def.min !== undefined && (value as number) < def.min) || (def.max !== undefined && (value as number) > def.max)))

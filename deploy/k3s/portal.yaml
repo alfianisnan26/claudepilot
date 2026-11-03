@@ -60,6 +60,12 @@ spec:
             # read only when that hop is private (clientAddress.ts), and only for the reporter's shown IP (rate limits keep the hop).
             - name: PORTAL_TRUST_CLOUDFLARE
               value: "true"
+            # PILOT-1129 (T-3598): standing Bypass per workspace, the owner's decision (2026-11-03). Sessions in these workspaces get Bypass from
+            # the portal itself (session.bypass allowed as "standing policy (owner)", put back by Keep going, workers of a parent in Bypass in it
+            # too). Comma separated <target>/<name> ids; never a workspace that reads as production or is marked [protected]; needs Bypass in
+            # chat on. Empty or removed: today's behaviour.
+            - name: PORTAL_BYPASS_STANDING_WORKSPACES
+              value: konfersi/konfersi,kohilabs/kohilabs
             # The origin an SSO provider sends the browser back to (T-1052); never taken from a request's Host here.
             - name: PORTAL_SSO_ORIGIN
               value: "https://pilot.ai.isnan.me"

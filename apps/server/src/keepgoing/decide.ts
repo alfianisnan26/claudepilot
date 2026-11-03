@@ -64,6 +64,8 @@ export interface DecideInput {
   ticketClosed?: boolean;
   /** PILOT-996: when the chat was last in Bypass (now while it is; its last `bypass.left` otherwise), or null. */
   bypassSeenAt?: string | null;
+  /** PILOT-1129: the standing Bypass policy covers the chat: out of Bypass it goes back, with no window, capable or not yet. */
+  standing?: boolean;
   /**
    * T-3189: asked only when a nudge (or the wake before one) is due: true when the chat has nothing to act on (it holds tickets, none open or
    * in progress, nothing changed on them since its last activity, no worker of it runs). Absent: false (today's behaviour).
@@ -138,10 +140,12 @@ export function decide(x: DecideInput): DecideOutput {
 
   // (d) Out of Bypass on a bypass-capable session: put back when it was in Bypass within 24 hours (PILOT-996, D-103), tried once while the
   // report does not stand; otherwise (older, or the portal refused) reported.
-  const outOfBypass = s.bypassCapable && s.mode !== 'bypassPermissions';
+  // PILOT-1129: under the standing policy, whenever it is out of Bypass (no window, and a chat not started capable is made so by the portal).
+  const outOfBypass = (s.bypassCapable || x.standing === true) && s.mode !== 'bypassPermissions';
   if (outOfBypass) causes.add('bypass');
   const seen = ms(x.bypassSeenAt);
-  const bypassBack = outOfBypass && !stands('bypass') && s.process === 'live' && Number.isFinite(seen) && now - seen < C.bypassBackHours * 60 * MIN;
+  const inWindow = Number.isFinite(seen) && now - seen < C.bypassBackHours * 60 * MIN;
+  const bypassBack = outOfBypass && !stands('bypass') && s.process === 'live' && (x.standing === true || inWindow);
 
   // (c) What waits: questions are answered, tool approvals are reported after 10 minutes and never answered.
   const approvals = x.requests.filter((r) => APPROVAL_KINDS.has(r.kind));
