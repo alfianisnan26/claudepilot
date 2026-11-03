@@ -476,7 +476,8 @@ test('T-3542: without --backend or JOB_RUN_BACKEND the k8s Job is exactly as bef
     const w = world();
     const r = w.run(argv, over);
     assert.equal(r.code, 0, r.out);
-    return { manifest: norm(w.applied1()), out: outNorm(r.out), calls: w.calls().replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB') };
+    const root = (t: string) => t.replaceAll(w.root, 'ROOT');
+    return { manifest: root(norm(w.applied1())), out: root(outNorm(r.out)), calls: root(w.calls().replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB')) };
   });
   for (const s of seen.slice(1)) {
     assert.equal(s.manifest, seen[0]!.manifest);

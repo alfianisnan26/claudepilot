@@ -28,7 +28,7 @@ for s in ${JR_SUBS:-}; do
 done
 sha=$(git -C "$d" rev-parse --short HEAD); t1=$(date +%s)
 say "checked out $main at $sha in $((t1 - t0))s"
-git -C "$d" submodule status --recursive 2>/dev/null | awk '{ printf "=== JOB-RUN submodule %s at %s\n", $2, substr($1, 1, 9) }' | tr -d '+-'
+git -C "$d" submodule status --recursive 2>/dev/null | awk '{ s = $1; sub(/^[-+U]/, "", s); printf "=== JOB-RUN submodule %s at %s\n", $2, substr(s, 1, 9) }'
 npmrun() { (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund --loglevel=error); }
 if [ "$JR_STEPS" = npm-ci ] && [ -f "$d/package-lock.json" ]; then
   npmrun "$d" || { rc=$?; say "npm ci failed in $main (rc=$rc); retrying once"; npmrun "$d" || { rc=$?; say "npm ci failed in $main (rc=$rc)"; say "EXIT $rc"; exit "$rc"; }; say "npm ci passed on the retry in $main"; }
