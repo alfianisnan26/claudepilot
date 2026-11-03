@@ -96,6 +96,8 @@ const decidedBy = (s: Live, id: string) => ({
   }),
 });
 
+const answered = new WeakMap<Live, Set<string>>();
+
 /** Answers every settings read and every switch to Bypass, on the newest process, until `p` settles (a restart makes a new one). */
 async function driving<T>(s: Live, p: Promise<T>): Promise<T> {
   let settled = false;
@@ -103,7 +105,9 @@ async function driving<T>(s: Live, p: Promise<T>): Promise<T> {
     () => (settled = true),
     () => (settled = true),
   );
-  const seen = new Set<string>();
+  // One record per rig of what was answered: an answer sent twice reaches a process that never asked (an integrity ending).
+  const seen = answered.get(s) ?? new Set<string>();
+  answered.set(s, seen);
   while (!settled) {
     for (const c of controls(s.ws)) {
       if (seen.has(c.id)) continue;
@@ -248,8 +252,7 @@ test('a worker of a parent in Bypass enters Bypass by the standing policy; a par
     assert.equal(s.controller.get(s.id)!.mode, 'bypassPermissions');
     const w = await newSession(s, 'docker/ws1', { parentId: s.id } as never);
     assert.equal(s.controller.get(w.id)!.bypassCapable, true);
-    const inherited = await driving(s, s.controller.inheritBypass(w.id));
-    assert.equal(inherited, true, JSON.stringify([s.controller.get(w.id)?.parentId, s.controller.get(s.id)?.mode, s.controller.audit({ kind: 'bypass.left', sessionId: w.id }).map((a) => a.detail), s.controller.audit({ kind: 'bypass.refused', sessionId: w.id }).map((a) => a.detail)]));
+    assert.equal(await driving(s, s.controller.inheritBypass(w.id)), true);
     assert.equal(s.controller.get(w.id)!.mode, 'bypassPermissions');
   } finally {
     await s.done();
