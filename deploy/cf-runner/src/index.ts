@@ -190,7 +190,8 @@ class JobRunBase extends DurableObject<Env> {
     if (bytes.length === 0) return;
     if (m.logSize >= LOG_CAP) return;
     const b = m.logSize + bytes.length > LOG_CAP ? bytes.slice(0, LOG_CAP - m.logSize) : bytes;
-    this.ctx.storage.sql.exec('INSERT INTO log (off, data) VALUES (?, ?)', m.logSize, b);
+    // SQLite storage binds a BLOB from an ArrayBuffer (not a view).
+    this.ctx.storage.sql.exec('INSERT INTO log (off, data) VALUES (?, ?)', m.logSize, b.slice().buffer);
     m.logSize += b.length;
   }
   #line(m: Meta, text: string) {
