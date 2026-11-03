@@ -142,7 +142,9 @@ if [ -n "$watch" ] && [ "$watch" != none ] && kill -0 "$watch" 2>/dev/null; then
     echo "job-run: the chat ended (process $watch): stopping $job" >&2; "${client[@]}" cancel "$job" >/dev/null 2>&1; kill -TERM $$ 2>/dev/null ) &
   wd=$!
 fi
-filter() { JR_MASK=$mask JR_ART=$work/art.b64 JR_LOG=$log JR_N=$work/n awk "$FILTER"; }
+# mawk (Debian's awk) reads a pipe in blocks, so lines would show only at the end of the job: -W interactive reads line by line.
+awk_live=(awk); awk -W version 2>/dev/null | grep -qi mawk && awk_live=(awk -W interactive)
+filter() { JR_MASK=$mask JR_ART=$work/art.b64 JR_LOG=$log JR_N=$work/n "${awk_live[@]}" "$FILTER"; }
 # In the background with `wait`: bash runs a trap only after a foreground command ends, and the follow ends only with the job, so an
 # interrupt (INT/TERM/HUP, the chat watchdog) would never reach cf_on_exit's cancel otherwise.
 ( "${client[@]}" follow "$job" "$work/info.json" | filter ) &

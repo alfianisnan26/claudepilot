@@ -43,3 +43,12 @@ JOB_RUN_BACKEND=auto JOB_RUN_CF_PROGRAMS=memorid scripts/job-run.sh --repo memor
 
 `cd deploy/cf-runner && npm test` (vitest, workers pool: signing, admission, budget, egress rules, routes);
 `apps/server/src/ci/jobRunCf.test.ts` (job-run.sh against a fake dispatcher) and the T-3542 case in `jobRun.test.ts` (k8s unchanged).
+
+## memor.id notes (from the full test pass, 2026-11-03)
+
+- The command runs without `CI` (npm install keeps `CI=1`): memor.id's `config:check` reads its values from the environment when `CI` is set.
+- apps/api lint is one eslint process of more than 48 min cold: run it as shards of the tracked files (`git -C apps/api ls-files`, round
+  robin, `--no-warn-ignored`), each well inside the 60-minute cap.
+- e2e: `/etc/hosts` is a read-only platform overlay and the egress intercept resolves every name to its placeholder. Run the dev stack and
+  Playwright in `unshare --mount` with a hosts file bind-mounted over `/etc/hosts`, with IPv4 and `::1` entries for the dev hosts.
+- A new image rolls out with `rollout_active_grace_period` 3600: instances on the old image can serve jobs for up to an hour.

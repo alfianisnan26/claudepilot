@@ -14,6 +14,9 @@ if [ "$JR_STEPS" = npm-ci ] && [ -f "$root/w/$main/package-lock.json" ]; then
     || { rc=$?; say "install scripts failed in $main (rc=$rc)"; say "EXIT $rc"; exit "$rc"; }
 fi
 t2=$(date +%s); say "steps ($JR_STEPS) in $((t2 - t1))s; running the command"
+# CI=1 is for npm (above). The command runs without it, as in the workspace: memor.id's config:check reads its values from the process
+# environment when CI is set (CI secrets) and from .dev.vars otherwise (T-3542). A command that wants CI sets it itself.
+unset CI
 cd "$root/w/$main" && printf '%s' "$JR_CMD" | base64 -d > "$root/cmd.sh"
 bash -o pipefail "$root/cmd.sh"; rc=$?
 t3=$(date +%s)

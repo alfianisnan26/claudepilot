@@ -273,8 +273,9 @@ test('T-3542 interrupted while the job runs: the trap cancels it on the dispatch
   const w = await world({ log: '=== JOB-RUN PLACEMENT backend=cf decision=started\nrunning...\n', hang: true });
   const h = w.run([...MEM, '--', 'sleep 600']);
   const t = Date.now();
-  while (!w.fake.requests().some((q) => q.url.includes('/log?offset='))) {
-    if (Date.now() - t > 15_000) throw new Error(`no log read: ${h.out()}`);
+  // The log streams while the job runs (no block buffering in the filter): the line is there before the job ends.
+  while (!h.out().includes('running...')) {
+    if (Date.now() - t > 15_000) throw new Error(`the log did not stream: ${h.out()}`);
     await new Promise((r) => setTimeout(r, 50));
   }
   h.p.kill('SIGTERM');
