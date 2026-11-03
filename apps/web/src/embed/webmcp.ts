@@ -352,6 +352,8 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
             (summary as string).trim(),
             `${type} · ${priority} · ${shots.length} screenshot${shots.length === 1 ? '' : 's'}`,
             ...(s.page ? [pageOf(s.page.url) ?? ''] : []),
+            // What the person allows is what is sent: the description too (cut for the sheet, sent whole).
+            description.length > 600 ? `${description.slice(0, 600)}…` : description,
           ],
         },
         options?.signal,

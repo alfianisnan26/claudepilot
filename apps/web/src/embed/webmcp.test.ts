@@ -342,6 +342,7 @@ test('create report: the form path (POST /reporter/v1/tickets with this panel to
   assert.equal(h.asks.length, 1);
   assert.equal(h.asks[0]!.action, 'File a report');
   assert.equal(h.asks[0]!.lines[0], 'Price is cut off');
+  assert.match(h.asks[0]!.lines.at(-1)!, /^The price wraps\.\n\n\*\*Steps to reproduce\*\*/, 'the person sees the description it sends');
   const create = h.calls[0]!;
   assert.deepEqual([create.method, create.url, create.auth], ['POST', '/reporter/v1/tickets', `Bearer ${TOKEN}`]);
   assert.deepEqual(create.body, {

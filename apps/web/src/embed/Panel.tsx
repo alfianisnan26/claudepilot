@@ -744,7 +744,7 @@ function AgentAsk({ ask, onAnswer }: { ask: ToolAsk; onAnswer: (ok: boolean) => 
       <p className="text-[13px] text-muted">An AI agent in this browser asks to do this as you.</p>
       <ul className="flex flex-col gap-1 text-[14px]">
         {ask.lines.filter(Boolean).map((l, i) => (
-          <li key={i} className={`break-words ${i === 0 ? 'font-semibold' : 'text-ink-soft'}`}>
+          <li key={i} className={`break-words whitespace-pre-line ${i === 0 ? 'font-semibold' : 'text-ink-soft'}`}>
             {l}
           </li>
         ))}
