@@ -140,6 +140,7 @@ describe('signing', () => {
 describe('cold start', () => {
   it('the platform answer is recognised and retried with a capped backoff', () => {
     expect(isNoInstance('There is no container instance that can be provided to this Durable Object, try again later')).toBe(true);
+    expect(isNoInstance('Maximum number of running container instances exceeded. Try again later, or try configuring a higher value for max_instances')).toBe(true);
     expect(isNoInstance('Container exited with code 1')).toBe(false);
     expect([1, 2, 3, 4, 5, 6].map(startRetryDelayS)).toEqual([15, 30, 60, 120, 120, 120]);
     const total = Array.from({ length: START_RETRIES - 1 }, (_, i) => startRetryDelayS(i + 1)).reduce((a, b) => a + b, 0);

@@ -155,6 +155,12 @@ st=$(jq -r '.state // "unknown"' <<<"$info" 2>/dev/null || echo unknown)
 rc=$(sed -n 's/^=== JOB-RUN EXIT \([0-9]\{1,3\}\)$/\1/p' "$log" | tail -n 1)
 infra=0
 grep -q '^=== JOB-RUN PLATFORM-STOP' "$log" 2>/dev/null && { infra=1; echo "job-run: $job: the Cloudflare container was stopped by the platform (infra failure): run it again" >&2; }
+# The dispatcher records the agent's exit code too: a finished job whose EXIT line did not reach the log still has it (never a guess:
+# only a number the agent reported, only for state finished).
+if [ -z "$rc" ] && [ "$st" = finished ]; then
+  rc=$(jq -r '.exit // empty' <<<"$info" 2>/dev/null | grep -xE '[0-9]{1,3}' || true)
+  [ -z "$rc" ] || echo "job-run: $job: the exit line was not in the log; the exit code $rc is the one the runner reported" >&2
+fi
 if [ -z "$rc" ]; then
   case "$st" in
     deadline) rc=124; echo "job-run: past the deadline (${timeout}s)" >&2 ;;

@@ -151,7 +151,8 @@ export const sizeOfId = (id: string): Size | null => {
 // ---- cold start -----------------------------------------------------------------------------------------------------------------------
 
 /** "There is no container instance that can be provided to this Durable Object, try again later": the platform's cold-start answer. */
-export const isNoInstance = (err: string) => /no container instance/i.test(err);
+/** Also "Maximum number of running container instances exceeded" (every instance of the class is busy: max_instances, found live). */
+export const isNoInstance = (err: string) => /no container instance|maximum number of running container instances/i.test(err);
 /** Container starts tried before a job is an infra failure; the waits between them (15 s, 30 s, 60 s, 120 s: about 4 minutes in all). */
 export const START_RETRIES = 5;
 export const startRetryDelayS = (attempt: number) => Math.min(120, 15 * 2 ** Math.max(0, attempt - 1));

@@ -243,6 +243,18 @@ test('T-3542 no exit line: deadline is 124, stopped is 1, a platform failure is 
   assert.match(rp.out, /stopped by the platform \(infra failure\)/);
 });
 
+test('T-3542 a finished job whose EXIT line never reached the log takes the exit code the runner reported (no guess otherwise)', async () => {
+  const head = '=== JOB-RUN PLACEMENT backend=cf decision=started\nworking\n';
+  const w = await world({ log: head, state: 'finished', exit: 4 });
+  const r = await w.go([...MEM, '--', 'true']);
+  assert.equal(r.code, 4, r.out);
+  assert.match(r.out, /the exit code 4 is the one the runner reported/);
+  const n = await world({ log: head, state: 'finished', exit: null });
+  const rn = await n.go([...MEM, '--', 'true']);
+  assert.equal(rn.code, 1, rn.out);
+  assert.match(rn.out, /ended without an exit code \(state finished\)/);
+});
+
 test('T-3542 artifacts come back from R2 through the dispatcher and unpack into --out', async () => {
   const src = mkdtempSync(join(tmpdir(), 'cp-jobrun-art-'));
   roots.push(src);

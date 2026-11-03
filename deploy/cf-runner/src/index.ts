@@ -322,7 +322,7 @@ class JobRunBase extends DurableObject<Env> {
     if (!port || this.#pulling) return;
     this.#pulling = true;
     let done: { exit: number } | null = null;
-    try {
+    const drain = async () => {
       for (let i = 0; i < 16; i++) {
         const from = this.#counter('agent');
         const r = await port.fetch(`http://c/log?offset=${from}&max=${PULL_MAX}`, { signal: AbortSignal.timeout(20_000) });
@@ -333,11 +333,18 @@ class JobRunBase extends DurableObject<Env> {
         this.ctx.storage.sql.exec('INSERT INTO counters (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', 'agent', from + b.length);
         if (b.length < PULL_MAX) break;
       }
+    };
+    try {
+      await drain();
       const st = await port.fetch('http://c/status', { signal: AbortSignal.timeout(20_000) });
       if (st.ok) {
         const s = (await st.json()) as { done: boolean; exit: number | null; location?: string };
         if (s.location) await this.#patch((m) => (m.location === s.location ? false : void (m.location = s.location)));
-        if (s.done) done = { exit: s.exit ?? 1 };
+        if (s.done) {
+          // The agent may have written its last lines (MEMORY, EXIT) after the read above: read again before the job ends (found live).
+          await drain();
+          done = { exit: s.exit ?? 1 };
+        }
       }
     } finally {
       this.#pulling = false;
