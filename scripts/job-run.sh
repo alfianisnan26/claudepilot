@@ -55,6 +55,11 @@
 #                                                       anything runs): a failed scan wipes its contents. A command
 #                                                       that holds a value is refused: single-quote the variable ('$E2E_CF_ACCESS_CLIENT_SECRET'),
 #                                                       so the Job expands it, not your shell
+#     --backend k8s|cf|auto                             (T-3542) where the job runs: k8s (the default, everything above), cf (a Cloudflare Container
+#                                                       started by the dispatcher in deploy/cf-runner; memor.id's GitLab repositories only in this slice), or
+#                                                       auto (cf when the run can go there and its program is in JOB_RUN_CF_PROGRAMS, else k8s). Default:
+#                                                       JOB_RUN_BACKEND, else k8s: with neither set nothing here changes. The rules: scripts/job-run-cf.sh
+#     --sub <path>@<ref>                                (T-3542, cf only, repeatable) that submodule of the repository at another pushed ref
 # Placement (T-611): the scheduler counts memory REQUESTS, the master (control plane, Argo CD, Gitea...) uses far more for real. Before it creates a
 # Job this script reads the master's real memory (kubectl top nodes) and, when that use PLUS the Job's expected peak (JOB_RUN_EXPECTED_PEAK_MI,
 # default 2300 Mi; 8192 Mi for --big) is over JOB_RUN_MASTER_MAX_PCT (default 85; 75 until 2026-10-17, T-731: the master sat at 67% with 13% CPU while every Job queued for node2's CPU
@@ -155,8 +160,19 @@ case "${1:-}" in
     jobs_json | jq -r "$JQ_FIN"' .items[] | [.metadata.name, (.metadata.labels["job-run/chat"] // "-"), (.metadata.labels["job-run/role"] // "-"),
       (if fin then (if (.status.succeeded // 0) > 0 then "succeeded" else "failed" end) elif .spec.suspend then "queued" else "running" end),
       .metadata.creationTimestamp] | @tsv' | grep . || echo "no job-run jobs"
+    # T-3542: with a dispatcher configured (JOB_RUN_CF_URL), its jobs of this workspace too. Unset: nothing more is printed.
+    if [ -n "${JOB_RUN_CF_URL:-}" ]; then
+      r=$(node "$here/scripts/job-run-cf-client.mjs" list 2>/dev/null) || r=
+      [ "${r%% *}" != 200 ] || jq -r '.[] | [.id, .chat, .role, .state, (.created / 1000 | todate)] | @tsv' <<<"${r#* }" 2>/dev/null || true
+    fi
     exit 0 ;;
   --stop)
+    # T-3542: a Cloudflare job (cp-cf-...) is stopped through the dispatcher.
+    if [[ ${2:-} =~ ^cp-cf-[sb][0-9a-f]{8}$ ]]; then
+      r=$(node "$here/scripts/job-run-cf-client.mjs" cancel "$2" 2>/dev/null) || r=
+      if [ "${r%% *}" = 200 ]; then echo "stopped $2"; echo "1 job(s) stopped"; else echo "0 job(s) stopped"; fi
+      exit 0
+    fi
     sel=; chat=
     if [ "${2:-}" = --chat ]; then chat=$(label "${3:?usage: job-run.sh --stop --chat <id>}"); else sel=${2:-}; fi
     [ -z "$sel" ] || [[ $sel =~ ^claudepilot-job-[0-9a-f]{8}$ ]] || die "usage: job-run.sh --stop [claudepilot-job-<hex> | --chat <id>]"
@@ -168,11 +184,13 @@ case "${1:-}" in
     echo "$n job(s) stopped"; exit 0 ;;
 esac
 
-repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pin=; pin_given=; cpu=; cpu_given=; pool=(); reuse=; run_image=; image_given=; layout=
+repo=; ref=; against=; keep=; steps=npm-ci; steps_given=; artifacts=; out=; timeout=3600; role=${PILOT_AGENT:-agent}; also=(); big=; pin=; pin_given=; cpu=; cpu_given=; pool=(); reuse=; run_image=; image_given=; layout=; backend=; subs=()
 argv0=("$@") # T-2885: the run's exact arguments, for an approval request (pool_approval)
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env|--image|--node|--cpu) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --repo|--ref|--against|--keep-tests|--also|--steps|--artifacts|--out|--timeout|--role|--pool-env|--image|--node|--cpu|--backend|--sub) [ $# -ge 2 ] || die "$1 needs a value" ;;&
+    --backend) backend=$2; shift 2 ;;
+    --sub) subs+=("$2"); shift 2 ;;
     --pool-env) pool+=("$2"); shift 2 ;;
     --node) pin=$2; pin_given=1; shift 2 ;;
     --cpu) cpu=$2; cpu_given=1; shift 2 ;;
@@ -336,6 +354,43 @@ done
 if [ -n "$pool_names" ] && [ -n "$out" ] && { [ -e "$out" ] || [ -L "$out" ]; }; then
   { [ -d "$out" ] && [ -z "$(ls -A -- "$out" 2>/dev/null)" ]; } || die "--out: with --pool-env the folder must be new or empty (a failed scan deletes its contents); refused"
 fi
+
+# The log: streamed, masked for the credentials, the artifacts block set aside; NR is kept so a broken stream can be resumed.
+# shellcheck disable=SC2016 # awk's own variables
+# S1i (review 7888): the mask is ONE pass over the ORIGINAL line, never over its own output. The old loop (index, cut, again) never ended when a mask
+# value held the replacement text ("REDACTED", "[redacted]"). Every hit of every value (overlapping, nested, any character: index() is a plain
+# substring search, no regex) becomes a span; the spans are sorted and merged; each merged run is replaced once. It always ends: each search
+# starts one character after the last hit. A value under 8 characters is not masked (too short to be a credential, and it would eat the log).
+MASKFN='function mask(line, nt, toks, repl,   k, tok, p, i, s, e, n, a, b, j, m, t1, t2, out, pos) {
+  n = 0
+  for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) < 8) continue
+    p = 1
+    while ((i = index(substr(line, p), tok)) > 0) { s = p + i - 1; n++; a[n] = s; b[n] = s + length(tok) - 1; p = s + 1 } }
+  if (n == 0) return line
+  hit = 1
+  for (j = 2; j <= n; j++) { t1 = a[j]; t2 = b[j]; m = j - 1; while (m >= 1 && a[m] > t1) { a[m + 1] = a[m]; b[m + 1] = b[m]; m-- } a[m + 1] = t1; b[m + 1] = t2 }
+  out = ""; pos = 1; j = 1
+  while (j <= n) { s = a[j]; e = b[j]; j++
+    while (j <= n && a[j] <= e + 1) { if (b[j] > e) e = b[j]; j++ }
+    out = out substr(line, pos, s - pos) repl; pos = e + 1 }
+  return out substr(line, pos) }'
+FILTER="$MASKFN"'
+BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n"); art = ENVIRON["JR_ART"]; lf = ENVIRON["JR_LOG"] }
+{ hit = 0; line = mask($0, nt, toks, "[redacted]"); if (hit) leak = 1
+  if (line == "=== JOB-RUN ARTIFACTS BEGIN") { inart = 1; next }
+  if (line == "=== JOB-RUN ARTIFACTS END") { inart = 0; next }
+  if (inart) { print line >> art; next }
+  print line; print line >> lf; fflush() }
+END { print NR >> ENVIRON["JR_N"]; if (leak) print "leak" >> ENVIRON["JR_N"] }'
+# T-3542: the backend. Unset (no --backend, no JOB_RUN_BACKEND) it is k8s and the rest of this script runs as it always did. cf and auto
+# go through scripts/job-run-cf.sh, which runs the job on Cloudflare and exits, or (auto, when the run cannot go there) returns here.
+backend=${backend:-${JOB_RUN_BACKEND:-k8s}}
+case "$backend" in
+  k8s) ;;
+  cf | auto) . "$here/scripts/job-run-cf.sh" ;;
+  *) die "--backend: k8s, cf or auto" ;;
+esac
+[ ${#subs[@]} -eq 0 ] || die "--sub: only with --backend cf (a submodule override for a memor.id job)"
 
 # The repository: named, or the current folder's origin (its user and password part never kept or shown).
 origin=$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://)[^@/]*@#\1#' || true)
@@ -738,33 +793,6 @@ while :; do
   sleep "$poll"
 done
 
-# The log: streamed, masked for the credentials, the artifacts block set aside; NR is kept so a broken stream can be resumed.
-# shellcheck disable=SC2016 # awk's own variables
-# S1i (review 7888): the mask is ONE pass over the ORIGINAL line, never over its own output. The old loop (index, cut, again) never ended when a mask
-# value held the replacement text ("REDACTED", "[redacted]"). Every hit of every value (overlapping, nested, any character: index() is a plain
-# substring search, no regex) becomes a span; the spans are sorted and merged; each merged run is replaced once. It always ends: each search
-# starts one character after the last hit. A value under 8 characters is not masked (too short to be a credential, and it would eat the log).
-MASKFN='function mask(line, nt, toks, repl,   k, tok, p, i, s, e, n, a, b, j, m, t1, t2, out, pos) {
-  n = 0
-  for (k = 1; k <= nt; k++) { tok = toks[k]; if (length(tok) < 8) continue
-    p = 1
-    while ((i = index(substr(line, p), tok)) > 0) { s = p + i - 1; n++; a[n] = s; b[n] = s + length(tok) - 1; p = s + 1 } }
-  if (n == 0) return line
-  hit = 1
-  for (j = 2; j <= n; j++) { t1 = a[j]; t2 = b[j]; m = j - 1; while (m >= 1 && a[m] > t1) { a[m + 1] = a[m]; b[m + 1] = b[m]; m-- } a[m + 1] = t1; b[m + 1] = t2 }
-  out = ""; pos = 1; j = 1
-  while (j <= n) { s = a[j]; e = b[j]; j++
-    while (j <= n && a[j] <= e + 1) { if (b[j] > e) e = b[j]; j++ }
-    out = out substr(line, pos, s - pos) repl; pos = e + 1 }
-  return out substr(line, pos) }'
-FILTER="$MASKFN"'
-BEGIN { nt = split(ENVIRON["JR_MASK"], toks, "\n"); art = ENVIRON["JR_ART"]; lf = ENVIRON["JR_LOG"] }
-{ hit = 0; line = mask($0, nt, toks, "[redacted]"); if (hit) leak = 1
-  if (line == "=== JOB-RUN ARTIFACTS BEGIN") { inart = 1; next }
-  if (line == "=== JOB-RUN ARTIFACTS END") { inart = 0; next }
-  if (inart) { print line >> art; next }
-  print line; print line >> lf; fflush() }
-END { print NR >> ENVIRON["JR_N"]; if (leak) print "leak" >> ENVIRON["JR_N"] }'
 filter() { JR_MASK=$mask JR_ART=$work/art.b64 JR_LOG=$log JR_N=$work/n awk "$FILTER"; }
 kubectl -n "$ns" logs -f "job/$job" 2>&1 | filter || true
 st=
@@ -874,5 +902,16 @@ if [ -n "$key" ] && [ "$rc" = 0 ] && [ "${st:-}" = Complete ] && [ -f "$work/n" 
     rm -f "$cache/$key.log.tmp" 2>/dev/null # a failed cp or mv leaves no half file behind
     echo "job-run: could not save the result for reuse (no harm done)" >&2
   fi
+fi
+# T-3542 CFR-8: with JOB_RUN_METRICS=1 a k8s run writes the same metrics line as a cf run (scripts/job-run-metrics.mjs compares them).
+if [ "${JOB_RUN_METRICS:-}" = 1 ]; then
+  mdir=${JOB_RUN_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/claudepilot-job-run}
+  run_s=$(sed -n 's/^=== JOB-RUN SUMMARY .* run=\([0-9]\{1,7\}\)s .*/\1/p' "$log" | tail -n 1)
+  { mkdir -p "$mdir" && jq -nc --arg t "$(date -u +%FT%TZ)" --arg job "$job" --arg repo "$repo" --arg program "$program" --arg role "$role" \
+      --arg chat "$chat" --arg size "$memory" --argjson queue "$((t1 - t0))" --argjson wall "$((t2 - t1))" --arg run "${run_s:-}" --argjson rc "$rc" \
+      --arg node "${node:-}" --arg st "${st:-}" \
+      '{t: $t, backend: "k8s", job: $job, repo: $repo, program: $program, role: $role, chat: $chat, size: $size, queue_s: $queue, wall_s: $wall,
+        start_s: null, run_s: (if $run == "" then null else ($run | tonumber) end), rc: $rc, est_usd: 0, infra_fail: ($st != "Complete" and $st != "Failed"),
+        state: $st, node: $node}' >> "$mdir/metrics.jsonl"; } 2>/dev/null || true
 fi
 exit "$rc"
