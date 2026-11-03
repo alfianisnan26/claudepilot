@@ -196,6 +196,8 @@ function ShotStrip({ shots, onRemove, canAdd }: { shots: Capture[]; onRemove?: (
     const id = autoAnnotate(shots, autoOpened);
     if (!id) return;
     autoOpened.add(id);
+    // A shot an agent took (WebMCP) is not the person's: no editor over the panel by itself.
+    if (shots.find((c) => c.captureId === id)?.byAgent) return;
     setEditing(id);
   }, [shots]);
   const edited = shots.find((c) => c.captureId === editing) ?? null;

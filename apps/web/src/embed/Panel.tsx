@@ -461,7 +461,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         if (m.requestId !== pendingRef.current) return;
         const screenshot = new Blob([m.screenshot], { type: m.mediaType });
         if (m.target) takeHostTarget(m.target);
-        const shot: Capture = { captureId: newId(), requestId: m.requestId, screenshot, previewUrl: URL.createObjectURL(screenshot), evidence: m.evidence, ...(m.target ? { target: m.target } : {}) };
+        const shot: Capture = {
+          captureId: newId(),
+          requestId: m.requestId,
+          screenshot,
+          previewUrl: URL.createObjectURL(screenshot),
+          evidence: m.evidence,
+          ...(m.target ? { target: m.target } : {}),
+          ...(captureWaits.current.has(m.requestId) ? { byAgent: true } : {}),
+        };
         if (appendNext.current) setShots((old) => [...old, shot].slice(-REPORT_SHOTS_MAX));
         else setCapture(shot);
         appendNext.current = false;
@@ -709,7 +717,12 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
           </>
         )}
         {contextOpen && connected && <ContextSheet section={contextOpen} onClose={() => setContextOpen(null)} />}
-        {ask && <AgentAsk ask={ask.ask} onAnswer={ask.answer} />}
+        {/* Over everything the panel draws (the annotation editor and the viewer too): the person must see what they allow. */}
+        {ask && (
+          <div className="relative z-[90]">
+            <AgentAsk ask={ask.ask} onAnswer={ask.answer} />
+          </div>
+        )}
         {toast && (
           <div className="anim-in pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50" key={toast.id}>
             <Notice tone={toast.tone}>{toast.text}</Notice>

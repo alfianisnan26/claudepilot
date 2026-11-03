@@ -37,6 +37,8 @@ export interface Capture {
   evidence: ReporterEvidence;
   /** What the capture toolbar's Ticket | Session switch said (host message), if it said anything. */
   target?: ReporterReportTarget;
+  /** Taken for a WebMCP tool (PILOT-1128): the annotation editor does not open by itself on it. */
+  byAgent?: boolean;
 }
 
 export type Tab = 'tickets' | 'report' | 'sessions' | 'knowledge' | 'settings';
