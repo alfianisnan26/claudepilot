@@ -149,7 +149,7 @@ I11 Agent self-adjustment. The owner's words (2026-10-12): "for personas, skills
    dir and delete it to re-run. Anything that adds a column holding sealed values must be listed in ENCRYPTED_COLUMNS.
    The tickets block (A3b, 40-49) is full since T-1974 took 49 (2026-10-21); tickets migrations overflow to 785+ (785-787 and 794-797 used; 788 is
    T-975's on its branch): take the next free number there after checking integration and the open branches.
-   The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-903 used, 2026-10-31: 902 is reporter_ip, 903 the annotations).
+   The UI reporter (docs/prd/ui-reporter-server.md) has its own block, 900-909 (900-904 used: 902 is reporter_ip, 903 the annotations (2026-10-31), 904 the WebMCP auto-approve grants (PILOT-1128, 2026-11-03, branch ticket/T-3543-reporter-webmcp)).
    Glance (docs/prd/glance-widgets.md) has its own block, 910-919 (910 user_layouts: the Home and Glance layouts per person and org context, D-111 D6, 2026-11-01).
    Performance (indexes measured with scripts/perf-api.mjs) has its own block, 920-929 (920 chat_audit_continued_from, chat_audit_session_kind, ci_runs_newest, 2026-11-01, branch perf/local-wins).
    Organizations (docs/prd/organizations.md §8) have their own block, 460-479 (2026-10-31: 460 founder account and password_set, 461 token owners, 462 token accounts and session starters,

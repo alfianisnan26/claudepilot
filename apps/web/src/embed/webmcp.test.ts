@@ -155,6 +155,10 @@ function harness(
     mine?: ReporterTicket[];
     answer?: boolean | null;
     coarse?: boolean;
+    /** An auto-approve grant id the panel answers with (first ask only, unless noAuto). */
+    grant?: string;
+    /** The server refuses an auto-approved create with this code (LIMIT_REACHED, CONFIRMATION_REQUIRED). */
+    refuseAuto?: string;
   } = {},
 ) {
   const calls: { method: string; url: string; auth: string | null; body: unknown; headers: Record<string, string> }[] = [];
@@ -165,6 +169,11 @@ function harness(
     calls.push({ method: init.method ?? 'GET', url, auth: headers.Authorization ?? null, body, headers });
     const ok = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
     const path = url.split('?')[0]!;
+    if (path === '/reporter/v1/tickets' && init.method === 'POST' && opts.refuseAuto && headers['x-reporter-agent-grant'])
+      return new Response(
+        JSON.stringify({ error: { code: opts.refuseAuto, message: 'Auto-approve allows 10 reports an hour. Ask the person.' } }),
+        { status: 429 },
+      );
     if (path === '/reporter/v1/tickets' && init.method === 'POST')
       return ok({ key: 'KONF-41', url: 'https://pilot.example/tickets/KONF-41' });
     if (path === '/reporter/v1/tickets') {
@@ -199,10 +208,12 @@ function harness(
       shots.push(c);
       return c;
     },
-    confirm: async (a) => {
+    approve: async (a) => {
       asks.push(a);
-      return opts.answer ?? true;
+      if (opts.grant && !a.noAuto) return { kind: 'auto', grantId: opts.grant };
+      return (opts.answer ?? true) ? { kind: 'person' } : { kind: 'denied' };
     },
+    autoRefused: () => events.push('auto refused'),
     filed: (key) => events.push(`filed ${key}`),
     used: (ids) => events.push(`used ${ids.join(',')}`),
   };
@@ -338,11 +349,19 @@ test('create report: the form path (POST /reporter/v1/tickets with this panel to
     expected: 'One line',
     actual: 'Two lines',
   });
-  assert.deepEqual(r, { ok: true, key: 'KONF-41', url: 'https://pilot.example/tickets/KONF-41', uploadFailed: [] });
+  assert.deepEqual(r, { ok: true, key: 'KONF-41', url: 'https://pilot.example/tickets/KONF-41', uploadFailed: [], autoApproved: false });
   assert.equal(h.asks.length, 1);
   assert.equal(h.asks[0]!.action, 'File a report');
   assert.equal(h.asks[0]!.lines[0], 'Price is cut off');
-  assert.match(h.asks[0]!.lines.at(-1)!, /^The price wraps\.\n\n\*\*Steps to reproduce\*\*/, 'the person sees the description it sends');
+  // The sheet shows what is sent, as plain text (no Markdown markers).
+  assert.deepEqual(h.asks[0]!.lines.slice(3), [
+    'The price wraps.',
+    'Steps to reproduce:\n1. Open /pricing\n2. Resize to 390 px',
+    'Expected: One line',
+    'Actual: Two lines',
+  ]);
+  assert.ok(!h.asks[0]!.lines.join('\n').includes('**'), 'no raw Markdown in the sheet');
+  assert.equal(h.asks[0]!.group, 'file');
   const create = h.calls[0]!;
   assert.deepEqual([create.method, create.url, create.auth], ['POST', '/reporter/v1/tickets', `Bearer ${TOKEN}`]);
   assert.deepEqual(create.body, {
@@ -443,8 +462,8 @@ test('list my reports: GET /reporter/v1/tickets with mine=true and the token; ke
 test('comment: only on a report of mine in this bucket, after Allow, through POST /reporter/v1/tickets/:key/comments', async () => {
   const h = harness({ mine: [ticket('KONF-12')] });
   const r = await h.run(TOOL_NAMES.comment, { key: 'konf-12', body: ' Still broken on iOS. ' });
-  assert.deepEqual(r, { ok: true, key: 'KONF-12' });
-  assert.deepEqual(h.asks[0], { action: 'Comment on KONF-12', lines: ['Still broken on iOS.'] });
+  assert.deepEqual(r, { ok: true, key: 'KONF-12', autoApproved: false });
+  assert.deepEqual(h.asks[0], { action: 'Comment on KONF-12', group: 'comment', lines: ['Still broken on iOS.'] });
   const post = h.calls.at(-1)!;
   assert.deepEqual(
     [post.method, post.url, post.body, post.auth],
@@ -469,7 +488,7 @@ test('attach screenshots: the "Add to it" path (captures, then files) to an open
   const b = shot();
   const h = harness({ shots: [a, b], mine: [ticket('KONF-12')] });
   const r = await h.run(TOOL_NAMES.attach, { key: 'KONF-12', captureIds: [b.captureId] });
-  assert.deepEqual(r, { ok: true, key: 'KONF-12', added: 1, uploadFailed: [] });
+  assert.deepEqual(r, { ok: true, key: 'KONF-12', added: 1, uploadFailed: [], autoApproved: false });
   const posts = h.calls.filter((c) => c.method === 'POST');
   assert.deepEqual(posts[0]!.url, '/reporter/v1/tickets/KONF-12/captures');
   assert.deepEqual(posts[0]!.body, { captures: [captureInput(b, null)] });
@@ -530,6 +549,53 @@ test('helpers: the description is composed in order and skips what is empty; a k
   assert.equal(keyOf('KONF-0', 'KONF'), null);
   assert.equal(keyOf('T-3', 'KONF'), null);
   assert.equal(keyOf('KONFX-3', 'KONF'), null);
+});
+
+/* ---------- auto-approve (PILOT-1128) ---------- */
+
+test('auto-approve: a grant answers without the sheet and the call names it (x-reporter-agent-grant); asked in the sheet, no header', async () => {
+  const h = harness({ shots: [shot()], grant: 'rag_1', mine: [ticket('KONF-12')] });
+  const r = await h.run(TOOL_NAMES.create, { summary: 'Auto' });
+  assert.equal(r.autoApproved, true);
+  const create = h.calls.find((c) => c.method === 'POST' && c.url === '/reporter/v1/tickets')!;
+  assert.equal(create.headers['x-reporter-agent-grant'], 'rag_1');
+  // The uploads that follow are the person's own file uploads: they carry no grant.
+  assert.ok(h.calls.filter((c) => /attachments/.test(c.url)).every((c) => !c.headers['x-reporter-agent-grant']));
+  const c = await h.run(TOOL_NAMES.comment, { key: 'KONF-12', body: 'hi' });
+  assert.equal(c.autoApproved, true);
+  assert.equal(h.calls.at(-1)!.headers['x-reporter-agent-grant'], 'rag_1');
+
+  const asked = harness({ shots: [shot()] });
+  await asked.run(TOOL_NAMES.create, { summary: 'Asked' });
+  assert.ok(asked.calls.every((x) => !x.headers['x-reporter-agent-grant']));
+});
+
+for (const code of ['LIMIT_REACHED', 'CONFIRMATION_REQUIRED'])
+  test(`auto-approve: the server refuses the grant (${code}): the person is asked with the reason, then it goes as theirs`, async () => {
+    const h = harness({ shots: [shot()], grant: 'rag_1', refuseAuto: code });
+    const r = await h.run(TOOL_NAMES.create, { summary: 'Over the cap' });
+    assert.equal(r.ok, true);
+    assert.equal(r.autoApproved, false);
+    assert.equal(h.asks.length, 2);
+    assert.equal(h.asks[1]!.noAuto, true);
+    assert.match(h.asks[1]!.note ?? '', /^Auto-approve did not apply: Auto-approve allows 10 reports an hour/);
+    const creates = h.calls.filter((c) => c.method === 'POST' && c.url === '/reporter/v1/tickets');
+    assert.deepEqual(
+      creates.map((c) => c.headers['x-reporter-agent-grant'] ?? null),
+      ['rag_1', null],
+    );
+    assert.ok(h.events.includes('auto refused'), 'the panel reloads its grants');
+  });
+
+test('auto-approve: refused and then denied by the person: nothing filed', async () => {
+  const h = harness({ shots: [shot()], grant: 'rag_1', refuseAuto: 'LIMIT_REACHED', answer: false });
+  const r = await h.run(TOOL_NAMES.create, { summary: 'x' });
+  assert.equal(r.code, 'DENIED');
+  assert.equal(
+    h.calls.filter((c) => c.method === 'POST' && c.url === '/reporter/v1/tickets' && !c.headers['x-reporter-agent-grant']).length,
+    0,
+  );
+  assert.deepEqual(h.events, ['auto refused']);
 });
 
 test('dev shim: the spec rules it keeps (names, duplicates, an aborted signal) and call() answers a JSON string', async () => {

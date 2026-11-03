@@ -73,9 +73,11 @@ addEventListener('message', async (e) => {
 });
 </script></body></html>`;
 
-const server = http
-  .createServer((q, s) => s.writeHead(200, { 'content-type': 'text/html' }).end(q.url.startsWith('/standin') ? standinPage : sdkPage))
-  .listen(4700, '127.0.0.1');
+const serve = (q, s) => s.writeHead(200, { 'content-type': 'text/html' }).end(q.url.startsWith('/standin') ? standinPage : sdkPage);
+const server = http.createServer(serve).listen(4700, '127.0.0.1');
+// A second site of the same bucket on another origin: a grant made on HOST must not apply there.
+const HOST2 = 'http://127.0.0.1:4701';
+const server2 = http.createServer(serve).listen(4701, '127.0.0.1');
 
 /* ---------- the portal: sign in, the test bucket and its site ---------- */
 
@@ -88,7 +90,10 @@ const api = await pw.request.newContext({ baseURL: PORTAL, extraHTTPHeaders: { o
   const c = await api.put(`/api/reporter/buckets/${BUCKET}/config`, {
     data: {
       enabled: true,
-      sites: [{ origin: HOST, environment: 'dev', repo: 'qa/webmcp-fixture', label: 'QA', branch: null }],
+      sites: [
+        { origin: HOST, environment: 'dev', repo: 'qa/webmcp-fixture', label: 'QA', branch: null },
+        { origin: HOST2, environment: 'dev2', repo: 'qa/webmcp-fixture', label: 'QA 2', branch: null },
+      ],
       sessionTargets: [],
       calloutsDefault: true,
     },
@@ -298,7 +303,8 @@ const EXPECTED = [
   await p.screenshot({ path: `${SHOTS}/webmcp-allow-sheet.png` });
   check(
     'B: the Allow / Deny sheet shows for reporter_create_report (screenshot webmcp-allow-sheet.png)',
-    (await sheet.getByRole('button', { name: 'Allow' }).count()) === 1 && (await sheet.getByText('[webmcp qa] deny case').count()) >= 1,
+    (await sheet.getByRole('button', { name: 'Allow once' }).count()) === 1 &&
+      (await sheet.getByText('[webmcp qa] deny case').count()) >= 1,
   );
   await sheet.getByRole('button', { name: 'Deny' }).click();
   const denied = await denyCall;
@@ -325,7 +331,7 @@ const EXPECTED = [
     60000,
   );
   await sheet.waitFor({ timeout: 15000 });
-  await sheet.getByRole('button', { name: 'Allow' }).click();
+  await sheet.getByRole('button', { name: 'Allow once' }).click();
   const filed = await allowCall;
   const key = filed.out?.key;
   check(
@@ -351,12 +357,146 @@ const EXPECTED = [
     await f.getByRole('dialog', { name: `Comment on ${key}` }).waitFor({ timeout: 15000 });
     await f
       .getByRole('dialog', { name: `Comment on ${key}` })
-      .getByRole('button', { name: 'Allow' })
+      .getByRole('button', { name: 'Allow once' })
       .click();
     const cmo = await cm;
     check('B: reporter_comment_on_report after Allow', cmo.out?.ok === true, JSON.stringify(cmo));
     await closeTicket(key);
   }
+  await browser.close();
+}
+
+/* ---------- E: auto-approve (PILOT-1128): session, revoke, always across a reload, another origin, the cap ---------- */
+{
+  const browser = await launch(true);
+  const { ctx, p } = await signedInPage(browser);
+  const filed = [];
+  const open = async (page, host) => {
+    await page.goto(`${host}/standin`, { waitUntil: 'load' });
+    for (let i = 0; i < 40 && !panelFrame(page); i++) await page.waitForTimeout(250);
+    const f = panelFrame(page);
+    const a = await agent(ctx, page, f);
+    return { f, a };
+  };
+  let { f, a } = await open(p, HOST);
+  await connect(ctx, f);
+  for (let i = 0; i < 50 && names(a.tools).length < 6; i++) await p.waitForTimeout(100);
+  const sheetOf = (fr) => fr.getByRole('dialog', { name: 'File a report' });
+  /** A create that either shows the sheet (then `answer` is clicked) or runs without it. */
+  const create = async (fr, ag, page, summary, answer) => {
+    await ag.invoke('reporter_capture_screenshot', { mode: 'viewport' });
+    const call = ag.invoke('reporter_create_report', { summary, description: 'WebMCP auto-approve QA.', priority: 'low' }, 60000);
+    let done = null;
+    call.then(
+      (r) => (done = r),
+      () => (done = { error: true }),
+    );
+    let sheet = false;
+    for (let i = 0; i < 150 && !done; i++) {
+      if (
+        await sheetOf(fr)
+          .isVisible()
+          .catch(() => false)
+      ) {
+        sheet = true;
+        break;
+      }
+      await page.waitForTimeout(100);
+    }
+    let note = null;
+    if (sheet) {
+      note = await sheetOf(fr)
+        .getByText(/Auto-approve did not apply/)
+        .innerText()
+        .catch(() => null);
+      if (answer.shot) await page.screenshot({ path: `${SHOTS}/${answer.shot}` });
+      await sheetOf(fr).getByRole('button', { name: answer.click }).click();
+    }
+    const r = await call;
+    if (r.out?.key) filed.push(r.out.key);
+    return { sheet, note, r };
+  };
+
+  const s1 = await create(f, a, p, '[webmcp qa] session 1', { click: 'Allow for this session', shot: 'webmcp-allow-sheet-scopes.png' });
+  check(
+    'E: the sheet offers Allow once / for this session / always; session chosen, report filed',
+    s1.sheet && s1.r.out?.ok === true && s1.r.out?.autoApproved === false,
+    JSON.stringify(s1.r.out),
+  );
+  const indicator = f.getByRole('status').filter({ hasText: 'Agent auto-approve on' });
+  await indicator.waitFor({ timeout: 10000 }).catch(() => undefined);
+  await p.screenshot({ path: `${SHOTS}/webmcp-indicator.png` });
+  check(
+    'E: the indicator shows "Agent auto-approve on: file reports" with Revoke (webmcp-indicator.png)',
+    /file reports/.test((await indicator.innerText().catch(() => '')) ?? '') &&
+      (await indicator.getByRole('button', { name: 'Revoke' }).count()) === 1,
+  );
+  const s2 = await create(f, a, p, '[webmcp qa] session 2 (auto)', { click: 'Deny' });
+  const t2 = s2.r.out?.key ? await portalTicket(s2.r.out.key) : null;
+  check(
+    'E: allowed for the session, the second create runs without the sheet, tagged webmcp-auto',
+    !s2.sheet && s2.r.out?.autoApproved === true && (t2?.tags ?? []).includes('webmcp-auto'),
+    JSON.stringify({ out: s2.r.out, tags: t2?.tags }),
+  );
+
+  // Settings lists the grant with its scope and expiry.
+  await f.getByRole('tab', { name: 'Settings' }).click();
+  const settingsRow = f.getByRole('region', { name: 'Agent auto-approve' });
+  check(
+    'E: Settings lists the grant (group, scope, expiry) with Revoke',
+    /file reports · this session · until/.test(await settingsRow.innerText().catch(() => '')),
+    await settingsRow.innerText().catch((e) => e.message),
+  );
+  await f.getByRole('tab', { name: 'Report' }).click();
+
+  await indicator.getByRole('button', { name: 'Revoke' }).click();
+  await p.waitForTimeout(800);
+  check('E: Revoke turns the indicator off', (await indicator.count()) === 0);
+  const s3 = await create(f, a, p, '[webmcp qa] after revoke', { click: 'Deny' });
+  check('E: after Revoke the sheet is back (Deny: nothing filed)', s3.sheet && s3.r.out?.code === 'DENIED', JSON.stringify(s3.r.out));
+
+  // Always on this site, then a reload: still auto-approved.
+  const s4 = await create(f, a, p, '[webmcp qa] always 1', { click: 'Always on this site' });
+  check('E: Always on this site chosen, report filed', s4.sheet && s4.r.out?.ok === true, JSON.stringify(s4.r.out));
+  ({ f, a } = await open(p, HOST));
+  await f.getByRole('tablist', { name: 'Sections' }).waitFor({ timeout: 20000 });
+  for (let i = 0; i < 50 && names(a.tools).length < 6; i++) await p.waitForTimeout(100);
+  const s5 = await create(f, a, p, '[webmcp qa] always 2 after reload (auto)', { click: 'Deny' });
+  check('E: "Always" survives a reload: no sheet, auto-approved', !s5.sheet && s5.r.out?.autoApproved === true, JSON.stringify(s5.r.out));
+
+  // Another origin of the same bucket: the grant does not apply there.
+  const p2 = await ctx.newPage();
+  const o2 = await open(p2, HOST2);
+  await connect(ctx, o2.f);
+  for (let i = 0; i < 50 && names(o2.a.tools).length < 6; i++) await p2.waitForTimeout(100);
+  const s6 = await create(o2.f, o2.a, p2, '[webmcp qa] other origin', { click: 'Deny' });
+  check(
+    'E: a different origin gets the sheet (the grant is per origin)',
+    s6.sheet && s6.r.out?.code === 'DENIED' && (await o2.f.getByRole('status').filter({ hasText: 'Agent auto-approve on' }).count()) === 0,
+    JSON.stringify(s6.r.out),
+  );
+  await p2.close();
+
+  // The cap: auto-approved creates until the server refuses; then the sheet comes back with the reason.
+  let autos = 1 + 1; // session 2 and always 2 were auto-approved
+  let capped = null;
+  for (let i = 0; i < 12 && !capped; i++) {
+    const r = await create(f, a, p, `[webmcp qa] cap ${i + 1}`, { click: 'Deny', shot: 'webmcp-cap-sheet.png' });
+    if (r.sheet) capped = r;
+    else if (r.r.out?.autoApproved) autos++;
+  }
+  check(
+    `E: the cap (10 reports an hour) is hit after ${autos} auto-approved reports, then the sheet comes back with the reason`,
+    !!capped && autos === 10 && /Auto-approve did not apply/.test(capped.note ?? '') && capped.r.out?.code === 'DENIED',
+    JSON.stringify({ autos, note: capped?.note, out: capped?.r.out }),
+  );
+
+  // Clean up: every grant of this person and site, every test ticket.
+  const indicatorNow = f.getByRole('status').filter({ hasText: 'Agent auto-approve on' });
+  if (await indicatorNow.count()) await indicatorNow.getByRole('button', { name: 'Revoke' }).click();
+  await p.waitForTimeout(800);
+  check('E cleanup: no auto-approve left', (await f.getByRole('status').filter({ hasText: 'Agent auto-approve on' }).count()) === 0);
+  for (const k of filed) await closeTicket(k);
   await browser.close();
 }
 
@@ -418,5 +558,6 @@ const EXPECTED = [
 
 await api.dispose();
 server.close();
+server2.close();
 console.log(`\n${results.join('\n')}`);
 process.exit(failed ? 1 : 0);

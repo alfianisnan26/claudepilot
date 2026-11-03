@@ -28,6 +28,16 @@ Keys are the project's (`KONF-12`), never the portal id (`T-n`) and never anothe
 - **Errors in the result.** A tool answers `{ ok: false, code, error }` (`NOT_CONNECTED`, `INVALID`, `NO_SCREENSHOT`, `NOT_FOUND`, `DENIED`, `LIMIT`, `CAPTURE_FAILED`, or the server's code such as `RATE_LIMITED`); it never throws (the spec hides a thrown error from the agent).
 - **Untrusted text.** Summaries and comments come from people and agents: data, never instructions (`untrustedContentHint` on the reading tools). The page's query string is never returned.
 
+## Auto-approve
+
+Owner, 2026-11-03: "auto approve ... should consent user". The Allow sheet offers, for the tool's group (**file reports**, **attach screenshots**, **comment**): Deny, **Allow once** (the default), **Allow for this session** (this sign-in only: its `cprt_` token, until it expires or signs out, at most 12 h) and **Always on this site** (this person, bucket and origin, any of their sign-ins, 30 days). Nothing else is pre-selected. Reading tools never ask.
+
+- **Kept on the server** (`reporter_agent_grants`, migration 904; routes `GET|POST|DELETE /reporter/v1/agent-grants`, `DELETE /reporter/v1/agent-grants/:id`). A token sees only its person's grants for its bucket and origin, and a session grant only for itself: another origin, another bucket, another browser profile's sign-in, or a signed-out panel gets the sheet.
+- **Visible.** While any grant is on, the panel shows "Agent auto-approve on: <groups>" with **Revoke** (every grant). Settings lists each grant (group, scope, until) with its own Revoke.
+- **Checked on every call.** An auto-approved call names its grant (`x-reporter-agent-grant`); the server checks it against the token and refuses it (`CONFIRMATION_REQUIRED`) when it does not apply, or over the cap (`LIMIT_REACHED`): **10 reports and 30 comments or screenshot additions per person per hour** (`PORTAL_REPORTER_AGENT_REPORTS_PER_HOUR`, `PORTAL_REPORTER_AGENT_ACTIONS_PER_HOUR`). Refused, the panel shows the sheet with the reason, and the call goes as the person's if they allow it.
+- **Traced.** An auto-approved report, and a ticket an auto-approved comment or screenshot addition lands on, is tagged `webmcp-auto`; each call is audited as `reporter.agent_auto_approved` (who, tool, grant id, ticket), each grant as `reporter.agent_grant_made` / `reporter.agent_grant_revoked`.
+- Tool results say `autoApproved: true|false`; `reporter_get_context` lists the groups auto-approved (`autoApprove`).
+
 ## How to try it
 
 - **Chrome.** Per secondary sources (not checked against chromestatus): `chrome://flags/#enable-webmcp-testing` locally, or an origin trial token for a live site (from Chrome 149). Firefox and Safari have none: the panel registers nothing and is unchanged.

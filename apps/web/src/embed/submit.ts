@@ -59,8 +59,9 @@ export async function fileReport(
   req: Omit<ReporterCreateTicketRequest, 'captures'>,
   shots: Capture[],
   onUpload: (done: number, total: number) => void = () => undefined,
+  grant: string | null = null,
 ): Promise<{ res: ReporterCreateTicketResponse; failed: string[] }> {
-  const res = await client.createTicket({ ...req, captures: shots.map((c) => captureInput(c, null)) });
+  const res = await client.createTicket({ ...req, captures: shots.map((c) => captureInput(c, null)) }, grant);
   const failed: string[] = [];
   const total = uploadCount(shots);
   let done = 0;
@@ -77,8 +78,8 @@ export async function fileReport(
 }
 
 /** Adds shots to an open ticket ("Add to it"): the captures, then each shot's files. */
-export async function addShots(client: ReporterClient, key: string, shots: Capture[]): Promise<string[]> {
-  await client.addCaptures(key, { captures: shots.map((c) => captureInput(c, null)) });
+export async function addShots(client: ReporterClient, key: string, shots: Capture[], grant: string | null = null): Promise<string[]> {
+  await client.addCaptures(key, { captures: shots.map((c) => captureInput(c, null)) }, grant);
   const failed: string[] = [];
   for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(key, id, kind, blob), c)));
   return failed;

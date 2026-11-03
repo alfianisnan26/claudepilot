@@ -75,13 +75,22 @@ export class FakeGit implements ReporterGit {
   }
 }
 
-export async function reporterHarness(opts: { now?: () => Date; release?: string; claudePlan?: ReporterDeps['claudePlan']; visitorIp?: (c: Context) => string } = {}) {
+export async function reporterHarness(
+  opts: {
+    now?: () => Date;
+    release?: string;
+    claudePlan?: ReporterDeps['claudePlan'];
+    visitorIp?: (c: Context) => string;
+    agentCaps?: ReporterDeps['agentCaps'];
+    audit?: (kind: string, detail: Record<string, unknown>, actor: string) => void;
+  } = {},
+) {
   const h = await ticketsHarness({ now: opts.now });
   // KONF may be seeded already; OTHER is ours.
   for (const [key, name] of [['KONF', 'Konfersi'], ['OTHER', 'Other']] as const) if (!h.tickets.bucketOwner(key)) h.tickets.createBucket(UI, { key, name });
   const chat = new FakeChat();
   const git = new FakeGit();
-  const service = new ReporterService({ store: h.store, tickets: h.tickets, chat, git, now: opts.now, sdkVersion: () => '1.0.0', ...(opts.claudePlan ? { claudePlan: opts.claudePlan } : {}) });
+  const service = new ReporterService({ store: h.store, tickets: h.tickets, chat, git, now: opts.now, sdkVersion: () => '1.0.0', ...(opts.claudePlan ? { claudePlan: opts.claudePlan } : {}), ...(opts.agentCaps ? { agentCaps: opts.agentCaps } : {}) });
   service.updateConfig(
     'KONF',
     {
@@ -106,6 +115,7 @@ export async function reporterHarness(opts: { now?: () => Date; release?: string
       userLabel: () => 'Owner',
       clientKey: () => '127.0.0.1',
       ...(opts.visitorIp ? { visitorIp: opts.visitorIp } : {}),
+      ...(opts.audit ? { audit: opts.audit } : {}),
       release: opts.release ?? null,
       ...(opts.now ? { now: () => opts.now!().getTime() } : {}),
     }) as never,

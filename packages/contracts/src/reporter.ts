@@ -73,6 +73,12 @@ export const REPORTER_LIMITS = {
   annotationTextChars: 300,
   /** A draft review untouched this long is discarded (its files too). */
   draftDays: 30,
+  /** WebMCP auto-approve (PILOT-1128): reports one person may file through an auto-approval in an hour (the server's default; configurable). */
+  agentReportsPerHour: 10,
+  /** WebMCP auto-approve: comments and screenshot additions one person may make through an auto-approval in an hour (default; configurable). */
+  agentActionsPerHour: 30,
+  /** WebMCP auto-approve: how long "Always allow on this site" lasts. */
+  agentAlwaysDays: 30,
 } as const;
 
 /**
@@ -625,6 +631,36 @@ export interface ReporterCreateTicketResponse {
   sessionDelivery?: ReporterSessionDelivery;
 }
 
+/**
+ * WebMCP auto-approve (PILOT-1128, owner 2026-11-03: "auto approve ... should consent user"). An agent's tool that sends something asks the
+ * person in the panel; the person may instead allow one GROUP of tools for this sign-in (`session`: this token only, until it expires or
+ * signs out, at most 12 h) or for this site (`always`: this person, bucket and origin, any of their sign-ins, 30 days). Kept on the server,
+ * revocable from the panel. An auto-approved call names its grant in the `x-reporter-agent-grant` header; the server checks the grant
+ * against the token (person, bucket, origin, and for `session` the token itself), caps the calls per person per hour, tags the ticket
+ * `webmcp-auto` and audits who, tool and grant. Reading tools (context, my reports, a screenshot) never ask.
+ */
+export type ReporterAgentGroup = 'file' | 'attach' | 'comment';
+export const REPORTER_AGENT_GROUPS: readonly ReporterAgentGroup[] = ['file', 'attach', 'comment'];
+export type ReporterAgentScope = 'session' | 'always';
+export const REPORTER_AGENT_GRANT_HEADER = 'x-reporter-agent-grant';
+export const REPORTER_AGENT_AUTO_TAG = 'webmcp-auto';
+
+export interface ReporterAgentGrant {
+  id: string;
+  group: ReporterAgentGroup;
+  scope: ReporterAgentScope;
+  bucketKey: string;
+  origin: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** POST /reporter/v1/agent-grants */
+export interface ReporterAgentGrantRequest {
+  group: ReporterAgentGroup;
+  scope: ReporterAgentScope;
+}
+
 /** GET /reporter/v1/me: who the token is (the panel shows actorLabel, signs out on 401). */
 export interface ReporterMe {
   bucketKey: string;
@@ -1057,6 +1093,10 @@ export const REPORTER_ROUTES = {
   sessionStream: '/reporter/v1/sessions/:id/stream',
   /** GET an image a line of that session shows (images only). */
   sessionBlob: '/reporter/v1/sessions/:id/blobs/:blobId',
+  /** WebMCP auto-approve (PILOT-1128): GET the grants that apply to this token, POST ReporterAgentGrantRequest, DELETE every one of them. */
+  agentGrants: '/reporter/v1/agent-grants',
+  /** DELETE one grant (revoke). */
+  agentGrant: '/reporter/v1/agent-grants/:id',
   knowledge: '/reporter/v1/knowledge', // GET ?q=
   note: '/reporter/v1/knowledge/note', // GET ?path=
 } as const;

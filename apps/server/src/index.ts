@@ -833,6 +833,11 @@ const reporterPlan = (claudeId: string) => {
 const reporter = new ReporterService({
   store,
   tickets,
+  // WebMCP auto-approve caps per person per hour (PILOT-1128); unset or not a whole number: REPORTER_LIMITS' 10 reports and 30 actions.
+  agentCaps: {
+    ...(process.env.PORTAL_REPORTER_AGENT_REPORTS_PER_HOUR ? { reports: Number(process.env.PORTAL_REPORTER_AGENT_REPORTS_PER_HOUR) } : {}),
+    ...(process.env.PORTAL_REPORTER_AGENT_ACTIONS_PER_HOUR ? { actions: Number(process.env.PORTAL_REPORTER_AGENT_ACTIONS_PER_HOUR) } : {}),
+  },
   chat: chatController,
   knowledge: {
     search: (vault, q) => knowledge.search(vault, q, { limit: 20 }).hits.map((h) => ({ path: h.path, title: h.title, snippet: h.snippet?.text ?? '' })),

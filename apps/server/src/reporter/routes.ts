@@ -12,10 +12,14 @@
 
 import { AppError, success } from '@isnanme/core';
 import {
+  REPORTER_AGENT_AUTO_TAG,
+  REPORTER_AGENT_GRANT_HEADER,
   REPORTER_BRIDGE_VERSION,
   REPORTER_LIMITS,
   ticketBucketRef,
   type Actor,
+  type ReporterAgentGroup,
+  type ReporterCreateTicketRequest,
   type ReporterConfig,
   type ReporterConnectClaim,
   type ReporterConnectMessage,
@@ -364,7 +368,7 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   /* ----- The panel API (bearer) ----- */
 
   const api = new Hono<Vars>();
-  const guarded = ['/me', '/tickets', '/tickets/*', '/reviews', '/reviews/*', '/duplicates', '/events', '/session-targets', '/observed-build', '/sessions', '/sessions/*', '/knowledge', '/knowledge/*'];
+  const guarded = ['/me', '/tickets', '/tickets/*', '/reviews', '/reviews/*', '/duplicates', '/events', '/session-targets', '/observed-build', '/sessions', '/sessions/*', '/knowledge', '/knowledge/*', '/agent-grants', '/agent-grants/*'];
   for (const p of guarded) api.use(p, async (c, next) => {
     // '/tickets' and '/tickets/*' may both match one path: the token is checked (and counted) once.
     if (c.get('reporter')) return next();
@@ -396,8 +400,44 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   api.delete('/me', (c) => {
     const x = ctxOf(c);
     service.revoke(x.id, 'signed out from the panel');
+    service.revokeSessionGrants(x.id);
     return c.json(success({ ok: true }));
   });
+
+  /*
+   * WebMCP auto-approve (PILOT-1128): the grants of this token (person, bucket, origin; a session grant only its own token), made and revoked
+   * from the panel. A call that names a grant (REPORTER_AGENT_GRANT_HEADER) is checked against it and the hourly cap before it runs, then
+   * counted, tagged webmcp-auto and audited (who, tool, grant).
+   */
+  api.get('/agent-grants', (c) => c.json(success({ items: service.agentGrants(ctxOf(c)), caps: service.agentCaps() })));
+  api.post('/agent-grants', json, async (c) => {
+    const x = ctxOf(c);
+    const g = service.grantAgent(x, await jsonBody(c));
+    deps.audit?.('reporter.agent_grant_made', { bucket: x.bucketKey, origin: x.origin, grantId: g.id, group: g.group, scope: g.scope, expiresAt: g.expiresAt, tokenId: x.id }, `reporter:${x.actorUser}`);
+    return c.json(success(g), 201);
+  });
+  api.delete('/agent-grants', (c) => {
+    const x = ctxOf(c);
+    const n = service.revokeAgentGrant(x, null);
+    deps.audit?.('reporter.agent_grant_revoked', { bucket: x.bucketKey, origin: x.origin, grantId: 'all', revoked: n, tokenId: x.id }, `reporter:${x.actorUser}`);
+    return c.json(success({ revoked: n }));
+  });
+  api.delete('/agent-grants/:id', (c) => {
+    const x = ctxOf(c);
+    const n = service.revokeAgentGrant(x, c.req.param('id'));
+    deps.audit?.('reporter.agent_grant_revoked', { bucket: x.bucketKey, origin: x.origin, grantId: c.req.param('id'), revoked: n, tokenId: x.id }, `reporter:${x.actorUser}`);
+    return c.json(success({ revoked: n }));
+  });
+  /** The grant an auto-approved call names, checked (or null: the person allowed it in the sheet, or no agent at all). */
+  const autoGrant = (c: Context<Vars>, group: ReporterAgentGroup): string | null => {
+    const id = c.req.header(REPORTER_AGENT_GRANT_HEADER);
+    return id ? service.useAgentGrant(ctxOf(c), id.slice(0, 80), group) : null;
+  };
+  const autoDone = (c: Context<Vars>, grantId: string, group: ReporterAgentGroup, tool: string, ticket: string) => {
+    const x = ctxOf(c);
+    service.recordAgentUse(x, grantId, group, tool);
+    deps.audit?.('reporter.agent_auto_approved', { bucket: x.bucketKey, origin: x.origin, who: x.actorUser, whoLabel: x.actorLabel, tool, grantId, ticket, tokenId: x.id }, `reporter:${x.actorUser}`);
+  };
 
   const query = (c: Context): ReporterTicketQuery => {
     const many = (k: string) => (c.req.queries(k) ?? []).flatMap((v) => v.split(',')).filter(Boolean) as never[];
@@ -426,9 +466,24 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     }
     return c.json(success(service.listTickets(x, query(c), base(c))));
   });
-  api.post('/tickets', json, async (c) => c.json(success(service.createTicket(ctxOf(c), await jsonBody(c), base(c))), 201));
+  api.post('/tickets', json, async (c) => {
+    const grant = autoGrant(c, 'file');
+    const body = await jsonBody<ReporterCreateTicketRequest>(c);
+    if (grant) body.tags = [...(Array.isArray(body.tags) ? body.tags : []), REPORTER_AGENT_AUTO_TAG];
+    const t = service.createTicket(ctxOf(c), body, base(c));
+    if (grant) autoDone(c, grant, 'file', 'reporter_create_report', t.key);
+    return c.json(success(t), 201);
+  });
   api.get('/tickets/:key', (c) => c.json(success(service.ticket(ctxOf(c), c.req.param('key'), base(c)))));
-  api.post('/tickets/:key/captures', json, async (c) => c.json(success(service.addCaptures(ctxOf(c), c.req.param('key'), await jsonBody(c), base(c)))));
+  api.post('/tickets/:key/captures', json, async (c) => {
+    const grant = autoGrant(c, 'attach');
+    const t = service.addCaptures(ctxOf(c), c.req.param('key'), await jsonBody(c), base(c));
+    if (grant) {
+      service.tagAgentAuto(ctxOf(c), t.key);
+      autoDone(c, grant, 'attach', 'reporter_attach_screenshots', t.key);
+    }
+    return c.json(success(t));
+  });
   api.post('/tickets/:key/attachments', raw, async (c) => {
     const bytes = Buffer.from(await c.req.arrayBuffer());
     const out = service.attach(ctxOf(c), c.req.param('key'), c.req.header('x-reporter-capture') ?? '', c.req.header('x-reporter-kind') ?? '', bytes, c.req.header('content-type'));
@@ -439,7 +494,16 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   api.get('/tickets/:key/captures/:captureId/screenshot', (c) => image(c, service.screenshot(ctxOf(c), c.req.param('key'), c.req.param('captureId'))));
   api.get('/tickets/:key/captures/:captureId/annotated', (c) => image(c, service.annotated(ctxOf(c), c.req.param('key'), c.req.param('captureId'))));
   api.get('/tickets/:key/comments', (c) => c.json(success(service.comments(ctxOf(c), c.req.param('key')))));
-  api.post('/tickets/:key/comments', json, async (c) => c.json(success(service.reply(ctxOf(c), c.req.param('key'), (await jsonBody<{ body: string }>(c)).body)), 201));
+  api.post('/tickets/:key/comments', json, async (c) => {
+    const grant = autoGrant(c, 'comment');
+    const key = c.req.param('key');
+    const r = service.reply(ctxOf(c), key, (await jsonBody<{ body: string }>(c)).body);
+    if (grant) {
+      service.tagAgentAuto(ctxOf(c), key);
+      autoDone(c, grant, 'comment', 'reporter_comment_on_report', key);
+    }
+    return c.json(success(r), 201);
+  });
 
   api.get('/reviews', (c) => c.json(success(service.reviews(ctxOf(c), c.req.query('status'), base(c)))));
   api.post('/reviews', json, async (c) => c.json(success(service.startReview(ctxOf(c), await jsonBody(c), base(c))), 201));

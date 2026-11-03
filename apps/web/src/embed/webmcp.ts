@@ -1,5 +1,7 @@
 import {
   REPORTER_LIMITS,
+  type ReporterAgentGrant,
+  type ReporterAgentGroup,
   type ReporterBuildInfo,
   type ReporterReview,
   type ReporterStatus,
@@ -99,9 +101,21 @@ export function registerTools(mc: ModelContextLike, tools: WebMcpTool[], signal:
 export interface ToolAsk {
   /** "File a report", "Add 2 screenshots to KONF-12", "Comment on KONF-12". */
   action: string;
-  /** The text the person checks: the title or the comment, a few facts. */
+  /** The auto-approve group of the tool (PILOT-1128): what "Allow for this session" or "Always allow on this site" would cover. */
+  group: ReporterAgentGroup;
+  /** The text the person checks: the title or the comment, a few facts, as plain text. */
   lines: string[];
+  /** Why the person is asked although an auto-approval exists (its cap was reached, it no longer applies). */
+  note?: string;
+  /** Ask even when an auto-approval exists (the server refused it). */
+  noAuto?: boolean;
 }
+
+/**
+ * The answer to a ToolAsk: denied; allowed by the person in the sheet (once, or with a new session/site grant that covers the NEXT calls);
+ * or auto-approved by an existing grant, whose id the call sends so the server checks, caps, tags and audits it.
+ */
+export type ToolApproval = { kind: 'denied' } | { kind: 'person' } | { kind: 'auto'; grantId: string };
 
 /** The panel as the tools see it, read at the moment a tool runs. */
 export interface ToolSnapshot {
@@ -117,14 +131,21 @@ export interface ToolSnapshot {
   review: ReporterReview | null;
   /** A phone-like device: no whole-page capture (the panel offers Snap only). */
   coarse: boolean;
+  /** The auto-approve grants that apply to this sign-in (PILOT-1128). */
+  grants?: ReporterAgentGrant[];
 }
 
 export interface ReporterToolDeps {
   snapshot(): ToolSnapshot;
   /** A capture through the SDK, as the Snap button takes it; it joins the report being written. Rejects when cancelled or failed. */
   capture(mode: 'viewport' | 'full', signal?: AbortSignal): Promise<Capture>;
-  /** Asks the person in the panel; false on Deny, Esc, a timeout or when the call is cancelled. */
-  confirm(ask: ToolAsk, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Asks the person in the panel, or answers for them from an auto-approve grant of the ask's group; denied on Deny, Esc, a timeout or when
+   * the call is cancelled.
+   */
+  approve(ask: ToolAsk, signal?: AbortSignal): Promise<ToolApproval>;
+  /** The server refused an auto-approval (cap, revoked, expired): the panel reloads its grants. */
+  autoRefused?(): void;
   /** A report was filed (the shots are used up): the panel clears the form, refreshes and shows the ticket. */
   filed(key: string): void;
   /** Shots were added to a ticket: they leave the report being written. */
@@ -162,6 +183,56 @@ const DENIED = () =>
   );
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+/** The server's two refusals of an auto-approval: the cap (LIMIT_REACHED) and a grant that does not apply (CONFIRMATION_REQUIRED). */
+const autoRefusal = (e: unknown) => ['LIMIT_REACHED', 'CONFIRMATION_REQUIRED'].includes(errorCode(e));
+
+/**
+ * Runs a sending call once it is approved: by a grant (the call names it), else by the person. When the server refuses the grant (over the
+ * cap, revoked, expired), the person is asked after all, with the reason as a note, and the call goes as theirs.
+ */
+async function approvedRun<T>(
+  deps: ReporterToolDeps,
+  ask: ToolAsk,
+  signal: AbortSignal | undefined,
+  run: (grant: string | null) => Promise<T>,
+): Promise<{ denied: true } | { denied: false; value: T; auto: boolean }> {
+  const a = await deps.approve(ask, signal);
+  if (a.kind === 'denied') return { denied: true };
+  if (a.kind === 'auto') {
+    try {
+      return { denied: false, value: await run(a.grantId), auto: true };
+    } catch (e) {
+      if (!autoRefusal(e)) throw e;
+      deps.autoRefused?.();
+      const again = await deps.approve({ ...ask, noAuto: true, note: `Auto-approve did not apply: ${errorText(e)}` }, signal);
+      if (again.kind === 'denied') return { denied: true };
+    }
+  }
+  return { denied: false, value: await run(null), auto: false };
+}
+
+/** The ask's lines for a report, as plain text (no Markdown in the sheet). */
+export function reportLines(f: {
+  summary: string;
+  meta: string;
+  page: string | null;
+  description: string;
+  steps: string[];
+  expected: string;
+  actual: string;
+}): string[] {
+  const cut = (t: string, n: number) => (t.length > n ? `${t.slice(0, n)}…` : t);
+  const steps = f.steps.map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return [
+    f.summary,
+    f.meta,
+    ...(f.page ? [f.page] : []),
+    ...(f.description.trim() ? [cut(f.description.trim(), 600)] : []),
+    ...(steps.length ? [`Steps to reproduce:\n${steps.map((x, i) => `${i + 1}. ${cut(x, 200)}`).join('\n')}`] : []),
+    ...(f.expected.trim() ? [`Expected: ${cut(f.expected.trim(), 300)}`] : []),
+    ...(f.actual.trim() ? [`Actual: ${cut(f.actual.trim(), 300)}`] : []),
+  ];
+}
 const errorText = (e: unknown) => (e instanceof Error ? e.message : 'Failed.').slice(0, 300);
 const errorCode = (e: unknown) =>
   e && typeof e === 'object' && typeof (e as { code?: unknown }).code === 'string' ? (e as { code: string }).code : 'ERROR';
@@ -253,6 +324,8 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
         reporter: s.connected ? s.actorLabel || null : null,
         shots: s.connected ? s.shots.map(shotFacts) : [],
         draftReview: s.connected && s.review?.status === 'draft' ? { title: s.review.title, comments: s.review.comments.length } : null,
+        // What the person auto-approved (the rest asks them in the panel).
+        autoApprove: s.connected ? (s.grants ?? []).map((g) => ({ group: g.group, scope: g.scope, expiresAt: g.expiresAt })) : [],
         limits: { shotsPerReport: TOOL_SHOTS_MAX, ticketsPerHour: REPORTER_LIMITS.ticketsPerHour },
       };
     },
@@ -297,7 +370,7 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
     name: TOOL_NAMES.create,
     title: 'File a report',
     description:
-      'Files a ticket in this project from the screenshots the reporter holds (take one with reporter_capture_screenshot first), exactly as the Report form does, after the person allows it in the reporter panel (it must be open to answer). Returns the ticket key (e.g. KONF-12).',
+      'Files a ticket in this project from the screenshots the reporter holds (take one with reporter_capture_screenshot first), exactly as the Report form does, after the person allows it in the reporter panel (it must be open to answer), or at once under an auto-approval they gave for filing reports. Returns the ticket key (e.g. KONF-12).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -345,39 +418,44 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
       if (description.length > DESCRIPTION_MAX) return fail('INVALID', `The description is longer than ${DESCRIPTION_MAX} characters.`);
       const shots = s.shots;
       if (!shots.length) return fail('NO_SCREENSHOT', 'A report needs a screenshot: call reporter_capture_screenshot first.');
-      const ok = await deps.confirm(
-        {
-          action: 'File a report',
-          lines: [
-            (summary as string).trim(),
-            `${type} · ${priority} · ${shots.length} screenshot${shots.length === 1 ? '' : 's'}`,
-            ...(s.page ? [pageOf(s.page.url) ?? ''] : []),
-            // What the person allows is what is sent: the description too (cut for the sheet, sent whole).
-            description.length > 600 ? `${description.slice(0, 600)}…` : description,
-          ],
-        },
-        options?.signal,
-      );
-      if (!ok) return DENIED();
-      const now = deps.snapshot();
-      if (!now.connected) return NOT_CONNECTED();
+      // What the person allows is what is sent (the description cut for the sheet, sent whole), in plain words, no Markdown.
+      const ask: ToolAsk = {
+        action: 'File a report',
+        group: 'file',
+        lines: reportLines({
+          summary: (summary as string).trim(),
+          meta: `${type} · ${priority} · ${shots.length} screenshot${shots.length === 1 ? '' : 's'}`,
+          page: s.page ? pageOf(s.page.url) : null,
+          description: body as string,
+          steps: steps as string[],
+          expected: expected as string,
+          actual: actual as string,
+        }),
+      };
       try {
-        const { res, failed } = await fileReport(
-          now.client,
-          {
-            summary: (summary as string).trim(),
-            description,
-            type: type as TicketType,
-            priority: priority as TicketPriority,
-            tags: [WEBMCP_TAG],
-            build: shots[0]!.evidence.build,
-            sdkVersion: now.sdkVersion || shots[0]!.evidence.sdkVersion,
-            target: { kind: 'ticket' },
-          },
-          shots,
-        );
-        deps.filed(res.key);
-        return { ok: true, key: res.key, url: res.url, uploadFailed: failed };
+        const r = await approvedRun(deps, ask, options?.signal, (grant) => {
+          const now = deps.snapshot();
+          if (!now.connected) throw Object.assign(new Error('Signed out.'), { code: 'NOT_CONNECTED' });
+          return fileReport(
+            now.client,
+            {
+              summary: (summary as string).trim(),
+              description,
+              type: type as TicketType,
+              priority: priority as TicketPriority,
+              tags: [WEBMCP_TAG],
+              build: shots[0]!.evidence.build,
+              sdkVersion: now.sdkVersion || shots[0]!.evidence.sdkVersion,
+              target: { kind: 'ticket' },
+            },
+            shots,
+            undefined,
+            grant,
+          );
+        });
+        if (r.denied) return DENIED();
+        deps.filed(r.value.res.key);
+        return { ok: true, key: r.value.res.key, url: r.value.res.url, uploadFailed: r.value.failed, autoApproved: r.auto };
       } catch (e) {
         return fail(errorCode(e), errorText(e));
       }
@@ -388,7 +466,7 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
     name: TOOL_NAMES.attach,
     title: 'Add screenshots to my report',
     description:
-      'Adds screenshots the reporter holds (all of them, or the captureIds given) to one of your own open reports in this project, after the person allows it. The key is the project key, e.g. KONF-12.',
+      'Adds screenshots the reporter holds (all of them, or the captureIds given) to one of your own open reports in this project, after the person allows it (or under their auto-approval for screenshots). The key is the project key, e.g. KONF-12.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -419,18 +497,16 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
       } catch (e) {
         return fail(errorCode(e), errorText(e));
       }
-      const ok = await deps.confirm(
-        {
-          action: `Add ${shots.length} screenshot${shots.length === 1 ? '' : 's'} to ${key}`,
-          lines: shots.map((c) => pageOf(c.evidence.page.url) ?? c.captureId),
-        },
-        options?.signal,
-      );
-      if (!ok) return DENIED();
+      const ask: ToolAsk = {
+        action: `Add ${shots.length} screenshot${shots.length === 1 ? '' : 's'} to ${key}`,
+        group: 'attach',
+        lines: shots.map((c) => pageOf(c.evidence.page.url) ?? c.captureId),
+      };
       try {
-        const failed = await addShots(s.client, key, shots);
+        const r = await approvedRun(deps, ask, options?.signal, (grant) => addShots(s.client, key, shots, grant));
+        if (r.denied) return DENIED();
         deps.used(shots.map((c) => c.captureId));
-        return { ok: true, key, added: shots.length, uploadFailed: failed };
+        return { ok: true, key, added: shots.length, uploadFailed: r.value, autoApproved: r.auto };
       } catch (e) {
         return fail(errorCode(e), errorText(e));
       }
@@ -471,7 +547,7 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
   const comment: WebMcpTool = {
     name: TOOL_NAMES.comment,
     title: 'Comment on my report',
-    description: `Posts a comment on one of your own reports in this project (as the reply box on the ticket does), after the person allows it. At most ${REPORTER_LIMITS.commentChars} characters, Markdown.`,
+    description: `Posts a comment on one of your own reports in this project (as the reply box on the ticket does), after the person allows it (or under their auto-approval for comments). At most ${REPORTER_LIMITS.commentChars} characters, Markdown.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -494,11 +570,11 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
       } catch (e) {
         return fail(errorCode(e), errorText(e));
       }
-      const ok = await deps.confirm({ action: `Comment on ${key}`, lines: [body.trim().slice(0, 600)] }, options?.signal);
-      if (!ok) return DENIED();
+      const ask: ToolAsk = { action: `Comment on ${key}`, group: 'comment', lines: [body.trim().slice(0, 600)] };
       try {
-        await s.client.reply(key, body.trim());
-        return { ok: true, key };
+        const r = await approvedRun(deps, ask, options?.signal, (grant) => s.client.reply(key, body.trim(), grant));
+        if (r.denied) return DENIED();
+        return { ok: true, key, autoApproved: r.auto };
       } catch (e) {
         return fail(errorCode(e), errorText(e));
       }

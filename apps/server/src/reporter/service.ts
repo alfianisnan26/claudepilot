@@ -15,6 +15,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { AppError } from '@isnanme/core';
 import { accountActive, recordTokenAccount, tokenAccount } from '../identity/accountGate.js';
 import {
+  REPORTER_AGENT_AUTO_TAG,
+  REPORTER_AGENT_GROUPS,
   REPORTER_LIMITS,
   REPORTER_TOKEN_PREFIX,
   TICKET_PRIORITIES,
@@ -25,6 +27,8 @@ import {
   ticketBucketRef,
   ticketIdOf,
   type Actor,
+  type ReporterAgentGrant,
+  type ReporterAgentGroup,
   type ReporterAnchor,
   type ReporterAnnotation,
   type ReporterBuildInfo,
@@ -165,6 +169,20 @@ export interface ReporterDeps {
    * every second by the live chat stream, so it must be cheap.
    */
   claudePlan?: (claudeId: string) => ReporterChatRuntime['plan'];
+  /** WebMCP auto-approve caps per person per hour (PILOT-1128); default REPORTER_LIMITS.agentReportsPerHour and agentActionsPerHour. */
+  agentCaps?: { reports?: number; actions?: number };
+}
+
+interface AgentGrantRow {
+  id: string;
+  bucket_key: string;
+  origin: string;
+  actor_user: string;
+  grp: ReporterAgentGroup;
+  scope: 'session' | 'always';
+  token_id: string | null;
+  created_at: string;
+  expires_at: string;
 }
 
 /** Who a panel call is: the token's scope, resolved now. */
@@ -395,6 +413,105 @@ export class ReporterService {
   stop(): void {
     for (const t of this.#pendingDeliveries.values()) clearTimeout(t);
     this.#pendingDeliveries.clear();
+  }
+
+  /* ---------- WebMCP auto-approve (PILOT-1128, docs/prd/ui-reporter-webmcp.md) ---------- */
+
+  /** The caps an auto-approval is held to, per person per hour. */
+  agentCaps(): { reports: number; actions: number } {
+    const n = (v: number | undefined, d: number) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : d);
+    return { reports: n(this.deps.agentCaps?.reports, REPORTER_LIMITS.agentReportsPerHour), actions: n(this.deps.agentCaps?.actions, REPORTER_LIMITS.agentActionsPerHour) };
+  }
+
+  /**
+   * The grants that apply to this token now: the token's person, bucket and origin, not revoked, not expired, and a `session` grant only for
+   * the token it was made with. Another origin, another bucket or another sign-in (session) sees none of them.
+   */
+  #grantRows(ctx: ReporterTokenCtx): AgentGrantRow[] {
+    return this.#db
+      .prepare(
+        `SELECT * FROM reporter_agent_grants WHERE actor_user = ? AND bucket_key = ? AND origin = ? AND revoked_at IS NULL AND expires_at > ?
+           AND (scope = 'always' OR token_id = ?) ORDER BY created_at`,
+      )
+      .all(ctx.actorUser, ctx.bucketKey, ctx.origin, this.#iso(), ctx.id) as unknown as AgentGrantRow[];
+  }
+
+  #grantView(r: AgentGrantRow): ReporterAgentGrant {
+    return { id: r.id, group: r.grp, scope: r.scope, bucketKey: r.bucket_key, origin: r.origin, createdAt: r.created_at, expiresAt: r.expires_at };
+  }
+
+  agentGrants(ctx: ReporterTokenCtx): ReporterAgentGrant[] {
+    return this.#grantRows(ctx).map((r) => this.#grantView(r));
+  }
+
+  /** The person allowed a group for this sign-in or this site (the panel's Allow sheet). One grant per group and scope: a new one replaces it. */
+  grantAgent(ctx: ReporterTokenCtx, raw: unknown): ReporterAgentGrant {
+    const b = (raw ?? {}) as { group?: unknown; scope?: unknown };
+    if (!REPORTER_AGENT_GROUPS.includes(b.group as ReporterAgentGroup)) throw invalid('group', 'group is file, attach or comment.');
+    if (b.scope !== 'session' && b.scope !== 'always') throw invalid('scope', 'scope is session or always.');
+    const now = this.#now();
+    const always = new Date(now.getTime() + REPORTER_LIMITS.agentAlwaysDays * 24 * HOUR).toISOString();
+    const expiresAt = b.scope === 'session' ? ctx.expiresAt : always;
+    const id = `rag_${randomUUID()}`;
+    this.#inTx(() => {
+      this.#wdb
+        .prepare(
+          `UPDATE reporter_agent_grants SET revoked_at = ? WHERE actor_user = ? AND bucket_key = ? AND origin = ? AND grp = ? AND scope = ? AND revoked_at IS NULL
+             AND (scope = 'always' OR token_id = ?)`,
+        )
+        .run(now.toISOString(), ctx.actorUser, ctx.bucketKey, ctx.origin, b.group as string, b.scope as string, ctx.id);
+      this.#wdb
+        .prepare('INSERT INTO reporter_agent_grants (id, bucket_key, origin, actor_user, grp, scope, token_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, ctx.bucketKey, ctx.origin, ctx.actorUser, b.group as string, b.scope as string, b.scope === 'session' ? ctx.id : null, now.toISOString(), expiresAt);
+    });
+    return this.#grantView(this.#db.prepare('SELECT * FROM reporter_agent_grants WHERE id = ?').get(id) as unknown as AgentGrantRow);
+  }
+
+  /** Revokes one grant that applies to this token (anything else is the same not found), or every one of them (`id` null). Returns how many. */
+  revokeAgentGrant(ctx: ReporterTokenCtx, id: string | null): number {
+    const mine = this.#grantRows(ctx).filter((r) => id === null || r.id === id);
+    if (id !== null && !mine.length) throw notFound();
+    const at = this.#iso();
+    const stmt = this.#wdb.prepare('UPDATE reporter_agent_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL');
+    for (const r of mine) stmt.run(at, r.id);
+    return mine.length;
+  }
+
+  /** Sign-out: the token's session grants end with it (they could not be used anyway: the token is gone). */
+  revokeSessionGrants(tokenId: string): void {
+    this.#wdb.prepare("UPDATE reporter_agent_grants SET revoked_at = ? WHERE token_id = ? AND scope = 'session' AND revoked_at IS NULL").run(this.#iso(), tokenId);
+  }
+
+  /**
+   * An auto-approved call (the panel sent `x-reporter-agent-grant`): the grant must apply to this token and to the tool's group, and the
+   * person's hourly cap must have room. Refused with CONFIRMATION_REQUIRED (the grant does not apply) or LIMIT_REACHED (the cap): the panel
+   * then asks the person instead. Returns the grant id; recordAgentUse counts the call once it went through.
+   */
+  useAgentGrant(ctx: ReporterTokenCtx, rawId: string, group: ReporterAgentGroup): string {
+    const g = this.#grantRows(ctx).find((r) => r.id === rawId && r.grp === group);
+    if (!g) throw new AppError('CONFIRMATION_REQUIRED', 'This auto-approval does not apply here (revoked, expired, another site or sign-in). Ask the person.');
+    const kind = group === 'file' ? 'report' : 'action';
+    const cap = kind === 'report' ? this.agentCaps().reports : this.agentCaps().actions;
+    const since = new Date(this.#now().getTime() - HOUR).toISOString();
+    const used = (this.#db.prepare('SELECT count(*) AS n FROM reporter_agent_uses WHERE actor_user = ? AND kind = ? AND at > ?').get(ctx.actorUser, kind, since) as { n: number }).n;
+    if (used >= cap)
+      throw new AppError('LIMIT_REACHED', `Auto-approve allows ${cap} ${kind === 'report' ? 'reports' : 'comments and screenshot additions'} an hour. Ask the person.`);
+    return g.id;
+  }
+
+  recordAgentUse(ctx: ReporterTokenCtx, grantId: string, group: ReporterAgentGroup, tool: string): void {
+    this.#wdb
+      .prepare('INSERT INTO reporter_agent_uses (grant_id, actor_user, kind, tool, at) VALUES (?, ?, ?, ?, ?)')
+      .run(grantId, ctx.actorUser, group === 'file' ? 'report' : 'action', tool.slice(0, 64), this.#iso());
+  }
+
+  /** Tags a ticket of this bucket `webmcp-auto` (an auto-approved comment or screenshot addition on it). */
+  tagAgentAuto(ctx: ReporterTokenCtx, ref: string): void {
+    const t = this.#ticketRow(ctx, ref);
+    const tags = (this.#db.prepare('SELECT tag FROM ticket_tags WHERE ticket_number = ?').all(t.number) as { tag: string }[]).map((r) => r.tag);
+    if (tags.includes(REPORTER_AGENT_AUTO_TAG)) return;
+    this.deps.tickets.update(this.#caller(ctx), ticketIdOf(t.number), { tags: [...tags, REPORTER_AGENT_AUTO_TAG] });
+    this.#changed();
   }
 
   /* ---------- Config and sites ---------- */
