@@ -116,6 +116,8 @@ export const DEFAULT_ALLOW = [
   'codeload.github.com',
   'objects.githubusercontent.com',
   'nodejs.org',
+  // Miniflare (wrangler dev, memor.id's e2e stack) reads the public request.cf sample from here; without it request.cf is missing.
+  'workers.cloudflare.com',
 ];
 
 export function hostAllowed(host: string, allow: string[]): boolean {
