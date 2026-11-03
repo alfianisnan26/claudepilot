@@ -284,8 +284,9 @@ export function reporterTools(deps: ReporterToolDeps, opts: { connected: boolean
       if (s.shots.length >= TOOL_SHOTS_MAX) return fail('LIMIT', `A report holds at most ${TOOL_SHOTS_MAX} screenshots.`);
       try {
         const c = await deps.capture(mode, options?.signal);
-        // The panel's state catches up after this call returns: the shot was added to the ones held before.
-        return { ok: true, shot: shotFacts(c), shots: s.shots.length + 1 };
+        // The panel's state may catch up only after this call returns: then the new shot is not in it yet.
+        const held = deps.snapshot().shots;
+        return { ok: true, shot: shotFacts(c), shots: held.some((x) => x.captureId === c.captureId) ? held.length : held.length + 1 };
       } catch (e) {
         return fail('CAPTURE_FAILED', errorText(e));
       }
