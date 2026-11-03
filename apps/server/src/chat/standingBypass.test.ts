@@ -15,7 +15,7 @@ import {
   standingBypass,
   workspaceProtected,
 } from './standingBypass.js';
-import { liveSession, ok, sleep, until, type Live } from './testkit.js';
+import { APPLIED, controls, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
 afterEach(() => standingBypass.reset());
 
@@ -84,8 +84,32 @@ async function answerBypass(s: Live) {
   s.ws.tails.at(-1)!.push(ok(req.id, { mode: 'bypassPermissions' }));
 }
 
-const decidedBy = (s: Live, id: string) =>
-  s.store.db!.prepare('SELECT status, decided_by FROM approvals WHERE id = ?').get(id) as { status: string; decided_by: string | null };
+const decidedBy = (s: Live, id: string) => ({
+  ...(s.store.db!.prepare('SELECT status, decided_by FROM approvals WHERE id = ?').get(id) as {
+    status: string;
+    decided_by: string | null;
+  }),
+});
+
+/** Answers every settings read and every switch to Bypass, on the newest process, until `p` settles (a restart makes a new one). */
+async function driving<T>(s: Live, p: Promise<T>): Promise<T> {
+  let settled = false;
+  p.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  const seen = new Set<string>();
+  while (!settled) {
+    for (const c of controls(s.ws)) {
+      if (seen.has(c.id)) continue;
+      if (c.request.subtype === 'get_settings') (seen.add(c.id), s.ws.tails.at(-1)!.push(ok(c.id, APPLIED)));
+      else if (c.request.subtype === 'set_permission_mode')
+        (seen.add(c.id), s.ws.tails.at(-1)!.push(ok(c.id, { mode: 'bypassPermissions' })));
+    }
+    await sleep(5);
+  }
+  return p;
+}
 
 test('a covered workspace: the session starts bypass-capable, its session.bypass card is allowed by the standing policy (owner), audited', async () => {
   const s = await liveSession();
@@ -104,7 +128,7 @@ test('a covered workspace: the session starts bypass-capable, its session.bypass
       { sessionId: b.id, workspaceId: 'docker/ws1' },
     );
     await answerBypass(s);
-    await approvals.standingSettled();
+    await approvals.standingDone();
     assert.deepEqual(decidedBy(s, a.id), { status: 'allowed', decided_by: STANDING_BYPASS_DECIDER });
     assert.equal(s.controller.get(b.id)!.mode, 'bypassPermissions');
     const entered = s.controller.audit({ kind: 'bypass.entered', sessionId: b.id })[0]!;
@@ -131,7 +155,7 @@ test('negatives: another workspace, an empty list, or the global switch off: not
       assert.equal(s.controller.get(b.id)!.bypassCapable, false, `${list || 'empty'} / switch ${allowed}`);
       assert.equal(s.controller.standingFor(b.id), false);
       const a = approvals.create({ kind: 'session.bypass', payload: { sessionId: b.id } }, { sessionId: b.id, workspaceId: 'docker/ws1' });
-      await approvals.standingSettled();
+      await approvals.standingDone();
       await sleep(30);
       assert.deepEqual(decidedBy(s, a.id), { status: 'pending', decided_by: null });
       assert.equal(s.controller.get(b.id)!.mode === 'bypassPermissions', false);
@@ -149,7 +173,7 @@ test('startup: cards that waited for a person are allowed once the session’s w
     const approvals = rig(s);
     const b = await newSession(s, 'docker/ws1', { bypassOptIn: true });
     const a = approvals.create({ kind: 'session.bypass', payload: { sessionId: b.id } }, { sessionId: b.id, workspaceId: 'docker/ws1' });
-    await approvals.standingSettled();
+    await approvals.standingDone();
     assert.equal(decidedBy(s, a.id).status, 'pending', 'no policy yet: it waits');
     standingBypass.configure('docker/ws1');
     const allowing = approvals.allowStandingPending();
@@ -163,7 +187,7 @@ test('startup: cards that waited for a person are allowed once the session’s w
 });
 
 test('Keep going’s put-back under the standing policy: no 24 hour window, and a session started before the policy is made capable first', async () => {
-  const s = await liveSession();
+  const s = await liveSession({}, true);
   try {
     rig(s);
     // Started before the policy: not capable, never in Bypass (no bypassSeenAt at all).
@@ -171,11 +195,10 @@ test('Keep going’s put-back under the standing policy: no 24 hour window, and 
     assert.equal(s.controller.get(b.id)!.bypassCapable, false);
     assert.equal(s.controller.bypassSeenAt(b.id), null);
     standingBypass.configure('docker/ws1');
-    const restoring = s.controller.restoreBypass(b.id);
+    const tails = s.ws.tails.length;
     // The restart for the flag (a new process), then the switch on it.
-    await until(() => s.ws.tails.length >= 3 || s.controller.get(b.id)!.bypassCapable === true);
-    await answerBypass(s);
-    assert.equal(await restoring, true);
+    assert.equal(await driving(s, s.controller.restoreBypass(b.id)), true);
+    assert.ok(s.ws.tails.length > tails, 'restarted with the flag');
     assert.equal(s.controller.get(b.id)!.mode, 'bypassPermissions');
     assert.equal(s.controller.get(b.id)!.bypassCapable, true);
     assert.equal(s.controller.audit({ kind: 'bypass.capable', sessionId: b.id })[0]?.detail.how, 'standing');

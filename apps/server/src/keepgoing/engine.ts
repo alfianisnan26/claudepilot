@@ -292,7 +292,7 @@ export class KeepGoingEngine {
       lastNudgeAt: this.#d.store.lastAt(s.id, 'nudged'),
       standing,
       ...(!ended && s.bypassCapable && this.#d.chat.restoreBypass ? { bypassSeenAt: this.#bypassSeenAt(s.id) } : {}),
-      ...(!ended && this.#d.chat.restoreBypass && this.#d.chat.standingFor?.(s.id) === true ? { standing: true } : {}),
+      ...(!ended && this.#d.chat.restoreBypass && this.#d.chat.standingFor?.(s.id) === true ? { standingBypass: true } : {}),
       ...(!ended ? { drained: () => this.#drained(s) } : {}),
       ...(ended
         ? {

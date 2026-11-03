@@ -382,7 +382,7 @@ export class Approvals {
   }
 
   /** Waits for the standing allows in flight (tests). */
-  async standingSettled(): Promise<void> {
+  async standingDone(): Promise<void> {
     while (this.#standingRuns.size) await Promise.all([...this.#standingRuns]);
   }
 
