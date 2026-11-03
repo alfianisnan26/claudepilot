@@ -2,7 +2,6 @@ import {
   REPORTER_LIMITS,
   TICKET_PRIORITY_LABEL,
   TICKET_TYPE_LABEL,
-  type ReporterCaptureInput,
   type ReporterCaptureMode,
   type ReporterDuplicateCandidate,
   type ReporterFileMode,
@@ -16,55 +15,18 @@ import { useEffect, useLayoutEffect, useState, type KeyboardEvent, type ReactNod
 import { SEVERITIES, countBySeverity, shotCaption } from '@/features/reporter/shared';
 import type { ReporterClient } from './api';
 import { Annotator } from './Annotator';
-import { editorSource, uploadPlan } from './annotate';
+import { editorSource } from './annotate';
 import { usePanel, type Capture } from './context';
 import { Icon, type IconName } from './icons';
 import { afterFiled, askLeadNote, elementLabel, reportProblem, sendButton, suggestTitle } from './formModel';
-import { autoAnnotate, hasUnsavedWork, progressText, uploadCount } from './journey';
+import { autoAnnotate, hasUnsavedWork, progressText } from './journey';
 import { pickTarget, proposedSummary, sentText, ticketsFor } from './model';
+import { addShots, captureInput, fileReport, uploadCapture } from './submit';
 import { Viewer } from './Viewer';
 import { AuthImg, Btn, Chip, ConfirmBar, Field, IconBtn, Notice, Seg, inputClass } from './ui';
 
 const TYPES: TicketType[] = ['bug', 'feature', 'task', 'question'];
 const PRIORITIES: TicketPriority[] = ['urgent', 'high', 'normal', 'low'];
-
-const captureInput = (c: Capture, note: string | null): ReporterCaptureInput => ({
-  captureId: c.captureId,
-  pageUrl: c.evidence.page.url,
-  anchor: c.evidence.anchor,
-  note,
-  ...(c.annotations?.length ? { annotations: c.annotations } : {}),
-});
-
-/**
- * Uploads a capture's screenshot (the blurred image when a mark blurs, never the original then), its annotated image, and its evidence;
- * returns what failed (the ticket or comment exists either way).
- */
-async function uploadCapture(
-  attach: (captureId: string, kind: 'screenshot' | 'annotated' | 'evidence', blob: Blob) => Promise<unknown>,
-  c: Capture,
-  onStep: () => void = () => undefined,
-): Promise<string[]> {
-  const failed: string[] = [];
-  for (const f of uploadPlan(c)) {
-    try {
-      await attach(c.captureId, f.kind, f.blob);
-    } catch {
-      failed.push(f.kind === 'annotated' ? 'annotated image' : 'screenshot');
-    }
-    onStep();
-  }
-  const json = new Blob([JSON.stringify(c.evidence)], { type: 'application/json' });
-  if (json.size > REPORTER_LIMITS.evidenceBytes) failed.push('evidence (too large)');
-  else
-    try {
-      await attach(c.captureId, 'evidence', json);
-    } catch {
-      failed.push('evidence');
-    }
-  onStep();
-  return failed;
-}
 
 export function ReportTab() {
   const p = usePanel();
@@ -371,9 +333,7 @@ function Duplicates({ shots, onAdded }: { shots: Capture[]; onAdded: (key: strin
   const add = async () => {
     setBusy(true);
     try {
-      await client.addCaptures(d.key, { captures: shots.map((c) => captureInput(c, null)) });
-      const failed: string[] = [];
-      for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(d.key, id, kind, blob), c)));
+      const failed = await addShots(client, d.key, shots);
       notify(failed.length ? `Added to ${d.key}; upload failed: ${failed.join(', ')}.` : `Added to ${d.key}.`, failed.length ? 'error' : 'ok');
       refresh();
       onAdded(d.key);
@@ -536,23 +496,21 @@ function QuickForm({ onFiled }: { onFiled: (key: string) => void }) {
     setError(null);
     setProgress(progressText({ stage: 'filing' }));
     try {
-      const res = await client.createTicket({
-        summary: summary.trim(),
-        description,
-        type,
-        priority: asking ? 'urgent' : priority,
-        tags: [],
-        captures: shots.map((c) => captureInput(c, null)),
-        build: capture.evidence.build,
-        sdkVersion: sdkVersion || capture.evidence.sdkVersion,
-        target,
-      });
-      const failed: string[] = [];
-      const total = uploadCount(shots);
-      let done = 0;
-      const step = () => setProgress(progressText({ stage: 'uploading', done: ++done, total }));
-      setProgress(progressText({ stage: 'uploading', done, total }));
-      for (const c of shots) failed.push(...(await uploadCapture((id, kind, blob) => client.attach(res.key, id, kind, blob), c, step)));
+      const { res, failed } = await fileReport(
+        client,
+        {
+          summary: summary.trim(),
+          description,
+          type,
+          priority: asking ? 'urgent' : priority,
+          tags: [],
+          build: capture.evidence.build,
+          sdkVersion: sdkVersion || capture.evidence.sdkVersion,
+          target,
+        },
+        shots,
+        (done, total) => setProgress(progressText({ stage: 'uploading', done, total })),
+      );
       refresh();
       // A direct ask goes straight into the chat with that session (the delivered message and the reply live); a ticket shows Filed.
       const next = afterFiled(target, res, description, capture.screenshot);

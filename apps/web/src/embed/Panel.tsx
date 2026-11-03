@@ -13,6 +13,7 @@ import {
 } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogoMark } from '../components/LogoMark';
+import { Sheet } from '../components/Sheet';
 import { TabBar } from '../components/TabBar';
 import {
   clearToken,
@@ -41,11 +42,15 @@ import { KnowledgeTab, SessionsTab, SettingsTab } from './OtherTabs';
 import { ReportTab } from './ReportTab';
 import { TicketsTab } from './TicketsTab';
 import { Btn, Notice } from './ui';
+import { modelContextOf, registerTools, reporterTools, toolsAllowed, type ReporterToolDeps, type ToolAsk } from './webmcp';
 
 const BUCKET = /^[A-Z]{2,6}$/;
 const POLL_MS = 30_000;
 /** Shots on one report (the form's strip). */
 const REPORT_SHOTS_MAX = 6;
+/** How long a WebMCP tool waits for the person's Allow, and for a screenshot it asked for. */
+const ASK_MS = 120_000;
+const AGENT_CAPTURE_MS = 60_000;
 
 /**
  * The reporter panel (/reporter/v1/embed?bucket=&origin=), framed by the SDK on the host page. It answers `ready` once it knows the
@@ -377,8 +382,37 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
       appendNext.current = append;
       setPending(requestId);
       post(captureRequest(requestId, mode, precise, choiceRef.current));
+      return requestId;
     },
     [post, setPref],
+  );
+  // WebMCP (PILOT-1128): a tool's screenshot resolves when its capture-result arrives (or fails with capture-cancelled), and a tool that sends
+  // something waits for the person's Allow in this panel.
+  const captureWaits = useRef(new Map<string, { resolve: (c: Capture) => void; reject: (e: Error) => void }>());
+  const [ask, setAsk] = useState<{ ask: ToolAsk; answer: (ok: boolean) => void } | null>(null);
+  const askRef = useRef(ask);
+  const confirmAsk = useCallback(
+    (a: ToolAsk, signal?: AbortSignal) =>
+      new Promise<boolean>((resolve) => {
+        // One question at a time; a second tool asking meanwhile is refused, not queued behind the person's back.
+        if (askRef.current || signal?.aborted) return resolve(false);
+        let done = false;
+        const finish = (ok: boolean) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          askRef.current = null;
+          setAsk(null);
+          resolve(ok);
+        };
+        const onAbort = () => finish(false);
+        const timer = setTimeout(() => finish(false), ASK_MS);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        askRef.current = { ask: a, answer: finish };
+        setAsk(askRef.current);
+      }),
+    [],
   );
   const openChat = useCallback((c: ChatOpen | null) => {
     setChat(c);
@@ -433,6 +467,8 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         appendNext.current = false;
         setPending(null);
         setTab('report');
+        captureWaits.current.get(m.requestId)?.resolve(shot);
+        captureWaits.current.delete(m.requestId);
         return;
       }
       case 'pilot-reporter:capture-cancelled':
@@ -440,6 +476,9 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         setPending(null);
         appendNext.current = false;
         if (m.reason === 'error') notify(m.message ? `Capture failed: ${m.message}` : 'Capture failed.', 'error');
+        const why = m.reason === 'user' ? 'The person cancelled the screenshot.' : m.message || 'Capture failed.';
+        captureWaits.current.get(m.requestId)?.reject(new Error(why));
+        captureWaits.current.delete(m.requestId);
         return;
       case 'pilot-reporter:panel-opened':
         refresh();
@@ -540,6 +579,79 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
       }
     : null;
 
+  // ---- WebMCP tools (PILOT-1128, docs/prd/ui-reporter-webmcp.md): registered only where the browser has a model context ----
+  const live = useRef<ReporterToolDeps | null>(null);
+  live.current = status
+    ? {
+        snapshot: () => ({
+          connected,
+          client,
+          bucket,
+          status,
+          page,
+          build,
+          sdkVersion,
+          actorLabel: token?.actorLabel ?? null,
+          shots,
+          review,
+          coarse,
+        }),
+        capture: (mode, signal) =>
+          new Promise<Capture>((resolve, reject) => {
+            if (pendingRef.current) return reject(new Error('A screenshot is already being taken.'));
+            const id = requestCapture(mode, false, shots.length > 0);
+            const waits = captureWaits.current;
+            const timer = setTimeout(() => {
+              waits.get(id)?.reject(new Error('No screenshot came back in time.'));
+              waits.delete(id);
+              setPending((p) => (p === id ? null : p));
+            }, AGENT_CAPTURE_MS);
+            waits.set(id, {
+              resolve: (c) => {
+                clearTimeout(timer);
+                resolve(c);
+              },
+              reject: (e) => {
+                clearTimeout(timer);
+                reject(e);
+              },
+            });
+            signal?.addEventListener('abort', () => waits.get(id)?.reject(new Error('Cancelled.')), { once: true });
+          }),
+        confirm: confirmAsk,
+        filed: (key) => {
+          setCapture(null);
+          refresh();
+          select(key);
+          setTab('tickets');
+          notify(`Filed ${key}`, 'ok');
+        },
+        used: (ids) => {
+          for (const id of ids) removeShot(id);
+          refresh();
+        },
+      }
+    : null;
+  const toolDeps = useMemo<ReporterToolDeps>(
+    () => ({
+      snapshot: () => live.current!.snapshot(),
+      capture: (mode, signal) =>
+        live.current ? live.current.capture(mode, signal) : Promise.reject(new Error('The reporter is not ready.')),
+      confirm: (a, signal) => (live.current ? live.current.confirm(a, signal) : Promise.resolve(false)),
+      filed: (key) => live.current?.filed(key),
+      used: (ids) => live.current?.used(ids),
+    }),
+    [],
+  );
+  useEffect(() => {
+    if (!status?.enabled) return;
+    const mc = modelContextOf(document, navigator);
+    if (!mc || !toolsAllowed(document)) return;
+    const ctl = new AbortController();
+    registerTools(mc, reporterTools(toolDeps, { connected }), ctl.signal);
+    return () => ctl.abort();
+  }, [status?.enabled, connected, toolDeps]);
+
   if (statusFailed) return <Quiet text="pilot is not reachable." />;
   if (!state || !status) return <div className="skeleton m-4 h-24 rounded-2xl" aria-busy="true" />;
   if (!status.enabled) return <Quiet text="The reporter is off for this site." />;
@@ -597,6 +709,7 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
           </>
         )}
         {contextOpen && connected && <ContextSheet section={contextOpen} onClose={() => setContextOpen(null)} />}
+        {ask && <AgentAsk ask={ask.ask} onAnswer={ask.answer} />}
         {toast && (
           <div className="anim-in pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50" key={toast.id}>
             <Notice tone={toast.tone}>{toast.text}</Notice>
@@ -604,6 +717,39 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         )}
       </div>
     </PanelContext.Provider>
+  );
+}
+
+/**
+ * A WebMCP tool asks before it sends anything (PILOT-1128): what it wants to do, in the agent's words shown as text, Deny focused first.
+ * Esc, the backdrop or no answer in two minutes is Deny.
+ */
+function AgentAsk({ ask, onAnswer }: { ask: ToolAsk; onAnswer: (ok: boolean) => void }) {
+  return (
+    <Sheet
+      title={ask.action}
+      variant="bottom"
+      onClose={() => onAnswer(false)}
+      footer={
+        <div className="flex gap-2 p-3">
+          <Btn autoFocus className="flex-1" onClick={() => onAnswer(false)}>
+            Deny
+          </Btn>
+          <Btn tone="primary" className="flex-1" onClick={() => onAnswer(true)}>
+            Allow
+          </Btn>
+        </div>
+      }
+    >
+      <p className="text-[13px] text-muted">An AI agent in this browser asks to do this as you.</p>
+      <ul className="flex flex-col gap-1 text-[14px]">
+        {ask.lines.filter(Boolean).map((l, i) => (
+          <li key={i} className={`break-words ${i === 0 ? 'font-semibold' : 'text-ink-soft'}`}>
+            {l}
+          </li>
+        ))}
+      </ul>
+    </Sheet>
   );
 }
 
