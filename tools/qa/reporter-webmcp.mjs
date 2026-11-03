@@ -99,7 +99,11 @@ const api = await pw.request.newContext({ baseURL: PORTAL, extraHTTPHeaders: { o
 /** The portal's own ticket (owner API) by its key, and closing it. */
 async function portalTicket(key) {
   const r = await api.get(`/api/tickets/${encodeURIComponent(key)}`);
-  if (r.ok()) return (await r.json()).data ?? null;
+  // GET /api/tickets/:id answers TicketDetail ({ ticket, events, ... }).
+  if (r.ok()) {
+    const d = (await r.json()).data ?? null;
+    return d?.ticket ? { ...d.ticket, events: d.events ?? [] } : null;
+  }
   return null;
 }
 async function closeTicket(key) {
