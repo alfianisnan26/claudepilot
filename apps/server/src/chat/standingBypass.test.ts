@@ -248,7 +248,8 @@ test('a worker of a parent in Bypass enters Bypass by the standing policy; a par
     assert.equal(s.controller.get(s.id)!.mode, 'bypassPermissions');
     const w = await newSession(s, 'docker/ws1', { parentId: s.id } as never);
     assert.equal(s.controller.get(w.id)!.bypassCapable, true);
-    assert.equal(await driving(s, s.controller.inheritBypass(w.id)), true);
+    const inherited = await driving(s, s.controller.inheritBypass(w.id));
+    assert.equal(inherited, true, JSON.stringify([s.controller.get(w.id)?.parentId, s.controller.get(s.id)?.mode, s.controller.audit({ kind: 'bypass.left', sessionId: w.id }).map((a) => a.detail), s.controller.audit({ kind: 'bypass.refused', sessionId: w.id }).map((a) => a.detail)]));
     assert.equal(s.controller.get(w.id)!.mode, 'bypassPermissions');
   } finally {
     await s.done();
