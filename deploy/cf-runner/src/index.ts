@@ -201,7 +201,10 @@ class JobRunBase extends DurableObject<Env> {
     return m;
   }
   #logEnd(): number {
-    return this.ctx.storage.sql.exec<{ e: number }>('SELECT COALESCE(MAX(off + length(data)), 0) AS e FROM log').one().e;
+    // Never at or below an existing offset: a log written by the racy version (before the fix) may hold overlapping rows.
+    return this.ctx.storage.sql
+      .exec<{ e: number }>('SELECT MAX(COALESCE(MAX(off + length(CAST(data AS BLOB))), 0), COALESCE(MAX(off) + 1, 0)) AS e FROM log')
+      .one().e;
   }
   #counter(k: string): number {
     return this.ctx.storage.sql.exec<{ v: number }>('SELECT v FROM counters WHERE k = ?', k).toArray()[0]?.v ?? 0;
