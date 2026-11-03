@@ -145,3 +145,11 @@ export const sizeOfId = (id: string): Size | null => {
   const m = JOB_ID.exec(id);
   return m ? (m[1] === 'b' ? 'big' : 'std') : null;
 };
+
+// ---- cold start -----------------------------------------------------------------------------------------------------------------------
+
+/** "There is no container instance that can be provided to this Durable Object, try again later": the platform's cold-start answer. */
+export const isNoInstance = (err: string) => /no container instance/i.test(err);
+/** Container starts tried before a job is an infra failure; the waits between them (15 s, 30 s, 60 s, 120 s: about 4 minutes in all). */
+export const START_RETRIES = 5;
+export const startRetryDelayS = (attempt: number) => Math.min(120, 15 * 2 ** Math.max(0, attempt - 1));

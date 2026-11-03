@@ -7,6 +7,7 @@
 //   job-run-cf-client.mjs get|cancel <id>        prints "<status> <JSON>"
 //   job-run-cf-client.mjs artifacts <id> <file>  the artifacts tar.gz into <file>; exit 0 saved, 3 none, 1 error
 //   job-run-cf-client.mjs list [<chat>]          prints "<status> <JSON>"
+//   job-run-cf-client.mjs budget                 prints "<status> <JSON>": today's ledger, the running jobs, the limits
 // Environment: JOB_RUN_CF_URL (https://...), JOB_RUN_CF_WORKSPACE (the key's id, e.g. kohilabs), and the key: JOB_RUN_CF_KEY (64 hex), or
 // else derived from CF_RUNNER_API_TOKEN as HMAC-SHA256(token, "cp-jobrun-key-v1\n" + workspace) (deploy/cf-runner/deploy.sh sets the
 // same value on the Worker; the token itself never goes to the Worker). JOB_RUN_POLL_S (default 5) is the log poll.
@@ -59,6 +60,8 @@ try {
     await out(await call(cmd === 'get' ? 'GET' : 'DELETE', `/jobs/${a1}${cmd === 'cancel' ? '?reason=job-run.sh' : ''}`));
   } else if (cmd === 'list') {
     await out(await call('GET', a1 ? `/jobs?chat=${encodeURIComponent(a1)}` : '/jobs'));
+  } else if (cmd === 'budget') {
+    await out(await call('GET', '/budget'));
   } else if (cmd === 'artifacts') {
     if (!ID.test(a1 ?? '') || !a2) die('artifacts <id> <file>');
     const r = await call('GET', `/jobs/${a1}/artifacts`);
@@ -118,7 +121,7 @@ try {
       if (chunk.length === 0) await sleep(poll);
     }
     writeFileSync(a2, JSON.stringify(info));
-  } else die('usage: job-run-cf-client.mjs submit|follow|get|cancel|artifacts|list ...');
+  } else die('usage: job-run-cf-client.mjs submit|follow|get|cancel|artifacts|list|budget ...');
 } catch (e) {
   die(`the dispatcher did not answer (${String(e?.name ?? 'error')})`, 1);
 }

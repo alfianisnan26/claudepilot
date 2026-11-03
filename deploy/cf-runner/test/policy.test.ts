@@ -8,10 +8,13 @@ import {
   DEFAULT_ALLOW,
   gitReadWithCredential,
   hostAllowed,
+  isNoInstance,
   type Ledger,
   type Limits,
   sizeOfId,
   spent,
+  START_RETRIES,
+  startRetryDelayS,
   utcDay,
 } from '../src/policy';
 
@@ -131,5 +134,15 @@ describe('signing', () => {
     expect((await req({ sig: good, body: '{"a":1}', path: '/jobs?chat=c2' })).ok).toBe(false);
     expect((await req({ sig: good, body: '{"a":1}', method: 'DELETE' })).ok).toBe(false);
     expect((await req({ sig: 'zz' })).ok).toBe(false);
+  });
+});
+
+describe('cold start', () => {
+  it('the platform answer is recognised and retried with a capped backoff', () => {
+    expect(isNoInstance('There is no container instance that can be provided to this Durable Object, try again later')).toBe(true);
+    expect(isNoInstance('Container exited with code 1')).toBe(false);
+    expect([1, 2, 3, 4, 5, 6].map(startRetryDelayS)).toEqual([15, 30, 60, 120, 120, 120]);
+    const total = Array.from({ length: START_RETRIES - 1 }, (_, i) => startRetryDelayS(i + 1)).reduce((a, b) => a + b, 0);
+    expect(total).toBe(225);
   });
 });

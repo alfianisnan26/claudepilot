@@ -17,12 +17,15 @@ import {
   DEFAULT_ALLOW,
   gitReadWithCredential,
   hostAllowed,
+  isNoInstance,
   JOB_ID,
   type Ledger,
   type Limits,
   SIZES,
   type Size,
   sizeOfId,
+  START_RETRIES,
+  startRetryDelayS,
   utcDay,
   type Waiter,
   WAITER_TTL_MS,
@@ -168,11 +171,15 @@ interface Meta extends Omit<JobSpec, 'cmd'> {
   location?: string;
   notes: number;
   logAgent?: number; // bytes read from the container's own log so far
+  attempts?: number; // container starts tried (cold-start retry)
+  lastStart?: number;
+  retryAt?: number;
 }
 
 class JobRunBase extends DurableObject<Env> {
   protected size: Size = 'std';
   #pulling = false;
+  #auth: string | null = null; // the clone's credential header, in memory until the job leaves the fetch phase
   #cmd: string | null = null; // the base64 command, in memory until the container has it
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -230,10 +237,19 @@ class JobRunBase extends DurableObject<Env> {
     const c = this.ctx.container;
     if (!c) throw new Error('no container binding');
     this.#line(m, `=== JOB-RUN PLACEMENT backend=cf instance=${SIZES[this.size].instance} job=${m.id} decision=started`);
+    this.#auth = creds ? `Basic ${btoa(`${creds.user}:${creds.token}`)}` : null;
+    m.attempts = 1;
+    m.lastStart = now;
     await this.#save(m);
+    await this.#startContainer(m);
+    await this.ctx.storage.setAlarm(Date.now() + 1000);
+    return this.#info(m);
+  }
+
+  async #startContainer(m: Meta) {
+    const c = this.ctx.container!;
     c.start({ enableInternet: false, env: { JR_JOB: m.id } });
-    const auth = creds ? `Basic ${btoa(`${creds.user}:${creds.token}`)}` : null;
-    await this.#intercept(m, 'fetch', auth);
+    await this.#intercept(m, 'fetch', this.#auth);
     await c.setInactivityTimeout(10 * 60_000).catch(() => {});
     this.ctx.waitUntil(
       c.monitor().then(
@@ -241,13 +257,22 @@ class JobRunBase extends DurableObject<Env> {
         (e: unknown) => this.#onExit(String((e as Error)?.message ?? e).slice(0, 200)),
       ),
     );
-    await this.ctx.storage.setAlarm(Date.now() + 1000);
-    return this.#info(m);
   }
 
   async #onExit(err: string | null) {
     const m = await this.#meta();
     if (!m || TERMINAL.has(m.state)) return;
+    // Cold start (T-3542): right after a deploy, or when every instance is taken, the platform has no instance for this object yet. The
+    // job has not been handed over (state starting, command still in memory): try again with a backoff instead of failing the job.
+    const attempts = m.attempts ?? 1;
+    if (m.state === 'starting' && err && isNoInstance(err) && this.#cmd !== null && attempts < START_RETRIES) {
+      const delay = startRetryDelayS(attempts);
+      m.attempts = attempts + 1;
+      m.retryAt = Date.now() + delay * 1000;
+      this.#line(m, `=== JOB-RUN CF no container instance yet (attempt ${attempts} of ${START_RETRIES}): retrying in ${delay}s`);
+      await this.#save(m);
+      return;
+    }
     await this.#pull(m).catch(() => {});
     if (TERMINAL.has(m.state)) return;
     this.#line(m, `=== JOB-RUN PLATFORM-STOP the container stopped before the job ended${err ? ` (${err.replace(/[\r\n]/g, ' ')})` : ''}`);
@@ -261,6 +286,7 @@ class JobRunBase extends DurableObject<Env> {
     if (m.state === 'running') return true;
     await this.#intercept(m, 'run', null);
     m.state = 'running';
+    this.#auth = null;
     m.runPhase = Date.now();
     await this.#save(m);
     return true;
@@ -332,7 +358,20 @@ class JobRunBase extends DurableObject<Env> {
     }
     const now = Date.now();
     const c = this.ctx.container;
-    if (m.state === 'starting') {
+    if (m.state === 'starting' && m.retryAt) {
+      if (now >= m.retryAt && !c?.running) {
+        delete m.retryAt;
+        m.lastStart = now;
+        await this.#save(m);
+        try {
+          await this.#startContainer(m);
+        } catch (e) {
+          this.#line(m, `=== JOB-RUN CF the restart failed (${String((e as Error)?.message ?? e).slice(0, 100)})`);
+          await this.#finish(m, 'infra', undefined, 'restart failed');
+          return;
+        }
+      }
+    } else if (m.state === 'starting') {
       if (c?.running) {
         try {
           const h = await c.getTcpPort(8080).fetch('http://c/health');
@@ -366,7 +405,7 @@ class JobRunBase extends DurableObject<Env> {
           /* not listening yet */
         }
       }
-      if (m.state === 'starting' && now - m.created > START_MS) {
+      if (m.state === 'starting' && now - (m.lastStart ?? m.created) > START_MS) {
         this.#line(m, `=== JOB-RUN the container did not start in ${START_MS / 1000}s`);
         await this.#finish(m, 'infra', undefined, 'start timeout');
         return;

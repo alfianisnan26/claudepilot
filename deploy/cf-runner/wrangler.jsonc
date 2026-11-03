@@ -16,7 +16,7 @@
       "class_name": "JobRunStd",
       "image": "registry.cloudflare.com/fccdbeb05cb96c17557497b18fe357b7/cp-jobrun-runner:__IMAGE_TAG__",
       "instance_type": "standard-3",
-      "max_instances": 6,
+      "max_instances": 10,
       "rollout_active_grace_period": 3600
     },
     {
@@ -43,9 +43,9 @@
     "BUDGET_USD_DAY": "5",
     "PROGRAM_USD_DAY": "5",
     "MAX_TIMEOUT_S": "3600",
-    "MAX_AT_ONCE": "6",
+    "MAX_AT_ONCE": "10",
     "MAX_PER_CHAT": "4",
-    "MAX_PER_PROGRAM": "6",
+    "MAX_PER_PROGRAM": "10",
     "ARTIFACT_MAX_BYTES": "100000000"
   }
 }

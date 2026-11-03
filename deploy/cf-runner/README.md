@@ -10,8 +10,8 @@
 |---|---|---|
 | CLI | `scripts/job-run.sh` (`--backend`, `--sub`), `scripts/job-run-cf.sh`, `scripts/job-run-cf-client.mjs` | same CLI, log lines, masking and exit codes as k8s; signed HTTPS to the dispatcher |
 | Dispatcher | `src/index.ts` (Worker `cp-jobrun-dispatcher`) | `POST /jobs`, `GET /jobs/:id`, `GET /jobs/:id/log?offset=`, `POST /jobs/:id/heartbeat`, `DELETE /jobs/:id`, `GET /jobs/:id/artifacts`, `GET /jobs?chat=`, `GET /budget` |
-| Scheduler DO | `src/index.ts`, rules in `src/policy.ts` | caps (6 at once, 4 per chat, 6 per program), queue order, ledger; **$5/day**, 60 min per job |
-| JobRun DOs | `JobRunStd` (standard-3: 2 vCPU, 8 GiB, 16 GB), `JobRunBig` (`--big`, standard-4: 4 vCPU, 12 GiB, 20 GB) | one per job: container, log in SQLite (64 MiB cap), alarms for deadline and heartbeat (120 s) |
+| Scheduler DO | `src/index.ts`, rules in `src/policy.ts` | caps (10 at once, 4 per chat, 10 per program), queue order, ledger; **$5/day**, 60 min per job |
+| JobRun DOs | `JobRunStd` (standard-3: 2 vCPU, 8 GiB, 16 GB), `JobRunBig` (`--big`, standard-4: 4 vCPU, 12 GiB, 20 GB) | one per job: container, log in SQLite (64 MiB cap), alarms for deadline and heartbeat (120 s), cold-start retry (no instance yet: 15/30/60/120 s) |
 | Egress | `Egress` WorkerEntrypoint | `enableInternet: false`; allow-list (`DEFAULT_ALLOW` or `ALLOW_HOSTS`); the GitLab token is added only to `git-upload-pack` reads of `gitlab.com/memorid/*`, only in the fetch phase; artifacts to R2 |
 | Runner image | `container/` (Dockerfile, `agent.mjs`, `fetch.sh`, `run.sh`) | Node 22.23.3, git, Playwright 1.63.0 Chromium, Caddy |
 | Metrics | `scripts/job-run-metrics.mjs` | one row per backend from `~/.cache/claudepilot-job-run/metrics.jsonl` |
