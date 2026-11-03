@@ -280,15 +280,6 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     void reloadReview();
     client.sessionTargets().then(setTargets, () => setTargets([]));
   }, [connected, client, reloadReview, tick]);
-  // The auto-approve grants of this sign-in: on connect and whenever tickets change (a grant made or revoked on another of its frames).
-  useEffect(() => {
-    if (!connected) {
-      setGrants([]);
-      grantsRef.current = [];
-      return;
-    }
-    reloadGrants();
-  }, [connected, reloadGrants, tick]);
   // The widget button's badges: draft comments, and the person's open tickets waiting for their reply (re-counted on every change).
   const [replies, setReplies] = useState(0);
   useEffect(() => {
@@ -479,6 +470,15 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
     },
     [askPerson, client, notify],
   );
+  // The auto-approve grants of this sign-in: on connect and whenever tickets change (a grant made or revoked on another of its frames).
+  useEffect(() => {
+    if (!connected) {
+      setGrants([]);
+      grantsRef.current = [];
+      return;
+    }
+    reloadGrants();
+  }, [connected, reloadGrants, tick]);
   const openChat = useCallback((c: ChatOpen | null) => {
     setChat(c);
     if (c) setTab('sessions');
