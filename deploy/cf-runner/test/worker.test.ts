@@ -2,6 +2,7 @@
 // (402), release into the ledger. The test configuration has no container application, so a job that is let in fails to start (503)
 // and its slot is given back: that path is checked too. The container side is covered by the live smoke (README.md).
 import { env } from 'cloudflare:workers';
+import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { sha256Hex, sign } from '../src/auth';
 import worker, { type Env, parseSpec } from '../src/index';
@@ -122,5 +123,34 @@ describe('POST /jobs', () => {
   it('a job of another workspace is not found (404), never shown', async () => {
     expect((await call('GET', `/jobs/${jobId()}`)).status).toBe(404);
     expect((await call('GET', '/jobs/not-a-job')).status).toBe(404);
+  });
+});
+
+describe('JobRun log (T-3542 live bug: a stale Meta saved after an await reused a log offset)', () => {
+  it('concurrent notes, heartbeats and a cancel append whole lines at unique offsets, and the log reads back in order', async () => {
+    const id = jobId();
+    const stub = E.JOBRUN_STD.get(E.JOBRUN_STD.idFromName(id));
+    await runInDurableObject(stub, async (_obj, state) => {
+      const now = Date.now();
+      await state.storage.put('meta', {
+        ...spec({ id }), workspace: 'kohilabs', size: 'std', state: 'running', created: now, lastBeat: now, logSize: 0, notes: 0,
+      });
+    });
+    await Promise.all([
+      ...Array.from({ length: 20 }, (_, i) => stub.note(`n${i}`)),
+      ...Array.from({ length: 5 }, () => stub.heartbeat('kohilabs')),
+    ]);
+    const c = await stub.cancel('kohilabs', 'test');
+    expect(c?.state).toBe('cancelled');
+    const r = await stub.readLog('kohilabs', 0);
+    const text = new TextDecoder().decode(r!.data);
+    const lines = text.trimEnd().split('\n');
+    expect(lines.filter((l) => l.startsWith('=== JOB-RUN EGRESS n')).length).toBe(20);
+    expect(lines.some((l) => l.startsWith('=== JOB-RUN stopped: test'))).toBe(true);
+    expect(lines.at(-1)).toMatch(/^=== JOB-RUN CF state=cancelled/);
+    expect(r!.info.logSize).toBe(new TextEncoder().encode(text).length);
+    // a second cancel changes nothing (terminal), and another workspace sees nothing
+    expect((await stub.cancel('kohilabs', 'again'))?.logSize).toBe(r!.info.logSize);
+    expect(await stub.readLog('other', 0)).toBeNull();
   });
 });

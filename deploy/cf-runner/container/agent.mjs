@@ -73,7 +73,7 @@ async function job(spec) {
   let ok = false;
   for (let i = 0; i < 5 && !ok; i++) {
     try {
-      const r = await fetch('http://control.jobrun/phase/run', { method: 'POST' });
+      const r = await fetch('http://control.jobrun/phase/run', { method: 'POST', signal: AbortSignal.timeout(15_000) });
       ok = r.status === 200;
     } catch {
       await sleep(1000);

@@ -170,7 +170,6 @@ interface Meta extends Omit<JobSpec, 'cmd'> {
   costUsd?: number;
   location?: string;
   notes: number;
-  logAgent?: number; // bytes read from the container's own log so far
   attempts?: number; // container starts tried (cold-start retry)
   lastStart?: number;
   retryAt?: number;
@@ -182,38 +181,56 @@ class JobRunBase extends DurableObject<Env> {
   #auth: string | null = null; // the clone's credential header, in memory until the job leaves the fetch phase
   #cmd: string | null = null; // the base64 command, in memory until the container has it
 
+  // Concurrency rule (T-3542, found live: "UNIQUE constraint failed: log.off"): a Meta read before an external await (a container
+  // fetch, an egress registration, an RPC) is never saved afterwards. Changes go through #patch (read, change, write, with only
+  // storage in between, which the input gate keeps atomic), and the log's end and the agent offset live in SQL, updated synchronously.
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS log (off INTEGER PRIMARY KEY, data BLOB NOT NULL)');
+    ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS counters (k TEXT PRIMARY KEY, v INTEGER NOT NULL)');
     if (ctx.container?.running) void ctx.blockConcurrencyWhile(() => ctx.container!.setInactivityTimeout(10 * 60_000).catch(() => {}));
   }
   async #meta() {
     return (await this.ctx.storage.get<Meta>('meta')) ?? null;
   }
-  async #save(m: Meta) {
+  async #patch(fn: (m: Meta) => boolean | void): Promise<Meta | null> {
+    const m = await this.#meta();
+    if (!m) return null;
+    if (fn(m) === false) return m;
     await this.ctx.storage.put('meta', m);
+    return m;
   }
-  #append(m: Meta, bytes: Uint8Array) {
+  #logEnd(): number {
+    return this.ctx.storage.sql.exec<{ e: number }>('SELECT COALESCE(MAX(off + length(data)), 0) AS e FROM log').one().e;
+  }
+  #counter(k: string): number {
+    return this.ctx.storage.sql.exec<{ v: number }>('SELECT v FROM counters WHERE k = ?', k).toArray()[0]?.v ?? 0;
+  }
+  #append(bytes: Uint8Array) {
     if (bytes.length === 0) return;
-    if (m.logSize >= LOG_CAP) return;
-    const b = m.logSize + bytes.length > LOG_CAP ? bytes.slice(0, LOG_CAP - m.logSize) : bytes;
+    const end = this.#logEnd();
+    if (end >= LOG_CAP) return;
+    const b = end + bytes.length > LOG_CAP ? bytes.slice(0, LOG_CAP - end) : bytes;
     // SQLite storage binds a BLOB from an ArrayBuffer (not a view).
-    this.ctx.storage.sql.exec('INSERT INTO log (off, data) VALUES (?, ?)', m.logSize, b.slice().buffer);
-    m.logSize += b.length;
+    this.ctx.storage.sql.exec('INSERT INTO log (off, data) VALUES (?, ?)', end, b.slice().buffer);
   }
-  #line(m: Meta, text: string) {
-    this.#append(m, new TextEncoder().encode(`${text}\n`));
+  #line(text: string) {
+    this.#append(new TextEncoder().encode(`${text}\n`));
   }
-  #egress(m: Meta, phase: 'fetch' | 'run', auth: string | null) {
+  #port() {
+    const c = this.ctx.container;
+    return c?.running ? c.getTcpPort(8080) : null;
+  }
+  #egress(id: string, phase: 'fetch' | 'run', auth: string | null) {
     const allow = this.env.ALLOW_HOSTS ? this.env.ALLOW_HOSTS.split(',').map((h) => h.trim()).filter(Boolean) : DEFAULT_ALLOW;
     // biome-ignore lint: ctx.exports is typed loosely in workers-types
     return (this.ctx as any).exports.Egress({
-      props: { job: m.id, size: this.size, phase, allow, group: this.env.GIT_GROUP, auth },
+      props: { job: id, size: this.size, phase, allow, group: this.env.GIT_GROUP, auth },
     }) as Fetcher;
   }
-  async #intercept(m: Meta, phase: 'fetch' | 'run', auth: string | null) {
+  async #intercept(id: string, phase: 'fetch' | 'run', auth: string | null) {
     const c = this.ctx.container!;
-    const e = this.#egress(m, phase, auth);
+    const e = this.#egress(id, phase, auth);
     await c.interceptOutboundHttps('*', e);
     await c.interceptAllOutboundHttp(e);
   }
@@ -223,33 +240,22 @@ class JobRunBase extends DurableObject<Env> {
     const old = await this.#meta();
     if (old) return this.#info(old);
     const now = Date.now();
-    const m: Meta = {
-      ...spec,
-      size: this.size,
-      state: 'starting',
-      created: now,
-      lastBeat: now,
-      logSize: 0,
-      notes: 0,
-    };
+    const m: Meta = { ...spec, size: this.size, state: 'starting', created: now, lastBeat: now, logSize: 0, notes: 0, attempts: 1, lastStart: now };
     delete (m as Partial<JobSpec>).cmd;
+    if (!this.ctx.container) throw new Error('no container binding');
     this.#cmd = spec.cmd;
-    const c = this.ctx.container;
-    if (!c) throw new Error('no container binding');
-    this.#line(m, `=== JOB-RUN PLACEMENT backend=cf instance=${SIZES[this.size].instance} job=${m.id} decision=started`);
     this.#auth = creds ? `Basic ${btoa(`${creds.user}:${creds.token}`)}` : null;
-    m.attempts = 1;
-    m.lastStart = now;
-    await this.#save(m);
-    await this.#startContainer(m);
+    this.#line(`=== JOB-RUN PLACEMENT backend=cf instance=${SIZES[this.size].instance} job=${m.id} decision=started`);
+    await this.ctx.storage.put('meta', m);
+    await this.#startContainer(m.id);
     await this.ctx.storage.setAlarm(Date.now() + 1000);
     return this.#info(m);
   }
 
-  async #startContainer(m: Meta) {
+  async #startContainer(id: string) {
     const c = this.ctx.container!;
-    c.start({ enableInternet: false, env: { JR_JOB: m.id } });
-    await this.#intercept(m, 'fetch', this.#auth);
+    c.start({ enableInternet: false, env: { JR_JOB: id } });
+    await this.#intercept(id, 'fetch', this.#auth);
     await c.setInactivityTimeout(10 * 60_000).catch(() => {});
     this.ctx.waitUntil(
       c.monitor().then(
@@ -260,23 +266,28 @@ class JobRunBase extends DurableObject<Env> {
   }
 
   async #onExit(err: string | null) {
-    const m = await this.#meta();
-    if (!m || TERMINAL.has(m.state)) return;
     // Cold start (T-3542): right after a deploy, or when every instance is taken, the platform has no instance for this object yet. The
     // job has not been handed over (state starting, command still in memory): try again with a backoff instead of failing the job.
-    const attempts = m.attempts ?? 1;
-    if (m.state === 'starting' && err && isNoInstance(err) && this.#cmd !== null && attempts < START_RETRIES) {
-      const delay = startRetryDelayS(attempts);
-      m.attempts = attempts + 1;
-      m.retryAt = Date.now() + delay * 1000;
-      this.#line(m, `=== JOB-RUN CF no container instance yet (attempt ${attempts} of ${START_RETRIES}): retrying in ${delay}s`);
-      await this.#save(m);
-      return;
-    }
-    await this.#pull(m).catch(() => {});
-    if (TERMINAL.has(m.state)) return;
-    this.#line(m, `=== JOB-RUN PLATFORM-STOP the container stopped before the job ended${err ? ` (${err.replace(/[\r\n]/g, ' ')})` : ''}`);
-    await this.#finish(m, 'infra', undefined, 'container stopped');
+    let retried = false;
+    const m = await this.#patch((x) => {
+      if (TERMINAL.has(x.state)) return false;
+      const attempts = x.attempts ?? 1;
+      if (x.state === 'starting' && err && isNoInstance(err) && this.#cmd !== null && attempts < START_RETRIES) {
+        const delay = startRetryDelayS(attempts);
+        x.attempts = attempts + 1;
+        x.retryAt = Date.now() + delay * 1000;
+        this.#line(`=== JOB-RUN CF no container instance yet (attempt ${attempts} of ${START_RETRIES}): retrying in ${delay}s`);
+        retried = true;
+        return;
+      }
+      return false;
+    });
+    if (!m || retried || TERMINAL.has(m.state)) return;
+    await this.#pull().catch(() => {});
+    const now = await this.#meta();
+    if (!now || TERMINAL.has(now.state)) return;
+    this.#line(`=== JOB-RUN PLATFORM-STOP the container stopped before the job ended${err ? ` (${err.replace(/[\r\n]/g, ' ')})` : ''}`);
+    await this.#finish('infra', undefined, 'container stopped');
   }
 
   /** Egress calls this when the container asks to leave the fetch phase: the credential goes, for good, before any repository code runs. */
@@ -284,66 +295,68 @@ class JobRunBase extends DurableObject<Env> {
     const m = await this.#meta();
     if (!m || TERMINAL.has(m.state)) return false;
     if (m.state === 'running') return true;
-    await this.#intercept(m, 'run', null);
-    m.state = 'running';
+    await this.#intercept(m.id, 'run', null);
     this.#auth = null;
-    m.runPhase = Date.now();
-    await this.#save(m);
+    await this.#patch((x) => {
+      if (TERMINAL.has(x.state) || x.state === 'running') return false;
+      x.state = 'running';
+      x.runPhase = Date.now();
+    });
     return true;
   }
 
   async note(text: string) {
-    const m = await this.#meta();
-    if (!m || TERMINAL.has(m.state) || m.notes >= 50) return;
-    m.notes++;
-    this.#line(m, `=== JOB-RUN EGRESS ${text.replace(/[^\x20-\x7e]/g, '?').slice(0, 200)}`);
-    await this.#save(m);
+    await this.#patch((m) => {
+      if (TERMINAL.has(m.state) || m.notes >= 50) return false;
+      m.notes++;
+      this.#line(`=== JOB-RUN EGRESS ${text.replace(/[^\x20-\x7e]/g, '?').slice(0, 200)}`);
+    });
   }
 
-  async #pull(m: Meta) {
-    const c = this.ctx.container;
-    if (!c?.running || this.#pulling) return;
+  /** Copies the container's new log bytes into SQLite; ends the job when the agent says it is done. */
+  async #pull() {
+    const port = this.#port();
+    if (!port || this.#pulling) return;
     this.#pulling = true;
+    let done: { exit: number } | null = null;
     try {
-      const port = c.getTcpPort(8080);
       for (let i = 0; i < 16; i++) {
-        const r = await port.fetch(`http://c/log?offset=${m.logAgent ?? 0}&max=${PULL_MAX}`);
+        const from = this.#counter('agent');
+        const r = await port.fetch(`http://c/log?offset=${from}&max=${PULL_MAX}`, { signal: AbortSignal.timeout(20_000) });
         if (!r.ok) break;
         const b = new Uint8Array(await r.arrayBuffer());
-        m.logAgent = (m.logAgent ?? 0) + b.length;
-        this.#append(m, b);
+        if (this.#counter('agent') !== from) break; // another reader moved on meanwhile (never expected: #pulling guards it)
+        this.#append(b);
+        this.ctx.storage.sql.exec('INSERT INTO counters (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', 'agent', from + b.length);
         if (b.length < PULL_MAX) break;
       }
-      const st = await port.fetch('http://c/status');
+      const st = await port.fetch('http://c/status', { signal: AbortSignal.timeout(20_000) });
       if (st.ok) {
         const s = (await st.json()) as { done: boolean; exit: number | null; location?: string };
-        if (s.location) m.location = s.location;
-        if (s.done) {
-          await this.#save(m);
-          await this.#finish(m, 'finished', s.exit ?? 1);
-          return;
-        }
+        if (s.location) await this.#patch((m) => (m.location === s.location ? false : void (m.location = s.location)));
+        if (s.done) done = { exit: s.exit ?? 1 };
       }
-      await this.#save(m);
     } finally {
       this.#pulling = false;
     }
+    if (done) await this.#finish('finished', done.exit);
   }
 
-  async #finish(m: Meta, state: Meta['state'], exit?: number, reason?: string) {
-    if (TERMINAL.has(m.state)) return;
-    m.state = state;
-    m.exit = exit;
-    m.reason = reason;
-    m.ended = Date.now();
-    m.costUsd = costUsd(this.size, (m.ended - m.created) / 1000);
-    this.#line(
-      m,
-      `=== JOB-RUN CF state=${state}${exit === undefined ? '' : ` exit=${exit}`} seconds=${Math.round((m.ended - m.created) / 1000)} est_usd=${m.costUsd.toFixed(4)}${reason ? ` reason=${reason.replace(/\s+/g, '-')}` : ''}`,
-    );
-    await this.#save(m);
+  async #finish(state: Meta['state'], exit?: number, reason?: string) {
+    const m = await this.#patch((x) => {
+      if (TERMINAL.has(x.state)) return false;
+      x.state = state;
+      x.exit = exit;
+      x.reason = reason;
+      x.ended = Date.now();
+      x.costUsd = costUsd(this.size, (x.ended - x.created) / 1000);
+      this.#line(
+        `=== JOB-RUN CF state=${state}${exit === undefined ? '' : ` exit=${exit}`} seconds=${Math.round((x.ended - x.created) / 1000)} est_usd=${x.costUsd.toFixed(4)}${reason ? ` reason=${reason.replace(/\s+/g, '-')}` : ''}`,
+      );
+    });
+    if (!m || m.state !== state || m.ended === undefined) return;
     const sch = this.env.SCHEDULER.get(this.env.SCHEDULER.idFromName('global'));
-    await sch.release(m.id, m.costUsd, m.program);
+    await sch.release(m.id, m.costUsd ?? 0, m.program);
     if (this.ctx.container?.running) await this.ctx.container.destroy().catch(() => {});
     await this.ctx.storage.setAlarm(Date.now() + KEEP_MS);
   }
@@ -360,24 +373,27 @@ class JobRunBase extends DurableObject<Env> {
     const c = this.ctx.container;
     if (m.state === 'starting' && m.retryAt) {
       if (now >= m.retryAt && !c?.running) {
-        delete m.retryAt;
-        m.lastStart = now;
-        await this.#save(m);
+        await this.#patch((x) => {
+          delete x.retryAt;
+          x.lastStart = now;
+        });
         try {
-          await this.#startContainer(m);
+          await this.#startContainer(m.id);
         } catch (e) {
-          this.#line(m, `=== JOB-RUN CF the restart failed (${String((e as Error)?.message ?? e).slice(0, 100)})`);
-          await this.#finish(m, 'infra', undefined, 'restart failed');
+          this.#line(`=== JOB-RUN CF the restart failed (${String((e as Error)?.message ?? e).slice(0, 100)})`);
+          await this.#finish('infra', undefined, 'restart failed');
           return;
         }
       }
     } else if (m.state === 'starting') {
-      if (c?.running) {
+      const port = this.#port();
+      if (port) {
         try {
-          const h = await c.getTcpPort(8080).fetch('http://c/health');
+          const h = await port.fetch('http://c/health', { signal: AbortSignal.timeout(10_000) });
           if (h.ok && this.#cmd !== null) {
-            const r = await c.getTcpPort(8080).fetch('http://c/run', {
+            const r = await port.fetch('http://c/run', {
               method: 'POST',
+              signal: AbortSignal.timeout(20_000),
               body: JSON.stringify({
                 job: m.id,
                 repoUrl: m.repoUrl,
@@ -389,39 +405,43 @@ class JobRunBase extends DurableObject<Env> {
                 artifactMax: num(this.env.ARTIFACT_MAX_BYTES, 96 * 1024 * 1024),
               }),
             });
-            if (r.ok) {
+            if (r.ok || r.status === 409) {
               this.#cmd = null;
-              m.state = 'fetching';
-              m.kicked = now;
-              await this.#save(m);
+              await this.#patch((x) => {
+                if (x.state !== 'starting') return false;
+                x.state = 'fetching';
+                x.kicked = now;
+              });
             }
           } else if (h.ok && this.#cmd === null) {
             // The object restarted between begin() and the kick: the command (memory only) is gone. Infra failure, never a guess.
-            this.#line(m, '=== JOB-RUN the dispatcher restarted before the job was handed over: no command (infra)');
-            await this.#finish(m, 'infra', undefined, 'restart before start');
+            this.#line('=== JOB-RUN the dispatcher restarted before the job was handed over: no command (infra)');
+            await this.#finish('infra', undefined, 'restart before start');
             return;
           }
         } catch {
           /* not listening yet */
         }
       }
-      if (m.state === 'starting' && now - (m.lastStart ?? m.created) > START_MS) {
-        this.#line(m, `=== JOB-RUN the container did not start in ${START_MS / 1000}s`);
-        await this.#finish(m, 'infra', undefined, 'start timeout');
+      const cur = await this.#meta();
+      if (cur && cur.state === 'starting' && !cur.retryAt && now - (cur.lastStart ?? cur.created) > START_MS) {
+        this.#line(`=== JOB-RUN the container did not start in ${START_MS / 1000}s`);
+        await this.#finish('infra', undefined, 'start timeout');
         return;
       }
     } else {
-      await this.#pull(m).catch(() => {});
-      if (TERMINAL.has(m.state)) return;
+      await this.#pull().catch(() => {});
     }
-    if (now - m.lastBeat > HEARTBEAT_MS) {
-      this.#line(m, `=== JOB-RUN no heartbeat from job-run.sh for ${HEARTBEAT_MS / 1000}s: stopping`);
-      await this.#finish(m, 'cancelled', undefined, 'no heartbeat');
+    const cur = await this.#meta();
+    if (!cur || TERMINAL.has(cur.state)) return;
+    if (now - cur.lastBeat > HEARTBEAT_MS) {
+      this.#line(`=== JOB-RUN no heartbeat from job-run.sh for ${HEARTBEAT_MS / 1000}s: stopping`);
+      await this.#finish('cancelled', undefined, 'no heartbeat');
       return;
     }
-    if (now - m.created > m.timeout * 1000) {
-      this.#line(m, `=== JOB-RUN past the deadline (${m.timeout}s): stopping`);
-      await this.#finish(m, 'deadline', 124, 'deadline');
+    if (now - cur.created > cur.timeout * 1000) {
+      this.#line(`=== JOB-RUN past the deadline (${cur.timeout}s): stopping`);
+      await this.#finish('deadline', 124, 'deadline');
       return;
     }
     await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
@@ -438,7 +458,7 @@ class JobRunBase extends DurableObject<Env> {
       created: m.created,
       runPhase: m.runPhase ?? null,
       ended: m.ended ?? null,
-      logSize: m.logSize,
+      logSize: this.#logEnd(),
       costUsd: m.costUsd ?? null,
       location: m.location ?? null,
       chat: m.chat,
@@ -451,18 +471,17 @@ class JobRunBase extends DurableObject<Env> {
     return m && m.workspace === workspace ? this.#info(m) : null;
   }
   async heartbeat(workspace: string) {
-    const m = await this.#meta();
-    if (!m || m.workspace !== workspace) return null;
-    if (!TERMINAL.has(m.state)) {
-      m.lastBeat = Date.now();
-      await this.#save(m);
-    }
-    return this.#info(m);
+    const m = await this.#patch((x) => {
+      if (x.workspace !== workspace || TERMINAL.has(x.state)) return false;
+      x.lastBeat = Date.now();
+    });
+    return m && m.workspace === workspace ? this.#info(m) : null;
   }
   async readLog(workspace: string, offset: number) {
-    const m = await this.#meta();
-    if (!m || m.workspace !== workspace) return null;
-    if (!TERMINAL.has(m.state) && m.state !== 'starting') await this.#pull(m).catch(() => {});
+    const m0 = await this.#meta();
+    if (!m0 || m0.workspace !== workspace) return null;
+    if (!TERMINAL.has(m0.state) && m0.state !== 'starting') await this.#pull().catch(() => {});
+    const m = (await this.#meta()) ?? m0;
     const rows = this.ctx.storage.sql
       .exec<{ off: number; data: ArrayBuffer }>('SELECT off, data FROM log WHERE off + length(data) > ? ORDER BY off LIMIT 64', offset)
       .toArray();
@@ -470,8 +489,7 @@ class JobRunBase extends DurableObject<Env> {
     let size = 0;
     for (const r of rows) {
       const d = new Uint8Array(r.data);
-      const from = Math.max(0, offset - r.off);
-      const p = d.slice(from);
+      const p = d.slice(Math.max(0, offset - r.off));
       parts.push(p);
       size += p.length;
       if (size >= PULL_MAX) break;
@@ -485,16 +503,17 @@ class JobRunBase extends DurableObject<Env> {
     return { data: out, next: offset + size, info: this.#info(m) };
   }
   async cancel(workspace: string, reason: string) {
-    const m = await this.#meta();
-    if (!m || m.workspace !== workspace) return null;
-    if (!TERMINAL.has(m.state)) {
-      await this.#pull(m).catch(() => {});
-      if (!TERMINAL.has(m.state)) {
-        this.#line(m, `=== JOB-RUN stopped: ${reason.replace(/[^\x20-\x7e]/g, '?').slice(0, 100)}`);
-        await this.#finish(m, 'cancelled', undefined, 'stopped');
+    const m0 = await this.#meta();
+    if (!m0 || m0.workspace !== workspace) return null;
+    if (!TERMINAL.has(m0.state)) {
+      await this.#pull().catch(() => {});
+      const cur = await this.#meta();
+      if (cur && !TERMINAL.has(cur.state)) {
+        this.#line(`=== JOB-RUN stopped: ${reason.replace(/[^\x20-\x7e]/g, '?').slice(0, 100)}`);
+        await this.#finish('cancelled', undefined, 'stopped');
       }
     }
-    return this.#info(m);
+    return this.#info((await this.#meta()) ?? m0);
   }
 }
 export class JobRunStd extends JobRunBase {
