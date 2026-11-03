@@ -464,7 +464,7 @@ test('T-3542: without --backend or JOB_RUN_BACKEND the k8s Job is exactly as bef
   const norm = (m: string) => m.replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB').replace(/job-run\/owner: "[^"]*"/, 'OWNER');
   const outNorm = (o: string) => o.replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB').replace(/in \d+s \(queued \d+s\)/, 'T');
   const argv = ['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'node', '--test'];
-  const runs = [
+  const runs: Record<string, string>[] = [
     {},
     // a dispatcher set but no backend asked for: still k8s, and nothing calls it (port 9 would refuse)
     { JOB_RUN_CF_URL: 'http://127.0.0.1:9', JOB_RUN_CF_WORKSPACE: 'kohilabs', JOB_RUN_CF_PROGRAMS: 'claudepilot' },
