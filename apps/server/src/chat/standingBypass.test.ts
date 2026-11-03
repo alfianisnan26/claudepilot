@@ -5,7 +5,12 @@
 
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
+import type { Workspace } from '@portal/contracts';
 import { Approvals } from '../approvals/service.js';
+import { clearResolvers } from '../authz/seam.js';
+import { ToolRegistry } from '../portalmcp/registry.js';
+import { portalMcpHarness } from '../portalmcp/testkit.js';
+import { registerSessionTools } from '../portalmcp/tools/sessions.js';
 import { Settings } from '../settings/store.js';
 import { STANDING_BYPASS_SETTING } from './bypass.js';
 import {
@@ -17,7 +22,7 @@ import {
 } from './standingBypass.js';
 import { APPLIED, controls, liveSession, ok, sleep, until, type Live } from './testkit.js';
 
-afterEach(() => standingBypass.reset());
+afterEach(() => (standingBypass.reset(), clearResolvers()));
 
 test('the env list: valid <target>/<name> ids, trimmed and de-duplicated; anything else ignored and reported', () => {
   assert.deepEqual(parseStandingWorkspaces(' konfersi/konfersi, kohilabs/kohilabs ,,konfersi/konfersi'), {
@@ -202,6 +207,49 @@ test('Keep going’s put-back under the standing policy: no 24 hour window, and 
     assert.equal(s.controller.get(b.id)!.mode, 'bypassPermissions');
     assert.equal(s.controller.get(b.id)!.bypassCapable, true);
     assert.equal(s.controller.audit({ kind: 'bypass.capable', sessionId: b.id })[0]?.detail.how, 'standing');
+  } finally {
+    await s.done();
+  }
+});
+
+test('session_start over MCP may start a session in Bypass in a covered workspace; elsewhere it is refused as before', async () => {
+  const registry = new ToolRegistry();
+  const h = await portalMcpHarness({ registry });
+  const s = await liveSession({}, true);
+  s.controller.bypassAllowed = () => true;
+  const workspaces = [
+    { id: 'docker/ws1', target: 'docker', name: 'ws1', label: 'One' },
+    { id: 'docker/ws2', target: 'docker', name: 'ws2', label: 'Two' },
+  ] as unknown as Workspace[];
+  registerSessionTools({ store: s.store, chat: s.controller, workspaces: { list: async () => workspaces, resolve: () => null } }, registry);
+  h.module.settings.update({ sessionControl: true });
+  const admin = h.token('admin');
+  try {
+    standingBypass.configure('docker/ws2');
+    const refused = await h.call(admin.secret, 'session_start', { workspace_id: 'docker/ws1', mode: 'bypassPermissions' });
+    assert.equal(refused.result?.isError, true, 'not covered: refused, nothing started');
+    standingBypass.configure('docker/ws1');
+    const started = await driving(s, h.call(admin.secret, 'session_start', { workspace_id: 'docker/ws1', mode: 'bypassPermissions' }));
+    assert.equal(started.result?.isError, undefined, JSON.stringify(started.raw));
+    const id = started.result!.structuredContent.session.id as string;
+    assert.deepEqual([s.controller.get(id)!.mode, s.controller.get(id)!.bypassCapable], ['bypassPermissions', true]);
+  } finally {
+    h.done();
+    await s.done();
+  }
+});
+
+test('a worker of a parent in Bypass enters Bypass by the standing policy; a parent not in Bypass hands nothing on', async () => {
+  const s = await liveSession({}, true);
+  try {
+    rig(s);
+    standingBypass.configure('docker/ws1');
+    await driving(s, s.controller.enterBypassStanding(s.id));
+    assert.equal(s.controller.get(s.id)!.mode, 'bypassPermissions');
+    const w = await newSession(s, 'docker/ws1', { parentId: s.id } as never);
+    assert.equal(s.controller.get(w.id)!.bypassCapable, true);
+    assert.equal(await driving(s, s.controller.inheritBypass(w.id)), true);
+    assert.equal(s.controller.get(w.id)!.mode, 'bypassPermissions');
   } finally {
     await s.done();
   }
