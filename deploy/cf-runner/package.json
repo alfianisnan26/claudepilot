@@ -1,0 +1,18 @@
+{
+  "name": "cp-jobrun-dispatcher",
+  "private": true,
+  "type": "module",
+  "description": "job-run.sh --backend cf: the dispatcher Worker, its Durable Objects and the runner image (T-3542, PILOT-1127)",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "5.20261013.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "wrangler": "4.147.0"
+  }
+}

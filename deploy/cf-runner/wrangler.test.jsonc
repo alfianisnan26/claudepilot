@@ -1,0 +1,26 @@
+// The test configuration (vitest-pool-workers): the same Worker without the container applications (no image is pulled in a test).
+{
+  "name": "cp-jobrun-dispatcher-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCHEDULER", "class_name": "Scheduler" },
+      { "name": "JOBRUN_STD", "class_name": "JobRunStd" },
+      { "name": "JOBRUN_BIG", "class_name": "JobRunBig" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Scheduler", "JobRunStd", "JobRunBig"] }],
+  "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "cp-jobrun-artifacts-test" }],
+  "vars": {
+    "GIT_GROUP": "memorid",
+    "BUDGET_USD_DAY": "5",
+    "PROGRAM_USD_DAY": "5",
+    "MAX_TIMEOUT_S": "3600",
+    "MAX_AT_ONCE": "2",
+    "MAX_PER_CHAT": "1",
+    "MAX_PER_PROGRAM": "2",
+    "ARTIFACT_MAX_BYTES": "1000"
+  }
+}
