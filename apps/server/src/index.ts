@@ -305,7 +305,8 @@ chatController.bypassAllowed = () => settingsModule.settings.get<boolean>(BYPASS
 // PILOT-1129: the standing Bypass policy, from the deploy manifest only (env PORTAL_BYPASS_STANDING_WORKSPACES); empty: today's behaviour.
 standingBypass.configure(process.env[STANDING_BYPASS_ENV]);
 if (standingBypass.ids.length) console.log(`[bypass] standing policy for ${standingBypass.ids.join(', ')}`);
-if (standingBypass.ignored.length) console.error(`[bypass] ${STANDING_BYPASS_ENV}: ignored ${standingBypass.ignored.join(', ')} (not a <target>/<name> id)`);
+if (standingBypass.ignored.length)
+  console.error(`[bypass] ${STANDING_BYPASS_ENV}: ignored ${standingBypass.ignored.join(', ')} (not a <target>/<name> id)`);
 chatController.autonomousAuto = () => settingsModule.settings.get<boolean>(AUTONOMOUS_AUTO_SETTING); // PILOT-996, D-103
 // T-561: crew leads launch with the lead rules (a hook in their --settings) while the policy is on; it applies at each lead's next start.
 chatController.leadRulesOn = () => settingsModule.settings.get<boolean>(LEAD_RULES_SETTING);

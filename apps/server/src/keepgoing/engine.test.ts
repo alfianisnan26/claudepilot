@@ -371,7 +371,13 @@ test('PILOT-1129: not covered by the standing policy, the 24 hour window still h
 test('PILOT-1129: the workers of a watched lead under the standing policy are put back too (not mid-turn, not ended, not another workspace)', async () => {
   const r = await rig();
   r.chat.put('lead', { mode: 'bypassPermissions', process: 'live' });
-  for (const [id, state] of [['w1', 'idle'], ['w2', 'working'], ['w3', 'idle'], ['w4', 'ended']] as const) r.chat.put(id, { mode: 'dontAsk', process: 'live', state, parentId: 'lead' });
+  for (const [id, state] of [
+    ['w1', 'idle'],
+    ['w2', 'working'],
+    ['w3', 'idle'],
+    ['w4', 'ended'],
+  ] as const)
+    r.chat.put(id, { mode: 'dontAsk', process: 'live', state, parentId: 'lead' });
   r.chat.put('w5', { mode: 'dontAsk', process: 'live', state: 'idle', parentId: 'w1' });
   r.chat.standingFor = (id) => id !== 'w3'; // w3 is in another workspace
   const calls: string[] = [];

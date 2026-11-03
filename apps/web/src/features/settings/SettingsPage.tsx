@@ -164,7 +164,10 @@ function Control({ setting, busy, onChange }: { setting: SettingView; busy: bool
   // PILOT-1129: a value set outside the portal (the deploy manifest): shown, never edited here.
   if (setting.fixedBy)
     return (
-      <span className="max-w-64 text-right text-[13px] [overflow-wrap:anywhere] text-ink-soft" title={`Set by ${setting.fixedBy} in the deploy manifest`}>
+      <span
+        className="max-w-64 text-right text-[13px] [overflow-wrap:anywhere] text-ink-soft"
+        title={`Set by ${setting.fixedBy} in the deploy manifest`}
+      >
         {String(setting.value) || 'Off'}
         <span className="block text-[12px] text-muted">{setting.fixedBy}</span>
       </span>

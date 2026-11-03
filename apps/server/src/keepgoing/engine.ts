@@ -225,7 +225,14 @@ export class KeepGoingEngine {
         }
         if (ok) {
           back++;
-          this.#trail(sessionId, ownerId, 'rebypassed', null, `Worker ${w.id.slice(0, 8)} out of Bypass: put back by the standing policy (owner).`, { worker: w.id });
+          this.#trail(
+            sessionId,
+            ownerId,
+            'rebypassed',
+            null,
+            `Worker ${w.id.slice(0, 8)} out of Bypass: put back by the standing policy (owner).`,
+            { worker: w.id },
+          );
           this.#changed(sessionId);
         }
       }

@@ -399,15 +399,25 @@ export class Approvals {
     if (!chat?.enterBypassStanding || chat.standingFor?.(sessionId) !== true) return null;
     const at = this.#iso();
     const claimed = this.#db()
-      .prepare("UPDATE approvals SET status = 'allowed', decided_by = ?, decided_at = ? WHERE id = ? AND status = 'pending' AND expires_at > ?")
+      .prepare(
+        "UPDATE approvals SET status = 'allowed', decided_by = ?, decided_at = ? WHERE id = ? AND status = 'pending' AND expires_at > ?",
+      )
       .run(STANDING_BYPASS_DECIDER, at, id, at);
     if (Number(claimed.changes) !== 1) return null;
     let result: ApprovalResult;
     try {
       const s = await chat.enterBypassStanding(sessionId, { actor: 'portal:standing', via: { approvalId: id } });
-      result = { ok: s.mode === 'bypassPermissions', message: s.mode === 'bypassPermissions' ? 'Bypass is on.' : 'Bypass did not turn on.', output: { mode: s.mode } };
+      result = {
+        ok: s.mode === 'bypassPermissions',
+        message: s.mode === 'bypassPermissions' ? 'Bypass is on.' : 'Bypass did not turn on.',
+        output: { mode: s.mode },
+      };
     } catch (e) {
-      result = { ok: false, message: e instanceof AppError ? e.message : 'Bypass could not be turned on.', output: { code: e instanceof AppError ? e.code : 'ERROR' } };
+      result = {
+        ok: false,
+        message: e instanceof AppError ? e.message : 'Bypass could not be turned on.',
+        output: { code: e instanceof AppError ? e.code : 'ERROR' },
+      };
     }
     this.#db().prepare('UPDATE approvals SET result = ? WHERE id = ?').run(JSON.stringify(result), id);
     this.#o.changed?.();

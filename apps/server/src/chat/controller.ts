@@ -2466,7 +2466,11 @@ export class ChatController {
         sessionId: id,
         workspaceId,
         actor,
-        detail: inherited ? { how: 'inherit', parent: parentId } : standingCapable ? { how: 'standing', decidedBy: STANDING_BYPASS_DECIDER } : { how: 'start' },
+        detail: inherited
+          ? { how: 'inherit', parent: parentId }
+          : standingCapable
+            ? { how: 'standing', decidedBy: STANDING_BYPASS_DECIDER }
+            : { how: 'start' },
       });
     if (full) return this.#queueStart(id, installed, full);
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
@@ -3792,7 +3796,13 @@ export class ChatController {
   }
 
   /** The switch itself, once every gate held: the live process, the one-request grant, `set_permission_mode`, the row, the High audit. */
-  async #switchOnBypass(sessionId: string, actor: string | undefined, auditActor: string, note: string, detail: Record<string, unknown>): Promise<ChatSession> {
+  async #switchOnBypass(
+    sessionId: string,
+    actor: string | undefined,
+    auditActor: string,
+    note: string,
+    detail: Record<string, unknown>,
+  ): Promise<ChatSession> {
     await this.#live(sessionId, true, true, actor); // resumes it when it slept (T-723: a refusal for memory names who asked); the policy and the flag are checked again at that launch
     this.#bypassGrant.add(sessionId);
     try {
@@ -3848,20 +3858,31 @@ export class ChatController {
       throw new AppError(BYPASS_BLOCKED, 'Bypass is blocked by policy.', { status: 403 });
     }
     if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
-    if (!this.standingFor(sessionId)) throw new AppError('FORBIDDEN', 'The standing Bypass policy does not cover this workspace.', { status: 403 });
+    if (!this.standingFor(sessionId))
+      throw new AppError('FORBIDDEN', 'The standing Bypass policy does not cover this workspace.', { status: 403 });
     if (session.mode === 'bypassPermissions') return session;
     if (!session.bypassCapable) {
       if (session.state === 'working' || session.state === 'waiting')
-        throw new AppError(BYPASS_NOT_CAPABLE, 'This session isn’t bypass-capable yet and a turn runs: it is made capable at its next idle look.', { status: 409 });
+        throw new AppError(
+          BYPASS_NOT_CAPABLE,
+          'This session isn’t bypass-capable yet and a turn runs: it is made capable at its next idle look.',
+          { status: 409 },
+        );
       session = await this.allowBypass(sessionId, { actor: req.actor, how: 'standing' });
     }
-    return this.#switchOnBypass(sessionId, req.actor, 'portal', 'Bypass on by the standing policy (owner): Claude runs every tool without asking.', {
-      claude: session.claudeName,
-      policy: 'standing',
-      decidedBy: STANDING_BYPASS_DECIDER,
-      capable: true,
-      ...(req.via ? { via: 'approval', approvalId: req.via.approvalId } : {}),
-    });
+    return this.#switchOnBypass(
+      sessionId,
+      req.actor,
+      'portal',
+      'Bypass on by the standing policy (owner): Claude runs every tool without asking.',
+      {
+        claude: session.claudeName,
+        policy: 'standing',
+        decidedBy: STANDING_BYPASS_DECIDER,
+        capable: true,
+        ...(req.via ? { via: 'approval', approvalId: req.via.approvalId } : {}),
+      },
+    );
   }
 
   /**
