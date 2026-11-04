@@ -179,6 +179,12 @@ export class BridgeDO extends SchemaDO {
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+    // Answer the peer's close, or its socket waits for the closing handshake (1005, 1006 and 1015 cannot be sent: 1000).
+    try {
+      ws.close([1005, 1006, 1015].includes(code) ? 1000 : code, reason.slice(0, 100));
+    } catch {
+      // already answered (the runtime's auto-reply) or gone
+    }
     const att = attachment(ws);
     if (att?.stage !== 'live') return;
     this.#audit('bridge.closed', att.connId, `code ${code}`);
