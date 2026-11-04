@@ -2,8 +2,16 @@
 // Additions are allowed; a changed signature goes through the coordinator.
 import type { Duplex } from 'node:stream';
 import type {
-  ConnectAgentHello, ConnectEnrollment, ConnectEnrollStatus, ConnectInstallOptions, ConnectKind, ConnectOpenArgs, ConnectNodeView,
-  ConnectStatusMessage, ConnectTargetSettings, Workspace,
+  ConnectAgentHello,
+  ConnectEnrollment,
+  ConnectEnrollStatus,
+  ConnectInstallOptions,
+  ConnectKind,
+  ConnectOpenArgs,
+  ConnectNodeView,
+  ConnectStatusMessage,
+  ConnectTargetSettings,
+  Workspace,
 } from '@portal/contracts';
 import type { Runtime } from '../workspaces/runtime.js';
 
@@ -12,11 +20,20 @@ export { ConnectError } from '@portal/connect-tunnel/errors';
 
 /** A stream to a service on the agent, shaped like a connected socket (the net.Socket methods an http.Agent calls are no-ops). */
 export type TunnelStream = Duplex & {
-  setKeepAlive(enable?: boolean, ms?: number): TunnelStream; setNoDelay(on?: boolean): TunnelStream;
-  setTimeout(ms: number, cb?: () => void): TunnelStream; ref(): TunnelStream; unref(): TunnelStream;
+  setKeepAlive(enable?: boolean, ms?: number): TunnelStream;
+  setNoDelay(on?: boolean): TunnelStream;
+  setTimeout(ms: number, cb?: () => void): TunnelStream;
+  ref(): TunnelStream;
+  unref(): TunnelStream;
 };
 
-export interface NodeInfo { hello: ConnectAgentHello; status: ConnectStatusMessage | null; connectedAt: string; rttMs: number | null; ip: string | null }
+export interface NodeInfo {
+  hello: ConnectAgentHello;
+  status: ConnectStatusMessage | null;
+  connectedAt: string;
+  rttMs: number | null;
+  ip: string | null;
+}
 
 /** One per node. Always exists for an enrolled node; `connected()` says whether the tunnel is up. */
 export interface NodeLink {
@@ -24,7 +41,11 @@ export interface NodeLink {
   readonly targetId: string;
   connected(): boolean;
   /** Resolves when the agent accepted the stream; rejects with ConnectError. `args` is for `host` only. */
-  open(service: 'docker' | 'kube' | 'host', args?: ConnectOpenArgs, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream>;
+  open(
+    service: 'docker' | 'kube' | 'host',
+    args?: ConnectOpenArgs,
+    opts?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<TunnelStream>;
   info(): NodeInfo | null;
   /** Fires on connect (true) and on disconnect (false). Returns an unsubscribe. */
   onChange(fn: (connected: boolean) => void): () => void;
@@ -33,9 +54,21 @@ export interface NodeLink {
 }
 
 export interface ConnectTargetRecord {
-  id: string; label: string; kind: ConnectKind; portalUrl: string; settings: ConnectTargetSettings; active: boolean; isDefault: boolean;
+  id: string;
+  label: string;
+  kind: ConnectKind;
+  portalUrl: string;
+  settings: ConnectTargetSettings;
+  active: boolean;
+  isDefault: boolean;
 }
-export interface ConnectNodeRecord { id: string; targetId: string; name: string; drained: boolean; keyFingerprint: string }
+export interface ConnectNodeRecord {
+  id: string;
+  targetId: string;
+  name: string;
+  drained: boolean;
+  keyFingerprint: string;
+}
 
 /** What a runtime needs from the registry (T1 implements; T3 consumes). */
 export interface RuntimeDeps {
@@ -49,12 +82,18 @@ export interface RuntimeDeps {
 }
 
 /** T3 implements it; T1 calls it when a target becomes usable or changes. One Runtime per target. */
-export type RuntimeFactory = (target: ConnectTargetRecord, nodes: { record: ConnectNodeRecord; link: NodeLink }[], deps: RuntimeDeps) => Runtime;
+export type RuntimeFactory = (
+  target: ConnectTargetRecord,
+  nodes: { record: ConnectNodeRecord; link: NodeLink }[],
+  deps: RuntimeDeps,
+) => Runtime;
 
 /** What T4's routes need from T1: look a token up without using it. */
 export interface EnrollmentLookup {
   /** The enrollment behind a token, or null when no such token exists. `usable` is false once expired, revoked or used up. */
-  lookup(token: string): { enrollment: ConnectEnrollment; target: ConnectTargetRecord; options: ConnectInstallOptions; usable: boolean } | null;
+  lookup(
+    token: string,
+  ): { enrollment: ConnectEnrollment; target: ConnectTargetRecord; options: ConnectInstallOptions; usable: boolean } | null;
   /** `enroll/status` for a token still inside its grace: waiting, enrolled, connected, expired or revoked. */
   status(token: string): ConnectEnrollStatus | null;
 }
@@ -73,7 +112,9 @@ export interface ConnectModuleApi {
   useRuntimeFactory(f: RuntimeFactory): void;
   /** Adds, replaces and removes the enrolled targets' runtimes on the manager as the registry changes. */
   bind(workspaces: {
-    addRuntime(r: Runtime): void; replaceRuntime(r: Runtime): void; removeRuntime(targetId: string): void;
+    addRuntime(r: Runtime): void;
+    replaceRuntime(r: Runtime): void;
+    removeRuntime(targetId: string): void;
     hooks: { beforeCreate?: (target: string, node?: string) => void };
   }): void;
   /** Resolves when every enrolled target has had a first connection, or after `ms`. */
