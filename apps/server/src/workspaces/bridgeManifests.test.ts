@@ -74,14 +74,17 @@ test('deploy/k3s-bridge/rbac.yaml: in every workspace namespace exactly the port
   }
 });
 
-test('deploy/k3s-bridge/rbac.yaml: the only Secret right is the identity Secret by name (plus create), in the namespace the bridge serves', () => {
+test('deploy/k3s-bridge/rbac.yaml: the only Secret right is get and update of the identity Secret by name, in the namespace the bridge serves', () => {
   const all = docs(`${BRIDGE}/rbac.yaml`);
   const identity = all.filter((d) => d.kind === 'Role' && d.metadata.name === 'cp-bridge-identity');
   assert.deepEqual(identity.map((r) => r.metadata.namespace), [servedNamespace()]);
-  assert.deepEqual(identity[0]!.rules, [
-    { apiGroups: [''], resources: ['secrets'], resourceNames: ['claudepilot-agent-identity'], verbs: ['get', 'update'] },
-    { apiGroups: [''], resources: ['secrets'], verbs: ['create'] },
-  ]);
+  assert.deepEqual(identity[0]!.rules, [{ apiGroups: [''], resources: ['secrets'], resourceNames: ['claudepilot-agent-identity'], verbs: ['get', 'update'] }]);
+  // Create can't be limited by name: the coordinator makes the Secret empty (README), and no Role here may create, list or watch Secrets.
+  for (const r of all.filter((d) => d.kind === 'Role').flatMap((x) => x.rules!)) {
+    if (!r.resources.includes('secrets')) continue;
+    assert.deepEqual(r.resourceNames, ['claudepilot-agent-identity'], `a Secret rule names the identity Secret: ${JSON.stringify(r)}`);
+    for (const v of ['create', 'list', 'watch', 'patch', 'delete', 'deletecollection']) assert.ok(!r.verbs.includes(v), `no ${v} on secrets: ${JSON.stringify(r)}`);
+  }
   assert.equal(podOf(bridgeDeployment()).containers[0]!.env!.find((e) => e.name === 'PILOT_IDENTITY_SECRET')?.value, 'claudepilot-agent-identity');
   const roles = all.filter((d) => d.kind === 'Role');
   assert.deepEqual(roles.map((r) => r.metadata.name).sort(), [...Array(4).fill('cp-bridge-workspaces'), 'cp-bridge-identity'].sort(), 'no other Role');
