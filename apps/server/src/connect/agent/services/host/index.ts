@@ -101,7 +101,7 @@ export function createService(opts: HostServiceOptions): HostService {
     name: 'host',
 
     async accept(args) {
-      if (!args || typeof args !== 'object') return { code: 'bad_open', message: 'A host stream names its operation.' };
+      if (!args || typeof args !== 'object' || !('op' in args)) return { code: 'bad_open', message: 'A host stream names its operation.' };
       if (args.op === 'exec') {
         const problem = execProblem(args as ExecOp);
         if (problem) return { code: 'bad_open', message: problem };
