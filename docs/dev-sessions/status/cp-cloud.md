@@ -20,8 +20,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 
 ## IN FLIGHT
 - cf-worker (worker 6562167d, opus): PILOT-1169 + 1170 built (1170 job 04c06087 177 pass on 3106571) but d3dc72203 conflicts on agent.generated.ts after 1172. Replaying on a new branch ticket/T-3735-tunnel-pkg-r2 with a regenerated bundle and a fresh self-test; then 1170 to blind review; next PILOT-1148.
-- cf-sec (worker e28ec1b4, opus): PILOT-1179 (HIGH, go-live blocker), branch ticket/T-3772-cloudflared-trust.
-- cf-review (worker 68d76aeb, opus, auto): idle; next PILOT-1170 (after the replay), then 1179.
+- cf-sec (worker e28ec1b4, opus): PILOT-1179 built d59cdd4d3275 (job d2d1935b 154), in review; now PILOT-1180 (deploy script safe re-run), branch ticket/T-3827-deploy-rerun.
+- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1179 on d59cdd4d3275; then 1170 (after the replay).
 - cf-bridge (worker 5bc808ae, opus): idle (pacing). PILOT-1142 rig refused again 21:4x: ws-isnan-jobs cannot create namespaces (comment 59344); script merged (2dfb4d129, 1d41f3ccd), ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -45,6 +45,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Standing (operator, 21:50): crew runs in auto mode, so the classifier refuses DNS/domain changes. Any later deploy that needs one goes here as the exact command.
 - PILOT-1142: service account isnan-claudepilot:ws-isnan-jobs needs create/list/delete on `dev-rig-*` namespaces + the rights in comment 58722 (refused again, comment 59344).
 - PILOT-1145: the cp-next-healthcheck service-token secret is stored nowhere; a path into the cp-next pool without an agent seeing it.
+- PILOT-1179: a stable address range for cloudflared, then narrow PORTAL_CLOUDFLARE_HOPS (deploy/k3s/portal.yaml, now 10.42.0.0/16). PILOT-1182: a NetworkPolicy so only Traefik reaches the portal's public port.
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
 - PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
@@ -54,7 +55,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 
 ## NEXT
 1. PILOT-1142 rig run when the coordinator grants the rights; PILOT-1180 (deploy script safe re-run) at a free slot.
-2. PILOT-1179 (cf-sec, HIGH, go-live blocker) at the next free builder slot.
+2. PILOT-1182 (HIGH, filed by cf-sec): workspaces reach the portal Service directly and can forge X-Forwarded-For; a NetworkPolicy and an internal port (needs the coordinator).
 3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
 4. cf-bridge (at a free builder slot): gaps 1161, 1163, 1164, 1157, 1167.
 5. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
