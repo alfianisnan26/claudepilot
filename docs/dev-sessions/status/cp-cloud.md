@@ -12,13 +12,14 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1141 manifests merged bbfedf992..a294e9fb6 + PRD fix ad076bef7 (job bf0d2e6d, review PASS 58258), closed.
 - PILOT-1162 multi-namespace bridge merged 882c8a494..9aa8816a4 (job 1a6d3781 107, review PASS 58261), closed.
 - PILOT-1144 BridgeDO + /bridge merged b213464ff..21f9ae716 (job d8ebfaf4 61, review PASS 58260), closed. Review minors -> PILOT-1172.
+- PILOT-1138 rate limits merged as squash d2c92d8ae (= reviewed head 3da7888ee, job 99b742cf 158, review PASS 58332), closed.
+- PILOT-1159 G6 spike merged 9072225a6..3bcca9b37 (job 3a3aee9c 41; skipped e66ef7047, a stale PRD copy), closed. Follow-ups PILOT-1169/1170/1171.
 
 ## IN FLIGHT
 - cf-bridge (worker 5bc808ae, opus): building PILOT-1172 hardening; then 1160/1158.
-- cf-review (worker 68d76aeb, opus, auto): re-checking PILOT-1138 at 3da7888ee.
-- cf-worker (worker 6562167d, opus): building PILOT-1159 G6 spike.
-- cf-sec (worker e28ec1b4, opus): PILOT-1138 fixed, head 3da7888ee (job 99b742cf 158); idle (pacing). Filed PILOT-1168; next it, with the lead's default (b).
-- Merge note: the 1138 branch has a merge commit (c5a057dbf); land it on cf/integration as one squash commit (linear, ff push).
+- cf-worker (worker 6562167d, opus): building PILOT-1169 tunnel package, then PILOT-1170 (HIGH) mux on the live link.
+- cf-review (worker 68d76aeb, opus, auto): idle until the next review ask.
+- cf-sec (worker e28ec1b4, opus): idle (pacing); next PILOT-1168 (go-live blocker, comment 58355 on PILOT-1131) with default (b).
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
 ## DECISIONS
@@ -46,8 +47,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - none (production cutover and the final hostname come at phase 6, operator + owner).
 
 ## NEXT
-1. PILOT-1138 merge on re-review PASS.
+1. PILOT-1168 (cf-sec) when a builder slot frees: it blocks go-live on any public host.
 2. cf-bridge when a slot frees: PILOT-1172, then gaps 1160, 1158, 1161, 1163, 1164, 1157, 1167; then PILOT-1142 rig e2e.
-3. cf-worker after 1159: PILOT-1148 SPA assets.
+3. cf-worker after 1170: PILOT-1171 kube client on streams, then PILOT-1148 SPA assets.
 3. PILOT-1134 mirror (after 1133), PILOT-1135 zones (after 1132), PILOT-1145 staging deploy (after 1132 + 1135).
 4. Phase 2: PILOT-1146, 1147, 1148, 1149, 1150, 1151.
