@@ -7,7 +7,7 @@ export interface Env {
   WORKSPACE: DurableObjectNamespace<WorkspaceDO>;
   CHAT_SESSION: DurableObjectNamespace<ChatSessionDO>;
   BRIDGE: DurableObjectNamespace<BridgeDO>;
-  /** Static assets: empty until phase 2 serves the SPA. */
+  /** Static assets: the SPA (apps/web's build, scripts/webAssets.mjs). */
   ASSETS: Fetcher;
   CP_VERSION: string;
   CP_COMMIT: string;

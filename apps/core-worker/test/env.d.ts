@@ -8,6 +8,11 @@ declare global {
       TEST_BRIDGE_NODE: string;
       TEST_BRIDGE_PRIVATE_KEY: string;
       TEST_BRIDGE_TOKEN: string;
+      /** The hashed entry script of the test web build (vitest.config.ts). */
+      TEST_WEB_ENTRY: string;
+      /** JSON: the headers the portal sends with its shell and with /assets files, from its own code (vitest.config.ts). */
+      TEST_PORTAL_SHELL_HEADERS: string;
+      TEST_PORTAL_ASSET_HEADERS: string;
     }
   }
   // Vite's import.meta.glob (the source guard reads the Worker's files through it, inside workerd).

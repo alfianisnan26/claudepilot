@@ -1,2 +1,5 @@
 .wrangler/
 dist/
+# The SPA build is copied here by `npm run build` (scripts/webAssets.mjs); only the ignore list is kept in git.
+public/*
+!public/.assetsignore
