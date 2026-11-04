@@ -14,10 +14,11 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1144 BridgeDO + /bridge merged b213464ff..21f9ae716 (job d8ebfaf4 61, review PASS 58260), closed. Review minors -> PILOT-1172.
 
 ## IN FLIGHT
-- cf-bridge (worker 5bc808ae, opus): idle (pacing); next PILOT-1172 hardening, then 1160/1158.
-- cf-review (worker 68d76aeb, opus, auto): idle; next the 1138 re-check.
+- cf-bridge (worker 5bc808ae, opus): building PILOT-1172 hardening; then 1160/1158.
+- cf-review (worker 68d76aeb, opus, auto): re-checking PILOT-1138 at 3da7888ee.
 - cf-worker (worker 6562167d, opus): building PILOT-1159 G6 spike.
-- cf-sec (worker e28ec1b4, opus): fixing PILOT-1138 review FAIL 58244 (shared tunnel key, Retry-After, admin sign-in).
+- cf-sec (worker e28ec1b4, opus): PILOT-1138 fixed, head 3da7888ee (job 99b742cf 158); idle (pacing). Filed PILOT-1168; next it, with the lead's default (b).
+- Merge note: the 1138 branch has a merge commit (c5a057dbf); land it on cf/integration as one squash commit (linear, ff push).
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
 ## DECISIONS
@@ -29,6 +30,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - 09:14 PILOT-1141 review FAIL (comment 58011: unbounded `secrets: create`); fix (a) went back to cf-bridge.
 - ~09:20-11:30 all three builders hit the two.claude session limit; resumed 11:45 after the reset. Next session window resets 16:40 UTC: on a limit, note the reset here and wake every worker right after it.
 - 12:00 Review trailer finding on 1138 is a false positive (trailers in a block above Co-Authored-By); builders now use one final block.
+- 12:20 PILOT-1168 route limiters: default (b), key on visitorAddress under the same trust conditions as the edge ceilings. Rejected: (a) the tunnel hop as a global key, (c) none until the CF binding. To be written on the ticket by its builder; the lead may not comment on unclaimed tickets.
 - 11:45 Operator pacing (one account): at most 2 workers building at once; cf-review takes review asks only. Order: 1143/1144 and 1141 first, then cf-sec 1138/1139 (paused). Only cf-migration tickets.
 
 ## FOR THE COORDINATOR
