@@ -14,14 +14,14 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1159 G6 spike merged 9072225a6..3bcca9b37 (job 3a3aee9c 41; skipped e66ef7047, a stale PRD copy), closed. Follow-ups PILOT-1169/1170/1171.
 - PILOT-1172 bridge hardening merged af872f583..929d2ba74 (job 98ef1e94 158, review PASS 58743), closed.
 - PILOT-1168 route limiter keys merged 7e4b34d01..103716ada (job 4e2cda31 222, review PASS 58772), closed. Follow-up PILOT-1179 (go-live blocker).
-- PILOT-1145 DONE by the operator as coordinator (job 5afb4f9e on 27102ae): https://pilot-next.kohi-labs.com serves cp-next-core behind Access (anon 403, service token 200), closed by the operator. The script's branch is in blind review before it lands.
+- PILOT-1145 DONE by the operator as coordinator (job 5afb4f9e on 27102ae): https://pilot-next.kohi-labs.com serves cp-next-core behind Access (anon 403, service token 200), closed by the operator. Script merged 599c96411..0022bff07 (review PASS on 27102ae67f10, in cf-review's report; ticket closed). Minors -> PILOT-1180.
 - PILOT-1158 (G5 app ports on enrolled kube) + PILOT-1160 (G7 big stdin / long exec) merged 2c033546f..2fa3b2e53 (job 05ad0b6b 35), closed (NORMAL, self-test).
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
 - cf-worker (worker 6562167d, opus): PILOT-1169 + 1170 built (1170 job 04c06087 177 pass on 3106571) but d3dc72203 conflicts on agent.generated.ts after 1172. Replaying on a new branch ticket/T-3735-tunnel-pkg-r2 with a regenerated bundle and a fresh self-test; then 1170 to blind review; next PILOT-1148.
 - cf-sec (worker e28ec1b4, opus): PILOT-1179 (HIGH, go-live blocker), branch ticket/T-3772-cloudflared-trust.
-- cf-review (worker 68d76aeb, opus, auto): reviewing the 1145 script, ticket/T-3703-stg-deploy 27102ae67f10; then 1170.
+- cf-review (worker 68d76aeb, opus, auto): idle; next PILOT-1170 (after the replay), then 1179.
 - cf-bridge (worker 5bc808ae, opus): idle (pacing). PILOT-1142 rig refused again 21:4x: ws-isnan-jobs cannot create namespaces (comment 59344); script merged (2dfb4d129, 1d41f3ccd), ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -53,7 +53,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - none (production cutover and the final hostname come at phase 6, operator + owner).
 
 ## NEXT
-1. Land the 1145 script on a review PASS; PILOT-1142 rig run.
+1. PILOT-1142 rig run when the coordinator grants the rights; PILOT-1180 (deploy script safe re-run) at a free slot.
 2. PILOT-1179 (cf-sec, HIGH, go-live blocker) at the next free builder slot.
 3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
 4. cf-bridge (at a free builder slot): gaps 1161, 1163, 1164, 1157, 1167.
