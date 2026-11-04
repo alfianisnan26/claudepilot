@@ -63,12 +63,56 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 - **G6 The portal’s half on workerd** (PILOT-1159, T-3717). A spike: the hub's auth + mux in a Durable Object (WebSocket accept, `ws` replaced), a stream
   abstraction without `node:stream`, and a kube HTTP + exec (v4/v5 channel) client that writes straight onto a `kube` stream instead of
   `@kubernetes/client-node` over a loopback port. Output: a design note and a working DO that lists pods through a rig bridge.
+  Spike done: see "G6 finding" below; the build is in G6a-G6c (PILOT-1169..1171).
 - **G7 Large stdin and long execs through the real kube proxy** (PILOT-1160, T-3718). A test like `host.bigstdin.test.ts` for the `kube` service: a 25 MB
   (CHAT_MAX_UPLOAD_BYTES) base64 stdin and an exec held past the proxy's idle timeout (60 s, `proxy.ts:164`), both through the real agent.
 - **G8 Target id continuity** (PILOT-1161, T-3719). Workspaces of the built-in `kubernetes` target (namespace `isnan-claudepilot-workspaces`) need either a
   data migration of their ids to a new enrolled id or an allowance for an enrolled target to take a reserved id when the portal has no
   static target of that name (the CF portal has none). Decide on the ticket. Stable workspace ids (`ws_` + 12 hex, targets-connect §24,
   T-42) keep `<target>/<name>` only as an alias, so the ticket first lists which stored references still key on the alias.
+
+## G6 finding: the portal's half in a Durable Object (spike, PILOT-1159)
+
+Proof: `apps/core-worker/test/spike/muxOnWorkerd.test.ts` (helpers in `test/spike/wire.ts`), 4 tests, run in workerd (the vitest pool,
+`nodejs_compat`, compatibility date 2026-10-01) inside `BridgeDO` through `runInDurableObject`. Two `MuxSession`s, one per end of a
+Cloudflare `WebSocketPair`: the portal end opens `kube` streams; the agent end stands in for the kube proxy (bearer, namespace, answers).
+
+**Runs as is (no change).**
+
+- `tunnel/frame.ts`, `mux.ts`, `stream.ts`, `lines.ts`, `open.ts`, unchanged. `nodejs_compat` gives them `Buffer`, the `node:stream`
+  Duplex, `process.nextTick` and timers with `unref` (test 1). `openService`/`acceptService` work; a service the agent doesn't run is
+  the typed refusal `service_unavailable`. So no "stream abstraction without `node:stream`" is needed.
+- HTTP/1.1 written straight onto a `kube` stream: a pods list with a chunked body, a second request on the same stream (keep-alive),
+  the bearer refused (401) and another namespace refused (403) (test 2). About 100 lines (`wire.ts`): no client-node, no loopback.
+- Exec rides the same stream (test 3): the `v5.channel.k8s.io` upgrade (101, `Sec-WebSocket-Accept` checked), then RFC 6455 frames,
+  masked from the portal, whose first byte is the channel (0 stdin, 1 stdout, 2 stderr, 3 status, 4 resize; v5 adds 255 = close a
+  channel, so stdin can end without closing). v4 is the same without 255. The agent pipes the upgrade raw (`proxy.ts:409-426`): no
+  change on the agent.
+- Limits: the mux sends one frame per WebSocket message, at most 64 KiB + the 12-byte header (test 4: 2 MiB in at least 32 messages,
+  with window updates), far under the agent's `ws` maxPayload (1 MiB) and Cloudflare's message limit (32 MiB in Cloudflare's docs; not
+  measured). Both ends ping every 15 s, so the link never idles.
+
+**Needs a port.**
+
+1. Socket: the hub is already `BridgeDO` for the handshake (PILOT-1144). After the welcome the DO feeds a `MuxSession` from
+   `webSocketMessage`/`webSocketClose` (the Hibernation API calls those, not `addEventListener` as the spike's `cfMuxSocket` does).
+2. Hibernation: the mux's streams, ids and windows live in memory and are lost when the object is evicted, and its 15 s `setInterval`
+   is a pending event, which in Cloudflare's docs keeps an object from hibernating (not measured). Drive the mux timer from the alarm;
+   with no stream open keep the ids in the socket attachment so a woken object rebuilds the session; one woken with streams lost closes
+   1011 and the agent reconnects.
+3. Backpressure: a Cloudflare WebSocket has no `bufferedAmount` and `send` has no completion, so the mux's high/low water marks never
+   hold the sender back. What waits toward the agent is bounded only by the stream windows: 256 KiB x 256 streams = 64 MiB against a
+   128 MB isolate. Cap the portal's streams per link lower, or count bytes in the adapter.
+4. Kube client: `KubernetesRuntime` uses `@kubernetes/client-node` (AppsV1Api, CoreV1Api, CustomObjectsApi, Exec: about a dozen REST
+   calls, `kubernetes.ts:4-15`) over the loopback listener (`connect/kube.ts:20-75`). Replace it with a REST + exec client on `kube`
+   streams (the spike's `wire.ts`, grown: bodies, Status errors, watch). A stream can't leave the DO, so the client runs in `BridgeDO`,
+   other objects call it by RPC, and an interactive exec (terminal, chat tail) is relayed by `BridgeDO` to the caller's WebSocket.
+5. Types: the tunnel modules need `@types/node`; the Worker's tsconfig has only workers-types, so the spike's two files are kept out
+   of the Worker typecheck (`apps/core-worker/tsconfig.json`).
+
+**Recommendation.** Keep the mux and stream code; share it as a package typechecked with node types (G6a, PILOT-1169). Port only
+the edges: the DO socket adapter with alarm-driven liveness, a bound on queued bytes, and the real-agent proof (G6b, PILOT-1170); a
+Worker kube client on streams in place of client-node (G6c, PILOT-1171). Do not port `hub.ts` or the `ws` server: `BridgeDO` is the hub.
 
 ## RBAC the bridge needs, and nothing wider
 
@@ -89,5 +133,6 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 
 - Nothing here was run against a cluster: the "Works" rows rest on the code paths and the existing unit and e2e tests named, not on a rig.
   The bridge rehearsal in `dev-rig-cp-bridge` (T-3699) is where they are first exercised together.
-- Cloudflare's WebSocket limits (message size, idle close) against the mux (`CONNECT_LIMITS.wsMaxPayload` 1 MiB, pings every 15 s,
-  `packages/contracts/src/connect.ts:126-160`) are part of G6.
+- G6 ran in workerd's local test runtime, inside one DO, with both mux ends in the same object and a stand-in for the agent's
+  `KubeProxy`: not on the Cloudflare edge, not over a real `/bridge` link with the real agent, not across hibernation, and not against
+  Cloudflare's own message-size limit or idle close (the 32 MiB figure is from Cloudflare's docs).

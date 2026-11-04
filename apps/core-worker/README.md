@@ -18,6 +18,9 @@ The ClaudePilot core on Cloudflare Workers + Durable Objects (epic PILOT-1131). 
   (`CONNECT_LIMITS`), and one live link per cluster: a new one replaces the old one (closed 4409, written to `bridge_audit`).
   Mux frames pass untouched; phase 1 only answers pings. `apps/server/src/connect/tunnel/bridgeWorker.test.ts` dials it with the
   real `dialTunnel` (opt-in: `CLAUDEPILOT_WORKER_TESTS=1`).
+- `test/spike/` (PILOT-1159, G6): the server's tunnel code (mux, streams, open) run unchanged inside `BridgeDO`, with HTTP/1.1 and an
+  exec written straight onto a `kube` stream. Kept out of the typecheck (it imports `apps/server`); the finding is in
+  `docs/prd/cf-bridge.md` ("G6 finding").
 - `wrangler.jsonc`: name `cp-next-core`, `nodejs_compat`, no account id and no route (they come from the environment at deploy),
   workers.dev and preview URLs off, an empty static-assets binding (`public/`, the SPA comes in phase 2).
 
