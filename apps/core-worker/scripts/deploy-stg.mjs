@@ -30,7 +30,8 @@ const fail = (msg) => {
 };
 const say = (msg) => console.log(`deploy-stg: ${msg}`);
 
-for (const n of ['CP_NEXT_CF_API_TOKEN', 'CP_NEXT_CF_ACCOUNT_ID', 'CP_NEXT_ZONE', 'CP_NEXT_HOST']) if (!process.env[n]) fail(`${n} is not set`);
+for (const n of ['CP_NEXT_CF_API_TOKEN', 'CP_NEXT_CF_ACCOUNT_ID', 'CP_NEXT_ZONE', 'CP_NEXT_HOST'])
+  if (!process.env[n]) fail(`${n} is not set`);
 const TOKEN = process.env.CP_NEXT_CF_API_TOKEN;
 const ACCOUNT = process.env.CP_NEXT_CF_ACCOUNT_ID;
 const ZONE = process.env.CP_NEXT_ZONE;
@@ -67,7 +68,9 @@ say(`zone found on the account`);
 
 const apps = await cf('GET', `${acct}/access/apps?per_page=1000`);
 let app = apps.find((a) => a.name === APP_NAME);
-const onHost = apps.filter((a) => a.name !== APP_NAME && [a.domain, ...(a.self_hosted_domains ?? [])].some((d) => d && (d === HOST || d.startsWith(`${HOST}/`))));
+const onHost = apps.filter(
+  (a) => a.name !== APP_NAME && [a.domain, ...(a.self_hosted_domains ?? [])].some((d) => d && (d === HOST || d.startsWith(`${HOST}/`))),
+);
 if (onHost.length) fail(`another Access app already covers the host (${onHost.map((a) => a.name).join(', ')})`);
 if (app && app.domain !== HOST) fail(`${APP_NAME} exists with another domain`);
 say(`Access app ${APP_NAME}: ${app ? `exists (${app.id})` : 'missing, will be created'}`);
@@ -86,7 +89,8 @@ const domains = await cf('GET', `${acct}/workers/domains?hostname=${encodeURICom
 const ours = domains.find((d) => d.hostname === HOST && d.service === WORKER);
 const theirs = domains.find((d) => d.hostname === HOST && d.service !== WORKER);
 if (theirs) fail(`the host is a custom domain of another Worker (${theirs.service})`);
-if (dns.length && !ours) fail(`a DNS record for the host already exists (${dns.map((r) => r.type).join(', ')}) and it is not this Worker's custom domain`);
+if (dns.length && !ours)
+  fail(`a DNS record for the host already exists (${dns.map((r) => r.type).join(', ')}) and it is not this Worker's custom domain`);
 say(`custom domain: ${ours ? `attached (${ours.id})` : 'not attached, will be attached after the deploy'}`);
 
 let workerExists = true;
@@ -128,7 +132,8 @@ if (svc) {
 }
 const policies = await cf('GET', `${acct}/access/apps/${app.id}/policies`);
 const foreign = policies.filter((p) => p.name !== POLICY_NAME);
-if (foreign.length) say(`note: the app has other policies, left as they are: ${foreign.map((p) => `${p.name} (${p.decision})`).join(', ')}`);
+if (foreign.length)
+  say(`note: the app has other policies, left as they are: ${foreign.map((p) => `${p.name} (${p.decision})`).join(', ')}`);
 const policyBody = { name: POLICY_NAME, decision: 'non_identity', include: [{ service_token: { token_id: svc.id } }], precedence: 1 };
 const existing = policies.find((p) => p.name === POLICY_NAME);
 if (existing) await cf('PUT', `${acct}/access/apps/${app.id}/policies/${existing.id}`, policyBody);
@@ -160,7 +165,10 @@ let anon, authed, body;
 for (let i = 0; i < 40; i++) {
   try {
     anon = await fetch(url, { redirect: 'manual' });
-    authed = await fetch(url, { redirect: 'manual', headers: { 'CF-Access-Client-Id': svc.client_id, 'CF-Access-Client-Secret': svcSecret } });
+    authed = await fetch(url, {
+      redirect: 'manual',
+      headers: { 'CF-Access-Client-Id': svc.client_id, 'CF-Access-Client-Secret': svcSecret },
+    });
     body = await authed.text();
     if (authed.status === 200) break;
   } catch (e) {
@@ -171,12 +179,16 @@ for (let i = 0; i < 40; i++) {
 svcSecret = undefined;
 const loc = anon?.headers.get('location') ?? '';
 const anonOk = anon && (anon.status === 403 || ((anon.status === 302 || anon.status === 301) && /\.cloudflareaccess\.com\//.test(loc)));
-say(`CHECK unauthenticated: ${anon?.status} ${loc ? `-> ${new URL(loc).host}${new URL(loc).pathname}` : ''} ${anonOk ? 'PASS (Access)' : 'FAIL'}`);
+say(
+  `CHECK unauthenticated: ${anon?.status} ${loc ? `-> ${new URL(loc).host}${new URL(loc).pathname}` : ''} ${anonOk ? 'PASS (Access)' : 'FAIL'}`,
+);
 let healthOk = false;
 try {
   const h = JSON.parse(body ?? '');
   healthOk = authed.status === 200 && h.ok === true && h.service === WORKER && h.commit === commit;
 } catch {}
 say(`CHECK service token: ${authed?.status} ${healthOk ? `PASS ${body}` : 'FAIL'}`);
-say(`ROLLBACK: npx wrangler rollback <previous version id> (cwd apps/core-worker); to take the host off: DELETE ${'/accounts/<account>/workers/domains/<domain id>'}`);
+say(
+  `ROLLBACK: npx wrangler rollback <previous version id> (cwd apps/core-worker); to take the host off: DELETE ${'/accounts/<account>/workers/domains/<domain id>'}`,
+);
 process.exit(anonOk && healthOk ? 0 : 1);
