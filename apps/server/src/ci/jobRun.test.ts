@@ -460,6 +460,40 @@ test('several words are one command, each quoted; the exit code 0 is passed on',
   assert.equal(e.JR_STEPS, 'none');
 });
 
+test('T-3542: without --backend or JOB_RUN_BACKEND the k8s Job is exactly as before, even with a dispatcher configured; auto keeps a k8s program on k8s', () => {
+  const norm = (m: string) => m.replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB').replace(/job-run\/owner: "[^"]*"/, 'OWNER');
+  const outNorm = (o: string) => o.replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB').replace(/in \d+s \(queued \d+s\)/, 'T');
+  const argv = ['--repo', 'claudepilot', '--ref', 'main', '--steps', 'none', '--', 'node', '--test'];
+  const runs: Record<string, string>[] = [
+    {},
+    // a dispatcher set but no backend asked for: still k8s, and nothing calls it (port 9 would refuse)
+    { JOB_RUN_CF_URL: 'http://127.0.0.1:9', JOB_RUN_CF_WORKSPACE: 'kohilabs', JOB_RUN_CF_PROGRAMS: 'claudepilot' },
+    { JOB_RUN_BACKEND: 'k8s' },
+    // auto: claudepilot is not a cf repository in this slice, so k8s, unchanged
+    { JOB_RUN_BACKEND: 'auto', JOB_RUN_CF_URL: 'http://127.0.0.1:9', JOB_RUN_CF_WORKSPACE: 'kohilabs', JOB_RUN_CF_PROGRAMS: 'claudepilot' },
+  ];
+  const seen = runs.map((over) => {
+    const w = world();
+    const r = w.run(argv, over);
+    assert.equal(r.code, 0, r.out);
+    const root = (t: string) => t.replaceAll(w.root, 'ROOT');
+    return { manifest: root(norm(w.applied1())), out: root(outNorm(r.out)), calls: root(w.calls().replace(/claudepilot-job-[0-9a-f]{8}/g, 'JOB')) };
+  });
+  for (const s of seen.slice(1)) {
+    assert.equal(s.manifest, seen[0]!.manifest);
+    assert.equal(s.out, seen[0]!.out);
+    assert.equal(s.calls, seen[0]!.calls);
+  }
+  const w = world();
+  const sub = w.run(['--repo', 'claudepilot', '--ref', 'main', '--sub', 'apps/api@stg', '--', 'true']);
+  assert.equal(sub.code, 2);
+  assert.match(sub.out, /--sub: only with --backend cf/);
+  const bad = w.run(['--backend', 'lambda', '--repo', 'claudepilot', '--ref', 'main', '--', 'true']);
+  assert.equal(bad.code, 2);
+  assert.match(bad.out, /--backend: k8s, cf or auto/);
+  assert.equal(w.applied().length, 0, 'nothing was created');
+});
+
 test('the token never reaches the output or the log: a Job that prints it is masked, and the run warns', () => {
   const w = world([], {});
   writeFileSync(

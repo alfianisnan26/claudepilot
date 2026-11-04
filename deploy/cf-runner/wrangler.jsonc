@@ -1,0 +1,51 @@
+// cp-jobrun-dispatcher (T-3542): KohiLabs account only (owner decision D1 for this slice). Every name starts with cp-jobrun-.
+// Deploy: deploy/cf-runner/deploy.sh (sets JOBRUN_KEYS, the image tag; see README.md). Image tag: replaced by deploy.sh (__IMAGE_TAG__).
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cp-jobrun-dispatcher",
+  "account_id": "fccdbeb05cb96c17557497b18fe357b7",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "name": "cp-jobrun-std",
+      "class_name": "JobRunStd",
+      "image": "registry.cloudflare.com/fccdbeb05cb96c17557497b18fe357b7/cp-jobrun-runner:__IMAGE_TAG__",
+      "instance_type": "standard-3",
+      "max_instances": 10,
+      "rollout_active_grace_period": 3600
+    },
+    {
+      "name": "cp-jobrun-big",
+      "class_name": "JobRunBig",
+      "image": "registry.cloudflare.com/fccdbeb05cb96c17557497b18fe357b7/cp-jobrun-runner:__IMAGE_TAG__",
+      "instance_type": "standard-4",
+      "max_instances": 2,
+      "rollout_active_grace_period": 3600
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCHEDULER", "class_name": "Scheduler" },
+      { "name": "JOBRUN_STD", "class_name": "JobRunStd" },
+      { "name": "JOBRUN_BIG", "class_name": "JobRunBig" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Scheduler", "JobRunStd", "JobRunBig"] }],
+  "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "cp-jobrun-artifacts" }],
+  "vars": {
+    "GIT_GROUP": "memorid",
+    // Owner decision D2 for this slice: $5/day in all, 60 min per job.
+    "BUDGET_USD_DAY": "5",
+    "PROGRAM_USD_DAY": "5",
+    "MAX_TIMEOUT_S": "3600",
+    "MAX_AT_ONCE": "10",
+    "MAX_PER_CHAT": "4",
+    "MAX_PER_PROGRAM": "10",
+    "ARTIFACT_MAX_BYTES": "100000000"
+  }
+}
