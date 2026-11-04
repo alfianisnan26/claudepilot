@@ -228,9 +228,10 @@ describe('a kubernetes agent against the real hub (A6 in its fake form)', () => 
       assert.deepEqual(portal.hub.hub.connection(node)!.hello.services.map((s) => [s.name, s.ok, s.version]), [['kube', true, 'v1.30.1+fake']]);
 
       // The portal's loopback listener: every accepted connection is a `kube` stream; the bearer is the one the hub gave this connection.
+      // It names its namespace, as the portal's KubeLoopback does: this agent serves two, so an open with none is refused (PILOT-1183).
       const link = portal.hub.hub.link({ id: node, targetId: 'e2e-kube' });
       const listener = net.createServer((socket) => {
-        link.open('kube').then(
+        link.open('kube', { namespace: fake.namespace }).then(
           (stream) => {
             socket.pipe(stream);
             stream.pipe(socket);
@@ -248,6 +249,8 @@ describe('a kubernetes agent against the real hub (A6 in its fake form)', () => 
       (await link.open('kube', { namespace: 'e2e-other' })).destroy();
       (await link.open('kube', { namespace: fake.namespace })).destroy();
       await assert.rejects(link.open('kube', { namespace: 'not-served' }), { code: 'denied' });
+      // PILOT-1172: an agent serving several namespaces never guesses one for an open that names none.
+      await assert.rejects(link.open('kube'), { code: 'denied' });
       const kc = new KubeConfig();
       kc.loadFromOptions({
         clusters: [{ name: 't', server: `http://127.0.0.1:${(listener.address() as AddressInfo).port}`, skipTLSVerify: true }],
