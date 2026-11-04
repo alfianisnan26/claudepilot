@@ -1,10 +1,8 @@
 {
   "extends": "@isnanme/tsconfig/base.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"]
+    // "node": @portal/connect-tunnel (PILOT-1169) uses Buffer, node:stream and timers, which workerd provides under nodejs_compat.
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
   },
-  "include": ["src", "test"],
-  // The G6 spike (PILOT-1159) imports apps/server's tunnel code, which needs @types/node (Buffer, NodeJS.Timeout, node:stream); those
-  // modules are typechecked by the server's tsconfig, the spike's two test files are not typechecked (vitest runs them).
-  "exclude": ["test/spike"]
+  "include": ["src", "test"]
 }

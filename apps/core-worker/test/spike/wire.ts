@@ -1,13 +1,13 @@
 // PILOT-1159 (G6 spike): the small pieces a Durable Object needs to speak to the agent's `kube` service without @kubernetes/client-node and
 // without a node:net loopback port. Test support for test/spike/muxOnWorkerd.test.ts only; nothing in src imports it.
 //
-//  - cfMuxSocket: the mux's `MuxSocket` (apps/server/src/connect/tunnel/mux.ts) on a Cloudflare WebSocket (what ws.ts is for `ws`).
+//  - cfMuxSocket: the mux's `MuxSocket` (@portal/connect-tunnel/mux) on a Cloudflare WebSocket (what ws.ts is for `ws`).
 //  - ByteReader: reads a Duplex (a MuxStream) by delimiter or by length.
 //  - writeRequest / readResponse: HTTP/1.1 written straight onto a `kube` stream (what the loopback listener carried for the kube client).
 //  - wsFrame / readWsFrame: RFC 6455 frames, for exec over v4/v5.channel.k8s.io after the 101 on the same stream.
 
 import type { Duplex } from 'node:stream';
-import type { MuxSocket } from '../../../server/src/connect/tunnel/mux.js';
+import type { MuxSocket } from '@portal/connect-tunnel/mux';
 
 export interface CfMuxSocket extends MuxSocket {
   /** The size of every binary message this end sent, to check against CONNECT_LIMITS.wsMaxPayload. */

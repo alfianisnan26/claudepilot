@@ -1,0 +1,27 @@
+{
+  "name": "@portal/connect-tunnel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The Connect tunnel (mux, streams, stream open), shared by the portal server, the agent and the Cloudflare Worker",
+  "exports": {
+    ".": "./src/index.ts",
+    "./errors": "./src/errors.ts",
+    "./frame": "./src/frame.ts",
+    "./lines": "./src/lines.ts",
+    "./memory": "./src/memory.ts",
+    "./mux": "./src/mux.ts",
+    "./open": "./src/open.ts",
+    "./stream": "./src/stream.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@portal/contracts": "*"
+  },
+  "devDependencies": {
+    "@isnanme/tsconfig": "^0.1.0",
+    "@types/node": "^22.18.0"
+  }
+}

@@ -8,6 +8,7 @@ COPY package.json package-lock.json .npmrc ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/contracts/package.json packages/contracts/
+COPY packages/connect-tunnel/package.json packages/connect-tunnel/
 RUN --mount=type=secret,id=node_auth_token,env=NODE_AUTH_TOKEN \
     --mount=type=cache,target=/root/.npm \
     npm ci
@@ -29,6 +30,7 @@ WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/packages/contracts packages/contracts
+COPY --from=build /app/packages/connect-tunnel packages/connect-tunnel
 COPY --from=build /app/apps/server/package.json apps/server/
 COPY --from=build /app/apps/server/node_modules apps/server/node_modules
 COPY --from=build /app/apps/server/dist apps/server/dist
