@@ -129,8 +129,9 @@ export function connectTimingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-// Ed25519 point checks on plain BigInt (RFC 8032 §5.1.3), so the portal (enrollment, re-key) and the Worker's BRIDGE_CLUSTERS registry refuse
-// exactly the same keys (PILOT-1172). Everything is computed inside the functions: no work at import, nothing left in a bundle that skips it.
+// Ed25519 point checks on plain BigInt (RFC 8032 §5.1.3) for the Worker's BRIDGE_CLUSTERS registry (PILOT-1172): the same check as the
+// portal's `publicKeyProblem` (apps/server/src/connect/tunnel/auth.ts), which keeps its own copy because the agent bundle may carry only
+// connect.ts of this package. connectSign.test.ts holds the two equal. Everything is computed inside the functions: no work at import.
 
 const P25519 = (): bigint => (1n << 255n) - 19n;
 

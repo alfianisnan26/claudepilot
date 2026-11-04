@@ -35,7 +35,7 @@ export function bridgeRegistry(raw: string | undefined): Map<string, BridgeClust
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
     for (const [name, v] of Object.entries(parsed as Record<string, unknown>)) {
       const e = v as Partial<BridgeCluster> | null;
-      // The portal's own key check (enrollment, re-key): a key of small order would verify signatures nobody made.
+      // The portal's key check (enrollment, re-key; held equal in connectSign.test.ts): a small-order key verifies signatures nobody made.
       const keyOk = connectPublicKeyProblem(e?.publicKey) === null;
       if (
         BRIDGE_CLUSTER_RE.test(name) &&
