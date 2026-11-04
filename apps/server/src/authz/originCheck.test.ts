@@ -42,7 +42,8 @@ test('whole app: the same site, and a client that is not a browser (no Origin, n
   const { app, portal } = await buildWholeApp();
   const cookie = `portal_session=${portal.signIn('24681357')}`;
   const send = (headers: Record<string, string>) => app.request(`http://${HOST}/api/logout`, { method: 'POST', headers: { host: HOST, cookie, 'content-type': 'application/json', ...headers }, body: '{}' });
-  for (const h of [{ origin: `http://${HOST}` }, { origin: `https://${HOST}`, 'sec-fetch-site': 'same-origin' }, {}]) {
+  const variants: Record<string, string>[] = [{ origin: `http://${HOST}` }, { origin: `https://${HOST}`, 'sec-fetch-site': 'same-origin' }, {}];
+  for (const h of variants) {
     const res = await send(h);
     assert.equal(await refusedCrossSite(res), false, JSON.stringify(h));
     assert.equal(res.status, 200, `${JSON.stringify(h)}: ${await res.text()}`);
