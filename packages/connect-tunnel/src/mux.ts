@@ -81,7 +81,28 @@ export interface MuxOptions {
   closeError?: (reason: string) => Error;
   /** One line per notable event (never payload bytes, keys or tokens). */
   log?: (line: string) => void;
+  /**
+   * Runs the liveness tick (ping, then the silence check) every `everyMs`; returns its stop. Default: an unref'd setInterval. A Durable Object
+   * passes its own, driven by its alarm, because a running interval keeps it from hibernating (PILOT-1170).
+   */
+  timer?: (tick: () => void, everyMs: number) => () => void;
+  /** Stream ids already used on this link, when a session is rebuilt over a link that outlived the old one (a woken Durable Object). */
+  resume?: MuxIds;
 }
+
+/** The stream ids a session has used: what a rebuilt session must not reuse. */
+export interface MuxIds {
+  /** The id this side opens next. */
+  nextId: number;
+  /** The highest id the peer opened. */
+  lastRemoteId: number;
+}
+
+const intervalTimer = (tick: () => void, everyMs: number): (() => void) => {
+  const t = setInterval(tick, everyMs);
+  t.unref();
+  return () => clearInterval(t);
+};
 
 export interface MuxCloseInfo {
   /** The WebSocket close code (ours when we closed it, the peer's otherwise); 1006 when the connection just broke. */
@@ -134,7 +155,7 @@ export class MuxSession implements StreamHost {
   #closed = false;
   #goneAway = false;
   #remoteGoAway: number | null = null;
-  #timer: NodeJS.Timeout | null = null;
+  #stopTimer: (() => void) | null = null;
   #lastReceived = Date.now();
   #pingSeq = 0;
   #rtt: number | null = null;
@@ -152,6 +173,14 @@ export class MuxSession implements StreamHost {
     this.#log = opts.log ?? (() => undefined);
     this.#decoder = new FrameDecoder(this.limits.maxFramePayload);
     this.#nextId = opts.role === 'client' ? 1 : 2;
+    if (opts.resume) {
+      const { nextId, lastRemoteId } = opts.resume;
+      if (nextId % 2 !== this.#nextId % 2 || nextId < this.#nextId || lastRemoteId < 0 || (lastRemoteId > 0 && !this.#remoteParity(lastRemoteId)))
+        throw new Error('The stream ids to resume from do not fit this role.');
+      this.#nextId = nextId;
+      this.#lastLocalId = nextId - 2;
+      this.#lastRemoteId = lastRemoteId;
+    }
     this.#socket.onMessage((data, isBinary) => this.#onMessage(data, isBinary));
     this.#socket.onClose((code, reason) => this.#shutdown({ code, reason, protocolError: false, remote: true, error: null }));
     this.#socket.onError((error) => {
@@ -159,8 +188,7 @@ export class MuxSession implements StreamHost {
       // ws follows an error with a close event; this covers sockets that do not
       this.#shutdown({ code: 1006, reason: 'socket error', protocolError: false, remote: true, error });
     });
-    this.#timer = setInterval(() => this.#tick(), this.limits.pingEveryMs);
-    this.#timer.unref();
+    this.#stopTimer = (opts.timer ?? intervalTimer)(() => this.#tick(), this.limits.pingEveryMs);
   }
 
   // ---- public ----------------------------------------------------------------------------------------------------------------------
@@ -191,6 +219,11 @@ export class MuxSession implements StreamHost {
   /** When something was last received, ms since the epoch. */
   get lastReceivedAt(): number {
     return this.#lastReceived;
+  }
+
+  /** The stream ids used so far (`MuxOptions.resume` of a session rebuilt over the same link). */
+  get ids(): MuxIds {
+    return { nextId: this.#nextId, lastRemoteId: this.#lastRemoteId };
   }
 
   stats(): { bytesIn: number; bytesOut: number; framesIn: number; framesOut: number; streams: number } {
@@ -509,8 +542,8 @@ export class MuxSession implements StreamHost {
   #shutdown(info: MuxCloseInfo): void {
     if (this.#closed) return;
     this.#closed = true;
-    if (this.#timer) clearInterval(this.#timer);
-    this.#timer = null;
+    this.#stopTimer?.();
+    this.#stopTimer = null;
     const error = this.#closeError(info.reason || 'closed');
     const streams = [...this.#streams.values()];
     this.#streams.clear();

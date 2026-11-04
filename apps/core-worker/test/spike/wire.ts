@@ -2,12 +2,13 @@
 // without a node:net loopback port. Test support for test/spike/muxOnWorkerd.test.ts only; nothing in src imports it.
 //
 //  - cfMuxSocket: the mux's `MuxSocket` (@portal/connect-tunnel/mux) on a Cloudflare WebSocket (what ws.ts is for `ws`).
-//  - ByteReader: reads a Duplex (a MuxStream) by delimiter or by length.
-//  - writeRequest / readResponse: HTTP/1.1 written straight onto a `kube` stream (what the loopback listener carried for the kube client).
+//  - ByteReader, writeRequest, readHead, readResponse: HTTP/1.1 on a `kube` stream; in src/bridge/http1.ts since PILOT-1170 (BridgeDO uses them).
 //  - wsFrame / readWsFrame: RFC 6455 frames, for exec over v4/v5.channel.k8s.io after the 101 on the same stream.
 
-import type { Duplex } from 'node:stream';
 import type { MuxSocket } from '@portal/connect-tunnel/mux';
+import { ByteReader } from '../../src/bridge/http1.js';
+
+export { ByteReader, readHead, readResponse, writeRequest, type Http1Head, type Http1Request } from '../../src/bridge/http1.js';
 
 export interface CfMuxSocket extends MuxSocket {
   /** The size of every binary message this end sent, to check against CONNECT_LIMITS.wsMaxPayload. */
@@ -67,102 +68,6 @@ export function cfMuxSocket(ws: WebSocket): CfMuxSocket {
     onClose: (fn) => void onClose.push(fn),
     onError: (fn) => void onError.push(fn),
   };
-}
-
-/** Reads a stream by delimiter or by length; `end` when the stream ended. */
-export class ByteReader {
-  #held: Buffer = Buffer.alloc(0);
-  #ended = false;
-  #wake: (() => void) | null = null;
-
-  constructor(stream: Duplex) {
-    stream.on('data', (chunk: Buffer) => {
-      this.#held = Buffer.concat([this.#held, chunk]);
-      this.#wake?.();
-    });
-    stream.on('end', () => {
-      this.#ended = true;
-      this.#wake?.();
-    });
-  }
-
-  async #more(): Promise<void> {
-    if (this.#ended) throw new Error('the stream ended');
-    await new Promise<void>((resolve) => (this.#wake = resolve));
-    this.#wake = null;
-  }
-
-  async until(delimiter: string, max = 64 * 1024): Promise<Buffer> {
-    for (;;) {
-      const at = this.#held.indexOf(delimiter);
-      if (at >= 0) {
-        const out = this.#held.subarray(0, at);
-        this.#held = this.#held.subarray(at + delimiter.length);
-        return out;
-      }
-      if (this.#held.length > max) throw new Error('line too long');
-      await this.#more();
-    }
-  }
-
-  async take(n: number): Promise<Buffer> {
-    while (this.#held.length < n) await this.#more();
-    const out = this.#held.subarray(0, n);
-    this.#held = this.#held.subarray(n);
-    return out;
-  }
-}
-
-export interface Http1Head {
-  status: number;
-  headers: Map<string, string>;
-}
-
-export interface Http1Request {
-  method: string;
-  path: string;
-  headers: Record<string, string>;
-  body?: string;
-}
-
-/** One HTTP/1.1 request, written onto the stream as the kube client's socket would have written it. */
-export function writeRequest(stream: Duplex, req: Http1Request): void {
-  const body = req.body === undefined ? null : Buffer.from(req.body, 'utf8');
-  const lines = [`${req.method} ${req.path} HTTP/1.1`, 'Host: kubernetes'];
-  for (const [k, v] of Object.entries(req.headers)) lines.push(`${k}: ${v}`);
-  if (body) lines.push(`Content-Length: ${body.length}`);
-  stream.write(Buffer.from(`${lines.join('\r\n')}\r\n\r\n`, 'latin1'));
-  if (body) stream.write(body);
-}
-
-export async function readHead(r: ByteReader): Promise<Http1Head> {
-  const [statusLine, ...rest] = (await r.until('\r\n\r\n')).toString('latin1').split('\r\n');
-  const m = /^HTTP\/1\.1 (\d{3}) /.exec(statusLine ?? '');
-  if (!m) throw new Error('not an HTTP/1.1 response');
-  const headers = new Map<string, string>();
-  for (const line of rest) {
-    const i = line.indexOf(':');
-    if (i > 0) headers.set(line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim());
-  }
-  return { status: Number(m[1]), headers };
-}
-
-/** A whole response: Content-Length or chunked (what the API server sends for lists). The stream stays usable for the next request. */
-export async function readResponse(r: ByteReader): Promise<Http1Head & { body: Buffer }> {
-  const head = await readHead(r);
-  if (head.headers.get('transfer-encoding')?.toLowerCase() === 'chunked') {
-    const parts: Buffer[] = [];
-    for (;;) {
-      const size = parseInt((await r.until('\r\n')).toString('latin1'), 16);
-      if (!Number.isFinite(size)) throw new Error('bad chunk size');
-      const chunk = await r.take(size);
-      await r.until('\r\n');
-      if (size === 0) break;
-      parts.push(chunk);
-    }
-    return { ...head, body: Buffer.concat(parts) };
-  }
-  return { ...head, body: await r.take(Number(head.headers.get('content-length') ?? 0)) };
 }
 
 /** An RFC 6455 frame. A client's frames are masked; the server's are not. */

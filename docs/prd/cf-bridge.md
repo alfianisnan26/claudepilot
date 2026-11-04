@@ -117,6 +117,22 @@ Cloudflare `WebSocketPair`: the portal end opens `kube` streams; the agent end s
 the edges: the DO socket adapter with alarm-driven liveness, a bound on queued bytes, and the real-agent proof (G6b, PILOT-1170); a
 Worker kube client on streams in place of client-node (G6c, PILOT-1171). Do not port `hub.ts` or the `ws` server: `BridgeDO` is the hub.
 
+**G6b built (PILOT-1170).** `BridgeDO` (`apps/core-worker/src/do/bridge.ts`) runs a server `MuxSession` on the live `/bridge` link:
+
+- Hibernation: `webSocketMessage`/`webSocketClose`/`webSocketError` feed a push socket (`src/bridge/link.ts`). The session's stream
+  ids and its open-stream count live in the socket attachment. A session lost to hibernation is rebuilt from the ids (`MuxOptions.resume`);
+  if streams were open, they are gone, so the link closes 1011 (audit `bridge.lost`) and the agent redials.
+- Liveness: the mux's ping is driven by the alarm (`MuxOptions.timer`), not a timer that would keep the object awake; the dead check stays
+  the alarm's own, from the attachment's `lastReceived`.
+- Queued bytes: a Cloudflare WebSocket has no `bufferedAmount` and no send completion, so the mux's water marks cannot hold back. The
+  bound is the per-stream window times the stream cap: 32 streams per link × 256 KiB = 8 MiB (`BRIDGE_LINK`); a response body read into
+  memory is capped at 4 MiB.
+- `kube` RPC: `BridgeDO.kube({path, namespace?, bearer})` does one GET over a `kube` stream (HTTP/1.1, `src/bridge/http1.ts`, 30 s).
+  The bearer is passed by the caller for now; the per-link bearer the agent should expect arrives with the control stream (next slice).
+  A stream the agent opens toward the Worker is refused (RST) until then.
+- Proof: `apps/server/src/connect/tunnel/bridgeWorker.test.ts` (`CLAUDEPILOT_WORKER_TESTS=1`) lists pods through `/bridge` with the
+  real `dialTunnel` agent and the real `KubeProxy` in front of a fake API server, and checks the proxy's walls (403, 401, `denied`).
+
 ## RBAC the bridge needs, and nothing wider
 
 - In each workspace namespace (`isnan-claudepilot-workspaces`, `isnan-pilot-ws-isnan`, `isnan-pilot-ws-konfersi`, `isnan-pilot-ws-kohilabs`):
@@ -140,3 +156,5 @@ Worker kube client on streams in place of client-node (G6c, PILOT-1171). Do not 
 - G6 ran in workerd's local test runtime, inside one DO, with both mux ends in the same object and a stand-in for the agent's
   `KubeProxy`: not on the Cloudflare edge, not over a real `/bridge` link with the real agent, not across hibernation, and not against
   Cloudflare's own message-size limit or idle close (the 32 MiB figure is from Cloudflare's docs).
+- G6b ran in local workerd (wrangler `unstable_startWorker`) with the real agent client: hibernation itself is simulated in the tests
+  (the in-memory session dropped), not observed on the Cloudflare edge.

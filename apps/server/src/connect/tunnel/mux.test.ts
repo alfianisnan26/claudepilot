@@ -341,6 +341,61 @@ describe('mux liveness (fake timers)', () => {
     assert.equal(session.closed, false);
     session.destroy();
   });
+
+  test('an injected timer (PILOT-1170) drives the tick instead of setInterval, and is stopped at the end', async () => {
+    const [mine, theirs] = memoryPair();
+    const sent: Buffer[] = [];
+    theirs.onMessage((d) => sent.push(d));
+    const t = { tick: (): void => assert.fail('no tick was handed over'), every: 0, stopped: 0 };
+    const session = new MuxSession({
+      role: 'server',
+      socket: mine,
+      timer: (fn, ms) => {
+        t.tick = fn;
+        t.every = ms;
+        return () => void t.stopped++;
+      },
+    });
+    assert.equal(t.every, CONNECT_LIMITS.pingEveryMs);
+    t.tick();
+    await waitFor(() => sent.length > 0);
+    assert.deepEqual(headers(sent), [`${FRAME_TYPE.ping}/${FRAME_FLAG.syn}/0/1`]);
+    session.close(1000, 'over');
+    assert.equal(t.stopped, 1);
+  });
+});
+
+describe('mux resume (PILOT-1170: a session rebuilt over a link that outlived the old one)', () => {
+  test('opens from the saved id on, and still refuses an id the peer used before', async () => {
+    const first = rawPeer('server');
+    first.theirs.send(dataFrame(5, FRAME_FLAG.syn, Buffer.from('x')), () => undefined);
+    await waitFor(() => first.streams.length === 1);
+    first.session.open().write('a');
+    first.session.open().write('b');
+    const ids = first.session.ids;
+    assert.deepEqual(ids, { nextId: 6, lastRemoteId: 5 });
+    first.session.destroy();
+
+    const [mine, theirs] = memoryPair();
+    const received: Buffer[] = [];
+    theirs.onMessage((d) => received.push(d));
+    const closed: MuxCloseInfo[] = [];
+    const again = new MuxSession({ role: 'server', socket: mine, resume: ids, onStream: () => undefined });
+    again.onClose((i) => closed.push(i));
+    again.open().write('c');
+    await waitFor(() => received.length > 0);
+    assert.equal(received[0]!.readUInt32BE(4), 6, 'the next id, not 2 again');
+    theirs.send(dataFrame(3, FRAME_FLAG.syn, Buffer.from('y')), () => undefined);
+    await waitFor(() => closed.length > 0);
+    assert.equal(closed[0]?.protocolError, true);
+    assert.match(closed[0]?.reason ?? '', /used before/);
+  });
+
+  test('ids that do not fit the role are refused', () => {
+    const [mine] = memoryPair();
+    assert.throws(() => new MuxSession({ role: 'server', socket: mine, resume: { nextId: 3, lastRemoteId: 0 } }), /do not fit/);
+    assert.throws(() => new MuxSession({ role: 'server', socket: mine, resume: { nextId: 4, lastRemoteId: 2 } }), /do not fit/);
+  });
 });
 
 describe('mux fuzz', () => {

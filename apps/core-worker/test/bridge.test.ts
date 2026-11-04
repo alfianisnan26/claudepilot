@@ -1,6 +1,8 @@
 // PILOT-1144: GET /bridge and BridgeDO inside workerd. The key pair, node id and bearer token are made at run time by vitest.config.ts.
 
 import { AppError } from '@isnanme/core';
+import { MuxLimitError, MuxSession } from '@portal/connect-tunnel/mux';
+import { acceptService } from '@portal/connect-tunnel/open';
 import {
   CONNECT_CLOSE,
   CONNECT_LIMITS,
@@ -15,10 +17,13 @@ import {
 } from '@portal/contracts';
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ByteReader } from '../src/bridge/http1.js';
+import { BRIDGE_LINK } from '../src/bridge/link.js';
 import { bridgeAuthorize, bridgeRegistry } from '../src/bridge/registry.js';
 import { bridgeUpgrade } from '../src/bridge/route.js';
 import { BRIDGE_AUDIT_KEEP } from '../src/do/bridge.js';
 import { locate } from '../src/locate.js';
+import { cfMuxSocket } from './spike/wire.js';
 
 const URL_BRIDGE = 'https://core.test/bridge';
 const stub = () => locate(env.BRIDGE, env.TEST_BRIDGE_CLUSTER);
@@ -271,6 +276,138 @@ describe('BridgeDO: liveness', () => {
     });
     await runDurableObjectAlarm(stub());
     expect(await expectReject(link, 'bad_request', CONNECT_CLOSE.timeout)).toMatch(/in time/);
+  });
+});
+
+/** The test's end of a live link as the agent: a client MuxSession whose `kube` service answers like the agent's proxy (PILOT-1170). */
+function agentOn(link: Link, bearer: string): { session: MuxSession; seen: { namespace: unknown; path: string }[] } {
+  const seen: { namespace: unknown; path: string }[] = [];
+  const session = new MuxSession({
+    role: 'client',
+    socket: cfMuxSocket(link.ws),
+    onStream: (stream) =>
+      void (async () => {
+        const req = await acceptService(stream, (r) =>
+          r.service === 'kube' ? { ok: true } : { ok: false, code: 'service_unavailable', message: 'Only kube here.' },
+        );
+        if (!req) return;
+        const r = new ByteReader(stream);
+        const [line = '', ...rest] = (await r.until('\r\n\r\n')).toString('latin1').split('\r\n');
+        const path = line.split(' ')[1] ?? '';
+        seen.push({ namespace: (req.args as { namespace?: unknown } | undefined)?.namespace, path });
+        const auth = rest.find((h) => h.toLowerCase().startsWith('authorization:'))?.slice('authorization:'.length).trim();
+        const body =
+          auth === `Bearer ${bearer}`
+            ? JSON.stringify({ kind: 'PodList', items: [{ metadata: { name: 'ws-a' } }] })
+            : JSON.stringify({ kind: 'Status', code: 401 });
+        const status = auth === `Bearer ${bearer}` ? '200 OK' : '401 Unauthorized';
+        stream.write(`HTTP/1.1 ${status}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+      })(),
+  });
+  return { session, seen };
+}
+
+/** Runs `fn` on the object's in-memory session of `connId`. */
+const onSession = <T>(connId: string, fn: (s: MuxSession | undefined, sessions: Map<string, unknown>) => T): Promise<T> =>
+  runInDurableObject(stub(), (instance) => {
+    const sessions = (instance as unknown as { sessions: Map<string, { session: MuxSession }> }).sessions;
+    return fn(sessions.get(connId)?.session, sessions);
+  });
+
+const setAttachment = (connId: string, patch: Record<string, unknown>) =>
+  runInDurableObject(stub(), (_i, state) => {
+    for (const ws of state.getWebSockets()) {
+      const att = ws.deserializeAttachment();
+      if (att?.connId === connId) ws.serializeAttachment({ ...att, ...patch });
+    }
+  });
+
+describe('BridgeDO: the mux on the live link (PILOT-1170)', () => {
+  it('a live link has a server MuxSession with the bridge’s stream cap; the 33rd stream is refused', async () => {
+    const link = await connect();
+    await onSession(link.connId, (s) => {
+      expect(s?.role).toBe('server');
+      expect(s?.limits.maxStreams).toBe(BRIDGE_LINK.maxStreams);
+      expect(BRIDGE_LINK.maxQueuedBytes).toBe(BRIDGE_LINK.maxStreams * CONNECT_LIMITS.initialWindow);
+      expect(BRIDGE_LINK.maxQueuedBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
+      const opened = Array.from({ length: BRIDGE_LINK.maxStreams }, () => s!.open());
+      expect(() => s!.open()).toThrow(MuxLimitError);
+      for (const x of opened) x.destroy();
+    });
+  });
+
+  it('GETs through the agent’s kube stream (RPC kube): bearer and namespace reach the agent; the attachment keeps the ids', async () => {
+    const link = await connect();
+    const bearer = crypto.randomUUID();
+    const agent = agentOn(link, bearer);
+    try {
+      const ok = await stub().kube({ path: '/api/v1/namespaces/ns-a/pods', namespace: 'ns-a', bearer });
+      expect(ok).toMatchObject({ ok: true, status: 200, contentType: 'application/json' });
+      expect(JSON.parse((ok as { body: string }).body).items[0].metadata.name).toBe('ws-a');
+      expect(agent.seen).toEqual([{ namespace: 'ns-a', path: '/api/v1/namespaces/ns-a/pods' }]);
+      expect(await stub().kube({ path: '/api/v1/namespaces/ns-a/pods', namespace: 'ns-a', bearer: 'wrong' })).toMatchObject({
+        ok: true,
+        status: 401,
+      });
+      const att = await runInDurableObject(stub(), (_i, state) =>
+        state.getWebSockets().map((ws) => ws.deserializeAttachment()).find((a) => a?.connId === link.connId),
+      );
+      expect(att).toMatchObject({ stage: 'live', ids: { nextId: 6, lastRemoteId: 0 }, streams: 0 });
+      // the bearer is in no audit row
+      expect(JSON.stringify(await stub().audit(500))).not.toContain(bearer);
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('refuses a malformed request, and answers agent_offline with no live link', async () => {
+    expect(await stub().kube({ path: 'api/v1/pods', bearer: 'b' })).toMatchObject({ ok: false, code: 'bad_request' });
+    expect(await stub().kube({ path: '/a b', bearer: 'b' })).toMatchObject({ ok: false, code: 'bad_request' });
+    expect(await stub().kube({ path: '/api', namespace: 'Bad_NS', bearer: 'b' })).toMatchObject({ ok: false, code: 'bad_request' });
+    expect(await stub().kube({ path: '/api', bearer: 'with space' })).toMatchObject({ ok: false, code: 'bad_request' });
+    const link = await connect();
+    link.ws.close(1000, 'bye');
+    await link.closed;
+    await vi.waitFor(async () => expect((await stub().links()).live).toBe(0));
+    expect(await stub().kube({ path: '/api', bearer: 'b' })).toMatchObject({ ok: false, code: 'agent_offline' });
+  });
+
+  it('a woken object (session gone from memory) with no stream open rebuilds it from the attachment’s ids and keeps the link', async () => {
+    const link = await connect();
+    await setAttachment(link.connId, { ids: { nextId: 10, lastRemoteId: 0 }, streams: 0 });
+    await onSession(link.connId, (_s, sessions) => sessions.clear());
+    link.ws.send(fromHex(CONNECT_TEST_VECTORS.frames.pingSynValue01020304));
+    expect(hex((await link.next()) as ArrayBuffer)).toBe('000200020000000001020304');
+    expect(await onSession(link.connId, (s) => s?.ids)).toEqual({ nextId: 10, lastRemoteId: 0 });
+    expect(await stub().links()).toEqual({ live: 1, pending: 0 });
+  });
+
+  it('a woken object whose link had streams open closes it 1011 (the agent reconnects), audited', async () => {
+    const link = await connect();
+    await setAttachment(link.connId, { ids: { nextId: 4, lastRemoteId: 0 }, streams: 1 });
+    await onSession(link.connId, (_s, sessions) => sessions.clear());
+    link.ws.send(fromHex(CONNECT_TEST_VECTORS.frames.pingSynValue01020304));
+    expect((await link.closed).code).toBe(1011);
+    const lost = (await stub().audit()).find((r) => r.event === 'bridge.lost' && r.connId === link.connId);
+    expect(lost?.detail).toBe('1 streams lost');
+  });
+
+  it('the alarm also rebuilds a session lost to hibernation, then pings', async () => {
+    const link = await connect();
+    await onSession(link.connId, (_s, sessions) => sessions.clear());
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect(hex((await link.next()) as ArrayBuffer).slice(0, 16)).toBe('0002000100000000');
+  });
+
+  it('a frame of an unknown version is a protocol error: GO_AWAY(1), close 1002, audited', async () => {
+    const link = await connect();
+    const bad = new Uint8Array(12);
+    bad[0] = 1;
+    link.ws.send(bad.buffer);
+    const goAway = (await link.next()) as ArrayBuffer;
+    expect(hex(goAway)).toBe('000300000000000000000001');
+    expect((await link.closed).code).toBe(1002);
+    expect((await stub().audit()).some((r) => r.event === 'bridge.protocol' && r.connId === link.connId)).toBe(true);
   });
 });
 
