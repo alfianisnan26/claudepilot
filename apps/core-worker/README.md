@@ -42,8 +42,22 @@ At deploy, `BRIDGE_CLUSTERS` is set with `wrangler secret put` (never in `wrangl
 app `cp-next-access` (whole host, created with no policy, so nobody gets in), its one policy `cp-next-healthcheck` (the service token
 `cp-next-healthcheck` only, no person yet), then `wrangler deploy`, then the Worker custom domain (which makes the host's DNS record;
 nothing else in the zone is touched), then two checks: `/healthz` without credentials is the Access redirect or 403, with the service token
-it is 200 and the deployed commit. It reads the four values from the `cp-next` pool by name and never prints them; an existing service
-token is rotated for the check and its secret is not kept. `--plan` reads only and says what a run would do. Run it in the cluster:
+it is 200 and the deployed commit. It reads the four values from the `cp-next` pool by name and never prints them.
+
+It is safe to run again (PILOT-1180):
+
+- Before anything is written it pins the account: `GET /accounts/<id>` must answer, its name must be KohiLabs, and the zone must belong
+  to it. Otherwise it stops.
+- A policy on `cp-next-access` that the script did not make stops the run (the app is deny-first, so an unknown allow rule is unsafe).
+  `--keep-unknown-policies` goes on and leaves such policies as they are.
+- A plain re-run keeps the existing service token: its secret is unknown to the run, so the token check is SKIPPED and the run exits 3
+  (deployed, Access check passed). `--rotate` rotates the token (the old secret stops working) and the run does both checks. The new
+  secret is used for the check only and is not kept.
+- `--plan` reads only and says what a run would do; the guards stop a plan the same way.
+- Exit codes: 0 both checks passed; 1 a guard stopped it or a check failed; 3 deployed, the token check skipped.
+- Its test (mocked fetch, no network; part of `npm test`): `npm run test:scripts -w @portal/core-worker`.
+
+Run it in the cluster:
 
 ```sh
 scripts/job-run.sh --ref <pushed sha> --pool-env CP_NEXT_CF_API_TOKEN --pool-env CP_NEXT_CF_ACCOUNT_ID --pool-env CP_NEXT_ZONE \
