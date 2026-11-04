@@ -187,7 +187,7 @@ test('PILOT-1184: a database error in the global wrong-code counter is not a 500
   const { call, store, rows, done } = await build();
   try {
     // Only the global counter's row fails to write (a trigger stands in for a full disk or a locked database).
-    store.db.exec(
+    store.db!.exec(
       `CREATE TRIGGER fail_code_global BEFORE INSERT ON auth_throttle WHEN NEW.key = '${CODE_GLOBAL.key}' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`,
     );
     for (let i = 1; i < config.loginLimit.attempts; i++) assert.equal((await login(call, WRONG)).status, 401, `wrong code ${i}: 401, not 500`);
