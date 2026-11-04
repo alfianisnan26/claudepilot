@@ -1,0 +1,30 @@
+// cp-next-core: the ClaudePilot core on Cloudflare Workers (epic PILOT-1131, D2).
+// No account id and no route here: they come from the environment at deploy time (CLOUDFLARE_ACCOUNT_ID, a later
+// routes slice). workers.dev and preview URLs stay off, so nothing is public before the routes are chosen.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "cp-next-core",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  // Overridden at deploy: --var CP_VERSION:<version> --var CP_COMMIT:<sha>.
+  "vars": { "CP_VERSION": "0.0.0", "CP_COMMIT": "dev" },
+  // Declared but empty: the SPA comes in phase 2.
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "durable_objects": {
+    "bindings": [
+      { "name": "PLATFORM", "class_name": "PlatformDO" },
+      { "name": "ORG", "class_name": "OrgDO" },
+      { "name": "WORKSPACE", "class_name": "WorkspaceDO" },
+      { "name": "CHAT_SESSION", "class_name": "ChatSessionDO" },
+      { "name": "BRIDGE", "class_name": "BridgeDO" }
+    ]
+  },
+  // Append only, like apps/server/src/store/migrations.ts: never edit a released tag.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PlatformDO", "OrgDO", "WorkspaceDO", "ChatSessionDO", "BridgeDO"] }
+  ]
+}
