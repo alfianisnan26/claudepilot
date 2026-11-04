@@ -16,9 +16,11 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 
 ## IN FLIGHT
 - cf-worker (worker 6562167d, opus): PILOT-1145 BLOCKED. The permission classifier refused the real deploy as a "DNS / Domain / Cert change"; nothing was created. Branch ticket/T-3703-stg-deploy 27102ae67 (script deploy-stg.mjs; read-only plan job 142e4726 rc 0). Back on 1169 (WIP ed1b410fe), then 1170.
-- cf-bridge (worker 5bc808ae, opus): PILOT-1142 rig e2e (rig namespace may need the coordinator); 1172 WIP parked, resumes after.
-- cf-review (worker 68d76aeb, opus, auto): idle; next the PILOT-1145 review (deploy/infra is HIGH).
-- cf-sec (worker e28ec1b4, opus): idle (pacing); next PILOT-1168 (go-live blocker, comment 58355 on PILOT-1131).
+- cf-bridge (worker 5bc808ae, opus): idle (pacing).
+  - PILOT-1142: the script was merged as 2dfb4d129 and 1d41f3ccd (job 038cad7d, 12 pass, it SKIPs without a rig). The ticket stays open: the rig namespace and rights are FOR THE COORDINATOR (T-3700, comments 58722 and 58730).
+  - PILOT-1172 is done at cc3c6e89d (job 98ef1e94, 158 pass) and is in blind review.
+- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1172.
+- cf-sec (worker e28ec1b4, opus): building PILOT-1168, the go-live blocker (comment 58355 on PILOT-1131).
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
 ## DECISIONS
