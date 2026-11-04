@@ -350,8 +350,9 @@ test('shapes: overview, flow times, trend and tickets are short, in hours, with 
     assert.equal(typeof full.basis.stages, 'string');
     assert.equal(full.efficiency.components[0].source, undefined, 'full: the sources are named once in basis');
 
+    // memor.id is counted by its tickets since 2026-11-04 (owner): no longer unavailable, its open tickets counted.
     const memor = data(await mcp.call(admin, 'metrics_overview', { program: 'memor-id' }));
-    assert.deepEqual([memor.program.unavailable, memor.open], ['unavailable:no_source', 'unavailable:no_source']);
+    assert.deepEqual([memor.program.unavailable, typeof memor.open], [undefined, 'object']);
 
     const fl = data(await mcp.call(admin, 'metrics_flow_times', { group_by: 'lead' }));
     assert.equal(fl.group_by, 'lead');

@@ -414,7 +414,8 @@ test('the program pause holds the watchdog: Flow’s own (by name or *) and Keep
     ['keepgoing by name', (r) => r.kg.pauses.push({ program: 'konfersi' }), 'keepgoing'],
   ];
   for (const [what, hold, by] of holds) {
-    const r = rig();
+    // Konfersi's program alone (the default also watches memor.id now): the pause by name is about it.
+    const r = rig({ settings: { 'flow.programs': 'konfersi|konfersi-migration||' } });
     mergeReady(r);
     r.tickets.add(20, { holder: 'wb' });
     r.chat.bypass.set(LEAD_B, { sessionId: LEAD_B, kind: 'bypass.left', actor: 'portal', at: ago(r, 10), detail: {} });

@@ -24,7 +24,7 @@ import { selfTestAt } from '../flow/engine.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { LAB_POLICIES } from './authz.js';
-import { ticketFlow } from './flowMetrics.js';
+import { DEFAULT_METRICS_PROGRAMS, ticketFlow } from './flowMetrics.js';
 import { leadOf, loadFlowTickets, loadOpenTickets, loadProgramTags, selfTestLineOf, verdictOf } from './flowMetricsData.js';
 import { Lab } from './index.js';
 import { KEEP_SNAPSHOTS_MS, pruneMetricSnapshots, readTrend, snapshotNear, SNAPSHOT_EVERY_MS, writeSnapshots } from './metricsSnapshots.js';
@@ -310,7 +310,8 @@ test('Metrics.snapshot: one row per ticket program, read back by the trend and a
       .map((p) => p.id);
     assert.equal(n1, programs.length);
     assert.equal(n2, programs.length);
-    assert.deepEqual(programs, ['all', 'claudepilot', 'konfersi', 'kohi']);
+    // memor.id is counted by its tickets since 2026-11-04 (owner): a ticket program, snapshotted like the others.
+    assert.deepEqual(programs, ['all', 'claudepilot', 'konfersi', 'memor-id', 'kohi']);
     const trend = h.lab.metrics.trend('claudepilot', 'done24h', '7d')!;
     assert.deepEqual(
       trend.points.map((p) => [p.atMs, p.value]),
@@ -331,7 +332,8 @@ test('Metrics.snapshot: one row per ticket program, read back by the trend and a
 });
 
 test('Metrics.overview and flow: the program’s tickets only, won’t-do apart, excluded counted, no crew is unavailable not 0', async () => {
-  const h = await seeded();
+  // A program without tickets (`commits`) stays unavailable: kept here as `legacy` now that memor.id counts tickets (owner, 2026-11-04).
+  const h = await seeded({ settings: { 'lab.metricsPrograms': `${DEFAULT_METRICS_PROGRAMS};legacy=Legacy|commits` } });
   try {
     const ov = (await h.lab.metrics.overview('konfersi', '24h'))!;
     assert.equal(ov.program.id, 'konfersi');
@@ -354,10 +356,10 @@ test('Metrics.overview and flow: the program’s tickets only, won’t-do apart,
         ['konfersi', 1],
       ],
     );
-    const memor = (await h.lab.metrics.overview('memor-id', '24h'))!;
+    const memor = (await h.lab.metrics.overview('legacy', '24h'))!;
     assert.equal(memor.program.unavailable?.reason, 'no_source');
     assert.equal(memor.effectiveness.value, null);
-    const ins = (await h.lab.metrics.insights('memor-id', '24h'))!;
+    const ins = (await h.lab.metrics.insights('legacy', '24h'))!;
     assert.deepEqual(
       ins.items.map((i) => i.kind),
       ['no_data'],
@@ -378,6 +380,7 @@ test('Metrics.tickets: drill-down by stage and by group; the setting changes the
         ['cp', 'CP'],
         ['kohi', 'kohi'],
         ['konfersi', 'konfersi'],
+        ['memorid', 'memorid'],
       ],
     );
     assert.deepEqual(progs.find((p) => p.id === 'cp')!.targets, { closuresPerHour: 1, resolveHours: 2, reviewHours: 3 });
@@ -576,7 +579,7 @@ test('program tags: ranked by tickets touched in 30 days, then by all their tick
       ['all', 'claudepilot', 'konfersi', 'memor-id'],
       'the setting’s programs always stay',
     );
-    assert.equal(await h.lab.snapshotMetrics(), 1 + 2 + 12, 'all, the two ticket programs of the setting, 12 tag programs');
+    assert.equal(await h.lab.snapshotMetrics(), 1 + 3 + 12, 'all, the three ticket programs of the setting, 12 tag programs');
   } finally {
     h.done();
   }
