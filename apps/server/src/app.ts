@@ -562,11 +562,15 @@ export function createApp(
           // Counted across all addresses; reported once per window when it reaches the ceiling, never refused (CODE_GLOBAL).
           if (users.throttle.tally('ip', CODE_GLOBAL.key, CODE_GLOBAL.windowMs) === CODE_GLOBAL.ceiling) {
             audit('portal.signin_code_guesses', null, { method: 'code', wrongCodes: CODE_GLOBAL.ceiling, windowS: CODE_GLOBAL.windowMs / 1000 }, 'medium');
-            platform?.bus.emit({
-              kind: 'security',
-              subject: { type: 'portal', id: 'signin-code-guesses' },
-              facts: { what: 'Server code guessed', wrongCodes: CODE_GLOBAL.ceiling, windowMin: CODE_GLOBAL.windowMs / 60_000 },
-            });
+            try {
+              platform?.bus.emit({
+                kind: 'security',
+                subject: { type: 'portal', id: 'signin-code-guesses' },
+                facts: { what: 'Server code guessed', wrongCodes: CODE_GLOBAL.ceiling, windowMin: CODE_GLOBAL.windowMs / 60_000 },
+              });
+            } catch {
+              // the alert, like the audit, must never break a sign-in
+            }
           }
           const lockMs = users.throttle.fail('ip', codeKey, CODE_LOCKOUT);
           if (lockMs > 0) {
