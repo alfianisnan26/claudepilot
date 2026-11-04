@@ -112,6 +112,9 @@ function dockerInfo(v: unknown): ConnectDockerInfo | undefined {
 
 const RULES = new Set<string>(CONNECT_DOCKER_RULES);
 
+/** A Kubernetes namespace name: a DNS label of at most 63 characters. */
+const NAMESPACE_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
 /** A `status` of the control stream; null when it is not an object. */
 export function cleanStatus(v: unknown, now: Date = new Date()): ConnectStatusMessage | null {
   if (!isObject(v)) return null;
@@ -126,7 +129,12 @@ export function cleanStatus(v: unknown, now: Date = new Date()): ConnectStatusMe
     status.denied = v.denied
       .slice(0, 40)
       .filter(isObject)
-      .map((x) => ({ rule: text(x.rule, 40), count: int(x.count, 0, 1_000_000_000) }))
+      .map((x) => {
+        const d: { rule: string; count: number; namespace?: string } = { rule: text(x.rule, 40), count: int(x.count, 0, 1_000_000_000) };
+        // A kube count's namespace (PILOT-1172): kept only when it is a DNS label, as a namespace name must be.
+        if (typeof x.namespace === 'string' && NAMESPACE_RE.test(x.namespace)) d.namespace = x.namespace;
+        return d;
+      })
       .filter((x) => /^[a-z][a-z.]*$/.test(x.rule) && x.count > 0);
   }
   if (isObject(v.streams)) status.streams = { docker: int(v.streams.docker, 0, 1_000), kube: int(v.streams.kube, 0, 1_000), host: int(v.streams.host, 0, 1_000) };

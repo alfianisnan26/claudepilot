@@ -43,13 +43,20 @@ export function inClusterServer(env: NodeJS.ProcessEnv = process.env): string | 
 }
 
 /**
- * The namespace a `kube` stream is for: the open request's `{ namespace }`, or the agent's own when there are no args (a portal from
- * before T-3720). Null when the args name no namespace, or one the agent does not serve: the stream is refused.
+ * The namespace a `kube` stream is for: the open request's `{ namespace }` when the agent serves it. An open with no args (a portal from
+ * before T-3720) falls back to the agent's own namespace only when that is the one namespace it serves; an agent that serves several
+ * refuses it, so it never guesses which one was meant (PILOT-1172, the decision is on the ticket). Null: the stream is refused.
  */
 export function streamNamespace(args: unknown, home: string, served: ReadonlySet<string>): string | null {
-  if (args === undefined) return home;
+  if (args === undefined) return served.size === 1 && served.has(home) ? home : null;
   const ns = args && typeof args === 'object' ? (args as { namespace?: unknown }).namespace : undefined;
   return typeof ns === 'string' && served.has(ns) ? ns : null;
+}
+
+/** The namespace an open asked for, when it is a valid name (it tags the refusal); '' otherwise. */
+function askedNamespace(args: unknown): string {
+  const ns = args && typeof args === 'object' ? (args as { namespace?: unknown }).namespace : undefined;
+  return typeof ns === 'string' && validNamespace(ns) ? ns : '';
 }
 
 export function createService(opts: KubeServiceOptions): KubeService {
@@ -59,6 +66,8 @@ export function createService(opts: KubeServiceOptions): KubeService {
   const served: ReadonlySet<string> = new Set(namespaces);
   // One proxy per namespace: each one's allowlist and body checks are for its own namespace only, so a stream opened for A can't reach B.
   const proxies = new Map<string, KubeProxy>();
+  /** Opens refused for their namespace since the last report, by the namespace asked for ('' when none or not a valid name). */
+  const refusedOpens = new Map<string, number>();
   let changed: (() => void) | undefined;
   let status: ConnectServiceStatus = { name: 'kube', ok: false, error: server ? 'Not checked yet.' : 'Not running in a Kubernetes cluster (no KUBERNETES_SERVICE_HOST).' };
   let lastCode = '';
@@ -120,8 +129,12 @@ export function createService(opts: KubeServiceOptions): KubeService {
 
     async accept(args?: unknown): Promise<StreamRefusal | null> {
       if (streamNamespace(args, opts.namespace, served) === null) {
-        opts.log.warn('policy.denied', { service: 'kube', rule: 'namespace' });
-        return { code: 'denied', message: 'That namespace is not served by this connector.' };
+        const asked = askedNamespace(args);
+        opts.log.warn('policy.denied', { service: 'kube', rule: 'namespace', ...(asked ? { namespace: asked } : {}) });
+        refusedOpens.set(asked, (refusedOpens.get(asked) ?? 0) + 1);
+        return args === undefined
+          ? { code: 'denied', message: 'This connector serves several namespaces: the open must name one.' }
+          : { code: 'denied', message: 'That namespace is not served by this connector.' };
       }
       if (!status.ok || Date.now() - probedAt > 3000) await refresh();
       return status.ok ? null : { code: server ? 'upstream_unreachable' : 'service_unavailable', message: status.error ?? 'Kubernetes is not available.' };
@@ -138,10 +151,19 @@ export function createService(opts: KubeServiceOptions): KubeService {
     refresh,
     onChange: (fn) => void (changed = fn),
 
+    /** Refusals since the last report, by rule and namespace: a proxy's under the namespace of its streams, a refused open under the one it asked for. */
     report(): Pick<ConnectStatusMessage, 'denied'> {
-      const counts = new Map<string, number>();
-      for (const p of proxies.values()) for (const d of p.takeDenied()) counts.set(d.rule, (counts.get(d.rule) ?? 0) + d.count);
-      const denied = [...counts].map(([rule, count]) => ({ rule, count }));
+      const counts = new Map<string, { rule: string; count: number; namespace?: string }>();
+      const add = (rule: string, count: number, namespace: string) => {
+        const key = `${rule}\u0000${namespace}`;
+        const had = counts.get(key);
+        if (had) had.count += count;
+        else counts.set(key, { rule, count, ...(namespace ? { namespace } : {}) });
+      };
+      for (const [ns, p] of proxies) for (const d of p.takeDenied()) add(d.rule, d.count, ns);
+      for (const [ns, count] of refusedOpens) add('namespace', count, ns);
+      refusedOpens.clear();
+      const denied = [...counts.values()];
       return denied.length ? { denied } : {};
     },
 

@@ -608,20 +608,26 @@ class AgentRuntime {
     const list = [...this.#services.values()];
     await Promise.race([Promise.allSettled(list.map((s) => s.refresh?.())), new Promise((r) => setTimeout(r, 4000).unref())]);
     const merged: Partial<Pick<ConnectStatusMessage, 'usage' | 'docker' | 'swarm'>> = {};
-    const denied = new Map<string, number>();
+    const denied = new Map<string, { rule: string; count: number; namespace?: string }>();
     for (const s of list) {
       const r = s.report?.() ?? {};
       if (r.usage) merged.usage = r.usage;
       if (r.docker) merged.docker = r.docker;
       if (r.swarm) merged.swarm = r.swarm;
-      for (const d of r.denied ?? []) denied.set(d.rule, (denied.get(d.rule) ?? 0) + d.count);
+      // Merged by rule and namespace, so a probe of one namespace is not folded into another's count (PILOT-1172).
+      for (const d of r.denied ?? []) {
+        const key = `${d.rule}\u0000${d.namespace ?? ''}`;
+        const had = denied.get(key);
+        if (had) had.count += d.count;
+        else denied.set(key, { rule: d.rule, count: d.count, ...(d.namespace ? { namespace: d.namespace } : {}) });
+      }
     }
     return {
       t: 'status',
       at: new Date().toISOString(),
       services: list.map((s) => s.status()),
       ...merged,
-      ...(denied.size ? { denied: [...denied].map(([rule, count]) => ({ rule, count })) } : {}),
+      ...(denied.size ? { denied: [...denied.values()] } : {}),
       streams: { ...this.#open },
     };
   }

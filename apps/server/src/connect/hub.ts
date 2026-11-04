@@ -587,7 +587,7 @@ export class Hub implements LiveSource {
     const changed = sig !== conn.signature;
     conn.signature = sig;
     const now = Date.now();
-    for (const d of status.denied ?? []) this.#denied(conn, d.rule, d.count, now);
+    for (const d of status.denied ?? []) this.#denied(conn, d.rule, d.count, now, d.namespace);
     if (now - conn.lastSummaryAt >= SUMMARY_EVERY_MS) {
       conn.lastSummaryAt = now;
       const node = this.d.registry.node(conn.nodeId);
@@ -596,13 +596,13 @@ export class Hub implements LiveSource {
     if (changed) this.d.notify();
   }
 
-  /** Denials are counted in `status`; the audit hears of each rule at most once in ten minutes per node. */
-  #denied(conn: Conn, rule: string, count: number, now: number): void {
-    const key = `${conn.nodeId}:${rule}`;
+  /** Denials are counted in `status`; the audit hears of each rule (per namespace, for kube) at most once in ten minutes per node. */
+  #denied(conn: Conn, rule: string, count: number, now: number, namespace?: string): void {
+    const key = `${conn.nodeId}:${rule}:${namespace ?? ''}`;
     if (now - (this.#denialAudited.get(key) ?? 0) < DENIED_AUDIT_EVERY_MS) return;
     this.#denialAudited.set(key, now);
     if (this.#denialAudited.size > 2_000) this.#denialAudited.clear();
-    this.d.events.record({ type: 'policy.denied', targetId: conn.targetId, nodeId: conn.nodeId, actor: agentActor(conn.nodeId), ip: conn.ip, detail: { rule, count } });
+    this.d.events.record({ type: 'policy.denied', targetId: conn.targetId, nodeId: conn.nodeId, actor: agentActor(conn.nodeId), ip: conn.ip, detail: { rule, count, ...(namespace ? { namespace } : {}) } });
   }
 
   /** The agent's half of a rotation (PRD §10.4): the new public key, signed with the OLD key; only while an admin has asked for one. */
