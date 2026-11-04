@@ -55,10 +55,16 @@ async function dial(): Promise<Link> {
   open.push(ws);
   const queue: (string | ArrayBuffer)[] = [];
   const waiting: ((m: string | ArrayBuffer) => void)[] = [];
+  // Binary messages may arrive as a Blob: read them into an ArrayBuffer, in order.
+  let chain = Promise.resolve();
   ws.addEventListener('message', (e) => {
-    const w = waiting.shift();
-    if (w) w(e.data as string | ArrayBuffer);
-    else queue.push(e.data as string | ArrayBuffer);
+    const data = e.data as string | ArrayBuffer | Blob;
+    chain = chain.then(async () => {
+      const m = data instanceof Blob ? await data.arrayBuffer() : data;
+      const w = waiting.shift();
+      if (w) w(m);
+      else queue.push(m);
+    });
   });
   const closed = new Promise<{ code: number; reason: string }>((resolve) => ws.addEventListener('close', (e) => resolve({ code: e.code, reason: e.reason })));
   ws.accept();
