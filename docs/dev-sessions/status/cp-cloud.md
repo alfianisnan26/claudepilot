@@ -18,7 +18,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 
 ## IN FLIGHT
 - cf-worker (worker 6562167d, opus): PILOT-1145 BLOCKED. The permission classifier refused the real deploy as a "DNS / Domain / Cert change"; nothing was created. Branch ticket/T-3703-stg-deploy 27102ae67 (script deploy-stg.mjs; read-only plan job 142e4726 rc 0). Back on 1169 (WIP ed1b410fe), then 1170.
-- cf-bridge (worker 5bc808ae, opus): building PILOT-1160 + 1158 (G7 + G5), branch ticket/T-3716-kube-appports-g5g7.
+- 21:45 cf-worker: PILOT-1145 deploy retry (operator), then 1169 WIP. cf-bridge: PILOT-1142 rig check/run, then 1160 + 1158 WIP on ticket/T-3716-kube-appports-g5g7.
+- cf-bridge (worker 5bc808ae, opus): see above.
   - PILOT-1142: the script was merged as 2dfb4d129 and 1d41f3ccd (job 038cad7d, 12 pass, it SKIPs without a rig). The ticket stays open: the rig namespace and rights are FOR THE COORDINATOR (T-3700, comments 58722 and 58730).
 - cf-review (worker 68d76aeb, opus, auto): idle; next review ask PILOT-1170.
 - cf-sec (worker e28ec1b4, opus): idle (pacing: cf-worker + cf-bridge build). Next: PILOT-1179 at the first free builder slot.
@@ -30,7 +31,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - 08:55 DECISIONS.md is a rule file (guard, D-60): the D-112 row goes to the coordinator on PILOT-1136.
 - Workers on Opus: backend/infra/security per owner routing 2026-10-25. Reviewer in mode auto (dontAsk refused git).
 - 11:45 Operator pacing (one account): at most 2 builders at once; cf-review takes review asks only. Only cf-migration tickets.
-- Session limits on two.claude: ~09:20-11:30 and ~12:30-16:40 UTC. Resume everyone right after each reset; note the reset here.
+- 21:45 Operator: resume after the 21:40 reset; 1145 deploy + 1142 rig first, then phase 2 (1146-1148); 2 workers. cf-worker retries the exact 1145 command once on that instruction; a second refusal stops it (no other path).
+- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 UTC. Resume everyone right after each reset; note the reset here.
 - 12:00 Builders put all trailers in one final block (`%(trailers)` reads only the last paragraph).
 - 12:20 PILOT-1168: key the route limiters on visitorAddress (default b). Rejected: the tunnel hop as a key; no limit until the CF binding.
 - 16:45 Operator: 1145 and 1142 first. 1172 and 1169/1170 are parked as pushed WIP. Access goes in front before any route (D3).
