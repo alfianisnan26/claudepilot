@@ -38,7 +38,7 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 | Shell / terminals (TTY exec, resize) | `kubernetes.ts:754-801`, `manager.ts:927` | Works | `connect/kube.ts:208`; resize is channel 4 on the same WebSocket |
 | CI runner (`cp-ci` via exec) | `ci/host.ts:128` | Works | generic `workspaces.exec` → `connect/kube.ts:207` |
 | Workspace git (repos host via exec) | `repos/host.ts:26` | Works | same |
-| App ports (TCP bridge over exec) | `appports/dial.ts:114-129` | **Gap G5** | refused for every enrolled target (`dial.ts:127`, 501), though the exec it needs passes |
+| App ports (TCP bridge over exec) | `appports/dial.ts:114-129` | Works (G5, PILOT-1158) | enrolled `kubernetes` gets the bridge (`BRIDGED_ENROLLED`); other enrolled kinds still 501; proven in `connect/agent/kubeExec.e2e.test.ts` |
 | Browser pool / VNC (browser container, ConfigMap, NetworkPolicy) | `browser/kube.ts:385-620`, `browser/index.ts:35` | **Gap G4** | `browserAccess()` is null for enrolled (`kubernetes.ts:207-210`); exec only into `workspace` (`rules.ts:103,132`); no `configmaps`/`networkpolicies` rule; root init refused (`schema.ts:66-67`) |
 | Namespace create | `kubernetes.ts:408-414` | Not needed | namespaces come from git (`deploy/k3s/workspace-orgs.yaml:1-7`); enrolled runtime never creates one (`connect/kube.ts:165`) |
 | Several namespaces (`kubernetes`, `isnan`, `konfersi`, `kohilabs` targets) | `deploy/k3s/portal.yaml:107,119`, `kubeTargets.ts` | **Gap G1** | one namespace per agent (`agent/config.ts:113`, `rules.ts:43`) |
@@ -59,13 +59,16 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
   and the browser container's root init (setuid/setgid only) under a narrow schema rule; then `browserAccess()` for enrolled targets.
   Probably splits in two (agent rules; portal side) once started.
 - **G5 App ports on enrolled kube targets** (PILOT-1158, T-3716). Lift the `enrolled` refusal in `appports/dial.ts:127` for kind `kubernetes` (the exec path
-  passes the proxy), with a test through the agent.
+  passes the proxy), with a test through the agent. Built: `dial.ts` `BRIDGED_ENROLLED`. `connect/agent/kubeExec.e2e.test.ts` runs the real
+  bridge through the real agent. Enrolled docker and the other kinds still answer 501.
 - **G6 The portal’s half on workerd** (PILOT-1159, T-3717). A spike: the hub's auth + mux in a Durable Object (WebSocket accept, `ws` replaced), a stream
   abstraction without `node:stream`, and a kube HTTP + exec (v4/v5 channel) client that writes straight onto a `kube` stream instead of
   `@kubernetes/client-node` over a loopback port. Output: a design note and a working DO that lists pods through a rig bridge.
   Spike done: see "G6 finding" below; the build is in G6a-G6c (PILOT-1169..1171).
 - **G7 Large stdin and long execs through the real kube proxy** (PILOT-1160, T-3718). A test like `host.bigstdin.test.ts` for the `kube` service: a 25 MB
   (CHAT_MAX_UPLOAD_BYTES) base64 stdin and an exec held past the proxy's idle timeout (60 s, `proxy.ts:164`), both through the real agent.
+  Test: `connect/agent/kubeExec.e2e.test.ts`. It uses the real agent and the portal's `ConnectKubeRuntime`, with `idleMs` 150 ms
+  injected through `serviceDeps.kube`.
 - **G8 Target id continuity** (PILOT-1161, T-3719). Workspaces of the built-in `kubernetes` target (namespace `isnan-claudepilot-workspaces`) need either a
   data migration of their ids to a new enrolled id or an allowance for an enrolled target to take a reserved id when the portal has no
   static target of that name (the CF portal has none). Decide on the ticket. Stable workspace ids (`ws_` + 12 hex, targets-connect §24,
