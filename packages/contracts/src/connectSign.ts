@@ -128,3 +128,74 @@ export function connectTimingSafeEqual(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+// Ed25519 point checks on plain BigInt (RFC 8032 §5.1.3), so the portal (enrollment, re-key) and the Worker's BRIDGE_CLUSTERS registry refuse
+// exactly the same keys (PILOT-1172). Everything is computed inside the functions: no work at import, nothing left in a bundle that skips it.
+
+const P25519 = (): bigint => (1n << 255n) - 19n;
+
+function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
+  let result = 1n;
+  let b = base % mod;
+  let e = exp;
+  while (e > 0n) {
+    if (e & 1n) result = (result * b) % mod;
+    b = (b * b) % mod;
+    e >>= 1n;
+  }
+  return result;
+}
+
+const modInv = (a: bigint, mod: bigint): bigint => modPow(a, mod - 2n, mod);
+const d25519 = (P: bigint): bigint => (((-121665n * modInv(121666n, P)) % P) + P) % P;
+
+/** The point 32 bytes encode on the Ed25519 curve, or null. Any 32 bytes load as a key; most are not on the curve. */
+function decodePoint(raw: Uint8Array, P: bigint, D: bigint): [bigint, bigint] | null {
+  let y = 0n;
+  for (let i = 31; i >= 0; i--) y = (y << 8n) | BigInt(raw[i]!);
+  const sign = (y >> 255n) & 1n;
+  y &= (1n << 255n) - 1n;
+  if (y >= P) return null;
+  const y2 = (y * y) % P;
+  const u = (y2 - 1n + P) % P;
+  const v = (D * y2 + 1n) % P;
+  // x = u v^3 (u v^7)^((p-5)/8)
+  const v3 = (v * v * v) % P;
+  const v7 = (v3 * v3 * v) % P;
+  let x = (((u * v3) % P) * modPow((u * v7) % P, (P - 5n) / 8n, P)) % P;
+  const vx2 = (v * x * x) % P;
+  if (vx2 !== u) {
+    if (vx2 !== (P - u) % P) return null;
+    x = (x * modPow(2n, (P - 1n) / 4n, P)) % P;
+  }
+  if (x === 0n && sign === 1n) return null;
+  if ((x & 1n) !== sign) x = P - x;
+  return [x, y];
+}
+
+/** P + Q on the curve (the complete twisted Edwards addition, a = -1). */
+function addPoints([x1, y1]: [bigint, bigint], [x2, y2]: [bigint, bigint], P: bigint, D: bigint): [bigint, bigint] {
+  const t = (D * ((x1 * x2) % P) * ((y1 * y2) % P)) % P;
+  const x3 = (((x1 * y2 + y1 * x2) % P) * modInv((1n + t) % P, P)) % P;
+  const y3 = (((y1 * y2 + x1 * x2) % P) * modInv((1n - t + P) % P, P)) % P;
+  return [x3, y3];
+}
+
+/**
+ * Why `publicKey` can't be a node's key, or null when it is 32 bytes (canonical base64url) that form an Ed25519 public key of large order.
+ * A key of small order (1, 2, 4 or 8: [8]P is the identity) verifies signatures nobody made: with the identity as the key, any
+ * (R = [S]B, S) passes. T6 enrolled one (the all-zero key, order 4) on a real portal before this check.
+ */
+export function connectPublicKeyProblem(publicKey: unknown): string | null {
+  if (typeof publicKey !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(publicKey)) return 'The key must be 32 bytes, base64url.';
+  const raw = connectFromB64u(publicKey);
+  if (!raw || raw.length !== 32) return 'The key must be 32 bytes, base64url.';
+  const P = P25519();
+  const D = d25519(P);
+  const point = decodePoint(raw, P, D);
+  if (!point) return 'That is not an Ed25519 public key.';
+  let q = point;
+  for (let i = 0; i < 3; i++) q = addPoints(q, q, P, D);
+  if (q[0] === 0n && q[1] === 1n) return 'That key has a small order: it would accept signatures nobody made.';
+  return null;
+}

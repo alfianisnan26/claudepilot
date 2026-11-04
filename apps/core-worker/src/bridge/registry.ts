@@ -2,7 +2,7 @@
 //   { "<cluster>": { "node": "nd_…", "publicKey": "<raw Ed25519, base64url>", "tokenSha256": "<hex of SHA-256(bearer token)>" } }
 // Only the token's hash is held. No secret, no registry: every dial is refused (fail closed). It is never in wrangler.jsonc.
 
-import { connectFromB64u, connectSha256Hex, connectTimingSafeEqual } from '@portal/contracts';
+import { connectPublicKeyProblem, connectSha256Hex, connectTimingSafeEqual } from '@portal/contracts';
 
 export interface BridgeCluster {
   node: string;
@@ -20,7 +20,7 @@ const NO_HASH = '0'.repeat(64);
 
 let cached: { raw: string; map: Map<string, BridgeCluster> } | null = null;
 
-/** The registry, or an empty one when the secret is absent or malformed (a malformed entry is dropped, never half-trusted). */
+/** The registry, or an empty one when the secret is absent or malformed (a malformed entry, a bad or small-order key included, is dropped). */
 export function bridgeRegistry(raw: string | undefined): Map<string, BridgeCluster> {
   if (!raw) return new Map();
   if (cached?.raw === raw) return cached.map;
@@ -35,13 +35,14 @@ export function bridgeRegistry(raw: string | undefined): Map<string, BridgeClust
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
     for (const [name, v] of Object.entries(parsed as Record<string, unknown>)) {
       const e = v as Partial<BridgeCluster> | null;
-      const key = typeof e?.publicKey === 'string' ? connectFromB64u(e.publicKey) : null;
+      // The portal's own key check (enrollment, re-key): a key of small order would verify signatures nobody made.
+      const keyOk = connectPublicKeyProblem(e?.publicKey) === null;
       if (
         BRIDGE_CLUSTER_RE.test(name) &&
         e &&
         typeof e.node === 'string' &&
         NODE_RE.test(e.node) &&
-        key?.length === 32 &&
+        keyOk &&
         typeof e.tokenSha256 === 'string' &&
         SHA256_RE.test(e.tokenSha256)
       ) {
