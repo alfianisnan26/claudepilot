@@ -50,7 +50,9 @@ The target is always `127.0.0.1:<port>` inside the workspace, over the channel e
 (`node -e BRIDGE <port>`; the address is a literal, only an integer port in range is an argument). One exec per TCP connection.
 
 - Built: Kubernetes (pod exec), Docker (docker exec), This machine.
-- Connect (enrolled targets): 501 in this slice.
+- Connect, an enrolled cluster (`kubernetes`): built (PILOT-1158). The bridge's exec passes the agent's kube proxy. Test:
+  `connect/agent/kubeExec.e2e.test.ts`.
+- Connect, any other enrolled kind (docker, swarm, container, host): 501.
 
 ## 6. The proxy
 
@@ -90,6 +92,6 @@ through app ports; never an app whose code is untrusted.
 
 ## 8. Not yet
 
-- Connect targets (a bridge through the agent).
+- Enrolled targets other than a cluster (a bridge through the agent's docker or host service).
 - Keep-alive or a pooled bridge (each request is one exec today).
 - The Browser page's iframe and port list (Frontend lane).

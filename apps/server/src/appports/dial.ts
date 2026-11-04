@@ -22,7 +22,7 @@ export function bridgeCommand(port: number): string[] {
   return ['node', '-e', BRIDGE, String(port)];
 }
 
-/** A runtime that has no bridge yet in this slice: the proxy answers 501 for it (Connect targets, PRD §5). */
+/** A runtime that has no bridge yet: the proxy answers 501 for it (enrolled docker, container and host targets, PRD §5). */
 export class NotOnThisTarget extends Error {
   constructor() {
     super('App ports are not available on this target yet.');
@@ -110,8 +110,14 @@ export class ExecDuplex extends Duplex {
 /** Opens one connection to `127.0.0.1:<port>` inside a workspace. */
 export type Dial = (workspaceId: string, port: number) => Promise<Duplex>;
 
-/** The kinds of target the bridge runs on in this slice. Enrolled targets (Connect) answer 501. */
+/** The kinds of target the bridge runs on. */
 const BRIDGED = new Set(['kubernetes', 'docker', 'local']);
+/**
+ * Enrolled (Connect) targets the bridge runs on: a cluster, whose exec passes the agent's kube proxy (rules.ts, `pods/exec` of the
+ * `workspace` container) as the portal's own does (PILOT-1158, G5; proven in connect/agent/kubeExec.e2e.test.ts). Enrolled docker and the
+ * rest still answer 501 until their exec is proven for a raw byte stream.
+ */
+const BRIDGED_ENROLLED = new Set(['kubernetes']);
 
 /** The dialer over the manager's runtimes. */
 export function createDialer(workspaces: {
@@ -124,7 +130,7 @@ export function createDialer(workspaces: {
     const [target, name] = [workspaceId.slice(0, slash), workspaceId.slice(slash + 1)];
     const runtime = workspaces.runtimeFor(target);
     if (!runtime) throw new Error('No such target.');
-    if (runtime.target.source === 'enrolled' || !BRIDGED.has(runtime.target.kind)) throw new NotOnThisTarget();
+    if (!(runtime.target.source === 'enrolled' ? BRIDGED_ENROLLED : BRIDGED).has(runtime.target.kind)) throw new NotOnThisTarget();
     return new ExecDuplex(await workspaces.exec(target, name, command));
   };
 }

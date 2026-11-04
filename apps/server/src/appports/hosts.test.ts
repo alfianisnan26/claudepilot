@@ -83,7 +83,20 @@ test('the bridge reaches 127.0.0.1 only; its one argument is an integer port in 
 const runtime = (kind: string, source?: string) => ({ target: { id: 't', kind, ...(source ? { source } : {}) } }) as unknown as Runtime;
 const fakeSession = (): ExecSession => ({ write() {}, close() {}, onData() {}, onExit() {} });
 
-test('the dialer: Kubernetes, Docker and local get the bridge; a Connect target is NotOnThisTarget (501)', async () => {
+test('the dialer: an enrolled cluster gets the bridge (PILOT-1158); every other enrolled kind stays NotOnThisTarget (501)', async () => {
+  const calls: string[][] = [];
+  const kube = createDialer({ runtimeFor: () => runtime('kubernetes', 'enrolled'), exec: async (_t, _n, command) => (calls.push(command), fakeSession()) });
+  (await kube('cluster/ws-1', 8765)).destroy();
+  assert.deepEqual(calls, [bridgeCommand(8765)]);
+  for (const kind of ['docker', 'swarm', 'container', 'host', 'local']) {
+    const dial = createDialer({ runtimeFor: () => runtime(kind, 'enrolled'), exec: async () => assert.fail(`no exec on an enrolled ${kind} target`) });
+    await assert.rejects(dial(`${kind}/ws-1`, 8765), NotOnThisTarget, kind);
+  }
+  const bad = createDialer({ runtimeFor: () => runtime('kubernetes', 'enrolled'), exec: async () => assert.fail('no exec for a bad port') });
+  await assert.rejects(bad('cluster/ws-1', 22), RangeError);
+});
+
+test('the dialer: Kubernetes, Docker and local get the bridge; an enrolled docker target is NotOnThisTarget (501)', async () => {
   const calls: string[][] = [];
   for (const kind of ['kubernetes', 'docker', 'local']) {
     const dial = createDialer({ runtimeFor: () => runtime(kind), exec: async (_t, _n, command) => (calls.push(command), fakeSession()) });

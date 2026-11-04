@@ -18,7 +18,7 @@ export interface ServiceDeps {
   /** Services made by the caller (tests); the rest are built from the configuration. */
   provided?: Partial<Record<ServiceName, AgentService>>;
   /** Kubernetes: where the API server, token and CA are (default: the pod's own). Tests point this at a fake. */
-  kube?: Partial<Pick<KubeServiceOptions, 'server' | 'tokenFile' | 'caFile' | 'readFile' | 'now'>>;
+  kube?: Partial<Pick<KubeServiceOptions, 'server' | 'tokenFile' | 'caFile' | 'readFile' | 'now' | 'idleMs'>>;
   host?: { loadPty?: () => Promise<never>; killGraceMs?: number; baseEnv?: NodeJS.ProcessEnv; passwdFile?: string; cgroupRoot?: string };
 }
 
