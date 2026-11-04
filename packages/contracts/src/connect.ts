@@ -727,8 +727,11 @@ export interface ConnectStatusMessage {
   usage?: ConnectHostUsage;
   docker?: ConnectDockerInfo;
   swarm?: { nodeId: string; role: 'manager' | 'worker' };
-  /** Requests the policy proxy refused since the last status, by rule (see `CONNECT_DOCKER_RULES`). */
-  denied?: { rule: string; count: number }[];
+  /**
+   * Requests the policy proxy refused since the last status, by rule (see `CONNECT_DOCKER_RULES`). `kube` counts also carry the
+   * namespace: of the stream that sent the request, or the one a refused open asked for (PILOT-1172).
+   */
+  denied?: { rule: string; count: number; namespace?: string }[];
   /** Streams open now, by service. */
   streams?: { docker: number; kube: number; host: number };
 }

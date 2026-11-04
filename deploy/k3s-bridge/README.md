@@ -20,7 +20,8 @@ than the portal's, or when the pod loses a guard.
 
 - **Several namespaces, one connection** (PILOT-1162, G1). The bridge serves `PILOT_KUBE_NAMESPACE` (`isnan-pilot-ws-isnan`, its own)
   and `PILOT_KUBE_NAMESPACES` (the other three), which are exactly the namespaces with a `cp-bridge-workspaces` Role.
-  - Each `kube` stream names its namespace in the open request, and the agent refuses one it does not serve (`denied`).
+  - Each `kube` stream names its namespace in the open request, and the agent refuses one it does not serve (`denied`). Because it
+    serves several, it also refuses an open that names none (PILOT-1172). Its denied counts are tagged with the namespace.
   - The stream's proxy forwards only that namespace's paths, so a stream for one namespace never reaches another.
   - On the portal, one kube target (a `ConnectKubeRuntime`, its `settings.namespace`) per namespace. Several targets on one enrolled
     node is the follow-up on PILOT-1162 (with G6).

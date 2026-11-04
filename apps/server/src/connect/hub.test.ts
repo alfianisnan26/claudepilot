@@ -300,6 +300,42 @@ describe('the control stream', () => {
     }
   });
 
+  test('kube denials keep their namespace (PILOT-1172): a valid name is kept and audited per namespace, anything else is dropped', async () => {
+    const { core, h } = await rig();
+    try {
+      const n = h.enrollNode();
+      const d = await h.dial(n.nodeId, n.keys);
+      const c = await h.control(d);
+      await c.send({
+        t: 'status',
+        at: '2026-10-12T09:00:01.000Z',
+        services: [{ name: 'kube', ok: true }],
+        denied: [
+          { rule: 'namespace', count: 3, namespace: 'ns-b' },
+          { rule: 'namespace', count: 2, namespace: 'ns-c' },
+          { rule: 'namespace', count: 1, namespace: 'Bad_NS' },
+          { rule: 'path', count: 1, namespace: 7 },
+        ],
+      });
+      assert.ok(await h.waitFor(() => h.hub.state(n.nodeId)?.status !== null));
+      assert.deepEqual(h.hub.state(n.nodeId)!.status!.denied, [
+        { rule: 'namespace', count: 3, namespace: 'ns-b' },
+        { rule: 'namespace', count: 2, namespace: 'ns-c' },
+        { rule: 'namespace', count: 1 },
+        { rule: 'path', count: 1 },
+      ]);
+      await new Promise((r) => setTimeout(r, 50 * TIME_SCALE));
+      const audited = core.events
+        .list('lab', { limit: 50 })
+        .filter((e) => e.type === 'policy.denied')
+        .map((e) => `${String(e.detail.rule)}:${String(e.detail.namespace ?? '')}`)
+        .sort();
+      assert.deepEqual(audited, ['namespace:', 'namespace:ns-b', 'namespace:ns-c', 'path:'], 'one audit row per rule and namespace');
+    } finally {
+      await h.close();
+    }
+  });
+
   test('logs land in the audit as agent.log, at most twenty a minute, never a secret', async () => {
     const { core, h } = await rig();
     try {

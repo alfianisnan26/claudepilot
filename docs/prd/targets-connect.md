@@ -402,7 +402,8 @@ Each `kube` stream is the server side of an HTTP connection to a proxy that forw
 
 **Several namespaces (T-3720, PILOT-1162).** An agent serves its own namespace (`PILOT_KUBE_NAMESPACE`, which also holds its identity Secret) plus the ones in `PILOT_KUBE_NAMESPACES`. Each namespace is its own kube target on the one connection.
 - The portal's loopback names the target's namespace in the open request (`args: { namespace }`, `ConnectKubeOpen`).
-- The agent refuses a namespace it does not serve with `denied`. An open with no args is for its own namespace, as from a portal before T-3720.
+- The agent refuses a namespace it does not serve with `denied`. An open with no args (a portal before T-3720) is for its own namespace only when that is the one namespace it serves; an agent that serves several refuses it, so it never guesses (PILOT-1172).
+- `status.denied` counts carry the namespace: of the stream that sent the refused request, or the one a refused open asked for (a valid name only). The portal keeps it and audits `policy.denied` once per rule and namespace (PILOT-1172).
 - Each namespace has its own proxy, and "the connector's namespace" below means the stream's namespace. So a request for B on a stream opened for A is refused (`namespace`), even when the agent also serves B.
 
 - requires `Authorization: Bearer <kubeLocalToken>`, the per-connection value from `config` (so another process on the portal's machine that finds the loopback port can't use the connector), then **drops** that header, every `Impersonate-*` and `X-Remote-*` header, and sets the service account's token, re-read from its file at most every 60 seconds (bound tokens rotate);

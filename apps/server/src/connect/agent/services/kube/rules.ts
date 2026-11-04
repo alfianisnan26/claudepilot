@@ -1,5 +1,5 @@
 // The Kubernetes allowlist (docs/prd/targets-connect.md §11.5, appendix B): which paths and verbs the connector's proxy forwards, all under
-// the connector's own namespace, with the object names the portal's workspaces use (`ws-*`). Everything else is a `Status` 403. RBAC is the
+// the one namespace a stream was opened for (the connector's own, or one of PILOT_KUBE_NAMESPACES), with the object names the portal's workspaces use (`ws-*`). Everything else is a `Status` 403. RBAC is the
 // second wall (the Role grants only these resources in that namespace); this file is the first, for a portal or a loopback process that asks
 // for more than the Role would refuse.
 import { refuseKube, type KubeRefusal } from './status.js';
@@ -65,7 +65,7 @@ export function classifyKube(method: string, path: string, ns: string): KubeRout
   }
   // A path under another namespace says so; a resource of this namespace that is not on the list is `resource`; anything else is simply not offered.
   const inNamespace = /^\/(?:api\/v1|apis\/[^/]+\/[^/]+)\/namespaces\/([^/]+)(?:\/|$)/.exec(path);
-  if (inNamespace) return inNamespace[1] === ns ? refuseKube('resource', 'That resource is not available through the tunnel.') : refuseKube('namespace', 'Only the connector’s own namespace is available.');
+  if (inNamespace) return inNamespace[1] === ns ? refuseKube('resource', 'That resource is not available through the tunnel.') : refuseKube('namespace', `This stream serves namespace ${ns} only.`);
   return refuseKube('path', 'This part of the Kubernetes API is not available through the tunnel.');
 }
 

@@ -25,7 +25,7 @@ export interface AgentConfig {
   dockerSocket: string;
   /** The host operator's local widening of the Docker policy. */
   docker: { allowImages: string[]; allowBinds: string[] };
-  /** Kubernetes: the agent's own namespace (its identity Secret, and a `kube` stream opened without a namespace). */
+  /** Kubernetes: the agent's own namespace (its identity Secret; and a `kube` stream opened without a namespace, when it serves no other). */
   kubeNamespace: string | null;
   /** Kubernetes: the further namespaces it serves, one kube target each (PILOT_KUBE_NAMESPACES, or agent.json `namespaces`; T-3720). */
   kubeNamespaces: string[];
