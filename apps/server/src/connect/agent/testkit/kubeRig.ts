@@ -8,6 +8,7 @@ import net, { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KubeConfig } from '@kubernetes/client-node';
+import type { ConnectKubeOpen } from '@portal/contracts';
 import { createService, type KubeService, type KubeServiceOptions } from '../services/kube/index.js';
 import { collectingLogger } from '../log.js';
 import { FakeKube } from './fakeKube.js';
@@ -34,7 +35,7 @@ export interface KubeRig {
   stop(): Promise<void>;
 }
 
-export async function startKubeRig(opts: { namespace?: string; service?: Partial<KubeServiceOptions> } = {}): Promise<KubeRig> {
+export async function startKubeRig(opts: { namespace?: string; service?: Partial<KubeServiceOptions>; /** The open request's args every stream is handed (T-3720); absent: none, as from a portal before it. */ open?: ConnectKubeOpen } = {}): Promise<KubeRig> {
   const namespace = opts.namespace ?? NAMESPACE;
   const fake = await FakeKube.start({ namespace });
   const dir = mkdtempSync(join(tmpdir(), 'cx2-kube-'));
@@ -48,7 +49,7 @@ export async function startKubeRig(opts: { namespace?: string; service?: Partial
   // The portal's loopback listener: every accepted connection is one `kube` stream.
   const listener = net.createServer((socket) => {
     const [portal, agent] = streamPair();
-    service.handle(agent, 'abcd1234');
+    service.handle(agent, 'abcd1234', opts.open);
     socket.pipe(portal);
     portal.pipe(socket);
     socket.on('error', () => portal.destroy());

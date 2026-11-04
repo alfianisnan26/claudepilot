@@ -25,7 +25,10 @@ export interface AgentConfig {
   dockerSocket: string;
   /** The host operator's local widening of the Docker policy. */
   docker: { allowImages: string[]; allowBinds: string[] };
+  /** Kubernetes: the agent's own namespace (its identity Secret, and a `kube` stream opened without a namespace). */
   kubeNamespace: string | null;
+  /** Kubernetes: the further namespaces it serves, one kube target each (PILOT_KUBE_NAMESPACES, or agent.json `namespaces`; T-3720). */
+  kubeNamespaces: string[];
   nodeName: string | null;
   /** Path of a PEM file: the CA that signs the portal's certificate. */
   caFile: string | null;
@@ -101,6 +104,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, file?: (dir: st
   const headersText = env[E.headers] ?? readText(join(dataDir, 'headers')) ?? undefined;
   const services = strings(f.services).filter((s): s is ServiceName => s === 'docker' || s === 'kube' || s === 'host');
   const offered = MODE_SERVICES[kind];
+  const kubeNamespace = env[E.kubeNamespace] ?? (typeof f.namespace === 'string' ? f.namespace : null);
+  const kubeNamespaces = env[E.kubeNamespaces] !== undefined ? list(env[E.kubeNamespaces]) : strings(f.namespaces);
 
   return {
     mode: kind,
@@ -110,7 +115,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, file?: (dir: st
     images: [...new Set([...list(env[E.images]), ...strings(f.images)])],
     dockerSocket: env[E.dockerSocket] ?? (typeof f.dockerSocket === 'string' ? f.dockerSocket : '/var/run/docker.sock'),
     docker: { allowImages: strings(dockerFile.allowImages), allowBinds: strings(dockerFile.allowBinds) },
-    kubeNamespace: env[E.kubeNamespace] ?? (typeof f.namespace === 'string' ? f.namespace : null),
+    kubeNamespace,
+    kubeNamespaces: [...new Set(kubeNamespaces)].filter((n) => n !== kubeNamespace),
     nodeName: env[E.nodeName] ?? (typeof f.nodeName === 'string' ? f.nodeName : null),
     caFile: env[E.ca] ?? (typeof f.ca === 'string' ? f.ca : null),
     headers: headersText ? parseHeaders(headersText) : {},

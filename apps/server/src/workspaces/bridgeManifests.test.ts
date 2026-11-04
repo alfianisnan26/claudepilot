@@ -74,6 +74,15 @@ test('deploy/k3s-bridge/rbac.yaml: in every workspace namespace exactly the port
   }
 });
 
+test('deploy/k3s-bridge/bridge.yaml: the agent serves exactly the namespaces it has a Role in (PILOT-1162, G1)', () => {
+  const env = podOf(bridgeDeployment()).containers[0]!.env!;
+  const extra = env.find((e) => e.name === 'PILOT_KUBE_NAMESPACES')!.value!.split(',').map((s) => s.trim());
+  const served = [servedNamespace(), ...extra];
+  assert.equal(new Set(served).size, served.length, 'no namespace twice');
+  const roles = docs(`${BRIDGE}/rbac.yaml`).filter((d) => d.kind === 'Role' && d.metadata.name === 'cp-bridge-workspaces');
+  assert.deepEqual([...served].sort(), roles.map((r) => r.metadata.namespace).sort(), 'a served namespace without a Role would be refused by RBAC; a Role without a served namespace is a right nobody uses');
+});
+
 test('deploy/k3s-bridge/rbac.yaml: the only Secret right is get and update of the identity Secret by name, in the namespace the bridge serves', () => {
   const all = docs(`${BRIDGE}/rbac.yaml`);
   const identity = all.filter((d) => d.kind === 'Role' && d.metadata.name === 'cp-bridge-identity');

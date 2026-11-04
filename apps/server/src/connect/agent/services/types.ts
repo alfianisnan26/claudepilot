@@ -1,7 +1,7 @@
 // What the agent's services have in common (docs/prd/targets-connect.md §9.5, §11). Each `services/<name>/index.ts` exports
 // `createService(deps): AgentService`; the tunnel client reads the open request, counts the stream against the service's cap, answers
 // `ok` and only then hands the stream over, so a service never speaks the open protocol.
-import type { ConnectHostOpen, ConnectServiceStatus, ConnectStatusMessage, ConnectStreamError } from '@portal/contracts';
+import type { ConnectOpenArgs, ConnectServiceStatus, ConnectStatusMessage, ConnectStreamError } from '@portal/contracts';
 import type { TunnelStream } from '../../seams.js';
 
 export type ServiceName = 'docker' | 'kube' | 'host';
@@ -15,9 +15,9 @@ export interface StreamRefusal {
 export interface AgentService {
   readonly name: ServiceName;
   /** Asked before the open answer is written: a refusal is sent as the answer and the stream never reaches `handle`. */
-  accept?(args?: ConnectHostOpen): Promise<StreamRefusal | null> | StreamRefusal | null;
-  /** Serves one accepted stream. `args` is the open request's, for `host` only. Never throws: failures end the stream. */
-  handle(stream: TunnelStream, trace: string, args?: ConnectHostOpen): void;
+  accept?(args?: ConnectOpenArgs): Promise<StreamRefusal | null> | StreamRefusal | null;
+  /** Serves one accepted stream. `args` is the open request's (`host`: the operation; `kube`: the namespace). Never throws: failures end the stream. */
+  handle(stream: TunnelStream, trace: string, args?: ConnectOpenArgs): void;
   /** The last known health, synchronous and cheap. */
   status(): ConnectServiceStatus;
   /** Checks now and updates what `status()` says (called before the hello and with every status message). */

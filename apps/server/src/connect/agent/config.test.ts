@@ -38,6 +38,16 @@ describe('loadConfig', () => {
     assert.deepEqual(c.docker, { allowImages: ['x:1'], allowBinds: ['/srv'] });
   });
 
+  it('PILOT_KUBE_NAMESPACES: further namespaces, unique and without the agent’s own; the environment wins over agent.json (T-3720)', () => {
+    const env = { PILOT_MODE: 'kubernetes', PILOT_KUBE_NAMESPACE: 'ns-a' };
+    assert.deepEqual(loadConfig(env, noFile).kubeNamespaces, []);
+    const c = loadConfig({ ...env, PILOT_KUBE_NAMESPACES: ' ns-b, ns-a ,ns-c,,ns-b ' }, () => ({ namespaces: ['ns-file'] }));
+    assert.equal(c.kubeNamespace, 'ns-a');
+    assert.deepEqual(c.kubeNamespaces, ['ns-b', 'ns-c']);
+    assert.deepEqual(loadConfig(env, () => ({ namespaces: ['ns-file', 7, ''] })).kubeNamespaces, ['ns-file']);
+    assert.deepEqual(loadConfig({ ...env, PILOT_KUBE_NAMESPACES: '' }, () => ({ namespaces: ['ns-file'] })).kubeNamespaces, [], 'an empty variable means none');
+  });
+
   it('the policy’s local widening comes from agent.json only, never from the environment', () => {
     const c = loadConfig({ PILOT_MODE: 'docker', PILOT_DOCKER_ALLOW_BINDS: '/', PILOT_ALLOW_IMAGES: '*' }, noFile);
     assert.deepEqual(c.docker, { allowImages: [], allowBinds: [] });

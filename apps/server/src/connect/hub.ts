@@ -22,7 +22,7 @@ import {
   type ConnectAgentHello,
   type ConnectChallenge,
   type ConnectConfigMessage,
-  type ConnectHostOpen,
+  type ConnectOpenArgs,
   type ConnectPortalMessage,
   type ConnectReject,
   type ConnectRejectCode,
@@ -141,7 +141,7 @@ export class HubLink implements NodeLink {
     return this.hub.isConnected(this.nodeId);
   }
 
-  async open(service: 'docker' | 'kube' | 'host', args?: ConnectHostOpen, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream> {
+  async open(service: 'docker' | 'kube' | 'host', args?: ConnectOpenArgs, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream> {
     const conn = this.hub.connection(this.nodeId);
     if (!conn || conn.session.closed) throw new ConnectError('agent_offline', 'The node is offline.');
     if (service === 'host' && !args) throw new ConnectError('bad_open', 'A host stream needs its operation.');

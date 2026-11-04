@@ -384,7 +384,7 @@ A Docker cluster grows by another enrollment: Targets → the target → Add nod
 
 ### 11.3 CLI
 
-`pilot-agent run` (default) · `enroll [--token-stdin]` · `doctor [--json]` · `identity` (prints node id and fingerprint) · `version`. Configuration comes from `agent.json` and the environment (`CONNECT_AGENT_ENV` in the contract: `PILOT_URL`, `PILOT_MODE`, `PILOT_DATA_DIR`, `PILOT_DOCKER_SOCKET`, `PILOT_IMAGES`, `PILOT_KUBE_NAMESPACE`, `PILOT_NODE_NAME`, `PILOT_CA`, `PILOT_HEADERS`, `PILOT_LOG_LEVEL`, `PILOT_HOME`, and for Kubernetes and Swarm `PILOT_ENROLL_TOKEN`, `PILOT_IDENTITY_SECRET`, `PILOT_BUNDLE_URL`, `PILOT_BUNDLE_SHA256`; plus `HTTPS_PROXY` and `NO_PROXY`). Proxies: observed on this sandbox's Node 22.23.3 ✅ that `NODE_USE_ENV_PROXY=1` makes global `fetch` and the global `WebSocket` honour `HTTPS_PROXY`, but `ws` (which uses the `https` module) ignores it and connects directly. So the agent gives `ws` an `https.Agent` that performs the CONNECT itself (about 30 lines: `HTTPS_PROXY`, `NO_PROXY`, credentials in the proxy's URL) and uses the same agent for its enrollment request. A test with a local CONNECT proxy proves it (T-AGENT).
+`pilot-agent run` (default) · `enroll [--token-stdin]` · `doctor [--json]` · `identity` (prints node id and fingerprint) · `version`. Configuration comes from `agent.json` and the environment (`CONNECT_AGENT_ENV` in the contract: `PILOT_URL`, `PILOT_MODE`, `PILOT_DATA_DIR`, `PILOT_DOCKER_SOCKET`, `PILOT_IMAGES`, `PILOT_KUBE_NAMESPACE`, `PILOT_KUBE_NAMESPACES` (further namespaces a Kubernetes agent serves, T-3720, §11.5), `PILOT_NODE_NAME`, `PILOT_CA`, `PILOT_HEADERS`, `PILOT_LOG_LEVEL`, `PILOT_HOME`, and for Kubernetes and Swarm `PILOT_ENROLL_TOKEN`, `PILOT_IDENTITY_SECRET`, `PILOT_BUNDLE_URL`, `PILOT_BUNDLE_SHA256`; plus `HTTPS_PROXY` and `NO_PROXY`). Proxies: observed on this sandbox's Node 22.23.3 ✅ that `NODE_USE_ENV_PROXY=1` makes global `fetch` and the global `WebSocket` honour `HTTPS_PROXY`, but `ws` (which uses the `https` module) ignores it and connects directly. So the agent gives `ws` an `https.Agent` that performs the CONNECT itself (about 30 lines: `HTTPS_PROXY`, `NO_PROXY`, credentials in the proxy's URL) and uses the same agent for its enrollment request. A test with a local CONNECT proxy proves it (T-AGENT).
 
 ### 11.4 The Docker service: a policy proxy
 
@@ -399,6 +399,11 @@ Each `docker` stream is the server side of an HTTP connection: the agent feeds t
 ### 11.5 The Kubernetes service
 
 Each `kube` stream is the server side of an HTTP connection to a proxy that forwards to `https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT` with the pod's CA (`/var/run/secrets/kubernetes.io/serviceaccount/ca.crt`) and verification on. The proxy:
+
+**Several namespaces (T-3720, PILOT-1162).** An agent serves its own namespace (`PILOT_KUBE_NAMESPACE`, which also holds its identity Secret) plus the ones in `PILOT_KUBE_NAMESPACES`. Each namespace is its own kube target on the one connection.
+- The portal's loopback names the target's namespace in the open request (`args: { namespace }`, `ConnectKubeOpen`).
+- The agent refuses a namespace it does not serve with `denied`. An open with no args is for its own namespace, as from a portal before T-3720.
+- Each namespace has its own proxy, and "the connector's namespace" below means the stream's namespace. So a request for B on a stream opened for A is refused (`namespace`), even when the agent also serves B.
 
 - requires `Authorization: Bearer <kubeLocalToken>`, the per-connection value from `config` (so another process on the portal's machine that finds the loopback port can't use the connector), then **drops** that header, every `Impersonate-*` and `X-Remote-*` header, and sets the service account's token, re-read from its file at most every 60 seconds (bound tokens rotate);
 - allows only the paths and verbs of appendix B (the connector's namespace, a fixed list of resources; no cluster-scoped paths, no other namespace; secrets only by the names foundation F3 uses, `ws-*-claudepilot`); adds `labelSelector=claudepilot.managed=true` to list and watch calls on pods, deployments and claims; passes WebSocket upgrades for `pods/exec` with their channel subprotocols;
@@ -1328,7 +1333,7 @@ export interface NodeLink {
   readonly nodeId: string;
   readonly targetId: string;
   connected(): boolean;
-  /** Resolves when the agent accepted the stream; rejects with ConnectError. `args` is for `host` only. */
+  /** Resolves when the agent accepted the stream; rejects with ConnectError. `args`: `host` the operation, `kube` `{ namespace }` (T-3720, §11.5). */
   open(service: 'docker' | 'kube' | 'host', args?: ConnectHostOpen, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream>;
   info(): NodeInfo | null;
   /** Fires on connect (true) and on disconnect (false). Returns an unsubscribe. */

@@ -51,9 +51,13 @@ spec:
               value: "kubernetes"
             - name: PILOT_DATA_DIR
               value: "/var/lib/claudepilot-agent"
-            # One namespace per agent until PILOT-1162 (G1); the identity Secret lives here too.
+            # The agent's own namespace: its identity Secret, and a kube stream opened without a namespace.
             - name: PILOT_KUBE_NAMESPACE
               value: "isnan-pilot-ws-isnan"
+            # The further namespaces it serves (PILOT-1162, G1): each is its own kube target on the one connection; any other is refused.
+            # Exactly the namespaces rbac.yaml gives a `cp-bridge-workspaces` Role in (bridgeManifests.test.ts checks).
+            - name: PILOT_KUBE_NAMESPACES
+              value: "isnan-claudepilot-workspaces,isnan-pilot-ws-konfersi,isnan-pilot-ws-kohilabs"
             - name: PILOT_IDENTITY_SECRET
               value: "claudepilot-agent-identity"
             - name: PILOT_NODE_NAME
