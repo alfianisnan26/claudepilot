@@ -36,7 +36,15 @@ export function bridgeRegistry(raw: string | undefined): Map<string, BridgeClust
     for (const [name, v] of Object.entries(parsed as Record<string, unknown>)) {
       const e = v as Partial<BridgeCluster> | null;
       const key = typeof e?.publicKey === 'string' ? connectFromB64u(e.publicKey) : null;
-      if (BRIDGE_CLUSTER_RE.test(name) && e && typeof e.node === 'string' && NODE_RE.test(e.node) && key?.length === 32 && typeof e.tokenSha256 === 'string' && SHA256_RE.test(e.tokenSha256)) {
+      if (
+        BRIDGE_CLUSTER_RE.test(name) &&
+        e &&
+        typeof e.node === 'string' &&
+        NODE_RE.test(e.node) &&
+        key?.length === 32 &&
+        typeof e.tokenSha256 === 'string' &&
+        SHA256_RE.test(e.tokenSha256)
+      ) {
         map.set(name, { node: e.node, publicKey: e.publicKey!, tokenSha256: e.tokenSha256 });
       } else {
         console.error('bridge: a BRIDGE_CLUSTERS entry is malformed and was dropped');

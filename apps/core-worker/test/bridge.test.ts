@@ -66,7 +66,9 @@ async function dial(): Promise<Link> {
       else queue.push(m);
     });
   });
-  const closed = new Promise<{ code: number; reason: string }>((resolve) => ws.addEventListener('close', (e) => resolve({ code: e.code, reason: e.reason })));
+  const closed = new Promise<{ code: number; reason: string }>((resolve) =>
+    ws.addEventListener('close', (e) => resolve({ code: e.code, reason: e.reason })),
+  );
   ws.accept();
   return { ws, closed, next: () => (queue.length ? Promise.resolve(queue.shift()!) : new Promise((r) => waiting.push(r))) };
 }
@@ -95,7 +97,12 @@ const hello = () => ({
 
 async function authFor(c: ConnectChallenge, opts: { key?: string; node?: string } = {}): Promise<ConnectAuth> {
   const node = opts.node ?? env.TEST_BRIDGE_NODE;
-  return { t: 'auth', node, sig: await connectSignChallenge(opts.key ?? env.TEST_BRIDGE_PRIVATE_KEY, c.connId, c.nonce, node), hello: hello() };
+  return {
+    t: 'auth',
+    node,
+    sig: await connectSignChallenge(opts.key ?? env.TEST_BRIDGE_PRIVATE_KEY, c.connId, c.nonce, node),
+    hello: hello(),
+  };
 }
 
 /** A link through the whole handshake. */
@@ -203,7 +210,11 @@ describe('BridgeDO: the Connect handshake', () => {
   });
 
   it('a first message that is binary, not JSON or too large is refused: bad_request', async () => {
-    for (const bad of [new Uint8Array([1, 2, 3]).buffer, 'not json', JSON.stringify({ t: 'auth', pad: 'x'.repeat(CONNECT_LIMITS.preAuth.firstMessageBytes) })]) {
+    for (const bad of [
+      new Uint8Array([1, 2, 3]).buffer,
+      'not json',
+      JSON.stringify({ t: 'auth', pad: 'x'.repeat(CONNECT_LIMITS.preAuth.firstMessageBytes) }),
+    ]) {
       const link = await dial();
       await challengeOf(link);
       link.ws.send(bad);
@@ -263,7 +274,11 @@ describe('redaction', () => {
   it('the bearer token appears in no log line and no audit row', async () => {
     const lines: string[] = [];
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
-      vi.spyOn(console, m).mockImplementation((...args: unknown[]) => void lines.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '))),
+      vi
+        .spyOn(console, m)
+        .mockImplementation(
+          (...args: unknown[]) => void lines.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')),
+        ),
     );
     try {
       await SELF.fetch(URL_BRIDGE, { headers: upgradeHeaders({ 'x-pilot-cluster': 'other-cluster' }) });

@@ -95,7 +95,15 @@ export class BridgeDO extends SchemaDO {
     const [client, server] = [pair[0], pair[1]];
     this.ctx.acceptWebSocket(server);
     const now = Date.now();
-    const pending: Pending = { stage: 'pending', connId: crypto.randomUUID(), nonce: connectB64u(crypto.getRandomValues(new Uint8Array(32))), issuedAt: now, cluster, node, publicKey };
+    const pending: Pending = {
+      stage: 'pending',
+      connId: crypto.randomUUID(),
+      nonce: connectB64u(crypto.getRandomValues(new Uint8Array(32))),
+      issuedAt: now,
+      cluster,
+      node,
+      publicKey,
+    };
     server.serializeAttachment(pending);
 
     if (this.#count().pending > PENDING_MAX) {
@@ -167,14 +175,18 @@ export class BridgeDO extends SchemaDO {
   /** The latest audit rows, newest first (RPC). */
   audit(limit = 50): BridgeAuditRow[] {
     return this.ctx.storage.sql
-      .exec<{ at: number; event: string; conn_id: string | null; detail: string | null }>('SELECT at, event, conn_id, detail FROM bridge_audit ORDER BY id DESC LIMIT ?', Math.min(Math.max(1, limit), 500))
+      .exec<{ at: number; event: string; conn_id: string | null; detail: string | null }>(
+        'SELECT at, event, conn_id, detail FROM bridge_audit ORDER BY id DESC LIMIT ?',
+        Math.min(Math.max(1, limit), 500),
+      )
       .toArray()
       .map((r) => ({ at: r.at, event: r.event, connId: r.conn_id, detail: r.detail }));
   }
 
   async #onAuth(ws: WebSocket, att: Pending, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') return this.#reject(ws, att.connId, 'bad_request', 'The first message must be text.');
-    if (textBytes(message) > CONNECT_LIMITS.preAuth.firstMessageBytes) return this.#reject(ws, att.connId, 'bad_request', 'The auth message is too large.');
+    if (textBytes(message) > CONNECT_LIMITS.preAuth.firstMessageBytes)
+      return this.#reject(ws, att.connId, 'bad_request', 'The auth message is too large.');
     let auth: unknown;
     try {
       auth = JSON.parse(message);
@@ -184,11 +196,13 @@ export class BridgeDO extends SchemaDO {
     if (!isObject(auth) || auth.t !== 'auth' || typeof auth.node !== 'string' || typeof auth.sig !== 'string' || !isObject(auth.hello)) {
       return this.#reject(ws, att.connId, 'bad_request', 'The auth message is not understood.');
     }
-    if (Date.now() - att.issuedAt > CONNECT_LIMITS.handshakeMs) return this.#reject(ws, att.connId, 'bad_request', 'The challenge expired.');
+    if (Date.now() - att.issuedAt > CONNECT_LIMITS.handshakeMs)
+      return this.#reject(ws, att.connId, 'bad_request', 'The challenge expired.');
 
     // A nonce is good for one answer, whatever that answer is.
     const sql = this.ctx.storage.sql;
-    if (sql.exec('SELECT 1 FROM used_nonce WHERE nonce = ?', att.nonce).toArray().length > 0) return this.#reject(ws, att.connId, 'bad_request', 'The challenge was already answered.');
+    if (sql.exec('SELECT 1 FROM used_nonce WHERE nonce = ?', att.nonce).toArray().length > 0)
+      return this.#reject(ws, att.connId, 'bad_request', 'The challenge was already answered.');
     sql.exec('INSERT INTO used_nonce (nonce, at) VALUES (?, ?)', att.nonce, Date.now());
 
     ws.serializeAttachment({ ...att, stage: 'verifying' } satisfies Pending);
@@ -198,7 +212,12 @@ export class BridgeDO extends SchemaDO {
     if (!signed) return this.#reject(ws, att.connId, 'bad_signature', 'The signature does not match.');
     const protocol = auth.hello.protocol;
     if (typeof protocol !== 'number' || protocol < CONNECT_PROTOCOL_MIN || protocol > CONNECT_PROTOCOL) {
-      return this.#reject(ws, att.connId, 'upgrade_required', `This portal speaks protocol ${CONNECT_PROTOCOL_MIN} to ${CONNECT_PROTOCOL}.`);
+      return this.#reject(
+        ws,
+        att.connId,
+        'upgrade_required',
+        `This portal speaks protocol ${CONNECT_PROTOCOL_MIN} to ${CONNECT_PROTOCOL}.`,
+      );
     }
 
     // One live link per cluster: the new one wins.
@@ -212,7 +231,14 @@ export class BridgeDO extends SchemaDO {
     }
 
     const now = Date.now();
-    ws.serializeAttachment({ stage: 'live', connId: att.connId, cluster: att.cluster, node: att.node, since: now, lastReceived: now } satisfies Live);
+    ws.serializeAttachment({
+      stage: 'live',
+      connId: att.connId,
+      cluster: att.cluster,
+      node: att.node,
+      since: now,
+      lastReceived: now,
+    } satisfies Live);
     const welcome: ConnectWelcome = {
       t: 'welcome',
       v: 1,
@@ -270,7 +296,13 @@ export class BridgeDO extends SchemaDO {
   }
 
   #audit(event: string, connId: string | null, detail: string | null): void {
-    this.ctx.storage.sql.exec('INSERT INTO bridge_audit (at, event, conn_id, detail) VALUES (?, ?, ?, ?)', Date.now(), event, connId, detail);
+    this.ctx.storage.sql.exec(
+      'INSERT INTO bridge_audit (at, event, conn_id, detail) VALUES (?, ?, ?, ?)',
+      Date.now(),
+      event,
+      connId,
+      detail,
+    );
   }
 
   async #scheduleAt(at: number): Promise<void> {

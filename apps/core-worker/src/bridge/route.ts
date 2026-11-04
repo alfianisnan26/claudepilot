@@ -17,7 +17,8 @@ import { bridgeAuthorize } from './registry.js';
 export const BRIDGE_INTERNAL = { cluster: 'x-cp-bridge-cluster', node: 'x-cp-bridge-node', key: 'x-cp-bridge-key' } as const;
 export const BRIDGE_CLUSTER_HEADER = 'x-pilot-cluster';
 
-export const notFound = (): Response => Response.json(new AppError('NOT_FOUND', 'Not found.').toJSON() satisfies ApiErrorBody, { status: 404 });
+export const notFound = (): Response =>
+  Response.json(new AppError('NOT_FOUND', 'Not found.').toJSON() satisfies ApiErrorBody, { status: 404 });
 
 const offersSubprotocol = (header: string | null): boolean => (header ?? '').split(',').some((p) => p.trim() === CONNECT_SUBPROTOCOL);
 
