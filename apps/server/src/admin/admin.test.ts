@@ -199,6 +199,20 @@ test('sign-in: an active admin gets a __Host- cookie (Secure, HttpOnly, SameSite
   assert.equal((await p.signIn('ops@example.test')).status, 401);
 });
 
+test('PILOT-1138 review: a locked email answers 429 with the lockout’s own Retry-After (its `retryAfter` detail), not the default minute', async () => {
+  const p = portal(ADMIN_HOST);
+  let locked: Awaited<ReturnType<typeof p.signIn>> | null = null;
+  for (let i = 0; i < 12 && !locked; i++) {
+    // An email no other test signs in with: the throttle keeps a lock in memory too, past the auth_throttle reset of beforeEach.
+    const r = await p.signIn('lockout-probe@example.test', `${PASSWORD}x`);
+    if (r.status === 429) locked = r;
+  }
+  assert.ok(locked, 'the email locked');
+  const wait = Number(locked.res.headers.get('retry-after'));
+  // The first lock is 30 s (identity/throttle.ts, 5 failures); the fallback a missing detail gave was 60.
+  assert.ok(Number.isInteger(wait) && wait >= 1 && wait <= 30, `Retry-After is the lockout's own wait: ${locked.res.headers.get('retry-after')}`);
+});
+
 test('the main portal’s cookie and every token are refused on the admin host; writes need the admin host’s Origin', async () => {
   const p = portal(ADMIN_HOST);
   assert.equal((await p.call('GET', '/admin-api/users', { cookie: `portal_session=${randomBytes(32).toString('base64url')}` })).status, 401);

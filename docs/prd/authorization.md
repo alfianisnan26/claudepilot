@@ -294,6 +294,16 @@ Counts come from the policy tables of Appendix A and B (rows whose access names 
 | `budget` | 3 | 2 | | budget and spike alerts to their owner |
 | `user`, `team`, `trigger`, `template`, `personal` | 0, 0, 0, 0, 1 | 0 | | trigger scheduler, notification delivery |
 
+### 12.6 Request limits at the doors without a cookie (PILOT-1138)
+
+Before the portal is reachable from the public internet (epic PILOT-1131), each door a stranger reaches without a cookie has a per-address ceiling in front of its own limits. The ceilings are in `app.ts`: `EDGE_LIMITS` (sign-in 60, `/mcp` 1200, `/connect/*` 600 and `/api/vscode/*` 1200 requests per minute) and `ADMIN_SIGNIN_LIMIT` (`POST /admin-api/session`, 30 per minute, counted before the admin host is handed to the console). The routes' own limits stay behind them: wrong codes (`rateLimit.ts`), the email lockout with backoff (`identity/throttle.ts`), per token and per tool on `/mcp` (`portalmcp/limits.ts`), and wrong enrollment tokens on `/connect` (`connect/publicRoutes.ts`). There is no `/api/agent` route.
+
+- **The key is the visitor.** Behind the tunnel the hop the proxy sees is the cloudflared pod for every visitor, so the ceilings key on `visitorAddress`: CF-Connecting-IP, read only with `PORTAL_TRUST_PROXY` and `PORTAL_TRUST_CLOUDFLARE` on and when that hop is private (`clientAddress.ts`); otherwise the hop. An IPv6 address counts by its /64 (`addressKey`). A client inside our networks could set the header itself; the routes' own limits (per token, per email) still hold for it.
+- Every 429 carries `Retry-After`: the ceiling's own time left, else a route's `retryAfterS` (the code limiter) or `retryAfter` (the lockout) detail, else 60 seconds (`retryAfterOf`, in `app.onError` and the admin console's).
+- The first refusal for an address in each window writes one `portal.rate_limited` audit row (medium) with the rule, the method, the address and the wait. It never records the path, the query or a header, so a token cannot reach the row.
+- The module `apps/server/src/ratelimit/` has no `node:` imports, and its counter is a `RateLimitStore`. It counts in memory on Node (bounded at 10,000 keys; a full store drops the ended windows and the oldest tenth in one sweep), and the Worker can plug in a Durable Object or the rate-limiting binding.
+- Open: the routes' own per-address limits (the code limiter, the per-address lockout) still key on the hop; the code sign-in has a fixed window with no backoff. Both are follow-ups on PILOT-1138.
+
 ### 12.7 Requests from another site (PILOT-1139)
 
 The session cookie rides on any request a browser sends, so a page on another site must not be able to change state with it. One rule, `originCheck.ts` (no `node:` import, so it moves to the Worker as is), is used by every door:

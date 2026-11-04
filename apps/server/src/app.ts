@@ -158,6 +158,8 @@ import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes, releaseOf } from './reporter/routes.js';
 import type { ReporterService } from './reporter/service.js';
 import { clientAddress } from './clientAddress.js';
+import { addressKey, MemoryRateLimitStore, retryAfterOf, type RateRule } from './ratelimit/limiter.js';
+import { rateLimit } from './ratelimit/middleware.js';
 import { CROSS_SITE_MESSAGE, crossSite, originAllowed, originExempt, sameHostOrigin } from './originCheck.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
 import { createHeartbeatRoutes } from './schedules/heartbeat.js';
@@ -171,10 +173,28 @@ export { PLAIN_NAME };
 /** The Origin rule (originCheck.ts, PILOT-1139), re-exported where older callers import it. */
 export { sameHostOrigin };
 
+/**
+ * PILOT-1138: requests per client address and minute at the doors that need no cookie, in front of each route's own limits. Generous:
+ * they stop floods (and password hashing on demand), not a person or an agent at work.
+ */
+export const EDGE_LIMITS: ReadonlyArray<readonly [string, RateRule]> = [
+  [API.login, { name: 'signin', limit: 60, windowMs: 60_000 }],
+  ['/mcp', { name: 'mcp', limit: 1200, windowMs: 60_000 }],
+  ['/connect/*', { name: 'connect', limit: 600, windowMs: 60_000 }],
+  ['/api/vscode/*', { name: 'vscode', limit: 1200, windowMs: 60_000 }],
+];
+/** The Admin console's sign-in (POST only, on the admin host): password hashing on demand, so a lower ceiling. */
+export const ADMIN_SIGNIN_LIMIT: RateRule = { name: 'admin_signin', limit: 30, windowMs: 60_000 };
+
+export { retryAfterOf };
+
 const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
 /**
- * The visitor's address as Cloudflare saw it (clientAddress.ts): only what is SHOWN and stored about a visitor (the UI reporter's IP).
- * Rate limits stay on clientKey: a pod in the cluster or a device at home could set CF-Connecting-IP itself and change its key with it.
+ * The visitor's address as Cloudflare saw it (clientAddress.ts): CF-Connecting-IP, read only with trustProxy and trustCloudflare and when
+ * the hop the proxy saw is private (the tunnel). Shown and stored about a visitor (the UI reporter's IP), and the key of the edge ceilings
+ * (PILOT-1138 review): behind the tunnel the hop is the cloudflared pod for EVERY visitor, so keyed on it one stranger would cut off all.
+ * A client inside our networks could set the header itself and spread its count over made-up addresses; the routes' own limits (per
+ * token, per email) still hold for it. The routes' own per-address limits stay on clientKey for now (follow-up on the ticket).
  */
 const visitorAddress = (c: Context<Env>) =>
   clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy, { connectingIp: c.req.header('cf-connecting-ip'), trusted: config.trustCloudflare });
@@ -288,6 +308,18 @@ export function createApp(
   app.use(slowRequests());
   // Organizations slice 4 (§6.11): FIRST, the host split. The admin host gets the console's own app (built below, once its services exist) and
   // nothing else of the portal; the console's paths on any other host are the same 404 as an unknown route.
+  // PILOT-1138: the per-address ceilings (EDGE_LIMITS, below) in one store, keyed on the visitor Cloudflare saw (an IPv6 address by its /64).
+  const edgeLimitStore = new MemoryRateLimitStore();
+  const edgeLimit = (rule: RateRule, methods?: readonly string[]) =>
+    rateLimit({
+      store: edgeLimitStore,
+      rule,
+      key: (c) => (methods && !methods.includes(c.req.method) ? null : addressKey(visitorAddress(c as Context<Env>))),
+      onLimited: (e) => audit('portal.rate_limited', null, { rule: e.rule, method: e.method, address: e.key, retryAfterS: e.retryAfterS }, 'medium'),
+      refuse: (c) => c.json(new AppError('RATE_LIMITED', 'Too many requests from this address. Wait a moment.').toJSON(), 429),
+    });
+  // The Admin console's sign-in: before the host split, which hands the admin host to the console's own app.
+  app.use('/admin-api/session', edgeLimit(ADMIN_SIGNIN_LIMIT, ['POST']));
   const adminGate = new AdminHostGate(adminHost, config.trustProxy);
   let adminConsole: ConsoleApp | null = null;
   app.use(adminHostMiddleware(adminGate, () => adminConsole));
@@ -431,6 +463,10 @@ export function createApp(
   const anyLimit = limit(256 * 1024 * 1024);
   app.use(API.login, loginLimit);
   app.use('/api/*', (c, next) => (/^application\/json/i.test(c.req.header('content-type') ?? '') ? jsonLimit(c, next) : anyLimit(c, next)));
+  // PILOT-1138: a per-address ceiling in front of the doors a stranger reaches without a cookie (ratelimit/, portable to the Worker). The
+  // routes' own limits (wrong codes, wrong tokens, per token, per tool) stay behind it; this one stops a flood before a route reads a body
+  // or a token, answers 429 with Retry-After and writes one audit row per address and window (never the path, query or token).
+  for (const [path, rule] of EDGE_LIMITS) app.use(path, edgeLimit(rule));
 
   app.onError((e, c) => {
     const error = isAppError(e)
@@ -439,6 +475,8 @@ export function createApp(
         ? new AppError(codeForStatus(e.status), undefined, { status: e.status, cause: e })
         : new AppError('INTERNAL_ERROR', undefined, { cause: e });
     if (error.status >= 500) console.error(e);
+    // PILOT-1138: every 429 says when to come back (the route's `retryAfterS` detail, else a minute).
+    if (error.status === 429) c.header('Retry-After', String(retryAfterOf(error.details)));
     return c.json(error.toJSON(), error.status as ContentfulStatusCode);
   });
 
