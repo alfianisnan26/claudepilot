@@ -203,7 +203,8 @@ test('PILOT-1138 review: a locked email answers 429 with the lockout’s own Ret
   const p = portal(ADMIN_HOST);
   let locked: Awaited<ReturnType<typeof p.signIn>> | null = null;
   for (let i = 0; i < 12 && !locked; i++) {
-    const r = await p.signIn('root@example.test', `${PASSWORD}x`);
+    // An email no other test signs in with: the throttle keeps a lock in memory too, past the auth_throttle reset of beforeEach.
+    const r = await p.signIn('lockout-probe@example.test', `${PASSWORD}x`);
     if (r.status === 429) locked = r;
   }
   assert.ok(locked, 'the email locked');
