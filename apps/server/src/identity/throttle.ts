@@ -125,12 +125,17 @@ export class Throttle {
    * the window passes). `weight` counts an event several times (a lookup miss counts double, I5).
    */
   take(scope: ThrottleScope, key: string, limit: number, windowMs: number, weight = 1): boolean {
+    return this.tally(scope, key, windowMs, weight) <= limit;
+  }
+
+  /** Counts `weight` events in a fixed window of `windowMs` and returns the window's count so far (a quota, or a counter that only reports). */
+  tally(scope: ThrottleScope, key: string, windowMs: number, weight = 1): number {
     const now = this.now();
     const row = this.#row(scope, key);
     const fresh = !row || now - row.window_start_ms > windowMs;
     const used = (fresh ? 0 : row.failures) + weight;
     this.#write(scope, key, { failures: used, window_start_ms: fresh ? now : row.window_start_ms, locked_until_ms: 0 });
-    return used <= limit;
+    return used;
   }
 
   /** Throws `LOCKED_OUT` when the quota is spent. */

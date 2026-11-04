@@ -14,7 +14,8 @@ import { AppError, isAppError } from '@isnanme/core';
 import { LOGIN_LIMITS } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { CODE_LOCKOUT, codeLockKey, createApp } from '../app.js';
+import { CODE_GLOBAL, CODE_LOCKOUT, codeLockKey, createApp } from '../app.js';
+import { parseCidrs } from '../clientAddress.js';
 import { config } from '../config.js';
 import { createInstallRoutes } from '../connect/install/routes.js';
 import type { InstallDeps } from '../connect/seams.js';
@@ -49,8 +50,15 @@ async function build(at?: { dataDir: string; key: string }, mcp?: Awaited<Return
   const dataDir = at?.dataDir ?? mkdtempSync(join(tmpdir(), 'cp-route-keys-'));
   const key = at?.key ?? generateSecretKey();
   const store = mcp?.store ?? (await Store.open({ dataDir, secretKey: parseSecretKey(key) }));
-  const rows: { kind: string; detail: unknown }[] = [];
-  const platform = { audit: { record: (r: { kind: string; detail: unknown }) => void rows.push(r) }, bus: { emit: async () => {} }, useReauth: () => {}, routes: () => [], hooks: new Hono() };
+  const rows: { kind: string; detail: unknown; severity?: string }[] = [];
+  const alerts: { kind: string; facts?: Record<string, unknown> }[] = [];
+  const platform = {
+    audit: { record: (r: { kind: string; detail: unknown }) => void rows.push(r) },
+    bus: { emit: (e: { kind: string; facts?: Record<string, unknown> }) => (alerts.push(e), null) },
+    useReauth: () => {},
+    routes: () => [],
+    hooks: new Hono(),
+  };
   // The VS Code routes are mounted only with a Portal MCP module (their tokens are its tokens).
   const app = make(new Portal(CODE, 60_000), stub, store, stub, stub, stub, stub, stub, { serveWeb: false, poolService: stub, mcp: stub, skills: stub, platform, ...(mcp ? { portalMcp: mcp.module } : {}) });
   const call = (method: string, path: string, init: Init = {}) =>
@@ -64,13 +72,16 @@ async function build(at?: { dataDir: string; key: string }, mcp?: Awaited<Return
     else store.close();
     rmSync(dataDir, { recursive: true, force: true });
   };
-  return { call, rows, dataDir, key, close: () => store.close(), done };
+  return { call, rows, alerts, dataDir, key, close: () => store.close(), done };
 }
 
-/** Runs `fn` as the cluster does: behind the trusted proxy, with Cloudflare in front (config is read per request). */
-async function behindCloudflare<T>(fn: () => Promise<T>): Promise<T> {
-  const saved = { trustProxy: config.trustProxy, trustCloudflare: config.trustCloudflare };
-  Object.assign(config, { trustProxy: true, trustCloudflare: true });
+/**
+ * Runs `fn` as the cluster does: behind the trusted proxy, with Cloudflare in front (config is read per request). `hops` is
+ * PORTAL_CLOUDFLARE_HOPS: by default the tunnel's own address.
+ */
+async function behindCloudflare<T>(fn: () => Promise<T>, hops = TUNNEL): Promise<T> {
+  const saved = { trustProxy: config.trustProxy, trustCloudflare: config.trustCloudflare, cloudflareHops: config.cloudflareHops };
+  Object.assign(config, { trustProxy: true, trustCloudflare: true, cloudflareHops: parseCidrs(hops) });
   try {
     return await fn();
   } finally {
@@ -87,7 +98,7 @@ test('code sign-in: the lock grows (doubling, a day at most), and the window out
   assert.equal(lockMsFor(CODE_LOCKOUT, n + 1), 2 * config.loginLimit.windowMs);
   assert.equal(lockMsFor(CODE_LOCKOUT, n + 3), 8 * config.loginLimit.windowMs);
   assert.equal(lockMsFor(CODE_LOCKOUT, n + 40), 24 * 60 * MIN, 'the ceiling is a day');
-  assert.ok(CODE_LOCKOUT.windowMs >= CODE_LOCKOUT.maxLockMs, 'waiting a lock out does not start the count over');
+  assert.equal(CODE_LOCKOUT.windowMs, CODE_LOCKOUT.maxLockMs, 'the window and the longest lock are both a day (the comment on CODE_LOCKOUT)');
   assert.notEqual(codeLockKey('192.0.2.1'), codeLockKey('192.0.2.2'));
   assert.match(codeLockKey('192.0.2.1'), /^code:[0-9a-f]{32}$/, 'a fingerprint, apart from the email lockout’s bare per-address keys');
 });
@@ -112,6 +123,63 @@ test('code sign-in: a guesser who waits each lock out gets a longer one every ti
   } finally {
     store.close();
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('PILOT-1179: a patient guesser on one address gets 18 tries per cycle of 66.5 h, at most 17 in its first day; the 24 h lock starts the count over', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'cp-code-cycle-'));
+  const store = await Store.open({ dataDir, secretKey: parseSecretKey(generateSecretKey()) });
+  const start = Date.UTC(2030, 0, 1);
+  let now = start;
+  const throttle = new Throttle(() => store.db, () => now);
+  const key = codeLockKey('198.51.100.9');
+  const tries: number[] = [];
+  const guess = () => {
+    const wait = throttle.retryAfter('ip', key);
+    if (wait) now += wait * 1000 + 1000; // waits every lock out, and a second more
+    tries.push(now);
+    return throttle.fail('ip', key, CODE_LOCKOUT);
+  };
+  try {
+    let lock = 0;
+    while (lock !== CODE_LOCKOUT.maxLockMs) lock = guess();
+    assert.equal(tries.length, 18, 'the 18th wrong code starts the first 24 h lock');
+    assert.equal(Math.round((tries.at(-1)! - start) / MIN), 2550, '42.5 h of growing locks before it (10 min doubling to 21 h 20 min)');
+    assert.equal(tries.filter((t) => t - start < 24 * 60 * MIN).length, 17, 'at most 17 tries in the first day');
+    // The 24 h lock waited out: the window has passed with it, so the count starts over (9 free tries, the 10th locks 10 min).
+    const after = Array.from({ length: config.loginLimit.attempts }, guess);
+    assert.deepEqual(after.slice(0, -1), Array(config.loginLimit.attempts - 1).fill(0));
+    assert.equal(after.at(-1), config.loginLimit.windowMs);
+  } finally {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('PILOT-1179: wrong codes across ALL addresses reach a ceiling that audits and alerts once per window, and refuses nobody', async () => {
+  const { call, rows, alerts, done } = await build();
+  // Spread over many addresses, each under its own lock (attempts - 1 wrong codes each), as a distributed guesser would.
+  const each = config.loginLimit.attempts - 1;
+  try {
+    let sent = 0;
+    for (let a = 0; sent < CODE_GLOBAL.ceiling + 5; a++)
+      for (let i = 0; i < each && sent < CODE_GLOBAL.ceiling + 5; i++, sent++) {
+        const r = await login(call, WRONG, { ip: `198.51.100.${a + 1}` });
+        assert.equal(r.status, 401, `wrong code ${sent + 1}: no address locked, nobody refused`);
+        const audited = rows.filter((x) => x.kind === 'portal.signin_code_guesses').length;
+        assert.equal(audited, sent + 1 >= CODE_GLOBAL.ceiling ? 1 : 0, `audit rows after ${sent + 1} wrong codes`);
+      }
+    const row = rows.find((x) => x.kind === 'portal.signin_code_guesses')!;
+    assert.deepEqual(row.detail, { method: 'code', wrongCodes: CODE_GLOBAL.ceiling, windowS: 3600 }, 'counts only: no address, no code');
+    assert.equal(row.severity, 'medium');
+    const alert = alerts.filter((x) => x.kind === 'security');
+    assert.equal(alert.length, 1, 'one alert at the ceiling, none after it');
+    assert.equal(alert[0]!.facts?.wrongCodes, CODE_GLOBAL.ceiling);
+    assert.equal(rows.filter((x) => x.kind === 'portal.signin_locked').length, 0, 'no address reached its own lock');
+    assert.equal((await login(call, CODE, { ip: '203.0.113.9' })).status, 200, 'the owner still signs in with the right code');
+    assert.equal((await login(call, CODE, { ip: '198.51.100.1' })).status, 200, 'even from an address that guessed');
+  } finally {
+    done();
   }
 });
 
@@ -229,7 +297,34 @@ test('connect installer routes: wrong tokens count per visitor behind the tunnel
   assert.deepEqual(failed, ['198.51.100.50', '203.0.113.77', PUBLIC_HOP]);
 });
 
-test('/mcp and the connect module read the same visitor key: CF-Connecting-IP only from a private hop, with both trusts on', async () => {
+test('PILOT-1179: CF-Connecting-IP from a private hop NOT on PORTAL_CLOUDFLARE_HOPS is ignored (a workspace pod); from a listed hop it is the visitor', async () => {
+  const WORKSPACE = '10.42.1.53'; // a workspace pod: a cluster address like the tunnel's, but not the tunnel
+  const fromPod = (claimed: string): Init => ({ ip: WORKSPACE, headers: { 'x-forwarded-for': WORKSPACE, 'cf-connecting-ip': claimed } });
+  const { call, done } = await build();
+  try {
+    await behindCloudflare(async () => {
+      // The pod names the owner's address to lock it out: the count lands on the pod's own address instead.
+      for (let i = 0; i < config.loginLimit.attempts; i++) await login(call, WRONG, fromPod('203.0.113.10'));
+      assert.equal((await login(call, CODE, fromPod('203.0.113.11'))).status, 429, 'the pod locked itself, whatever it claims');
+      assert.equal((await login(call, CODE, via('203.0.113.10'))).status, 200, 'the named visitor, through the real tunnel, is not locked');
+    });
+    // An empty list (the default): even the tunnel's header is not read, so its visitors share the tunnel's address.
+    const req = (init: Init) => ({ headers: init.headers ?? {}, socket: { remoteAddress: init.ip } }) as unknown as IncomingMessage;
+    await behindCloudflare(async () => {
+      assert.equal(visitorOfRequest(req(via('198.51.100.70'))), TUNNEL, 'no hop listed: the hop');
+      assert.equal(visitorOfRequest(req(fromPod('198.51.100.71'))), WORKSPACE);
+    }, '');
+    // A range on the list: any tunnel replica in it is trusted; the pod outside it is not.
+    await behindCloudflare(async () => {
+      assert.equal(visitorOfRequest(req(via('198.51.100.72'))), '198.51.100.72', 'the tunnel inside 10.42.0.0/24');
+      assert.equal(visitorOfRequest(req(fromPod('198.51.100.73'))), WORKSPACE, 'the pod in 10.42.1.x is outside it');
+    }, '10.42.0.0/24');
+  } finally {
+    done();
+  }
+});
+
+test('/mcp and the connect module read the same visitor key: CF-Connecting-IP only from a listed hop, with both trusts on', async () => {
   const ctx = (init: Init) => ({ req: { header: (n: string) => init.headers?.[n] }, env: { incoming: { socket: { remoteAddress: init.ip } } } }) as unknown as Context;
   const req = (init: Init) => ({ headers: init.headers ?? {}, socket: { remoteAddress: init.ip } }) as unknown as IncomingMessage;
   await behindCloudflare(async () => {

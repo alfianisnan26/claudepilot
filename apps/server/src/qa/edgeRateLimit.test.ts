@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { Hono } from 'hono';
 import { ADMIN_SIGNIN_LIMIT, createApp, EDGE_LIMITS, retryAfterOf } from '../app.js';
+import { parseCidrs } from '../clientAddress.js';
 import { config } from '../config.js';
 import { Portal } from '../portal.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
@@ -107,10 +108,10 @@ test('retryAfterOf: a route detail wins when it is a positive number, else a min
   for (const d of [undefined, null, {}, { retryAfterS: 0 }, { retryAfterS: -5 }, { retryAfterS: '9' }, { retryAfterS: Number.NaN }]) assert.equal(retryAfterOf(d), 60);
 });
 
-/** Runs `fn` as the cluster does: behind the trusted proxy, with Cloudflare in front (config is read per request). */
+/** Runs `fn` as the cluster does: behind the trusted proxy, with Cloudflare in front and its tunnel's hop listed (config is read per request). */
 async function behindCloudflare<T>(fn: () => Promise<T>): Promise<T> {
-  const saved = { trustProxy: config.trustProxy, trustCloudflare: config.trustCloudflare };
-  Object.assign(config, { trustProxy: true, trustCloudflare: true });
+  const saved = { trustProxy: config.trustProxy, trustCloudflare: config.trustCloudflare, cloudflareHops: config.cloudflareHops };
+  Object.assign(config, { trustProxy: true, trustCloudflare: true, cloudflareHops: parseCidrs('10.42.0.17') });
   try {
     return await fn();
   } finally {

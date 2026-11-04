@@ -57,9 +57,15 @@ spec:
             - name: PORTAL_TRUST_PROXY
               value: "true"
             # Cloudflare's tunnel is the hop Traefik sees for public visitors (a cluster address): their address is CF-Connecting-IP,
-            # read only when that hop is private (clientAddress.ts), and only for the reporter's shown IP (rate limits keep the hop).
+            # the key of every per-address limit and the reporter's shown IP (clientAddress.ts, visitor.ts), read only from a hop on
+            # PORTAL_CLOUDFLARE_HOPS. Unset, no hop is trusted and every visitor shares the tunnel pod's address (one stranger's
+            # wrong codes would lock them all). PILOT-1179: the cloudflared pods (namespace isnan-cloudflared) have no stable address,
+            # so the list is the pod network 10.42.0.0/16: today's behaviour, which a workspace pod (same network) can also use to name
+            # a visitor. Narrow it to the tunnel's own range once cloudflared has one (FOR THE COORDINATOR on PILOT-1179).
             - name: PORTAL_TRUST_CLOUDFLARE
               value: "true"
+            - name: PORTAL_CLOUDFLARE_HOPS
+              value: "10.42.0.0/16"
             # PILOT-1129 (T-3598): standing Bypass per workspace, the owner's decision (2026-11-03). Sessions in these workspaces get Bypass from
             # the portal itself (session.bypass allowed as "standing policy (owner)", put back by Keep going, workers of a parent in Bypass in it
             # too). Comma separated <target>/<name> ids; never a workspace that reads as production or is marked [protected]; needs Bypass in
