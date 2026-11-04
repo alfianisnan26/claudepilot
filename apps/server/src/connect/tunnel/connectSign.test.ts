@@ -9,6 +9,7 @@ import {
   connectB64u,
   connectFromB64u,
   connectPkcs8FromSeed,
+  connectPublicKeyProblem,
   connectSha256Hex,
   connectSignChallenge,
   connectTimingSafeEqual,
@@ -21,6 +22,7 @@ import {
   keyPairFromSeed,
   newConnId,
   newNonce,
+  publicKeyProblem,
   sha256Hex,
   signChallenge,
   verifyChallenge,
@@ -83,5 +85,58 @@ describe('connectSign (WebCrypto) against auth.ts (node:crypto)', () => {
     assert.equal(connectTimingSafeEqual('abc', 'abc'), true);
     assert.equal(connectTimingSafeEqual('abc', 'abd'), false);
     assert.equal(connectTimingSafeEqual('abc', 'abcd'), false);
+  });
+});
+
+// PILOT-1172: the Worker's registry uses the contract's key check; the portal (and the agent bundle, which may carry only connect.ts) keeps
+// its own in auth.ts. They must refuse exactly the same keys, with the same words.
+describe('connectPublicKeyProblem (contract) against publicKeyProblem (auth.ts)', () => {
+  const same = (key: unknown) => assert.equal(connectPublicKeyProblem(key), publicKeyProblem(key), JSON.stringify(key));
+
+  test('the same answer for wrong shapes, real keys and random 32-byte strings (about half off the curve)', () => {
+    for (const bad of [undefined, null, 42, '', 'abc', 'A'.repeat(42), 'A'.repeat(44), `${'A'.repeat(42)}!`, b64u(randomBytes(31)), b64u(randomBytes(33))]) same(bad);
+    for (let i = 0; i < 50; i++) {
+      const k = generateNodeKeyPair().publicKey;
+      assert.equal(connectPublicKeyProblem(k), null);
+      same(k);
+    }
+    let off = 0;
+    for (let i = 0; i < 400; i++) {
+      const k = b64u(randomBytes(32));
+      same(k);
+      if (connectPublicKeyProblem(k) === 'That is not an Ed25519 public key.') off++;
+    }
+    assert.ok(off > 120 && off < 280, `${off} of 400 random strings were off the curve`);
+  });
+
+  test('the same refusal for every small-order point (libsodium list, both sign bits) and for y = p', () => {
+    const hexes = [
+      '0000000000000000000000000000000000000000000000000000000000000000',
+      '0100000000000000000000000000000000000000000000000000000000000000',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+      'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+      '0000000000000000000000000000000000000000000000000000000000000080',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+      'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+    ];
+    for (const h of hexes) {
+      const k = b64u(Buffer.from(h, 'hex'));
+      assert.notEqual(connectPublicKeyProblem(k), null, h);
+      same(k);
+    }
+    assert.match(connectPublicKeyProblem(b64u(Buffer.from(hexes[0]!, 'hex'))) ?? '', /small order/);
+  });
+
+  test('a non-canonical spelling of a real key is refused by both', () => {
+    // The 43rd character carries 4 bits; flipping the low (unused) bits gives another spelling of the same bytes.
+    const k = generateNodeKeyPair().publicKey;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const last = alphabet.indexOf(k[42]!);
+    const respelled = k.slice(0, 42) + alphabet[last ^ 1]!;
+    assert.deepEqual(fromB64u(respelled), fromB64u(k));
+    same(respelled);
+    assert.notEqual(connectPublicKeyProblem(respelled), null);
   });
 });
