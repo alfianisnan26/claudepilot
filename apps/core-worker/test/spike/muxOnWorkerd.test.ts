@@ -70,7 +70,8 @@ async function fakeKubeService(stream: MuxStream, bearer: string): Promise<void>
     try {
       head = (await r.until('\r\n\r\n')).toString('latin1');
     } catch {
-      return stream.end();
+      stream.end();
+      return;
     }
     const [line = '', ...rest] = head.split('\r\n');
     const [method, path = ''] = line.split(' ');
