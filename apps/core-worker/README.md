@@ -46,8 +46,9 @@ it is 200 and the deployed commit. It reads the four values from the `cp-next` p
 
 It is safe to run again (PILOT-1180):
 
-- Before anything is written it pins the account: `GET /accounts/<id>` must answer, its name must be KohiLabs, and the zone must belong
-  to it. Otherwise it stops.
+- It takes only `--plan`, `--rotate` and `--keep-unknown-policies`: any other argument (a typo such as `--plna`) stops it before any call.
+- Before anything is written it pins the account: `GET /accounts/<id>` must answer with that id, its whole name must be KohiLabs (any
+  case, `Kohi Labs` allowed, nothing more), and the zone must belong to it. Otherwise it stops.
 - A policy on `cp-next-access` that the script did not make stops the run (the app is deny-first, so an unknown allow rule is unsafe).
   `--keep-unknown-policies` goes on and leaves such policies as they are.
 - A plain re-run keeps the existing service token: its secret is unknown to the run, so the token check is SKIPPED and the run exits 3

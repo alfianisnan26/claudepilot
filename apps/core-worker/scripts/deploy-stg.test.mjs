@@ -128,9 +128,22 @@ test('--plan on a fresh account: reads only, pins the account first, says what a
   w.clean();
 });
 
+test('an unknown argument (a typo of --plan, a stray value) stops before any call: a typo never writes', async () => {
+  for (const argv of [['--plna'], ['--plan', '--rotat'], ['plan'], ['--plan=1'], ['--keep-unknown-policies', '--force'], ['']]) {
+    const w = world(deployedState());
+    await assert.rejects(run(w.deps(argv)), (x) => x instanceof Stop && /unknown argument/.test(x.message), JSON.stringify(argv));
+    assert.deepEqual(w.calls, [], `no Cloudflare call at all (${JSON.stringify(argv)})`);
+    assert.equal(w.deployed.length, 0);
+  }
+  const w = world({ account: (id) => ({ id, name: 'Kohi Labs' }) });
+  assert.equal(await run(w.deps(['--plan'])), 0, 'the allowed spelling with one space passes');
+});
+
 test('the account pin: another account name, an unreadable account, or a zone of another account stops before any write (a plan too)', async () => {
   for (const [over, why] of [
     [{ account: (id) => ({ id, name: 'Isnan.me' }) }, /not KohiLabs.*Isnan\.me/],
+    [{ account: (id) => ({ id, name: 'KohiLabs Sandbox' }) }, /not KohiLabs.*KohiLabs Sandbox/],
+    [{ account: (id) => ({ id, name: 'kohilabs-old' }) }, /not KohiLabs/],
     [{ account: (id) => ({ id: hex(16), name: 'KohiLabs' }) }, /not KohiLabs/],
     [{ account: null }, /not readable with this token \(404\)/],
     [{ zones: () => [{ id: hex(16), name: ZONE, account: { id: hex(16) } }] }, /zone belongs to another account/],

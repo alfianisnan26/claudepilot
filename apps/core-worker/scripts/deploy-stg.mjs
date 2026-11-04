@@ -17,6 +17,7 @@
 //     --pool-env CP_NEXT_HOST -- 'node apps/core-worker/scripts/deploy-stg.mjs [--plan] [--rotate] [--keep-unknown-policies]; exit $?'
 // --plan: reads only (account, zone, Access app and its policies, token, DNS record, custom domain, Worker) and says what a run would do;
 //   the guards stop a plan the same way they stop a run.
+// Any other argument stops the run before any call (a typo must never write).
 // Exit: 0 both checks passed; 1 stopped by a guard, or a check failed; 3 deployed, the Access check passed, the token check skipped.
 // Guards: every name is cp-next-*; the host must be pilot-next.<zone>; the account is KohiLabs; an existing Access app or DNS record
 // that is not ours, or an unknown policy on our app, stops it.
@@ -30,8 +31,14 @@ export const APP_NAME = 'cp-next-access';
 export const POLICY_NAME = 'cp-next-healthcheck';
 export const TOKEN_NAME = 'cp-next-healthcheck';
 export const WORKER = 'cp-next-core';
-/** The account this Worker belongs on (PILOT-1180): its name as GET /accounts/<id> gives it ("KohiLabs", any case, one space allowed). */
-export const ACCOUNT_NAME = /^kohi ?labs\b/i;
+/**
+ * The account this Worker belongs on (PILOT-1180): its whole name as GET /accounts/<id> gives it, exactly "KohiLabs" (any case, one
+ * space allowed), so "KohiLabs Sandbox" does not pass. The id is checked against CP_NEXT_CF_ACCOUNT_ID; the name is the pin, because
+ * an id literal here would only repeat the pool value and give a reader no way to see which account it is.
+ */
+export const ACCOUNT_NAME = /^kohi ?labs$/i;
+/** The only arguments the script takes; anything else stops it. */
+export const FLAGS = ['--plan', '--rotate', '--keep-unknown-policies'];
 const WORKER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** A guard stopped the run (exit 1). */
@@ -45,12 +52,15 @@ export class Stop extends Error {}
 export async function run(deps) {
   const { fetch, env: e, argv, log = console.log } = deps;
   const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  const PLAN = argv.includes('--plan');
-  const ROTATE = argv.includes('--rotate');
-  const KEEP_UNKNOWN = argv.includes('--keep-unknown-policies');
   const fail = (msg) => {
     throw new Stop(msg);
   };
+  // A typo (`--plna`) must never write: any argument but these stops the run before anything is read or written (PILOT-1180).
+  const unknown = argv.filter((a) => !FLAGS.includes(a));
+  if (unknown.length) fail(`unknown argument ${JSON.stringify(unknown[0].slice(0, 40))}; allowed: ${FLAGS.join(', ')}`);
+  const PLAN = argv.includes('--plan');
+  const ROTATE = argv.includes('--rotate');
+  const KEEP_UNKNOWN = argv.includes('--keep-unknown-policies');
   const say = (msg) => log(`deploy-stg: ${msg}`);
 
   for (const n of ['CP_NEXT_CF_API_TOKEN', 'CP_NEXT_CF_ACCOUNT_ID', 'CP_NEXT_ZONE', 'CP_NEXT_HOST']) if (!e[n]) fail(`${n} is not set`);
