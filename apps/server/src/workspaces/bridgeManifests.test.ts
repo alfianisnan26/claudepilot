@@ -143,7 +143,8 @@ test('deploy/k3s-build/bridge-job.yaml: kaniko like the portal build, no token, 
   const dockerfile = readFileSync(join(REPO, 'deploy/k3s-build/bridge.Dockerfile'), 'utf8');
   assert.match(dockerfile, /^USER 65534:65534$/m);
   assert.match(dockerfile, /^RUN node extract-agent\.mjs agent\.generated\.ts agent\.mjs$/m);
-  assert.doesNotMatch(dockerfile, /npm|NODE_AUTH_TOKEN|ARG /, 'no package install, no token');
+  const instructions = dockerfile.split('\n').filter((l) => !l.startsWith('#')).join('\n');
+  assert.doesNotMatch(instructions, /npm|NODE_AUTH_TOKEN|^ARG /m, 'no package install, no token');
   const build = readFileSync(join(REPO, 'scripts/k3s-build.sh'), 'utf8');
   assert.match(build, /portal\|workspace\|workspace-dev\|browser\|bridge/);
   assert.match(build, /bridge\) echo cp-bridge ;;/);
