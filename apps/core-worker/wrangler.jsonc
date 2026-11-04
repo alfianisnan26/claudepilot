@@ -20,11 +20,9 @@
       { "name": "ORG", "class_name": "OrgDO" },
       { "name": "WORKSPACE", "class_name": "WorkspaceDO" },
       { "name": "CHAT_SESSION", "class_name": "ChatSessionDO" },
-      { "name": "BRIDGE", "class_name": "BridgeDO" }
-    ]
+      { "name": "BRIDGE", "class_name": "BridgeDO" },
+    ],
   },
   // Append only, like apps/server/src/store/migrations.ts: never edit a released tag.
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PlatformDO", "OrgDO", "WorkspaceDO", "ChatSessionDO", "BridgeDO"] }
-  ]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlatformDO", "OrgDO", "WorkspaceDO", "ChatSessionDO", "BridgeDO"] }],
 }
