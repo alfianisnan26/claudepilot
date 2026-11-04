@@ -15,17 +15,14 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1172 bridge hardening merged af872f583..929d2ba74 (job 98ef1e94 158, review PASS 58743), closed.
 - PILOT-1168 route limiter keys merged 7e4b34d01..103716ada (job 4e2cda31 222, review PASS 58772), closed. Follow-up PILOT-1179 (go-live blocker).
 - PILOT-1145 DONE by the operator as coordinator (job 5afb4f9e on 27102ae): https://pilot-next.kohi-labs.com serves cp-next-core behind Access (anon 403, service token 200), closed by the operator. The script's branch is in blind review before it lands.
+- PILOT-1158 (G5 app ports on enrolled kube) + PILOT-1160 (G7 big stdin / long exec) merged 2c033546f..2fa3b2e53 (job 05ad0b6b 35), closed (NORMAL, self-test).
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-worker (worker 6562167d, opus): PILOT-1145 BLOCKED. The permission classifier refused the real deploy as a "DNS / Domain / Cert change"; nothing was created. Branch ticket/T-3703-stg-deploy 27102ae67 (script deploy-stg.mjs; read-only plan job 142e4726 rc 0). Back on 1169 (WIP ed1b410fe), then 1170.
-- cf-worker: the 1145 retry was refused again (comment 59346); stopped, back on PILOT-1169, then 1170, then phase-2 PILOT-1148.
-- cf-review: reviewing the 1145 script, ticket/T-3703-stg-deploy 27102ae67f10.
-- 21:45 cf-bridge: PILOT-1142 rig check/run, then 1160 + 1158 WIP on ticket/T-3716-kube-appports-g5g7.
-- cf-bridge (worker 5bc808ae, opus): see above.
-  - PILOT-1142: the script was merged as 2dfb4d129 and 1d41f3ccd (job 038cad7d, 12 pass, it SKIPs without a rig). The ticket stays open: the rig namespace and rights are FOR THE COORDINATOR (T-3700, comments 58722 and 58730).
-- cf-review (worker 68d76aeb, opus, auto): idle; next review ask PILOT-1170.
-- cf-sec (worker e28ec1b4, opus): idle (pacing: cf-worker + cf-bridge build). Next: PILOT-1179 at the first free builder slot.
+- cf-worker (worker 6562167d, opus): PILOT-1169 + 1170 built (1170 job 04c06087 177 pass on 3106571) but d3dc72203 conflicts on agent.generated.ts after 1172. Replaying on a new branch ticket/T-3735-tunnel-pkg-r2 with a regenerated bundle and a fresh self-test; then 1170 to blind review; next PILOT-1148.
+- cf-sec (worker e28ec1b4, opus): PILOT-1179 (HIGH, go-live blocker), branch ticket/T-3772-cloudflared-trust.
+- cf-review (worker 68d76aeb, opus, auto): reviewing the 1145 script, ticket/T-3703-stg-deploy 27102ae67f10; then 1170.
+- cf-bridge (worker 5bc808ae, opus): idle (pacing). PILOT-1142 rig refused again 21:4x: ws-isnan-jobs cannot create namespaces (comment 59344); script merged (2dfb4d129, 1d41f3ccd), ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
 ## DECISIONS
@@ -46,7 +43,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1136: land D-112 in DECISIONS.md.
 - PILOT-1141: admission allow for Job claudepilot-build-bridge, Namespace isnan-cp-bridge, Secret cp-bridge-enroll, empty identity Secret per served namespace.
 - Standing (operator, 21:50): crew runs in auto mode, so the classifier refuses DNS/domain changes. Any later deploy that needs one goes here as the exact command.
-- PILOT-1142: a dev-rig namespace if the account still cannot make one (exact ask on T-3700).
+- PILOT-1142: service account isnan-claudepilot:ws-isnan-jobs needs create/list/delete on `dev-rig-*` namespaces + the rights in comment 58722 (refused again, comment 59344).
+- PILOT-1145: the cp-next-healthcheck service-token secret is stored nowhere; a path into the cp-next pool without an agent seeing it.
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
 - PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
@@ -58,5 +56,5 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 1. Land the 1145 script on a review PASS; PILOT-1142 rig run.
 2. PILOT-1179 (cf-sec, HIGH, go-live blocker) at the next free builder slot.
 3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
-4. cf-bridge: gaps 1161, 1163, 1164, 1157, 1167.
+4. cf-bridge (at a free builder slot): gaps 1161, 1163, 1164, 1157, 1167.
 5. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
