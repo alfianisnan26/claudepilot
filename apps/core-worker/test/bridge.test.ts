@@ -531,7 +531,8 @@ describe('BridgeDO: the audit is pruned', () => {
       sql.exec("INSERT INTO bridge_audit (at, event) VALUES (?, 'test.old')", now - BRIDGE_AUDIT_KEEP.ms - 60_000);
       sql.exec("INSERT INTO bridge_audit (at, event) VALUES (?, 'test.young')", now - BRIDGE_AUDIT_KEEP.ms + 60_000);
       sql.exec("INSERT INTO bridge_audit (at, event) VALUES (?, 'test.now')", now);
-      await state.storage.setAlarm(now);
+      // In the future: an alarm in the past may fire by itself first, and runDurableObjectAlarm would find none (PILOT-1181).
+      await state.storage.setAlarm(now + 60_000);
     });
     expect(await runDurableObjectAlarm(stub())).toBe(true);
     expect((await stub().audit()).map((r) => r.event)).toEqual(['test.now', 'test.young']);
@@ -549,7 +550,7 @@ describe('BridgeDO: the audit is pruned', () => {
         BRIDGE_AUDIT_KEEP.rows + extra,
         now,
       );
-      await state.storage.setAlarm(now);
+      await state.storage.setAlarm(now + 60_000);
     });
     expect(await runDurableObjectAlarm(stub())).toBe(true);
     await runInDurableObject(stub(), (_i, state) => {
