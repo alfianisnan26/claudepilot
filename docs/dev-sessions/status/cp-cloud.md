@@ -15,7 +15,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-worker (worker 6562167d, opus): PILOT-1145 staging deploy behind Access (HIGH); 1169/1170 WIP parked, resumes after.
+- cf-worker (worker 6562167d, opus): PILOT-1145 BLOCKED. The permission classifier refused the real deploy as a "DNS / Domain / Cert change"; nothing was created. Branch ticket/T-3703-stg-deploy 27102ae67 (script deploy-stg.mjs; read-only plan job 142e4726 rc 0). Back on 1169 (WIP ed1b410fe), then 1170.
 - cf-bridge (worker 5bc808ae, opus): PILOT-1142 rig e2e (rig namespace may need the coordinator); 1172 WIP parked, resumes after.
 - cf-review (worker 68d76aeb, opus, auto): idle; next the PILOT-1145 review (deploy/infra is HIGH).
 - cf-sec (worker e28ec1b4, opus): idle (pacing); next PILOT-1168 (go-live blocker, comment 58355 on PILOT-1131).
@@ -37,6 +37,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1133: Gitea token `CP_GITEA_MIRROR_TOKEN` + owner org (blocks 1134 mirror and 1146 origin switch).
 - PILOT-1136: land D-112 in DECISIONS.md.
 - PILOT-1141: admission allow for Job claudepilot-build-bridge, Namespace isnan-cp-bridge, Secret cp-bridge-enroll, empty identity Secret per served namespace.
+- PILOT-1145 (T-3703): allow the one staging deploy command, which the classifier refused as a DNS change (exact command on the ticket); and a path that stores the `cp-next-healthcheck` service-token secret without an agent seeing it.
 - PILOT-1142: a dev-rig namespace if the account still cannot make one (exact ask on T-3700).
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
