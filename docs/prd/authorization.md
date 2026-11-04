@@ -294,6 +294,16 @@ Counts come from the policy tables of Appendix A and B (rows whose access names 
 | `budget` | 3 | 2 | | budget and spike alerts to their owner |
 | `user`, `team`, `trigger`, `template`, `personal` | 0, 0, 0, 0, 1 | 0 | | trigger scheduler, notification delivery |
 
+### 12.7 Requests from another site (PILOT-1139)
+
+The session cookie rides on any request a browser sends, so a page on another site must not be able to change state with it. One rule, `originCheck.ts` (no `node:` import, so it moves to the Worker as is), is used by every door:
+
+- **HTTP.** Every request that is not GET, HEAD or OPTIONS, on **every path** (not only `/api`), is refused with 403 "Refused: this request came from another site." when its `Origin` is not allowed, or, with no `Origin`, when `Sec-Fetch-Site` is `cross-site`. With neither header the caller is not a browser (an agent, a CLI) and carries no cookie a page could ride. Hono's `csrf()` stays on `/api/*` for form posts with no Origin.
+- **Allowed origins.** The request's own Host (the scheme is not compared: TLS ends at the proxy), or exactly one of `PORTAL_ALLOWED_ORIGINS` (comma-separated `http(s)://host[:port]`; an entry with a path, another scheme or junk is dropped, so a typo never widens the list). On Cloudflare it names the public host in front of the origin.
+- **Sockets.** The live, chat, shell and browser (VNC) handshakes require an allowed `Origin` (a browser always sends one). App ports keep their own check (`appports/proxy.ts`): their page is the port's own host, not the portal's. The admin console requires its own host on writes; the Connect hub uses a signed challenge.
+- **Exempt doors**, each cookieless by design: `/mcp` (bearer tokens), `/connect/` (agents) and `/hooks/` (a token in the path). The UI reporter stays checked. A new exemption needs a review: the door must never read the session cookie.
+- **The test** (`authz/originCheck.test.ts`) builds the whole app and sends every unsafe route a valid cookie with a foreign `Origin` and with `Sec-Fetch-Site: cross-site`: each must answer the cross-site 403 unless exempt, and an exempt door must not be refused. A new unsafe route that the check does not cover fails it.
+
 ## 13. Data model
 
 New tables (block 400-459; ✅ run in `node:sqlite` on the real schema, `COORD/p5-schema-check.mts`):

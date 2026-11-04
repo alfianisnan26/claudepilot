@@ -158,6 +158,7 @@ import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes, releaseOf } from './reporter/routes.js';
 import type { ReporterService } from './reporter/service.js';
 import { clientAddress } from './clientAddress.js';
+import { CROSS_SITE_MESSAGE, crossSite, originAllowed, originExempt, sameHostOrigin } from './originCheck.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
 import { createHeartbeatRoutes } from './schedules/heartbeat.js';
 import { portalHelpers } from './schedules/helpers.js';
@@ -167,19 +168,8 @@ type Env = { Bindings: HttpBindings; Variables: { token: string; actor: Actor } 
 /** Letters, digits, dot, underscore and dash, starting with a letter or digit: what a target or a workspace is ever called. */
 export { PLAIN_NAME };
 
-/**
- * The page that sent this request is this portal: its Origin, exactly as a browser writes it, is http or https and names the
- * request's own Host. The scheme is not compared, since TLS ends at a proxy and the server sees http (T-143); x-forwarded-*
- * is not trusted. Both Origin checks on /api use this one rule.
- */
-export function sameHostOrigin(origin: string, host: string | undefined): boolean {
-  try {
-    const o = new URL(origin);
-    return (o.protocol === 'http:' || o.protocol === 'https:') && o.origin === origin && host !== undefined && o.host === host;
-  } catch {
-    return false;
-  }
-}
+/** The Origin rule (originCheck.ts, PILOT-1139), re-exported where older callers import it. */
+export { sameHostOrigin };
 
 const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
 /**
@@ -413,18 +403,19 @@ export function createApp(
   });
   // JSON answers gzip-compressed when the client accepts it (T-376); never a stream, a blob or a download (jsonCompress.ts).
   app.use('/api/*', jsonCompress());
-  app.use('/api/*', csrf({ origin: (origin, c) => sameHostOrigin(origin, c.req.header('host')) }));
-  // csrf() only looks at form-like content types. Browsers name the origin on every request that is not a plain
-  // GET, so a JSON request from another origin (or marked cross-site) is refused here too (same host rule as the sockets).
-  app.use('/api/*', async (c, next) => {
-    if (!/^(GET|HEAD|OPTIONS)$/.test(c.req.method)) {
-      const origin = c.req.header('origin');
-      let foreign = c.req.header('sec-fetch-site') === 'cross-site';
-      if (origin !== undefined) foreign = !sameHostOrigin(origin, c.req.header('host'));
-      if (foreign) throw new AppError('FORBIDDEN', 'Forbidden');
+  // PILOT-1139: EVERY request that may change state, on every path (not /api alone), from another site is refused: browsers name the
+  // origin on every request that is not a plain GET, and Sec-Fetch-Site when there is none (originCheck.ts, the same rule as the
+  // sockets). Allowed: this request's host, or an exact origin in PORTAL_ALLOWED_ORIGINS. Outside: the cookieless doors (ORIGIN_EXEMPT).
+  // authz/originCheck.test.ts probes every unsafe route of the whole app with a valid cookie.
+  app.use('*', async (c, next) => {
+    if (!/^(GET|HEAD|OPTIONS)$/.test(c.req.method) && !originExempt(c.req.path)) {
+      if (crossSite({ origin: c.req.header('origin'), secFetchSite: c.req.header('sec-fetch-site'), host: c.req.header('host') }, config.allowedOrigins))
+        throw new AppError('FORBIDDEN', CROSS_SITE_MESSAGE);
     }
     await next();
   });
+  // csrf() only looks at form-like content types; it also refuses a form post with no Origin at all.
+  app.use('/api/*', csrf({ origin: (origin, c) => originAllowed(origin, c.req.header('host'), config.allowedOrigins) }));
   // Bodies are refused by their size before anything reads them into memory: sign-in takes a few bytes (and needs no session, so
   // it must not buffer megabytes for a stranger), a JSON call a few MB; uploads have their own, lower limits (QA-028).
   const limit = (maxSize: number) =>
