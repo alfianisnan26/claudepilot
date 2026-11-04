@@ -47,7 +47,8 @@ function writeHeader(b: Buffer, at: number, h: FrameHeader) {
 
 /** DATA frame, header and payload in one allocation (one WebSocket message carries one frame). */
 export function dataFrame(streamId: number, flags: number, payload: Buffer | readonly Buffer[] = EMPTY): Buffer {
-  const parts = Buffer.isBuffer(payload) ? [payload] : payload;
+  // Spelled out: with @cloudflare/workers-types beside @types/node (apps/core-worker), Buffer.isBuffer does not narrow the union.
+  const parts: readonly Buffer[] = Buffer.isBuffer(payload) ? [payload as Buffer] : (payload as readonly Buffer[]);
   let n = 0;
   for (const p of parts) n += p.length;
   const b = Buffer.allocUnsafe(HEADER_BYTES + n);
