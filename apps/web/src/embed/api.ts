@@ -1,6 +1,9 @@
 import {
+  REPORTER_AGENT_GRANT_HEADER,
   REPORTER_ROUTES,
   type ReporterAddCapturesRequest,
+  type ReporterAgentGrant,
+  type ReporterAgentGrantRequest,
   type ReporterChatPage,
   type ReporterChatSendRequest,
   type ReporterChatStreamLine,
@@ -162,11 +165,17 @@ export interface ReporterClient {
   revoke(): Promise<unknown>;
   tickets(q: ReporterTicketQuery): Promise<ReporterTicketList>;
   ticket(key: string): Promise<ReporterTicket>;
-  createTicket(req: ReporterCreateTicketRequest): Promise<ReporterCreateTicketResponse>;
-  addCaptures(key: string, req: ReporterAddCapturesRequest): Promise<unknown>;
+  /** `grant`: the WebMCP auto-approval this call goes through (PILOT-1128); the server checks it, caps it and tags the ticket webmcp-auto. */
+  createTicket(req: ReporterCreateTicketRequest, grant?: string | null): Promise<ReporterCreateTicketResponse>;
+  addCaptures(key: string, req: ReporterAddCapturesRequest, grant?: string | null): Promise<unknown>;
   attach(key: string, captureId: string, kind: 'screenshot' | 'annotated' | 'evidence', body: Blob): Promise<unknown>;
   comments(key: string): Promise<ReporterTicketComment[]>;
-  reply(key: string, body: string): Promise<unknown>;
+  reply(key: string, body: string, grant?: string | null): Promise<unknown>;
+  /** WebMCP auto-approve grants that apply to this token, and the hourly caps they are held to. */
+  agentGrants(): Promise<{ items: ReporterAgentGrant[]; caps: { reports: number; actions: number } | null }>;
+  grantAgent(req: ReporterAgentGrantRequest): Promise<ReporterAgentGrant>;
+  /** Revokes one grant, or every grant of this token (null). */
+  revokeAgentGrant(id: string | null): Promise<unknown>;
   duplicates(q: ReporterDuplicateQuery): Promise<ReporterDuplicateCandidate[]>;
   reviews(): Promise<ReporterReview[]>;
   review(id: string): Promise<ReporterReview>;
@@ -226,14 +235,20 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
       });
   };
 
-  async function call<T>(method: string, path: string, body?: unknown, raw?: { blob: Blob; headers: Record<string, string> }): Promise<T> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    raw?: { blob: Blob; headers: Record<string, string> },
+    extra: Record<string, string> = {},
+  ): Promise<T> {
     let res: Response;
     const withToken = !!opts.token() && path !== R.connectClaim && !path.startsWith(R.status);
     try {
       res = await f(path, {
         method,
         credentials: 'omit',
-        headers: headers(raw ? raw.headers : body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        headers: headers({ ...(raw ? raw.headers : body === undefined ? {} : { 'Content-Type': 'application/json' }), ...extra }),
         body: raw ? raw.blob : body === undefined ? undefined : JSON.stringify(body),
       });
     } catch {
@@ -249,6 +264,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
   }
 
   const R = REPORTER_ROUTES;
+  const viaGrant = (grant: string | null | undefined): Record<string, string> => (grant ? { [REPORTER_AGENT_GRANT_HEADER]: grant } : {});
   return {
     status: (bucket, origin) => call('GET', `${R.status}?${new URLSearchParams({ bucket, origin })}`),
     claimConnect: (bucket, origin, verifier) => call('POST', R.connectClaim, { bucket, origin, verifier }),
@@ -260,12 +276,21 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
       return { items: v.items ?? [], nextCursor: v.nextCursor ?? null, counts: v.counts ?? { status: {}, priority: {}, type: {}, onPath: 0 } };
     },
     ticket: (key) => call('GET', fill(R.ticket, { key })),
-    createTicket: (req) => call('POST', R.tickets, req),
-    addCaptures: (key, req) => call('POST', fill(R.captures, { key }), req),
+    createTicket: (req, grant) => call('POST', R.tickets, req, undefined, viaGrant(grant)),
+    addCaptures: (key, req, grant) => call('POST', fill(R.captures, { key }), req, undefined, viaGrant(grant)),
     attach: (key, captureId, kind, blob) =>
       call('POST', fill(R.attach, { key }), undefined, { blob, headers: { 'Content-Type': blob.type || 'application/octet-stream', 'x-reporter-capture': captureId, 'x-reporter-kind': kind } }),
     comments: async (key) => listOf<ReporterTicketComment>(await call('GET', fill(R.ticketComments, { key })), 'items'),
-    reply: (key, body) => call('POST', fill(R.ticketComments, { key }), { body }),
+    reply: (key, body, grant) => call('POST', fill(R.ticketComments, { key }), { body }, undefined, viaGrant(grant)),
+    agentGrants: async () => {
+      const v = await call<{ items?: ReporterAgentGrant[]; caps?: { reports: number; actions: number } } | ReporterAgentGrant[]>(
+        'GET',
+        R.agentGrants,
+      );
+      return Array.isArray(v) ? { items: v, caps: null } : { items: v.items ?? [], caps: v.caps ?? null };
+    },
+    grantAgent: (req) => call('POST', R.agentGrants, req),
+    revokeAgentGrant: (id) => call('DELETE', id ? fill(R.agentGrant, { id }) : R.agentGrants),
     duplicates: async (q) => listOf<ReporterDuplicateCandidate>(await call('POST', R.duplicates, q), 'candidates'),
     reviews: async () => listOf<ReporterReview>(await call('GET', `${R.reviews}?status=draft`), 'items'),
     review: (id) => call('GET', fill(R.review, { id })),

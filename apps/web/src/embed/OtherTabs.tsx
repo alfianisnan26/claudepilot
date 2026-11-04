@@ -1,5 +1,6 @@
 import type { ReporterNote, ReporterNoteHit, ReporterSession } from '@portal/contracts';
 import { useEffect, useState } from 'react';
+import { grantLine, liveGrants } from './agentGrants';
 import { usePanel } from './context';
 import { Icon } from './icons';
 import { sessionTitle } from './chatModel';
@@ -174,7 +175,20 @@ export function KnowledgeTab() {
 const HOTKEY_LABEL: Record<keyof Hotkeys, string> = { report: 'Report', crop: 'Crop', callouts: 'Callouts', panel: 'Panel' };
 
 export function SettingsTab() {
-  const { calloutsVisible, setCalloutsVisible, hotkeys, setHotkeys, coarse, signOut, actorLabel, status, sdkVersion } = usePanel();
+  const {
+    calloutsVisible,
+    setCalloutsVisible,
+    hotkeys,
+    setHotkeys,
+    coarse,
+    signOut,
+    actorLabel,
+    status,
+    sdkVersion,
+    agentGrants,
+    revokeAgentGrant,
+  } = usePanel();
+  const grants = liveGrants(agentGrants ?? []);
   const [recording, setRecording] = useState<keyof Hotkeys | null>(null);
   return (
     <div className="flex flex-col gap-4 p-3">
@@ -220,6 +234,22 @@ export function SettingsTab() {
           </Btn>
         </section>
       )}
+      {/* WebMCP auto-approve (PILOT-1128): each grant of this sign-in and site, revocable. */}
+      <section className="flex flex-col gap-1" aria-label="Agent auto-approve">
+        <h2 className="px-1 text-[12.5px] font-semibold text-muted">Agent auto-approve</h2>
+        {grants.length ? (
+          grants.map((g) => (
+            <div key={g.id} className="flex min-h-11 items-center justify-between gap-2 px-1">
+              <span className="min-w-0 text-[14px] break-words">{grantLine(g)}</span>
+              <Btn tone="ghost" onClick={() => revokeAgentGrant(g.id)} className="shrink-0 text-accent">
+                Revoke
+              </Btn>
+            </div>
+          ))
+        ) : (
+          <p className="px-1 text-[13px] text-muted">None. An agent asks before each report, screenshot or comment.</p>
+        )}
+      </section>
       <details className="rounded-xl px-1 text-[13px] text-muted">
         <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-ink-soft">About</summary>
         <div className="flex flex-col gap-1 pb-2">

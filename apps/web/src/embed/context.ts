@@ -1,4 +1,5 @@
 import type {
+  ReporterAgentGrant,
   ReporterCaptureMode,
   ReporterContextCounts,
   ReporterDeviceInfo,
@@ -37,6 +38,8 @@ export interface Capture {
   evidence: ReporterEvidence;
   /** What the capture toolbar's Ticket | Session switch said (host message), if it said anything. */
   target?: ReporterReportTarget;
+  /** Taken for a WebMCP tool (PILOT-1128): the annotation editor does not open by itself on it. */
+  byAgent?: boolean;
 }
 
 export type Tab = 'tickets' | 'report' | 'sessions' | 'knowledge' | 'settings';
@@ -107,6 +110,9 @@ export interface PanelState {
   setHotkeys(h: Record<'report' | 'crop' | 'callouts' | 'panel', string>): void;
   /** The last capture mode, priority and annotation tool (per bucket, this browser only): the next report starts on them. */
   prefs: JourneyPrefs;
+  /** WebMCP auto-approve grants of this sign-in (PILOT-1128), and revoking one (or every one: null). */
+  agentGrants: ReporterAgentGrant[];
+  revokeAgentGrant(id: string | null): void;
   setPref<K extends keyof JourneyPrefs>(key: K, value: JourneyPrefs[K]): void;
 }
 

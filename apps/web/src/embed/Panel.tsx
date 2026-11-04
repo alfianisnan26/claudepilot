@@ -1,5 +1,6 @@
 import {
   REPORTER_BRIDGE_VERSION,
+  type ReporterAgentGrant,
   type ReporterAnnotation,
   type ReporterBuildInfo,
   type ReporterCaptureMode,
@@ -13,6 +14,7 @@ import {
 } from '@portal/contracts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogoMark } from '../components/LogoMark';
+import { Sheet } from '../components/Sheet';
 import { TabBar } from '../components/TabBar';
 import {
   clearToken,
@@ -41,11 +43,24 @@ import { KnowledgeTab, SessionsTab, SettingsTab } from './OtherTabs';
 import { ReportTab } from './ReportTab';
 import { TicketsTab } from './TicketsTab';
 import { Btn, Notice } from './ui';
+import { GROUP_LABEL, grantFor, indicatorText, liveGrants, type AskAnswer } from './agentGrants';
+import {
+  modelContextOf,
+  registerTools,
+  reporterTools,
+  toolsAllowed,
+  type ReporterToolDeps,
+  type ToolApproval,
+  type ToolAsk,
+} from './webmcp';
 
 const BUCKET = /^[A-Z]{2,6}$/;
 const POLL_MS = 30_000;
 /** Shots on one report (the form's strip). */
 const REPORT_SHOTS_MAX = 6;
+/** How long a WebMCP tool waits for the person's Allow, and for a screenshot it asked for. */
+const ASK_MS = 120_000;
+const AGENT_CAPTURE_MS = 60_000;
 
 /**
  * The reporter panel (/reporter/v1/embed?bucket=&origin=), framed by the SDK on the host page. It answers `ready` once it knows the
@@ -377,9 +392,93 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
       appendNext.current = append;
       setPending(requestId);
       post(captureRequest(requestId, mode, precise, choiceRef.current));
+      return requestId;
     },
     [post, setPref],
   );
+  // WebMCP (PILOT-1128): a tool's screenshot resolves when its capture-result arrives (or fails with capture-cancelled), and a tool that sends
+  // something waits for the person's Allow in this panel.
+  const captureWaits = useRef(new Map<string, { resolve: (c: Capture) => void; reject: (e: Error) => void }>());
+  const [ask, setAsk] = useState<{ ask: ToolAsk; answer: (a: AskAnswer) => void } | null>(null);
+  const askRef = useRef(ask);
+  const askPerson = useCallback(
+    (a: ToolAsk, signal?: AbortSignal) =>
+      new Promise<AskAnswer>((resolve) => {
+        // One question at a time; a second tool asking meanwhile is refused, not queued behind the person's back.
+        if (askRef.current || signal?.aborted) return resolve('deny');
+        let done = false;
+        const finish = (answer: AskAnswer) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          askRef.current = null;
+          setAsk(null);
+          resolve(answer);
+        };
+        const onAbort = () => finish('deny');
+        const timer = setTimeout(() => finish('deny'), ASK_MS);
+        signal?.addEventListener('abort', onAbort, { once: true });
+        askRef.current = { ask: a, answer: finish };
+        setAsk(askRef.current);
+      }),
+    [],
+  );
+  // Auto-approve (PILOT-1128): the grants that apply to this sign-in, from the server (person, bucket, origin; a session grant only this
+  // token). An ask of a group with a grant is answered without the sheet; the server still checks the grant and the caps on the call.
+  const [grants, setGrants] = useState<ReporterAgentGrant[]>([]);
+  const [caps, setCaps] = useState<{ reports: number; actions: number } | null>(null);
+  const grantsRef = useRef(grants);
+  grantsRef.current = grants;
+  const reloadGrants = useCallback(() => {
+    if (!tokenRef.current) return setGrants([]);
+    client.agentGrants().then(
+      (g) => {
+        setGrants(g.items);
+        setCaps(g.caps);
+      },
+      () => undefined,
+    );
+  }, [client]);
+  const revokeGrant = useCallback(
+    (id: string | null) => {
+      // Gone from the panel at once (no auto-approval in between), then from the server.
+      setGrants((old) => (id ? old.filter((g) => g.id !== id) : []));
+      grantsRef.current = id ? grantsRef.current.filter((g) => g.id !== id) : [];
+      client.revokeAgentGrant(id).then(reloadGrants, () => {
+        notify('Could not revoke the auto-approval.', 'error');
+        reloadGrants();
+      });
+    },
+    [client, reloadGrants, notify],
+  );
+  const approve = useCallback(
+    async (a: ToolAsk, signal?: AbortSignal): Promise<ToolApproval> => {
+      const g = a.noAuto ? null : grantFor(grantsRef.current, a.group);
+      if (g) return { kind: 'auto', grantId: g.id };
+      const answer = await askPerson(a, signal);
+      if (answer === 'deny') return { kind: 'denied' };
+      if (answer === 'session' || answer === 'always')
+        try {
+          const made = await client.grantAgent({ group: a.group, scope: answer });
+          grantsRef.current = [...grantsRef.current.filter((x) => !(x.group === made.group && x.scope === made.scope)), made];
+          setGrants(grantsRef.current);
+        } catch {
+          notify('Allowed once: the auto-approval could not be saved.', 'error');
+        }
+      return { kind: 'person' };
+    },
+    [askPerson, client, notify],
+  );
+  // The auto-approve grants of this sign-in: on connect and whenever tickets change (a grant made or revoked on another of its frames).
+  useEffect(() => {
+    if (!connected) {
+      setGrants([]);
+      grantsRef.current = [];
+      return;
+    }
+    reloadGrants();
+  }, [connected, reloadGrants, tick]);
   const openChat = useCallback((c: ChatOpen | null) => {
     setChat(c);
     if (c) setTab('sessions');
@@ -427,12 +526,22 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         if (m.requestId !== pendingRef.current) return;
         const screenshot = new Blob([m.screenshot], { type: m.mediaType });
         if (m.target) takeHostTarget(m.target);
-        const shot: Capture = { captureId: newId(), requestId: m.requestId, screenshot, previewUrl: URL.createObjectURL(screenshot), evidence: m.evidence, ...(m.target ? { target: m.target } : {}) };
+        const shot: Capture = {
+          captureId: newId(),
+          requestId: m.requestId,
+          screenshot,
+          previewUrl: URL.createObjectURL(screenshot),
+          evidence: m.evidence,
+          ...(m.target ? { target: m.target } : {}),
+          ...(captureWaits.current.has(m.requestId) ? { byAgent: true } : {}),
+        };
         if (appendNext.current) setShots((old) => [...old, shot].slice(-REPORT_SHOTS_MAX));
         else setCapture(shot);
         appendNext.current = false;
         setPending(null);
         setTab('report');
+        captureWaits.current.get(m.requestId)?.resolve(shot);
+        captureWaits.current.delete(m.requestId);
         return;
       }
       case 'pilot-reporter:capture-cancelled':
@@ -440,6 +549,9 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         setPending(null);
         appendNext.current = false;
         if (m.reason === 'error') notify(m.message ? `Capture failed: ${m.message}` : 'Capture failed.', 'error');
+        const why = m.reason === 'user' ? 'The person cancelled the screenshot.' : m.message || 'Capture failed.';
+        captureWaits.current.get(m.requestId)?.reject(new Error(why));
+        captureWaits.current.delete(m.requestId);
         return;
       case 'pilot-reporter:panel-opened':
         refresh();
@@ -537,8 +649,86 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         },
         prefs,
         setPref,
+        agentGrants: grants,
+        revokeAgentGrant: revokeGrant,
       }
     : null;
+
+  // ---- WebMCP tools (PILOT-1128, docs/prd/ui-reporter-webmcp.md): registered only where the browser has a model context ----
+  const live = useRef<ReporterToolDeps | null>(null);
+  live.current = status
+    ? {
+        snapshot: () => ({
+          connected,
+          client,
+          bucket,
+          status,
+          page,
+          build,
+          sdkVersion,
+          actorLabel: token?.actorLabel ?? null,
+          shots,
+          review,
+          coarse,
+          grants: liveGrants(grantsRef.current),
+        }),
+        capture: (mode, signal) =>
+          new Promise<Capture>((resolve, reject) => {
+            if (pendingRef.current) return reject(new Error('A screenshot is already being taken.'));
+            const id = requestCapture(mode, false, shots.length > 0);
+            const waits = captureWaits.current;
+            const timer = setTimeout(() => {
+              waits.get(id)?.reject(new Error('No screenshot came back in time.'));
+              waits.delete(id);
+              setPending((p) => (p === id ? null : p));
+            }, AGENT_CAPTURE_MS);
+            waits.set(id, {
+              resolve: (c) => {
+                clearTimeout(timer);
+                resolve(c);
+              },
+              reject: (e) => {
+                clearTimeout(timer);
+                reject(e);
+              },
+            });
+            signal?.addEventListener('abort', () => waits.get(id)?.reject(new Error('Cancelled.')), { once: true });
+          }),
+        approve,
+        autoRefused: reloadGrants,
+        filed: (key) => {
+          setCapture(null);
+          refresh();
+          select(key);
+          setTab('tickets');
+          notify(`Filed ${key}`, 'ok');
+        },
+        used: (ids) => {
+          for (const id of ids) removeShot(id);
+          refresh();
+        },
+      }
+    : null;
+  const toolDeps = useMemo<ReporterToolDeps>(
+    () => ({
+      snapshot: () => live.current!.snapshot(),
+      capture: (mode, signal) =>
+        live.current ? live.current.capture(mode, signal) : Promise.reject(new Error('The reporter is not ready.')),
+      approve: (a, signal) => (live.current ? live.current.approve(a, signal) : Promise.resolve({ kind: 'denied' as const })),
+      autoRefused: () => live.current?.autoRefused?.(),
+      filed: (key) => live.current?.filed(key),
+      used: (ids) => live.current?.used(ids),
+    }),
+    [],
+  );
+  useEffect(() => {
+    if (!status?.enabled) return;
+    const mc = modelContextOf(document, navigator);
+    if (!mc || !toolsAllowed(document)) return;
+    const ctl = new AbortController();
+    registerTools(mc, reporterTools(toolDeps, { connected }), ctl.signal);
+    return () => ctl.abort();
+  }, [status?.enabled, connected, toolDeps]);
 
   if (statusFailed) return <Quiet text="pilot is not reachable." />;
   if (!state || !status) return <div className="skeleton m-4 h-24 rounded-2xl" aria-busy="true" />;
@@ -567,6 +757,16 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
           onContext={connected ? () => setContextOpen('context') : null}
           divided={detail}
         />
+        {connected && indicatorText(grants) && (
+          // While any auto-approve is on (PILOT-1128): it says so, with one-tap Revoke (every grant of this sign-in and site).
+          <div role="status" className="flex min-h-11 shrink-0 items-center gap-2 bg-gold-soft pl-3 text-[13px]">
+            <Icon name="bot" className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 break-words">{indicatorText(grants)}</span>
+            <Btn tone="ghost" onClick={() => revokeGrant(null)} className="shrink-0 text-accent">
+              Revoke
+            </Btn>
+          </div>
+        )}
         {!connected ? (
           <Connect client={client} bucket={bucket} origin={origin} bucketName={status.bucketName} onConnected={onConnected} note={ended ? 'Session ended. Connect again.' : null} />
         ) : (
@@ -597,6 +797,12 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
           </>
         )}
         {contextOpen && connected && <ContextSheet section={contextOpen} onClose={() => setContextOpen(null)} />}
+        {/* Over everything the panel draws (the annotation editor and the viewer too): the person must see what they allow. */}
+        {ask && (
+          <div className="relative z-[90]">
+            <AgentAsk ask={ask.ask} onAnswer={ask.answer} caps={caps} />
+          </div>
+        )}
         {toast && (
           <div className="anim-in pointer-events-none fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-50" key={toast.id}>
             <Notice tone={toast.tone}>{toast.text}</Notice>
@@ -604,6 +810,64 @@ function PanelInner({ bucket, origin }: { bucket: string; origin: string }) {
         )}
       </div>
     </PanelContext.Provider>
+  );
+}
+
+/**
+ * A WebMCP tool asks before it sends anything (PILOT-1128): what it wants to do, in the agent's words shown as text, Deny focused first.
+ * Allow once (the default answer), or auto-approve this group of tools for this sign-in or for this site; nothing is pre-selected. Esc, the
+ * backdrop or no answer in two minutes is Deny.
+ */
+function AgentAsk({
+  ask,
+  onAnswer,
+  caps,
+}: {
+  ask: ToolAsk;
+  onAnswer: (a: AskAnswer) => void;
+  caps: { reports: number; actions: number } | null;
+}) {
+  const group = GROUP_LABEL[ask.group];
+  const cap = caps ? (ask.group === 'file' ? `${caps.reports} reports` : `${caps.actions} comments and screenshot additions`) : null;
+  return (
+    <Sheet
+      title={ask.action}
+      variant="bottom"
+      onClose={() => onAnswer('deny')}
+      footer={
+        <div className="flex flex-col gap-2 p-3">
+          <div className="flex gap-2">
+            <Btn autoFocus className="flex-1" onClick={() => onAnswer('deny')}>
+              Deny
+            </Btn>
+            <Btn tone="primary" className="flex-1" onClick={() => onAnswer('once')}>
+              Allow once
+            </Btn>
+          </div>
+          <p className="px-1 text-[12.5px] text-muted">
+            Or let the agent {group} without asking{cap ? ` (at most ${cap} an hour)` : ''}:
+          </p>
+          <div className="flex gap-2">
+            <Btn className="flex-1 text-[13px]" onClick={() => onAnswer('session')}>
+              Allow for this session
+            </Btn>
+            <Btn className="flex-1 text-[13px]" onClick={() => onAnswer('always')}>
+              Always on this site
+            </Btn>
+          </div>
+        </div>
+      }
+    >
+      {ask.note && <Notice tone="error">{ask.note}</Notice>}
+      <p className="text-[13px] text-muted">An AI agent in this browser asks to do this as you.</p>
+      <ul className="flex flex-col gap-1 text-[14px]">
+        {ask.lines.filter(Boolean).map((l, i) => (
+          <li key={i} className={`break-words whitespace-pre-line ${i === 0 ? 'font-semibold' : 'text-ink-soft'}`}>
+            {l}
+          </li>
+        ))}
+      </ul>
+    </Sheet>
   );
 }
 

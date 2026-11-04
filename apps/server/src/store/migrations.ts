@@ -4697,6 +4697,38 @@ export const MIGRATIONS: Migration[] = [
     },
   },
   {
+    version: 904,
+    name: 'UI reporter: WebMCP auto-approve grants per person, bucket and origin, and the calls made through them (PILOT-1128)',
+    up(db) {
+      // docs/prd/ui-reporter-webmcp.md "Auto-approve": a grant lets an agent's tools of one group skip the Allow sheet. `session` grants name
+      // the token they belong to (they end with it); `always` grants hold for the person, bucket and origin. Each auto-approved call is a row
+      // of reporter_agent_uses, which the hourly caps count. Additive only: two new tables.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS reporter_agent_grants (
+          id TEXT PRIMARY KEY,
+          bucket_key TEXT NOT NULL,
+          origin TEXT NOT NULL,
+          actor_user TEXT NOT NULL,
+          grp TEXT NOT NULL CHECK (grp IN ('file', 'attach', 'comment')),
+          scope TEXT NOT NULL CHECK (scope IN ('session', 'always')),
+          token_id TEXT,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_agent_grants_actor ON reporter_agent_grants (actor_user, bucket_key, origin);
+        CREATE TABLE IF NOT EXISTS reporter_agent_uses (
+          grant_id TEXT NOT NULL,
+          actor_user TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('report', 'action')),
+          tool TEXT NOT NULL,
+          at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS reporter_agent_uses_actor ON reporter_agent_uses (actor_user, kind, at);
+      `);
+    },
+  },
+  {
     version: 407,
     name: 'identity: the profile (username, avatar, what the person set themselves) and the device of each web sign-in',
     up(db) {

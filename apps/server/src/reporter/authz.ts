@@ -11,6 +11,8 @@ import { declarePolicies, declareToolPolicies } from '../authz/seam.js';
 const bucketPath = (verb: 'view' | 'manage') => ({ type: 'ticket_bucket' as const, verb, from: 'path' as const, param: 'key' });
 const CHAT =
   'Chat in the widget: only a session of the token\'s bucket (linked to one of its tickets, in its default workspace, or a direct-report target) that the token\'s person may view through the seam; any other id is the same 404.';
+const AGENT =
+  "WebMCP auto-approve grants (PILOT-1128): only the token's own person, bucket and origin (a session grant only for its token); another one is the same 404.";
 const TOKEN = 'The cprt_ token (256 bits, hashed at rest): one bucket, one origin, re-checked against the bucket switch and its sites on every call.';
 
 export const REPORTER_OWNER_POLICIES = {
@@ -68,6 +70,10 @@ export const REPORTER_WIDGET_POLICIES = {
   'POST /reporter/v1/sessions/:id/messages': { kind: 'bearer', why: `${TOKEN} ${CHAT} Operate on the session through the seam; rate limited per token; audited as reporter.chat_sent.` },
   'GET /reporter/v1/sessions/:id/stream': { kind: 'bearer', why: `${TOKEN} ${CHAT}` },
   'GET /reporter/v1/sessions/:id/blobs/:blobId': { kind: 'bearer', why: `${TOKEN} ${CHAT} Images only.` },
+  'GET /reporter/v1/agent-grants': { kind: 'bearer', why: `${TOKEN} ${AGENT}` },
+  'POST /reporter/v1/agent-grants': { kind: 'bearer', why: `${TOKEN} ${AGENT} Audited as reporter.agent_grant_made.` },
+  'DELETE /reporter/v1/agent-grants': { kind: 'bearer', why: `${TOKEN} ${AGENT} Audited as reporter.agent_grant_revoked.` },
+  'DELETE /reporter/v1/agent-grants/:id': { kind: 'bearer', why: `${TOKEN} ${AGENT} Audited as reporter.agent_grant_revoked.` },
   'GET /reporter/v1/knowledge': { kind: 'bearer', why: TOKEN },
   'GET /reporter/v1/knowledge/note': { kind: 'bearer', why: TOKEN },
 } satisfies RoutePolicies;
