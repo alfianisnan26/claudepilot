@@ -1,0 +1,33 @@
+# Builds the cp-bridge image IN the cluster (kaniko, as portal-job.yaml) and pushes it to the internal registry as
+# registry.int.isnan.me/cp-bridge:<commit sha> (T-3699). No Secret: the Dockerfile takes the committed agent bundle, nothing private.
+#   scripts/k3s-build.sh bridge <commit sha> <commit sha>
+# In isnan-claudepilot this Job name must first pass the admission policy's name rule (deploy/k3s/workspace-jobs-rbac.yaml, the
+# `build-(...)` list; a coordinator change, PILOT-1141); until then build it in a rig: BUILD_NAMESPACE=dev-rig-<name>.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: claudepilot-build-bridge
+  namespace: isnan-claudepilot
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: k3s-node2
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - --context=git://github.com/alfianisnan26/claudepilot.git#refs/heads/main#COMMIT
+            - --dockerfile=deploy/k3s-build/bridge.Dockerfile
+            - --destination=registry.isnan-registry.svc.cluster.local:5000/cp-bridge:TAG
+            - --insecure
+            - --cache=false
+            - --snapshot-mode=redo
+            - --push-retry=3
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
