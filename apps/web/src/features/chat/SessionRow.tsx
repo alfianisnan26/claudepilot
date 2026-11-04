@@ -447,6 +447,7 @@ export function SessionRow({
               ) : (
                 <InfoTip label="Bypass" icon={BYPASS_DOT}>
                   Bypass: this agent runs every tool without asking you first.
+                  {s.standingBypass ? ' Standing policy (owner): the portal puts it back when it is off.' : ''}
                 </InfoTip>
               )}
             </span>

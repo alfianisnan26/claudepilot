@@ -72,6 +72,11 @@ export interface KeepGoingChatPort {
    * window), allowing its open tool cards but AskUserQuestion and ExitPlanMode. True when the chat is in Bypass after.
    */
   restoreBypass?(id: string): Promise<boolean>;
+  /**
+   * PILOT-1129: the workspace's standing Bypass policy covers this chat (env PORTAL_BYPASS_STANDING_WORKSPACES, the global switch on): out of
+   * Bypass it is put back whenever it is seen, with no 24 hour window, and so are its workers.
+   */
+  standingFor?(id: string): boolean;
   /** T-3189: the sessions this chat started (its workers), any state. Absent: its workers are unknown, so it is never taken as drained. */
   children?(id: string): ChatSession[];
 }
@@ -188,12 +193,52 @@ export class KeepGoingEngine {
       } catch (e) {
         console.error(`[keepgoing] a look at a chat failed: ${(e as Error).message}`);
       }
+      try {
+        await this.healStandingWorkers(p.sessionId, p.ownerId);
+      } catch (e) {
+        console.error(`[keepgoing] putting a worker back in Bypass failed: ${(e as Error).message}`);
+      }
     }
     if (this.#dirty) {
       this.#dirty = false;
       this.#publish();
     }
     return rows.length;
+  }
+
+  /**
+   * PILOT-1129: the live workers (and theirs, three levels) of a chat Keep going watches, in a workspace under the standing Bypass policy, that
+   * are out of Bypass and not mid-turn: each is put back through the controller's standing path, on the record. Returns how many came back.
+   */
+  async healStandingWorkers(sessionId: string, ownerId: string, depth = 0): Promise<number> {
+    const chat = this.#d.chat;
+    if (depth > 2 || !chat.children || !chat.restoreBypass || !chat.standingFor) return 0;
+    let back = 0;
+    for (const w of chat.children(sessionId)) {
+      if (w.state === 'ended') continue;
+      if (w.mode !== 'bypassPermissions' && w.state !== 'working' && w.state !== 'waiting' && chat.standingFor(w.id)) {
+        let ok = false;
+        try {
+          ok = (await chat.restoreBypass(w.id)) === true;
+        } catch {
+          ok = false;
+        }
+        if (ok) {
+          back++;
+          this.#trail(
+            sessionId,
+            ownerId,
+            'rebypassed',
+            null,
+            `Worker ${w.id.slice(0, 8)} out of Bypass: put back by the standing policy (owner).`,
+            { worker: w.id },
+          );
+          this.#changed(sessionId);
+        }
+      }
+      back += await this.healStandingWorkers(w.id, ownerId, depth + 1);
+    }
+    return back;
   }
 
   #publish(): void {
@@ -254,6 +299,7 @@ export class KeepGoingEngine {
       lastNudgeAt: this.#d.store.lastAt(s.id, 'nudged'),
       standing,
       ...(!ended && s.bypassCapable && this.#d.chat.restoreBypass ? { bypassSeenAt: this.#bypassSeenAt(s.id) } : {}),
+      ...(!ended && this.#d.chat.restoreBypass && this.#d.chat.standingFor?.(s.id) === true ? { standingBypass: true } : {}),
       ...(!ended ? { drained: () => this.#drained(s) } : {}),
       ...(ended
         ? {
@@ -353,7 +399,17 @@ export class KeepGoingEngine {
         } catch (e) {
           this.#failed(s, ownerId, 'Bypass could not be put back', e);
         }
-        if (back) this.#trail(s.id, ownerId, 'rebypassed', null, 'Out of Bypass, in it within 24 hours: put back in Bypass; its open tool cards allowed.');
+        const standing = this.#d.chat.standingFor?.(s.id) === true;
+        if (back)
+          this.#trail(
+            s.id,
+            ownerId,
+            'rebypassed',
+            null,
+            standing
+              ? 'Out of Bypass: put back by the standing policy (owner); its open tool cards allowed.'
+              : 'Out of Bypass, in it within 24 hours: put back in Bypass; its open tool cards allowed.',
+          );
         else await this.#report(s, ownerId, 'bypass', iso(now));
         return this.#changed(s.id);
       }

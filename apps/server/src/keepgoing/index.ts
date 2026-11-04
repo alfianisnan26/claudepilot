@@ -32,6 +32,8 @@ interface ControllerLike {
   /** PILOT-996: when it was last in Bypass, and the gated put-back (the controller's `bypassSeenAt`, `restoreBypass`). */
   bypassSeenAt?: (id: string) => string | null;
   restoreBypass?: (id: string) => Promise<boolean>;
+  /** PILOT-1129: the standing Bypass policy covers the chat (the controller's `standingFor`). */
+  standingFor?: (id: string) => boolean;
   /** T-3189: the sessions a session started (its workers). */
   children?: (id: string) => ChatSession[];
 }
@@ -67,6 +69,7 @@ export function keepGoingChatPort(raw: unknown): (KeepGoingChatPort & { controll
       ? { bypassSeenAt: (id: string) => ctl.bypassSeenAt!(id), restoreBypass: (id: string) => ctl.restoreBypass!(id) }
       : {}),
     ...(typeof ctl.children === 'function' ? { children: (id: string) => ctl.children!(id) } : {}),
+    ...(typeof ctl.standingFor === 'function' ? { standingFor: (id: string) => ctl.standingFor!(id) } : {}),
   };
 }
 

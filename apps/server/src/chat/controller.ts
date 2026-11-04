@@ -208,6 +208,7 @@ import {
 } from './integrity.js';
 import { crewReplyUrgent, crewWakeMs, crewWindowMs, wakeMinutes } from './crewReport.js';
 import { DAY_MS, readRecoverConfig, recoverContinuation, recoverRefusal, type RecoverBy } from './recover.js';
+import { STANDING_BYPASS_DECIDER, standingBypass } from './standingBypass.js';
 
 /** T-102: the areas a hint may name (anything else a reader returns is left out). */
 const CONFIG_CHANGES: ReadonlySet<string> = new Set<ChatConfigChange>([
@@ -2381,6 +2382,9 @@ export class ChatController {
     // "in Bypass now" is the parent's live mode (`bypassNow`: its process, the mode confirmed for it, its newest record), never the row alone.
     let inherited = false;
     if (opts.inheritBypass === true && parentId && !opts.manager && this.bypassNow(parentId)) bypassCapable = inherited = true;
+    // PILOT-1129: under the workspace's standing Bypass policy every session starts bypass-capable (a person's opt-in is the owner's list).
+    let standingCapable = false;
+    if (!bypassCapable && !opts.manager && this.#bypassAllowed() && standingBypass.applies(workspaceId)) bypassCapable = standingCapable = true;
     // T-349: asked again after the last await, so nothing runs between this answer and the insert below.
     if (parentId && opts.liveParent !== undefined) this.#requireLiveParent(parentId, workspaceId, opts.liveParent);
     // T-490 (D-63): a worker's reason for running above its role's model, redacted and capped once, for its row and its audit row alike.
@@ -2462,7 +2466,11 @@ export class ChatController {
         sessionId: id,
         workspaceId,
         actor,
-        detail: inherited ? { how: 'inherit', parent: parentId } : { how: 'start' },
+        detail: inherited
+          ? { how: 'inherit', parent: parentId }
+          : standingCapable
+            ? { how: 'standing', decidedBy: STANDING_BYPASS_DECIDER }
+            : { how: 'start' },
       });
     if (full) return this.#queueStart(id, installed, full);
     // Its slot counts as running until the launch settles (T-417 review: else a start waiting in line takes the same room).
@@ -3776,7 +3784,26 @@ export class ChatController {
       );
     if (this.reauth?.fresh(req.sessionToken) !== true)
       refuse('no_reauth', new AppError(REAUTH_REQUIRED, 'Enter the server code again to turn this on.', { status: 403 }));
-    await this.#live(sessionId, true, true, req.actor); // resumes it when it slept (T-723: a refusal for memory names who asked); the policy and the flag are checked again at that launch
+    // PILOT-1000: entered from an approval card, the person's Allow is the acknowledgement; the row names the request.
+    return this.#switchOnBypass(sessionId, req.actor, 'ui', 'Bypass on: Claude runs every tool without asking.', {
+      claude: session.claudeName,
+      policy: 'allowed',
+      capable: true,
+      acknowledged: true,
+      reauth: 'fresh',
+      ...(req.via ? { via: 'approval', approvalId: req.via.approvalId } : {}),
+    });
+  }
+
+  /** The switch itself, once every gate held: the live process, the one-request grant, `set_permission_mode`, the row, the High audit. */
+  async #switchOnBypass(
+    sessionId: string,
+    actor: string | undefined,
+    auditActor: string,
+    note: string,
+    detail: Record<string, unknown>,
+  ): Promise<ChatSession> {
+    await this.#live(sessionId, true, true, actor); // resumes it when it slept (T-723: a refusal for memory names who asked); the policy and the flag are checked again at that launch
     this.#bypassGrant.add(sessionId);
     try {
       const reply = await this.#request(sessionId, 'set_permission_mode', { mode: 'bypassPermissions' });
@@ -3792,25 +3819,70 @@ export class ChatController {
     }
     const row = this.#chat.row(sessionId)!;
     this.#chat.patchSession(sessionId, { mode: 'bypassPermissions' });
-    this.#note(sessionId, 'Bypass on: Claude runs every tool without asking.');
-    this.#chat.addAudit({
-      severity: 'high',
-      kind: 'bypass.entered',
-      sessionId,
-      workspaceId: row.workspace_id,
-      actor: 'ui',
-      // PILOT-1000: entered from an approval card, the person's Allow is the acknowledgement; the row names the request.
-      detail: {
-        claude: session.claudeName,
-        policy: 'allowed',
-        capable: true,
-        acknowledged: true,
-        reauth: 'fresh',
-        ...(req.via ? { via: 'approval', approvalId: req.via.approvalId } : {}),
-      },
-    });
+    this.#note(sessionId, note);
+    this.#chat.addAudit({ severity: 'high', kind: 'bypass.entered', sessionId, workspaceId: row.workspace_id, actor: auditActor, detail });
     this.#emitSession(sessionId);
     return this.#chat.get(sessionId)!;
+  }
+
+  /**
+   * PILOT-1129: the workspace's standing Bypass policy covers this session: the env list names its workspace, the workspace does not read as
+   * production or protected, and the global Bypass switch is on. Never for a manager session.
+   */
+  standingWorkspace(workspaceId: string): boolean {
+    return this.#bypassAllowed() && standingBypass.applies(workspaceId);
+  }
+
+  standingFor(rawId: string): boolean {
+    try {
+      const row = this.#chat.row(this.#chat.resolveId(rawId));
+      if (!row || (row as { kind?: string }).kind === 'manager') return false;
+      return this.#bypassAllowed() && standingBypass.applies(row.workspace_id);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * PILOT-1129: Bypass on by the standing policy (owner), no person: a session.bypass request the portal answers, Keep going's put-back, an
+   * MCP session_start in Bypass. The policy and the standing list must hold now; a session not started bypass-capable is made so first (a
+   * restart with the flag), unless a turn runs (then it is refused with why, and the next look tries again). Audited `bypass.entered` with
+   * `policy: standing` and who decided.
+   */
+  async enterBypassStanding(rawId: string, req: { actor?: string; via?: { approvalId: string } } = {}): Promise<ChatSession> {
+    const sessionId = this.#chat.resolveId(rawId);
+    let session = this.#require(sessionId);
+    this.#notMoving(sessionId);
+    if (!this.#bypassAllowed()) {
+      this.#refuseBypass(sessionId, 'policy', 'standing');
+      throw new AppError(BYPASS_BLOCKED, 'Bypass is blocked by policy.', { status: 403 });
+    }
+    if (session.state === 'ended') throw new AppError('CONFLICT', 'This session has ended.');
+    if (!this.standingFor(sessionId))
+      throw new AppError('FORBIDDEN', 'The standing Bypass policy does not cover this workspace.', { status: 403 });
+    if (session.mode === 'bypassPermissions') return session;
+    if (!session.bypassCapable) {
+      if (session.state === 'working' || session.state === 'waiting')
+        throw new AppError(
+          BYPASS_NOT_CAPABLE,
+          'This session isn’t bypass-capable yet and a turn runs: it is made capable at its next idle look.',
+          { status: 409 },
+        );
+      session = await this.allowBypass(sessionId, { actor: req.actor, how: 'standing' });
+    }
+    return this.#switchOnBypass(
+      sessionId,
+      req.actor,
+      'portal',
+      'Bypass on by the standing policy (owner): Claude runs every tool without asking.',
+      {
+        claude: session.claudeName,
+        policy: 'standing',
+        decidedBy: STANDING_BYPASS_DECIDER,
+        capable: true,
+        ...(req.via ? { via: 'approval', approvalId: req.via.approvalId } : {}),
+      },
+    );
   }
 
   /**
@@ -3818,7 +3890,7 @@ export class ChatController {
    * a turn boundary, with the flag. The policy must allow it; it doesn't turn Bypass on, and a session that is
    * working or waiting has to finish first.
    */
-  async allowBypass(rawId: string, opts: { actor?: string } = {}): Promise<ChatSession> {
+  async allowBypass(rawId: string, opts: { actor?: string; how?: 'restart' | 'standing' } = {}): Promise<ChatSession> {
     const sessionId = this.#chat.resolveId(rawId);
     const session = this.#require(sessionId);
     this.#notMoving(sessionId);
@@ -3854,8 +3926,8 @@ export class ChatController {
         kind: 'bypass.capable',
         sessionId,
         workspaceId: session.workspaceId,
-        actor: 'ui',
-        detail: { how: 'restart' },
+        actor: opts.how === 'standing' ? 'portal' : 'ui',
+        detail: opts.how === 'standing' ? { how: 'standing', decidedBy: STANDING_BYPASS_DECIDER } : { how: 'restart' },
       });
     }
     await this.#live(sessionId, true, true, opts.actor);
@@ -4316,7 +4388,7 @@ export class ChatController {
    * be a lead, and the person's own entry for this chat must be on record saying the acknowledgement was ticked and the server code was
    * fresh THEN (no new code is asked at the wake). Any other wake keeps FR20/FR38: off after sleep.
    */
-  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake' | 'lost' | 'keepgoing' | 'inherit'): Promise<void> {
+  async #keepBypass(sessionId: string, how: 'move' | 'restart' | 'recover' | 'wake' | 'lost' | 'keepgoing' | 'inherit' | 'standing'): Promise<void> {
     const after =
       how === 'move'
         ? 'after the move'
@@ -4330,7 +4402,9 @@ export class ChatController {
                 ? 'by Keep going'
                 : how === 'inherit'
                   ? 'from the parent'
-                  : 'after the recovery';
+                  : how === 'standing'
+                    ? 'by the standing policy'
+                    : 'after the recovery';
     // The lead's own paths: the same extra gates (T-417, T-416 S2; PILOT-996: Keep going's re-entry within 24 hours).
     // A worker in an inherited Bypass is not asked the lead's gates on a wake: its parent in Bypass now is its gate (below).
     const lead = (how === 'wake' || how === 'lost' || how === 'keepgoing') && !this.#inheritedBypass(sessionId);
@@ -4371,7 +4445,8 @@ export class ChatController {
         );
       // PILOT-996: a worker gets Bypass only from a parent that is in it now (never wider than its parent). PILOT-997 review 42957: on every
       // way back too (a move, a restart, a recovery, Keep going) for a session whose capability came from its parent, not only at the inherit.
-      if (how === 'inherit' || this.#inheritedBypass(sessionId)) {
+      // PILOT-1129: the standing policy is the owner's own decision for the whole workspace: no parent is asked for it.
+      if (how !== 'standing' && (how === 'inherit' || this.#inheritedBypass(sessionId))) {
         let parent = row.parent_id ? this.#chat.row(row.parent_id) : null;
         // Its parent restarting in Bypass at the same time reads the start mode until its own keep is done (2026-11-01: an MCP change
         // restarted a Konfersi lead and its workers together and the workers dropped to default): wait for that, then ask.
@@ -4472,6 +4547,15 @@ export class ChatController {
     const id = this.#chat.resolveId(rawId);
     const session = this.#require(id);
     if (session.mode === 'bypassPermissions') return true;
+    // PILOT-1129: under the standing policy, whenever it is off (no 24 hour window, no lead gates), made capable first when it was not.
+    if (session.state !== 'ended' && this.standingFor(id)) {
+      if (!session.bypassCapable) {
+        if (session.state === 'working' || session.state === 'waiting') return false;
+        await this.allowBypass(id, { actor: 'portal:standing', how: 'standing' });
+      }
+      await this.#keepBypass(id, 'standing');
+      return this.#chat.row(id)?.mode === 'bypassPermissions';
+    }
     if (session.state === 'ended' || !session.bypassCapable) return false;
     const seen = this.bypassSeenAt(id);
     if (!seen || Date.now() - Date.parse(seen) > KEEPGOING_BYPASS_WINDOW_MS) return false;
@@ -4487,6 +4571,12 @@ export class ChatController {
     const id = this.#chat.resolveId(rawId);
     const session = this.#require(id);
     if (session.mode === 'bypassPermissions') return true;
+    // PILOT-1129: under the standing policy a worker of a parent in Bypass enters it by that policy (made capable at its create).
+    const parent = session.parentId ? this.#chat.row(session.parentId) : null;
+    if (session.state !== 'ended' && parent?.mode === 'bypassPermissions' && this.standingFor(id)) {
+      await this.#keepBypass(id, 'standing');
+      return this.#chat.row(id)?.mode === 'bypassPermissions';
+    }
     if (!session.parentId || !session.bypassCapable) return false;
     await this.#keepBypass(id, 'inherit');
     return this.#chat.row(id)?.mode === 'bypassPermissions';

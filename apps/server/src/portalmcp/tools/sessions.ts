@@ -268,14 +268,19 @@ export function registerSessionTools(
       agent: z.string().regex(CHAT_AGENT_NAME).optional().describe('The agent it runs as, .claude/agents/<agent>.md in its folder (e.g. implementer): its prompt, its tools and its model, at every start of its process.'),
       parent: z.string().max(80).optional().describe('A live session of this workspace it starts as a worker of (session_family, crew reports).'),
       report: z.enum(WORKER_REPORTS).optional().describe('With parent: what the parent hears of it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
-      mode: MCP_MODE_INPUT.optional().describe('Its permission mode, applied before its first prompt: plan, default, acceptEdits, dontAsk or auto. bypassPermissions is refused here (a session started over MCP is not bypass-capable).'),
+      mode: MCP_MODE_INPUT.optional().describe(
+        'Its permission mode, applied before its first prompt: plan, default, acceptEdits, dontAsk or auto. bypassPermissions is refused here (a session started over MCP is not bypass-capable), except in a workspace under the standing Bypass policy (PORTAL_BYPASS_STANDING_WORKSPACES), where it starts in Bypass.',
+      ),
     }),
     async handler(ctx, args) {
       assertCanChange(store, 'workspace');
-      if (args.mode === 'bypassPermissions') throw new PortalToolError('FORBIDDEN', approvals ? MCP_BYPASS_AT_START : MCP_BYPASS_REFUSED);
-      const mode = mcpMode(args.mode);
       if (args.report && !args.parent) throw new AppError('VALIDATION_FAILED', 'report needs a parent.', { details: { report: 'Only with parent.' } });
       const workspaceId = await workspaceFor(args.workspace_id, ctx);
+      // PILOT-1129: in a workspace under the standing Bypass policy a session may start in Bypass (it starts bypass-capable there).
+      const standingStart = args.mode === 'bypassPermissions' && chat.standingWorkspace?.(workspaceId) === true;
+      if (args.mode === 'bypassPermissions' && !standingStart)
+        throw new PortalToolError('FORBIDDEN', approvals ? MCP_BYPASS_AT_START : MCP_BYPASS_REFUSED);
+      const mode = standingStart ? undefined : mcpMode(args.mode);
       const parentId = args.parent ? leadFor(args.parent, workspaceId, ctx) : null;
       const s = await chat.create(
         { workspaceId, cwd: args.folder, title: args.title, claudeId: args.claude_id, ticketId: args.ticket_id, ...(args.agent ? { agent: args.agent } : {}) },
@@ -283,6 +288,14 @@ export function registerSessionTools(
         // T-349: the parent must still be live when the row is written (liveParent), with the same not found as leadFor's.
         { actor: ctx.actor, ...(parentId ? { parentId, liveParent: NO_PARENT, ...(args.report ? { report: args.report } : {}) } : {}) },
       );
+      if (standingStart) {
+        try {
+          await chat.enterBypassStanding(s.id, { actor: ctx.actor });
+        } catch (e) {
+          await chat.end(s.id).catch(() => undefined);
+          throw e;
+        }
+      }
       // PILOT-996: the mode asked applies before the first prompt; refused (Auto not allowed for it), the session is ended unprompted.
       if (mode) {
         try {
@@ -324,8 +337,13 @@ export function registerSessionTools(
     const requester = ctx.isAgent && ctx.sessionId ? { sessionId: ctx.sessionId, workspaceId: ctx.workspaceId, actor: actorOfPrincipal(ctx.principal) } : null;
     const a = approvals!.create({ kind: 'session.bypass', payload: { sessionId: target.id }, reason: args.reason ?? `Asked with session_configure by ${ctx.actor}.` }, requester);
     ctx.affected(`session:${target.id}`, `approval:${a.id}`);
+    // PILOT-1129: under the workspace's standing Bypass policy the portal allows the card itself, at once; the outcome comes as a message.
+    // A fake chat of a test may not have it: then nothing is standing.
+    const standing = chat.standingFor?.(target.id) === true;
     return {
-      summary: `Bypass for ${target.id} waits for a person’s approval (${a.id}, until ${a.expiresAt}). Nothing changed yet.`,
+      summary: standing
+        ? `Bypass for ${target.id} is being turned on by the standing policy (owner) (${a.id}); the outcome follows as a message.`
+        : `Bypass for ${target.id} waits for a person’s approval (${a.id}, until ${a.expiresAt}). Nothing changed yet.`,
       approval: { id: a.id, kind: a.kind, status: a.status, expires_at: a.expiresAt, page: approvalPath(a.id) },
       session: sessionBrief(target, ctx),
     };

@@ -10,6 +10,7 @@
 import { defineErrorCodes } from '@isnanme/core';
 import { BYPASS_BLOCKED, BYPASS_NOT_CAPABLE, BYPASS_NOT_KEPT, REAUTH_REQUIRED } from '@portal/contracts';
 import { defineSetting } from '../settings/registry.js';
+import { STANDING_BYPASS_ENV, standingBypass } from './standingBypass.js';
 
 declare module '@isnanme/core' {
   interface ErrorCodeRegistry {
@@ -60,6 +61,24 @@ defineSetting({
   label: 'Auto for agents',
   help: 'Lets sessions no person started (workers, triggers, tickets, Portal MCP) run in Auto, where Claude Code’s classifier approves routine actions and blocks risky ones. New sessions without a person start in Auto, and so do workers (unless their parent is in Bypass); a worker may be given Auto whatever its parent’s mode, any other mode never wider than its parent. Off: Auto only for your own sessions and the workers of an Auto or Bypass parent.',
   protective: false,
+});
+
+/**
+ * PILOT-1129: the standing Bypass policy (chat/standingBypass.ts), shown read-only in Settings: the workspaces the deploy manifest lists
+ * (env PORTAL_BYPASS_STANDING_WORKSPACES). Changed only there, so the decision stays with the owner's manifest.
+ */
+export const STANDING_BYPASS_SETTING = 'sessions.standingBypass';
+
+defineSetting({
+  key: STANDING_BYPASS_SETTING,
+  type: 'string',
+  default: '',
+  scope: 'global',
+  group: 'sessions',
+  order: 12,
+  label: 'Standing Bypass',
+  help: 'Workspaces where the portal itself allows Bypass (no person’s click), puts it back whenever it is off, and starts every session bypass-capable. Set in the deploy manifest (PORTAL_BYPASS_STANDING_WORKSPACES), never here; never for a workspace that reads as production or is marked [protected]; Bypass in chat must be on. Empty: off.',
+  fixed: { value: () => standingBypass.ids.join(', '), by: STANDING_BYPASS_ENV },
 });
 
 /** What is true of a workspace, for the confirmation: only what the portal knows is claimed. */
