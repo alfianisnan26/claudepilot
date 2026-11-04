@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds an image IN the cluster (kaniko, linux/amd64) and pushes it to registry.int.isnan.me (pushing from outside fails: slow uplink,
 # a 60 s request cut, Cloudflare's 100 MB cap). The source is this repository on GitHub, so the commit must be pushed first.
-#   scripts/k3s-build.sh portal|workspace|workspace-dev|browser <tag> [commit]      commit: default HEAD; branch: BUILD_BRANCH (default integration)
+#   scripts/k3s-build.sh portal|workspace|workspace-dev|browser|bridge <tag> [commit]      commit: default HEAD; branch: BUILD_BRANCH (default integration)
 #   BUILD_NAMESPACE=dev-rig-<name>: run the job in a rig namespace instead (scripts/dev-rig.sh), for a build from a dev branch; not the portal
 #   (its job needs the token Secret)
 # The portal build needs the GitHub Packages token for the private @isnanme/ui package: a Secret that lives for the build only, deleted on exit,
 # and the log is searched for the token before the script says it is clean.
 set -eu
-what=${1:?portal|workspace|workspace-dev|browser}; tag=${2:?image tag, for example 2026.10.13-1 (workspace: <claude version>-<date>-<n>)}
+what=${1:?portal|workspace|workspace-dev|browser|bridge}; tag=${2:?image tag, for example 2026.10.13-1 (workspace: <claude version>-<date>-<n>)}
 commit=${3:-$(git rev-parse HEAD)}; branch=${BUILD_BRANCH:-integration}
 ns=${BUILD_NAMESPACE:-isnan-claudepilot}; job=claudepilot-build-$what; file=deploy/k3s-build/$what-job.yaml
 [ -f "$file" ] || { echo "no job file $file" >&2; exit 2; }
@@ -35,5 +35,5 @@ if [ "$what" = portal ]; then
   t=$(gh auth token); n=$(kubectl -n "$ns" logs "job/$job" | grep -c -F -- "$t" || true); unset t
   [ "$n" = 0 ] && echo "token in the build log: none" || echo "WARNING: the token appears $n times in the build log" >&2
 fi
-repo=claudepilot/$(case "$what" in portal) echo portal ;; browser) echo browser ;; *) echo workspace ;; esac)
+repo=$(case "$what" in portal) echo claudepilot/portal ;; browser) echo claudepilot/browser ;; bridge) echo cp-bridge ;; *) echo claudepilot/workspace ;; esac)
 echo "pushed: registry.int.isnan.me/$repo:$tag"; curl -fsS "https://registry.int.isnan.me/v2/$repo/tags/list" | head -c 300; echo

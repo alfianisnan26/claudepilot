@@ -1,0 +1,81 @@
+# cp-bridge (epic PILOT-1131, D4; T-3699): the Connect agent in kube mode, dialling OUT to the Cloudflare-hosted core. Stateless: its
+# identity lives in a Secret of the namespace it serves (rbac.yaml), so a restarted pod reconnects without enrolling again. One replica:
+# two agents with one identity would fight over the tunnel. No Service and no Ingress: nothing dials in.
+#
+# Set by the coordinator before the first apply (PILOT-1141, FOR THE COORDINATOR):
+#   - the image tag: the commit of a bridge-job.yaml build (registry.int.isnan.me/cp-bridge:<sha>);
+#   - PILOT_URL: the cp-next Worker's https origin (it is a placeholder that fails closed until then);
+#   - the Secret `cp-bridge-enroll` (key `token`) in isnan-cp-bridge, from an enrollment made on the cp-next core. Read only by the
+#     kubelet for the env below; delete it after the first connect (the identity Secret takes over). Never in git.
+#   - optionally the Secret `cp-bridge-headers` (key `headers`: `Name: value` lines, e.g. a Cloudflare Access service token).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cp-bridge
+  namespace: isnan-cp-bridge
+  labels:
+    app.kubernetes.io/name: cp-bridge
+    app.kubernetes.io/part-of: cp-bridge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cp-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cp-bridge
+        app.kubernetes.io/part-of: cp-bridge
+    spec:
+      serviceAccountName: cp-bridge
+      # The account's token is what the agent forwards allowed calls with; the account itself mounts none by default (rbac.yaml).
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bridge
+          image: registry.int.isnan.me/cp-bridge:COMMIT
+          args: ["run"]
+          env:
+            - name: PILOT_URL
+              value: "https://cp-next.invalid"
+            - name: PILOT_MODE
+              value: "kubernetes"
+            - name: PILOT_DATA_DIR
+              value: "/var/lib/claudepilot-agent"
+            # One namespace per agent until PILOT-1162 (G1); the identity Secret lives here too.
+            - name: PILOT_KUBE_NAMESPACE
+              value: "isnan-pilot-ws-isnan"
+            - name: PILOT_IDENTITY_SECRET
+              value: "claudepilot-agent-identity"
+            - name: PILOT_NODE_NAME
+              value: "cp-bridge"
+            - name: PILOT_ENROLL_TOKEN
+              valueFrom:
+                secretKeyRef: {name: cp-bridge-enroll, key: token, optional: true}
+            - name: PILOT_HEADERS
+              valueFrom:
+                secretKeyRef: {name: cp-bridge-headers, key: headers, optional: true}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/claudepilot-agent}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: state, emptyDir: {}}
+        - {name: tmp, emptyDir: {}}

@@ -1,0 +1,11 @@
+# The bridge's own namespace (T-3699). Cluster-scoped: the coordinator applies it (FOR THE COORDINATOR on PILOT-1141), never an agent.
+# Pod security `restricted`: the bridge runs as nobody, read-only, no capabilities, RuntimeDefault seccomp (bridge.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: isnan-cp-bridge
+  labels:
+    app.kubernetes.io/part-of: cp-bridge
+    pod-security.kubernetes.io/enforce: restricted
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
