@@ -89,6 +89,7 @@ import { ReporterService } from './reporter/service.js';
 import { PoolService } from './pools/service.js';
 import { createApp, PLAIN_NAME } from './app.js';
 import { bootListening, bootMark } from './bootTiming.js';
+import { cloudflareTrustWarnings } from './clientAddress.js';
 import { config } from './config.js';
 import { JsonFile } from './jsonFile.js';
 import { Portal } from './portal.js';
@@ -415,6 +416,9 @@ const connect = createConnect({
   notify: () => connectChanged(),
 });
 wireConnect({ connect, workspaces, chat: chatController, reconciler });
+// PILOT-1179: CF-Connecting-IP is believed only from a listed hop; with none listed every visitor through the tunnel shares one address
+// (one key for every per-address limit). Said once at boot, never the list itself beyond what was dropped (a typo, not a secret).
+for (const line of cloudflareTrustWarnings(config)) console.warn(`[portal] ${line}`);
 connect.start();
 reconciler.start();
 // After the manager's hooks are set (Connect's `wireConnect` sets `settled`, which resume waits on for enrolled targets: FR38).

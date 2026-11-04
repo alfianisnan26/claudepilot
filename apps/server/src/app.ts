@@ -199,8 +199,12 @@ const clientKey = (c: Context<Env>) => visitorAddress(c);
 /**
  * The server-code sign-in lock (PILOT-1168), per visitor, in `auth_throttle` so a restart does not lift it: `loginLimit.attempts` wrong
  * codes in a day lock the address for `loginLimit.windowMs`, and every further wrong code doubles the lock up to a day (10 -> 10 min,
- * 11 -> 20 min, ... 18 and on -> 24 h). A right code starts the address over. The window outlasts the longest lock, so waiting a lock out
- * does not reset the count. Kept under the `ip` scope (no migration: the table's scope list is fixed) with a `code:` key, apart from the
+ * 11 -> 20 min, ... 18 and on -> 24 h). A right code starts the address over. Every lock restarts the 24 h window, so a lock shorter
+ * than a day does not reset the count; the 24 h lock at the cap does (PILOT-1179): once it has been waited out the window has passed too,
+ * and the count starts over. A patient guesser on one address therefore gets 18 tries per cycle of about 66 h (17 tries and 42.5 h of
+ * growing locks, the 18th try, then the 24 h lock): about 6.5 a day on average, at most 17 in the cycle's first day. A 48 h window was not taken: the
+ * identity sweep deletes a row a day after its last write (Throttle.sweep), so it would end the same way. CODE_GLOBAL counts guesses
+ * across all addresses. Kept under the `ip` scope (no migration: the table's scope list is fixed) with a `code:` key, apart from the
  * email lockout's per-address keys (bare fingerprints).
  */
 export const CODE_LOCKOUT: LockoutRule = {
@@ -210,6 +214,13 @@ export const CODE_LOCKOUT: LockoutRule = {
   maxLockMs: 24 * 60 * 60 * 1000,
 };
 export const codeLockKey = (address: string) => `code:${fingerprint(address || 'unknown')}`;
+/**
+ * PILOT-1179: wrong server codes from ALL addresses together, per hour (key `code:*`, which no fingerprint can be). Many addresses each
+ * staying under their own lock are a spread guess. At the ceiling it writes one `portal.signin_code_guesses` audit row and sends one
+ * security alert per window; it refuses NOBODY (decision on PILOT-1179: a global lock would let any stranger lock the owner out of the
+ * code sign-in, silently, with no address to tell it by). The per-address lock above still applies to each guesser.
+ */
+export const CODE_GLOBAL = { key: 'code:*', ceiling: 50, windowMs: 60 * 60 * 1000 } as const;
 
 async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   try {
@@ -548,6 +559,15 @@ export function createApp(
         token = portal.signIn(typeof code === 'string' ? code : '', { device: deviceLabel(c.req.header('user-agent')), method: 'code' });
       } catch (e) {
         if (isAppError(e) && e.is('UNAUTHORIZED')) {
+          // Counted across all addresses; reported once per window when it reaches the ceiling, never refused (CODE_GLOBAL).
+          if (users.throttle.tally('ip', CODE_GLOBAL.key, CODE_GLOBAL.windowMs) === CODE_GLOBAL.ceiling) {
+            audit('portal.signin_code_guesses', null, { method: 'code', wrongCodes: CODE_GLOBAL.ceiling, windowS: CODE_GLOBAL.windowMs / 1000 }, 'medium');
+            platform?.bus.emit({
+              kind: 'security',
+              subject: { type: 'portal', id: 'signin-code-guesses' },
+              facts: { what: 'Server code guessed', wrongCodes: CODE_GLOBAL.ceiling, windowMin: CODE_GLOBAL.windowMs / 60_000 },
+            });
+          }
           const lockMs = users.throttle.fail('ip', codeKey, CODE_LOCKOUT);
           if (lockMs > 0) {
             audit('portal.signin_locked', null, { method: 'code', address: key, lockS: Math.ceil(lockMs / 1000) }, 'medium');

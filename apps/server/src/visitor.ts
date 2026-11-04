@@ -3,10 +3,10 @@
 //
 // Behind the Cloudflare tunnel the hop the proxy saw is the cloudflared pod for every visitor, so a limit keyed on the hop lets one stranger
 // lock everyone out. clientAddress.ts reads CF-Connecting-IP only with PORTAL_TRUST_PROXY and PORTAL_TRUST_CLOUDFLARE on, when that hop is
-// a private address and the header holds an address; otherwise the hop (or the socket) is the key, as before.
+// on PORTAL_CLOUDFLARE_HOPS (the tunnel's own addresses) and the header holds an address; otherwise the hop (or the socket) is the key.
 //
-// Decision on PILOT-1168 (option b): a client inside our networks can set the header itself and spread its count over made-up addresses.
-// The limits per token, per account and per session do not read the address and still hold for it.
+// PILOT-1179 narrowed PILOT-1168's option b: a private hop is no longer enough (a workspace pod is private too, and could name any
+// visitor to lock it out or spread its own count). The limits per token, per account and per session do not read the address at all.
 import type { IncomingMessage } from 'node:http';
 import { clientAddress } from './clientAddress.js';
 import { config } from './config.js';
@@ -15,7 +15,11 @@ type HeaderOf = (name: string) => string | undefined;
 
 /** The address from a header reader and the socket's address; `trustProxy` defaults to the portal's setting (config is read per call). */
 export function visitorFrom(header: HeaderOf, remoteAddress: string | undefined, trustProxy: boolean = config.trustProxy): string {
-  return clientAddress(header('x-forwarded-for'), remoteAddress, trustProxy, { connectingIp: header('cf-connecting-ip'), trusted: config.trustCloudflare });
+  return clientAddress(header('x-forwarded-for'), remoteAddress, trustProxy, {
+    connectingIp: header('cf-connecting-ip'),
+    trusted: config.trustCloudflare,
+    hops: config.cloudflareHops.hops,
+  });
 }
 
 /** A Hono request (the node server puts the socket in `c.env.incoming`). */

@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { isInternalIp, reporterIpText } from '@portal/contracts';
-import { clientAddress } from '../clientAddress.js';
+import { clientAddress, parseCidrs } from '../clientAddress.js';
 import { releaseOf } from './routes.js';
 import { build, capture, reporterHarness } from './testkit.js';
 
@@ -31,7 +31,8 @@ test('/me returns the client address and its family; a widget ticket stores it a
 test('behind Cloudflare: the reporter IP is CF-Connecting-IP when the hop is the tunnel, never a header from a public peer (audit 2026-11-01)', async () => {
   // The app's visitorAddress: Traefik's hop from X-Forwarded-For (here fixed per request by a test header), Cloudflare trusted.
   const h = await reporterHarness({
-    visitorIp: (c) => clientAddress(c.req.header('x-test-hop'), '10.42.0.5', true, { connectingIp: c.req.header('cf-connecting-ip'), trusted: true }),
+    visitorIp: (c) =>
+      clientAddress(c.req.header('x-test-hop'), '10.42.0.5', true, { connectingIp: c.req.header('cf-connecting-ip'), trusted: true, hops: parseCidrs('10.42.0.17').hops }),
   });
   try {
     const t = h.mint().token;

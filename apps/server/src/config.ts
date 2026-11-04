@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_IMAGE_REPO, claudeImageRef, DEFAULT_CLAUDE_CODE_VERSION } from '@portal/contracts';
+import { parseCidrs } from './clientAddress.js';
 import { parseAllowedOrigins } from './originCheck.js';
 import { parseKubeTargets } from './workspaces/kubeTargets.js';
 import { parseNodeSelector } from './workspaces/nodeSelector.js';
@@ -20,9 +21,15 @@ export const config = {
   trustProxy: env('PORTAL_TRUST_PROXY') === 'true',
   /**
    * Cloudflare in front of the trusted proxy (the cluster: Cloudflare's tunnel, then Traefik): the client address is CF-Connecting-IP when
-   * the hop the proxy saw is a private address (clientAddress.ts). Needs trustProxy; only for a portal reached through Cloudflare.
+   * the hop the proxy saw is one of `cloudflareHops` (clientAddress.ts). Needs trustProxy; only for a portal reached through Cloudflare.
    */
   trustCloudflare: env('PORTAL_TRUST_CLOUDFLARE') === 'true',
+  /**
+   * PILOT-1179: the tunnel's own addresses (PORTAL_CLOUDFLARE_HOPS, comma-separated addresses or CIDR ranges): only a hop on this list may
+   * name the visitor with CF-Connecting-IP. Empty (the default): no hop may, and every visitor through the tunnel shares the tunnel's
+   * address (the boot log warns when trustCloudflare is on). A range that also holds workspace pods lets a workspace name any visitor.
+   */
+  cloudflareHops: parseCidrs(env('PORTAL_CLOUDFLARE_HOPS')),
   /**
    * The Admin console's host (docs/prd/organizations.md §6.11, the PRD's `settings.adminHost`), e.g. admin.pilot.ai.isnan.me. Unset (or not a
    * host name): the console is off and its paths are 404 everywhere. Compared with the request's Host (X-Forwarded-Host only with trustProxy).
