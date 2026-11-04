@@ -72,9 +72,11 @@ Every route of `REPORTER_ROUTES` under `/reporter/v1` from `me` down. No `Access
   Traefik, so the portal sees a pod address, never presented as the reporter's public IP.
   Behind Cloudflare (`PORTAL_TRUST_CLOUDFLARE=true`, set in `deploy/k3s/portal.yaml`; audit 2026-11-01: every reporter IP was 10.42.x)
   the reporter's IP is `CF-Connecting-IP`, read only when the proxy is trusted and the hop Traefik saw is on `PORTAL_CLOUDFLARE_HOPS`
-  (Cloudflare's tunnel in the cluster; PILOT-1179); from any other hop the header is the sender's own and is ignored, and it must be an address. Only the shown and
-  stored reporter IP (`visitorIp` in the routes' deps) uses it: rate limits keep the hop, since a pod in the cluster or a device at home
-  could set the header itself.
+  (Cloudflare's tunnel in the cluster; PILOT-1179); from any other hop the header is the sender's own and is ignored, and it must be an address. The shown and
+  stored reporter IP (`visitorIp` in the routes' deps) and the reporter's rate limits (`clientKey`) both use this visitor address
+  (PILOT-1168): keyed on the hop, every visitor behind the tunnel would share one count. A request from a hop not on the list is keyed
+  on that hop, whatever header it sets. The k3s list (`10.42.0.0/16`) is the whole pod network, so a pod, or Traefik's own load
+  balancer, is believed too; narrowing that is PILOT-1182 and PILOT-1184.
 - The panel's ticket list (`GET /tickets`, its counts and its search) holds only tickets that came through the reporter: an evidence
   record or a capture added from a page. An agent's internal tickets in the same bucket stay in the portal (audit 2026-11-01). A token
   is only valid for a person who may operate the bucket, so this is not an authorization rule (the portal shows them everything): the

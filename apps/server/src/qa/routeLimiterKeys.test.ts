@@ -72,7 +72,7 @@ async function build(at?: { dataDir: string; key: string }, mcp?: Awaited<Return
     else store.close();
     rmSync(dataDir, { recursive: true, force: true });
   };
-  return { call, rows, alerts, dataDir, key, close: () => store.close(), done };
+  return { call, rows, alerts, dataDir, key, store, close: () => store.close(), done };
 }
 
 /**
@@ -178,6 +178,22 @@ test('PILOT-1179: wrong codes across ALL addresses reach a ceiling that audits a
     assert.equal(rows.filter((x) => x.kind === 'portal.signin_locked').length, 0, 'no address reached its own lock');
     assert.equal((await login(call, CODE, { ip: '203.0.113.9' })).status, 200, 'the owner still signs in with the right code');
     assert.equal((await login(call, CODE, { ip: '198.51.100.1' })).status, 200, 'even from an address that guessed');
+  } finally {
+    done();
+  }
+});
+
+test('PILOT-1184: a database error in the global wrong-code counter is not a 500: a wrong code stays 401, the address lock still counts', async () => {
+  const { call, store, rows, done } = await build();
+  try {
+    // Only the global counter's row fails to write (a trigger stands in for a full disk or a locked database).
+    store.db.exec(
+      `CREATE TRIGGER fail_code_global BEFORE INSERT ON auth_throttle WHEN NEW.key = '${CODE_GLOBAL.key}' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`,
+    );
+    for (let i = 1; i < config.loginLimit.attempts; i++) assert.equal((await login(call, WRONG)).status, 401, `wrong code ${i}: 401, not 500`);
+    assert.equal((await login(call, WRONG)).status, 429, 'the per-address lock still counts and locks');
+    assert.equal(rows.filter((x) => x.kind === 'portal.signin_code_guesses').length, 0, 'no report without a count');
+    assert.equal((await login(call, CODE, { ip: '203.0.113.9' })).status, 200, 'the right code still signs in');
   } finally {
     done();
   }

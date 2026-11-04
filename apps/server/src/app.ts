@@ -559,8 +559,15 @@ export function createApp(
         token = portal.signIn(typeof code === 'string' ? code : '', { device: deviceLabel(c.req.header('user-agent')), method: 'code' });
       } catch (e) {
         if (isAppError(e) && e.is('UNAUTHORIZED')) {
-          // Counted across all addresses; reported once per window when it reaches the ceiling, never refused (CODE_GLOBAL).
-          if (users.throttle.tally('ip', CODE_GLOBAL.key, CODE_GLOBAL.windowMs) === CODE_GLOBAL.ceiling) {
+          // Counted across all addresses; reported once per window when it reaches the ceiling, never refused (CODE_GLOBAL). Only a
+          // report: a database error in it must not turn a wrong code into a 500 (PILOT-1184); the per-address lock below still counts.
+          let wrongCodes = 0;
+          try {
+            wrongCodes = users.throttle.tally('ip', CODE_GLOBAL.key, CODE_GLOBAL.windowMs);
+          } catch (x) {
+            console.warn(`[portal] the wrong-code counter failed: ${x instanceof Error ? x.message : String(x)}`);
+          }
+          if (wrongCodes === CODE_GLOBAL.ceiling) {
             audit('portal.signin_code_guesses', null, { method: 'code', wrongCodes: CODE_GLOBAL.ceiling, windowS: CODE_GLOBAL.windowMs / 1000 }, 'medium');
             try {
               platform?.bus.emit({
