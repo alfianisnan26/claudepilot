@@ -277,7 +277,7 @@ export function registerSessionTools(
       if (args.report && !args.parent) throw new AppError('VALIDATION_FAILED', 'report needs a parent.', { details: { report: 'Only with parent.' } });
       const workspaceId = await workspaceFor(args.workspace_id, ctx);
       // PILOT-1129: in a workspace under the standing Bypass policy a session may start in Bypass (it starts bypass-capable there).
-      const standingStart = args.mode === 'bypassPermissions' && chat.standingWorkspace(workspaceId);
+      const standingStart = args.mode === 'bypassPermissions' && chat.standingWorkspace?.(workspaceId) === true;
       if (args.mode === 'bypassPermissions' && !standingStart)
         throw new PortalToolError('FORBIDDEN', approvals ? MCP_BYPASS_AT_START : MCP_BYPASS_REFUSED);
       const mode = standingStart ? undefined : mcpMode(args.mode);
@@ -338,7 +338,8 @@ export function registerSessionTools(
     const a = approvals!.create({ kind: 'session.bypass', payload: { sessionId: target.id }, reason: args.reason ?? `Asked with session_configure by ${ctx.actor}.` }, requester);
     ctx.affected(`session:${target.id}`, `approval:${a.id}`);
     // PILOT-1129: under the workspace's standing Bypass policy the portal allows the card itself, at once; the outcome comes as a message.
-    const standing = chat.standingFor(target.id);
+    // A fake chat of a test may not have it: then nothing is standing.
+    const standing = chat.standingFor?.(target.id) === true;
     return {
       summary: standing
         ? `Bypass for ${target.id} is being turned on by the standing policy (owner) (${a.id}); the outcome follows as a message.`
