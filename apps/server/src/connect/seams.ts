@@ -3,14 +3,12 @@
 import type { Duplex } from 'node:stream';
 import type {
   ConnectAgentHello, ConnectEnrollment, ConnectEnrollStatus, ConnectInstallOptions, ConnectKind, ConnectOpenArgs, ConnectNodeView,
-  ConnectStatusMessage, ConnectStreamError, ConnectTargetSettings, Workspace,
+  ConnectStatusMessage, ConnectTargetSettings, Workspace,
 } from '@portal/contracts';
 import type { Runtime } from '../workspaces/runtime.js';
 
-/** What a call over the tunnel fails with when there is no tunnel or the agent refused. */
-export class ConnectError extends Error {
-  constructor(readonly code: 'agent_offline' | 'target_removed' | ConnectStreamError, message: string) { super(message); }
-}
+/** What a call over the tunnel fails with when there is no tunnel or the agent refused (lives in @portal/connect-tunnel, PILOT-1169). */
+export { ConnectError } from '@portal/connect-tunnel/errors';
 
 /** A stream to a service on the agent, shaped like a connected socket (the net.Socket methods an http.Agent calls are no-ops). */
 export type TunnelStream = Duplex & {

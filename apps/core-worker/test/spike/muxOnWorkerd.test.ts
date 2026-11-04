@@ -1,18 +1,18 @@
 // PILOT-1159 (G6 spike): can the portal's half of Connect run inside a Durable Object on workerd, with no node:net loopback?
 //
-// Inside BridgeDO (runInDurableObject), unchanged server code (apps/server/src/connect/tunnel: mux.ts, stream.ts, open.ts, lines.ts,
-// frame.ts) runs a MuxSession on each end of a Cloudflare WebSocketPair. The portal end opens a `kube` stream with `openService` and writes
+// Inside BridgeDO (runInDurableObject), the portal's own tunnel code (@portal/connect-tunnel since PILOT-1169: mux.ts, stream.ts, open.ts,
+// lines.ts, frame.ts) runs a MuxSession on each end of a Cloudflare WebSocketPair. The portal end opens a `kube` stream with `openService` and writes
 // HTTP/1.1 straight onto it (no @kubernetes/client-node, no loopback listener); the agent end stands in for the agent's kube proxy
 // (apps/server/src/connect/agent/services/kube/proxy.ts): it accepts the stream with `acceptService`, checks the per-connection bearer and
 // answers like the API server. Exec rides the same stream: a 101 to v5.channel.k8s.io, then RFC 6455 frames with a channel byte.
 // What the spike found is in docs/prd/cf-bridge.md (G6).
 
+import type { MuxStream } from '@portal/connect-tunnel/mux';
+import { MuxSession } from '@portal/connect-tunnel/mux';
+import { acceptService, openService } from '@portal/connect-tunnel/open';
 import { CONNECT_LIMITS } from '@portal/contracts';
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import type { MuxStream } from '../../../server/src/connect/tunnel/mux.js';
-import { MuxSession } from '../../../server/src/connect/tunnel/mux.js';
-import { acceptService, openService } from '../../../server/src/connect/tunnel/open.js';
 import { locate } from '../../src/locate.js';
 import { ByteReader, cfMuxSocket, readHead, readResponse, readWsFrame, wsAccept, wsFrame, writeRequest, type CfMuxSocket } from './wire.js';
 

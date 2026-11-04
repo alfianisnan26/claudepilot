@@ -38,7 +38,7 @@ describe('the generated bundle', () => {
     assert.deepEqual(unexpected, [], 'the bundle imports something it must not');
     assert.ok(out.imports.some((i) => i.path === '@lydell/node-pty' && i.kind === 'dynamic-import'), 'the pty package stays a run-time import');
 
-    const allowedSource = [/^src\/connect\/agent\//, /^src\/connect\/tunnel\//, /^src\/connect\/seams\.ts$/, /^src\/workspaces\/(hostexec|runtime)\.ts$/, /^\.\.\/\.\.\/packages\/contracts\/src\/connect\.ts$/];
+    const allowedSource = [/^src\/connect\/agent\//, /^src\/connect\/tunnel\//, /^src\/connect\/seams\.ts$/, /^src\/workspaces\/(hostexec|runtime)\.ts$/, /^\.\.\/\.\.\/packages\/contracts\/src\/connect\.ts$/, /^\.\.\/\.\.\/packages\/connect-tunnel\/src\//];
     const allowedPackages = new Set(['ws', 'tar-stream', 'streamx', 'fast-fifo', 'b4a', 'text-decoder', 'events-universal']);
     const stray: string[] = [];
     for (const input of Object.keys(metafile.inputs)) {

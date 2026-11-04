@@ -62,6 +62,7 @@ else
   done
   mkdir -p "$nm/@portal"
   link "$wt/packages/contracts" "$nm/@portal/contracts"
+  link "$wt/packages/connect-tunnel" "$nm/@portal/connect-tunnel"
   link "$wt/apps/server" "$nm/@portal/server"
   link "$wt/apps/web" "$nm/@portal/web"
   for d in apps/web apps/server packages/contracts; do
@@ -74,7 +75,7 @@ missing=$(node -e '
   const fs = require("fs"), path = require("path"); const [wt, nm] = process.argv.slice(1);
   const lock = JSON.parse(fs.readFileSync(path.join(wt, "package-lock.json"), "utf8")).packages || {};
   const q = [], seen = new Set(), out = [];
-  for (const w of ["apps/web", "apps/server", "packages/contracts"]) { const p = lock[w] || {}; q.push(...Object.keys({ ...p.dependencies, ...p.devDependencies, ...p.peerDependencies })); }
+  for (const w of ["apps/web", "apps/server", "packages/contracts", "packages/connect-tunnel"]) { const p = lock[w] || {}; q.push(...Object.keys({ ...p.dependencies, ...p.devDependencies, ...p.peerDependencies })); }
   while (q.length) { const n = q.pop(); if (seen.has(n)) continue; seen.add(n); const e = lock["node_modules/" + n];
     if (!e || e.link || e.optional || fs.existsSync(path.join(nm, n))) continue;
     out.push(n + "@" + e.version); q.push(...Object.keys({ ...e.dependencies, ...e.peerDependencies })); }
@@ -101,7 +102,7 @@ fi
 tsc=$nm/typescript/bin/tsc; rc=0; real=0; gapn=0; summary=
 gapre=
 for p in $gap; do n=${p%@*}; gapre+="${gapre:+|}${n//./\\.}"; done
-for d in packages/contracts apps/server apps/web; do
+for d in packages/contracts packages/connect-tunnel apps/server apps/web; do
   out=$(cd "$wt" && node "$tsc" --noEmit --pretty false -p "$d" 2>&1) && { summary+="$d: clean"$'\n'; continue; }
   # An error line starts with the file; the indented lines after it belong to it.
   r=0; g=0; cur=
