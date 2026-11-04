@@ -3,52 +3,51 @@
 Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to KohiLabs Gitea. Integration branch `cf/integration` (from integration 6150655e5).
 
 ## DONE
-- Decisions D1-D7 + hard limits recorded on PILOT-1131 (comment 57923).
-- Phase tickets PILOT-1132..1156 (tags cf-migration + phase-n).
-- `cf/integration` created on origin and pilot.
-- PILOT-1140 gap analysis (docs/prd/cf-bridge.md) merged 9be55e4b4 (job 008f03b7), closed; gaps filed as PILOT-1157..1164.
+- Decisions D1-D7 + hard limits recorded on PILOT-1131 (comment 57923). Phase tickets PILOT-1132..1156.
+- PILOT-1140 gap analysis merged 9be55e4b4 (job 008f03b7), closed; gaps PILOT-1157..1164.
 - PILOT-1139 origin/CSRF merged c20382436..33d6d6ffb (job 65e012f1 5194, review PASS 58245), closed.
 - PILOT-1143 Worker skeleton merged 51de2b63c..42f0e097c (job 11fe24f4 16), closed.
 - PILOT-1141 manifests merged bbfedf992..a294e9fb6 + PRD fix ad076bef7 (job bf0d2e6d, review PASS 58258), closed.
 - PILOT-1162 multi-namespace bridge merged 882c8a494..9aa8816a4 (job 1a6d3781 107, review PASS 58261), closed.
-- PILOT-1144 BridgeDO + /bridge merged b213464ff..21f9ae716 (job d8ebfaf4 61, review PASS 58260), closed. Review minors -> PILOT-1172.
+- PILOT-1144 BridgeDO + /bridge merged b213464ff..21f9ae716 (job d8ebfaf4 61, review PASS 58260), closed. Minors -> PILOT-1172.
 - PILOT-1138 rate limits merged as squash d2c92d8ae (= reviewed head 3da7888ee, job 99b742cf 158, review PASS 58332), closed.
 - PILOT-1159 G6 spike merged 9072225a6..3bcca9b37 (job 3a3aee9c 41; skipped e66ef7047, a stale PRD copy), closed. Follow-ups PILOT-1169/1170/1171.
+- PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-bridge (worker 5bc808ae, opus): building PILOT-1172 hardening; then 1160/1158.
-- cf-worker (worker 6562167d, opus): building PILOT-1169 tunnel package, then PILOT-1170 (HIGH) mux on the live link.
-- cf-review (worker 68d76aeb, opus, auto): idle until the next review ask.
-- cf-sec (worker e28ec1b4, opus): idle (pacing); next PILOT-1168 (go-live blocker, comment 58355 on PILOT-1131) with default (b).
+- cf-worker (worker 6562167d, opus): PILOT-1145 staging deploy behind Access (HIGH); 1169/1170 WIP parked, resumes after.
+- cf-bridge (worker 5bc808ae, opus): PILOT-1142 rig e2e (rig namespace may need the coordinator); 1172 WIP parked, resumes after.
+- cf-review (worker 68d76aeb, opus, auto): idle; next the PILOT-1145 review (deploy/infra is HIGH).
+- cf-sec (worker e28ec1b4, opus): idle (pacing); next PILOT-1168 (go-live blocker, comment 58355 on PILOT-1131).
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
 ## DECISIONS
-- 08:50 No "2026-10-30 security sweep" exists; PILOT-1137 tracks the open exposure tickets + new gaps (PILOT-1138, 1139).
+- 08:50 No "2026-10-30 security sweep" exists; PILOT-1137 tracks the exposure tickets (+1138, 1139, 1168).
 - 08:50 Phase-2 API proxy targets a scratch portal, never the live one (hard limit).
 - 08:55 DECISIONS.md is a rule file (guard, D-60): the D-112 row goes to the coordinator on PILOT-1136.
-- Workers on Opus: backend/infra/security per owner routing 2026-10-25.
-- Reviewer runs in mode auto: dontAsk refused Bash (git diff), so the first reviewer 7ee2ad61 was ended.
-- 09:14 PILOT-1141 review FAIL (comment 58011: unbounded `secrets: create`); fix (a) went back to cf-bridge.
-- ~09:20-11:30 all three builders hit the two.claude session limit; resumed 11:45 after the reset. Next session window resets 16:40 UTC: on a limit, note the reset here and wake every worker right after it.
-- 12:00 Review trailer finding on 1138 is a false positive (trailers in a block above Co-Authored-By); builders now use one final block.
-- 12:20 PILOT-1168 route limiters: default (b), key on visitorAddress under the same trust conditions as the edge ceilings. Rejected: (a) the tunnel hop as a global key, (c) none until the CF binding. To be written on the ticket by its builder; the lead may not comment on unclaimed tickets.
-- 11:45 Operator pacing (one account): at most 2 workers building at once; cf-review takes review asks only. Order: 1143/1144 and 1141 first, then cf-sec 1138/1139 (paused). Only cf-migration tickets.
+- Workers on Opus: backend/infra/security per owner routing 2026-10-25. Reviewer in mode auto (dontAsk refused git).
+- 11:45 Operator pacing (one account): at most 2 builders at once; cf-review takes review asks only. Only cf-migration tickets.
+- Session limits on two.claude: ~09:20-11:30 and ~12:30-16:40 UTC. Resume everyone right after each reset; note the reset here.
+- 12:00 Builders put all trailers in one final block (`%(trailers)` reads only the last paragraph).
+- 12:20 PILOT-1168: key the route limiters on visitorAddress (default b). Rejected: the tunnel hop as a key; no limit until the CF binding.
+- 16:45 Operator: 1145 and 1142 first. 1172 and 1169/1170 are parked as pushed WIP. Access goes in front before any route (D3).
+- 16:45 PILOT-1168 must land before pilot-next serves any data path; the skeleton serves only /healthz behind Access.
 
 ## FOR THE COORDINATOR
-- PILOT-1132: KohiLabs Cloudflare token `CP_NEXT_CF_API_TOKEN` (scopes on ticket) + Workers Paid status.
-- PILOT-1133: Gitea token `CP_GITEA_MIRROR_TOKEN` + owner org.
+- PILOT-1133: Gitea token `CP_GITEA_MIRROR_TOKEN` + owner org (blocks 1134 mirror and 1146 origin switch).
 - PILOT-1136: land D-112 in DECISIONS.md.
-- PILOT-1141: admission policy for Job claudepilot-build-bridge, a rig namespace, Namespace isnan-cp-bridge, Secret cp-bridge-enroll.
+- PILOT-1141: admission allow for Job claudepilot-build-bridge, Namespace isnan-cp-bridge, Secret cp-bridge-enroll, empty identity Secret per served namespace.
+- PILOT-1142: a dev-rig namespace if the account still cannot make one (exact ask on T-3700).
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
-- PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry, later).
+- PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
 
 ## NEEDS A HUMAN
 - none (production cutover and the final hostname come at phase 6, operator + owner).
 
 ## NEXT
-1. PILOT-1168 (cf-sec) when a builder slot frees: it blocks go-live on any public host.
-2. cf-bridge when a slot frees: PILOT-1172, then gaps 1160, 1158, 1161, 1163, 1164, 1157, 1167; then PILOT-1142 rig e2e.
-3. cf-worker after 1170: PILOT-1171 kube client on streams, then PILOT-1148 SPA assets.
-3. PILOT-1134 mirror (after 1133), PILOT-1135 zones (after 1132), PILOT-1145 staging deploy (after 1132 + 1135).
-4. Phase 2: PILOT-1146, 1147, 1148, 1149, 1150, 1151.
+1. Review + close PILOT-1145; report the pilot-next URL to the operator once /healthz answers behind Access.
+2. PILOT-1168 (cf-sec) at the next free slot.
+3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
+4. cf-bridge: 1142, 1172, then gaps 1160, 1158, 1161, 1163, 1164, 1157, 1167.
+5. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
