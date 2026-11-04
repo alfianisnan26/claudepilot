@@ -12,14 +12,14 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1144 BridgeDO + /bridge merged b213464ff..21f9ae716 (job d8ebfaf4 61, review PASS 58260), closed. Minors -> PILOT-1172.
 - PILOT-1138 rate limits merged as squash d2c92d8ae (= reviewed head 3da7888ee, job 99b742cf 158, review PASS 58332), closed.
 - PILOT-1159 G6 spike merged 9072225a6..3bcca9b37 (job 3a3aee9c 41; skipped e66ef7047, a stale PRD copy), closed. Follow-ups PILOT-1169/1170/1171.
+- PILOT-1172 bridge hardening merged af872f583..929d2ba74 (job 98ef1e94 158, review PASS 58743), closed.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
 - cf-worker (worker 6562167d, opus): PILOT-1145 BLOCKED. The permission classifier refused the real deploy as a "DNS / Domain / Cert change"; nothing was created. Branch ticket/T-3703-stg-deploy 27102ae67 (script deploy-stg.mjs; read-only plan job 142e4726 rc 0). Back on 1169 (WIP ed1b410fe), then 1170.
 - cf-bridge (worker 5bc808ae, opus): idle (pacing).
   - PILOT-1142: the script was merged as 2dfb4d129 and 1d41f3ccd (job 038cad7d, 12 pass, it SKIPs without a rig). The ticket stays open: the rig namespace and rights are FOR THE COORDINATOR (T-3700, comments 58722 and 58730).
-  - PILOT-1172 is done at cc3c6e89d (job 98ef1e94, 158 pass) and is in blind review.
-- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1172.
+- cf-review (worker 68d76aeb, opus, auto): idle; next review asks PILOT-1168 and 1170 (HIGH).
 - cf-sec (worker e28ec1b4, opus): building PILOT-1168, the go-live blocker (comment 58355 on PILOT-1131).
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -52,5 +52,5 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 1. Review + close PILOT-1145; report the pilot-next URL to the operator once /healthz answers behind Access.
 2. PILOT-1168 (cf-sec) at the next free slot.
 3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
-4. cf-bridge: 1142, 1172, then gaps 1160, 1158, 1161, 1163, 1164, 1157, 1167.
+4. cf-bridge (when a builder slot frees): gaps 1160, 1158, 1161, 1163, 1164, 1157, 1167.
 5. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
