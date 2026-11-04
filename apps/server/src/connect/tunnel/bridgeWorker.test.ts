@@ -8,11 +8,17 @@ import { dirname, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CONNECT_AGENT_VERSION, CONNECT_PROTOCOL, type ConnectAgentHello } from '@portal/contracts';
+import { LOCAL_TOKEN, NAMESPACE, startKubeRig } from '../agent/testkit/kubeRig.js';
 import { generateNodeKeyPair } from './auth.js';
+import type { MuxStream } from './mux.js';
+import { acceptService, type OpenDecision } from './open.js';
 import { dialTunnel, TunnelConnectError, TunnelRejected } from './ws.js';
 
 const enabled = process.env.CLAUDEPILOT_WORKER_TESTS === '1';
-const WORKER_CONFIG = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../core-worker/wrangler.jsonc');
+const WORKER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../core-worker');
+const WORKER_CONFIG = resolve(WORKER_DIR, 'wrangler.jsonc');
+/** The real Worker plus one test-only route to BridgeDO's kube RPC (apps/core-worker/test/interop/entry.ts; never deployed). */
+const WORKER_ENTRY = resolve(WORKER_DIR, 'test/interop/entry.ts');
 
 interface DevWorker {
   url: Promise<URL>;
@@ -41,6 +47,7 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
   const cluster = 'interop-cluster';
   let worker: DevWorker;
   let url: string;
+  let httpUrl: string;
 
   before(async () => {
     // A variable specifier: wrangler is a dependency of apps/core-worker, not of the server, and only this opt-in test loads it.
@@ -48,6 +55,7 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
     const { unstable_startWorker } = (await import(specifier)) as { unstable_startWorker(opts: unknown): Promise<DevWorker> };
     worker = await unstable_startWorker({
       config: WORKER_CONFIG,
+      entrypoint: WORKER_ENTRY,
       bindings: {
         BRIDGE_CLUSTERS: {
           type: 'plain_text',
@@ -61,6 +69,7 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
     await worker.ready;
     const u = await worker.url;
     url = `ws://${u.host}/bridge`;
+    httpUrl = `http://${u.host}`;
   });
 
   after(async () => {
@@ -105,6 +114,58 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
       dialTunnel({ url, nodeId: node, privateKey: other.privateKey, hello, ws: { headers: headers() } }),
       (e: unknown) => e instanceof TunnelRejected && e.code === 'bad_signature',
     );
+  });
+
+  test('the DO lists pods through /bridge: the real dialTunnel agent, the real KubeProxy, a fake API server (PILOT-1170, the G6 exit)', async () => {
+    const rig = await startKubeRig();
+    rig.fake.pods.set('ws-a', {
+      metadata: { name: 'ws-a', namespace: NAMESPACE, labels: { 'claudepilot.managed': 'true' } },
+      status: { phase: 'Running' },
+    });
+    const accepted: string[] = [];
+    // What connect/agent/client.ts #dispatch does for a stream the portal opens, reduced to the kube service.
+    const onStream = (stream: MuxStream) =>
+      void (async () => {
+        const req = await acceptService(stream, async (r): Promise<OpenDecision> => {
+          if (r.service !== 'kube') return { ok: false, code: 'service_unavailable', message: 'Only kube here.' };
+          const refusal = await rig.service.accept!(r.args);
+          return refusal ? { ok: false, code: refusal.code, message: refusal.message } : { ok: true };
+        });
+        if (!req) return;
+        accepted.push(JSON.stringify(req.args ?? null));
+        rig.service.handle(stream, req.trace ?? '--------', req.args);
+      })();
+    const d = await dialTunnel({ url, nodeId: node, privateKey: keys.privateKey, hello, ws: { headers: headers() }, onStream });
+    const ask = async (body: { path: string; namespace?: string; bearer: string }) => {
+      const res = await fetch(`${httpUrl}/__interop/kube`, { method: 'POST', body: JSON.stringify({ cluster, ...body }) });
+      assert.equal(res.status, 200);
+      return (await res.json()) as { ok: boolean; status?: number; body?: string; code?: string };
+    };
+    try {
+      const pods = `/api/v1/namespaces/${NAMESPACE}/pods`;
+      const list = await ask({ path: pods, namespace: NAMESPACE, bearer: LOCAL_TOKEN });
+      assert.equal(list.ok, true, JSON.stringify(list));
+      assert.equal(list.status, 200);
+      const items = (JSON.parse(list.body!) as { items: { metadata: { name: string } }[] }).items;
+      assert.deepEqual(
+        items.map((p) => p.metadata.name),
+        ['ws-a'],
+      );
+      // The API server saw the service account's token and the managed selector the proxy adds, never the bridge's bearer.
+      const seen = rig.fake.requests.find((r) => r.url.startsWith(pods));
+      assert.equal(seen?.headers.authorization, `Bearer ${rig.fake.token}`);
+      assert.match(seen?.url ?? '', /claudepilot\.managed/);
+      assert.deepEqual(accepted, [JSON.stringify({ namespace: NAMESPACE })]);
+
+      // The agent's walls hold through the bridge: another namespace's path, a wrong bearer, a namespace it does not serve.
+      assert.equal((await ask({ path: '/api/v1/namespaces/kube-system/pods', namespace: NAMESPACE, bearer: LOCAL_TOKEN })).status, 403);
+      assert.equal((await ask({ path: pods, namespace: NAMESPACE, bearer: `${LOCAL_TOKEN}x` })).status, 401);
+      const denied = await ask({ path: pods, namespace: 'kube-system', bearer: LOCAL_TOKEN });
+      assert.deepEqual([denied.ok, denied.code], [false, 'denied']);
+    } finally {
+      d.session.close(1000, 'test over');
+      await rig.stop();
+    }
   });
 
   test('a second client replaces the first', async () => {
