@@ -294,6 +294,14 @@ Counts come from the policy tables of Appendix A and B (rows whose access names 
 | `budget` | 3 | 2 | | budget and spike alerts to their owner |
 | `user`, `team`, `trigger`, `template`, `personal` | 0, 0, 0, 0, 1 | 0 | | trigger scheduler, notification delivery |
 
+### 12.6 Request limits at the doors without a cookie (PILOT-1138)
+
+Before the portal is reachable from the public internet (epic PILOT-1131), each door a stranger reaches without a cookie has a per-address ceiling in front of its own limits. The ceilings are in `EDGE_LIMITS` in `app.ts`: sign-in 60, `/mcp` 1200, `/connect/*` 600 and `/api/vscode/*` 1200 requests per minute. The routes' own limits stay behind them: wrong codes (`rateLimit.ts`), the email lockout with backoff (`identity/throttle.ts`), per token and per tool on `/mcp` (`portalmcp/limits.ts`), and wrong enrollment tokens on `/connect` (`connect/publicRoutes.ts`).
+
+- Every 429 carries `Retry-After`: the ceiling's own time left, a route's `retryAfterS` detail, or else 60 seconds (`app.onError`).
+- The first refusal for an address in each window writes one `portal.rate_limited` audit row (medium) with the rule, the method, the address and the wait. It never records the path, the query or a header, so a token cannot reach the row.
+- The module `apps/server/src/ratelimit/` has no `node:` imports, and its counter is a `RateLimitStore`. It counts in memory on Node, and the Worker can plug in a Durable Object or the rate-limiting binding. On the Worker the key must be the address Cloudflare saw. Behind a proxy, `clientKey` would otherwise key every visitor as the proxy.
+
 ## 13. Data model
 
 New tables (block 400-459; ✅ run in `node:sqlite` on the real schema, `COORD/p5-schema-check.mts`):

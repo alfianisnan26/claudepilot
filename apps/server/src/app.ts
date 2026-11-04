@@ -158,6 +158,8 @@ import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes, releaseOf } from './reporter/routes.js';
 import type { ReporterService } from './reporter/service.js';
 import { clientAddress } from './clientAddress.js';
+import { MemoryRateLimitStore, type RateRule } from './ratelimit/limiter.js';
+import { rateLimit } from './ratelimit/middleware.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
 import { createHeartbeatRoutes } from './schedules/heartbeat.js';
 import { portalHelpers } from './schedules/helpers.js';
@@ -179,6 +181,23 @@ export function sameHostOrigin(origin: string, host: string | undefined): boolea
   } catch {
     return false;
   }
+}
+
+/**
+ * PILOT-1138: requests per client address and minute at the doors that need no cookie, in front of each route's own limits. Generous:
+ * they stop floods (and password hashing on demand), not a person or an agent at work.
+ */
+export const EDGE_LIMITS: ReadonlyArray<readonly [string, RateRule]> = [
+  [API.login, { name: 'signin', limit: 60, windowMs: 60_000 }],
+  ['/mcp', { name: 'mcp', limit: 1200, windowMs: 60_000 }],
+  ['/connect/*', { name: 'connect', limit: 600, windowMs: 60_000 }],
+  ['/api/vscode/*', { name: 'vscode', limit: 1200, windowMs: 60_000 }],
+];
+
+/** The seconds a 429 asks the client to wait: a route's `retryAfterS` detail when it set one, else 60. */
+export function retryAfterOf(details: unknown): number {
+  const s = (details as { retryAfterS?: unknown } | null | undefined)?.retryAfterS;
+  return typeof s === 'number' && Number.isFinite(s) && s >= 1 ? Math.ceil(s) : 60;
 }
 
 const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
@@ -440,6 +459,22 @@ export function createApp(
   const anyLimit = limit(256 * 1024 * 1024);
   app.use(API.login, loginLimit);
   app.use('/api/*', (c, next) => (/^application\/json/i.test(c.req.header('content-type') ?? '') ? jsonLimit(c, next) : anyLimit(c, next)));
+  // PILOT-1138: a per-address ceiling in front of the doors a stranger reaches without a cookie (ratelimit/, portable to the Worker). The
+  // routes' own limits (wrong codes, wrong tokens, per token, per tool) stay behind it; this one stops a flood before a route reads a body
+  // or a token, answers 429 with Retry-After and writes one audit row per address and window (never the path, query or token).
+  const edgeLimitStore = new MemoryRateLimitStore();
+  for (const [path, rule] of EDGE_LIMITS) {
+    app.use(
+      path,
+      rateLimit({
+        store: edgeLimitStore,
+        rule,
+        key: (c) => clientKey(c as Context<Env>),
+        onLimited: (e) => audit('portal.rate_limited', null, { rule: e.rule, method: e.method, address: e.key, retryAfterS: e.retryAfterS }, 'medium'),
+        refuse: (c) => c.json(new AppError('RATE_LIMITED', 'Too many requests from this address. Wait a moment.').toJSON(), 429),
+      }),
+    );
+  }
 
   app.onError((e, c) => {
     const error = isAppError(e)
@@ -448,6 +483,8 @@ export function createApp(
         ? new AppError(codeForStatus(e.status), undefined, { status: e.status, cause: e })
         : new AppError('INTERNAL_ERROR', undefined, { cause: e });
     if (error.status >= 500) console.error(e);
+    // PILOT-1138: every 429 says when to come back (the route's `retryAfterS` detail, else a minute).
+    if (error.status === 429) c.header('Retry-After', String(retryAfterOf(error.details)));
     return c.json(error.toJSON(), error.status as ContentfulStatusCode);
   });
 
