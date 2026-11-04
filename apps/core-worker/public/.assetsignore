@@ -1,2 +1,2 @@
-# Kept empty until phase 2 serves the SPA from here (PILOT-1131).
+# Files of public/ that are not uploaded as assets. The rest is apps/web's build, copied by scripts/webAssets.mjs (PILOT-1148).
 .assetsignore

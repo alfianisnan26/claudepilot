@@ -12,8 +12,15 @@
   "observability": { "enabled": true },
   // Overridden at deploy: --var CP_VERSION:<version> --var CP_COMMIT:<sha>.
   "vars": { "CP_VERSION": "0.0.0", "CP_COMMIT": "dev" },
-  // Declared but empty: the SPA comes in phase 2.
-  "assets": { "directory": "./public", "binding": "ASSETS" },
+  // The SPA (PILOT-1148): `npm run build` fills public/ with apps/web's build and its _headers (scripts/webAssets.mjs). Every path
+  // not listed in run_worker_first is the asset router's: a file, or the shell (index.html) for a client-side route. /assets/* goes
+  // to the Worker so a missing hashed file is a 404, not the shell (src/app.ts).
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/bridge", "/connect/*", "/healthz", "/assets/*"],
+  },
   "durable_objects": {
     "bindings": [
       { "name": "PLATFORM", "class_name": "PlatformDO" },

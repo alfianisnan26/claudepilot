@@ -4,7 +4,8 @@
 //   2. its one policy `cp-next-healthcheck`: the service token `cp-next-healthcheck` only (non_identity). No email, no domain:
 //      people are added by the owner later. The token's secret is used in this run for the check and is never printed or kept;
 //      an existing token is rotated (its old secret stops working).
-//   3. `wrangler deploy` (wrangler.jsonc has no route; CP_VERSION/CP_COMMIT from this commit).
+//   3. `npm run build` (the SPA into public/, PILOT-1148), then `wrangler deploy` (wrangler.jsonc has no route; CP_VERSION/CP_COMMIT
+//      from this commit).
 //   4. the Worker custom domain for the host (this creates its DNS record; nothing else in the zone is touched).
 //   5. the checks: /healthz with no credentials is the Access login redirect or 403; with the service token it is 200 and this commit.
 // Usage (in the cluster, never in the pod):
@@ -140,7 +141,13 @@ if (existing) await cf('PUT', `${acct}/access/apps/${app.id}/policies/${existing
 else await cf('POST', `${acct}/access/apps/${app.id}/policies`, policyBody);
 say(`policy ${POLICY_NAME}: non_identity, include service token ${svc.id} only`);
 
-// 3. The Worker.
+// 3. The Worker, with the SPA as its assets (PILOT-1148: apps/web's build and _headers in public/). The build gets no Cloudflare value.
+const build = spawnSync('npm', ['run', 'build'], {
+  cwd: WORKER_DIR,
+  env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CP_NEXT_CF_'))),
+  stdio: 'inherit',
+});
+if (build.status !== 0) fail(`the SPA build exited ${build.status}`);
 const env = { ...process.env, CLOUDFLARE_API_TOKEN: TOKEN, CLOUDFLARE_ACCOUNT_ID: ACCOUNT };
 const deploy = spawnSync('npx', ['wrangler', 'deploy', '--var', `CP_VERSION:stg-${commit.slice(0, 12)}`, '--var', `CP_COMMIT:${commit}`], {
   cwd: WORKER_DIR,
