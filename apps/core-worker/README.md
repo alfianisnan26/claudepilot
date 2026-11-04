@@ -1,6 +1,6 @@
 # cp-next-core (`@portal/core-worker`)
 
-The ClaudePilot core on Cloudflare Workers + Durable Objects (epic PILOT-1131). Phase 1: a skeleton, not deployed. The live portal
+The ClaudePilot core on Cloudflare Workers + Durable Objects (epic PILOT-1131). Phase 1: a skeleton, on staging behind Access (below). The live portal
 (`apps/server`) is unchanged and stays on k3s until cutover.
 
 - `src/app.ts`: the Hono app. `GET /healthz` answers `{ ok, service, version, commit, connectProtocol }`; any other path is the
@@ -34,3 +34,20 @@ npm run build:dry -w @portal/core-worker     # wrangler deploy --dry-run: the bu
 ```
 
 At deploy, `BRIDGE_CLUSTERS` is set with `wrangler secret put` (never in `wrangler.jsonc` or the repository).
+
+## Staging deploy (PILOT-1145)
+
+`scripts/deploy-stg.mjs` puts the Worker on `CP_NEXT_HOST` (`pilot-next.<zone>`) behind Cloudflare Access, Access first (D3): the Access
+app `cp-next-access` (whole host, created with no policy, so nobody gets in), its one policy `cp-next-healthcheck` (the service token
+`cp-next-healthcheck` only, no person yet), then `wrangler deploy`, then the Worker custom domain (which makes the host's DNS record;
+nothing else in the zone is touched), then two checks: `/healthz` without credentials is the Access redirect or 403, with the service token
+it is 200 and the deployed commit. It reads the four values from the `cp-next` pool by name and never prints them; an existing service
+token is rotated for the check and its secret is not kept. `--plan` reads only and says what a run would do. Run it in the cluster:
+
+```sh
+scripts/job-run.sh --ref <pushed sha> --pool-env CP_NEXT_CF_API_TOKEN --pool-env CP_NEXT_CF_ACCOUNT_ID --pool-env CP_NEXT_ZONE \
+  --pool-env CP_NEXT_HOST -- 'node apps/core-worker/scripts/deploy-stg.mjs --plan; exit $?'
+```
+
+Rollback: `npx wrangler rollback <previous version id>` in `apps/core-worker` (same environment); to take the host off, delete the
+custom domain (`DELETE /accounts/<account>/workers/domains/<id>`). `/bridge` stays refused until `BRIDGE_CLUSTERS` is set.
