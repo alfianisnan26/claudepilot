@@ -24,7 +24,10 @@ export function createApp() {
   // and nothing the Worker answers is one.
   const appHeaders = secureHeaders({ strictTransportSecurity: false });
   const assetHeaders = secureHeaders({ strictTransportSecurity: false, crossOriginResourcePolicy: 'cross-origin' });
-  app.use((c, next) => (c.req.path.startsWith('/assets/') ? assetHeaders(c, next) : appHeaders(c, next)));
+  // A WebSocket upgrade (/bridge) is answered by a Durable Object: its 101 is not a page and its headers cannot be changed.
+  app.use((c, next) =>
+    c.req.header('upgrade')?.toLowerCase() === 'websocket' ? next() : c.req.path.startsWith('/assets/') ? assetHeaders(c, next) : appHeaders(c, next),
+  );
   // What the API says is for this session only (the portal's rule): never kept by a shared cache.
   app.use('/api/*', async (c, next) => {
     await next();
