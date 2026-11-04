@@ -19,10 +19,13 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-worker (worker 6562167d, opus): PILOT-1169 + 1170 built (1170 job 04c06087 177 pass on 3106571) but d3dc72203 conflicts on agent.generated.ts after 1172. Replaying on a new branch ticket/T-3735-tunnel-pkg-r2 with a regenerated bundle and a fresh self-test; then 1170 to blind review; next PILOT-1148.
-- cf-sec (worker e28ec1b4, opus): PILOT-1179 built d59cdd4d3275 (job d2d1935b 154), in review; now PILOT-1180 (deploy script safe re-run), branch ticket/T-3827-deploy-rerun.
-- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1179 on d59cdd4d3275; then 1170 (after the replay).
-- cf-bridge (worker 5bc808ae, opus): idle (pacing). PILOT-1142 rig refused again 21:4x: ws-isnan-jobs cannot create namespaces (comment 59344); script merged (2dfb4d129, 1d41f3ccd), ticket open.
+- MERGES HELD: cf/integration d651c999 fails agent.e2e kube case every run (PILOT-1183, jobs bd56aa58, 4d7bea57). Red until the cause is known; an incident if a cf merge caused it.
+- cf-bridge (worker 5bc808ae, opus): PILOT-1183 bisect + fix, branch ticket/T-3830-kube-e2e.
+- Ready to merge after 1183: PILOT-1179 (review PASS 59397 on d59cdd4d3275, job d2d1935b 154; go-live items -> PILOT-1184).
+- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1170 (+1169) on ticket/T-3735-tunnel-pkg-r2 0ab6789bfa2c (job 4d7bea57 545/1 fail = 1183). r2 also fixes flaky prune tests (PILOT-1181).
+- cf-sec (worker e28ec1b4, opus): PILOT-1180 (deploy script safe re-run), branch ticket/T-3827-deploy-rerun.
+- cf-worker (worker 6562167d, opus): idle (pacing); next PILOT-1148.
+- PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
 ## DECISIONS
@@ -55,7 +58,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 
 ## NEXT
 1. PILOT-1142 rig run when the coordinator grants the rights; PILOT-1180 (deploy script safe re-run) at a free slot.
-2. PILOT-1182 (HIGH, filed by cf-sec): workspaces reach the portal Service directly and can forge X-Forwarded-For; a NetworkPolicy and an internal port (needs the coordinator).
+2. PILOT-1184 (HIGH, go-live checks from the 1179 review). PILOT-1182 (HIGH, filed by cf-sec; review: not a blocker if the server code is long): workspaces reach the portal Service directly and can forge X-Forwarded-For; a NetworkPolicy and an internal port (needs the coordinator).
 3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
 4. cf-bridge (at a free builder slot): gaps 1161, 1163, 1164, 1157, 1167.
 5. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
