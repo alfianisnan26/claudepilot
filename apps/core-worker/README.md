@@ -11,11 +11,12 @@ The ClaudePilot core on Cloudflare Workers + Durable Objects (epic PILOT-1131). 
 - `src/locate.ts`: the only place that calls `idFromName`; it places every object in `apac` (a test fails on any other caller).
 - `GET /bridge` (PILOT-1144, D3, D4): the in-cluster cp-bridge dials out here. `src/bridge/route.ts` checks before the upgrade:
   `Upgrade: websocket`, no `Origin`, subprotocol `pilot.tunnel.v1`, `X-Pilot-Cluster`, and `Authorization: Bearer` whose SHA-256
-  matches the cluster in the `BRIDGE_CLUSTERS` secret (`{ "<cluster>": { node, publicKey, tokenSha256 } }`; absent means every dial
-  is refused). Any failure is the plain 404. `src/do/bridge.ts` (`BridgeDO`, one per cluster) then runs the Connect handshake of
+  matches the cluster in the `BRIDGE_CLUSTERS` secret (`{ "<cluster>": { node, publicKey, tokenSha256 } }`; absent, not JSON
+  or malformed means every dial is refused; an entry whose key is not a valid Ed25519 key of large order, the portal's own
+  `connectPublicKeyProblem`, is dropped). Any failure is the plain 404. `src/do/bridge.ts` (`BridgeDO`, one per cluster) then runs the Connect handshake of
   `apps/server/src/connect/hub.ts` (challenge, auth, welcome or reject) with the WebCrypto Ed25519 check shared in
   `packages/contracts/src/connectSign.ts`, single-use nonces, the Hibernation API, an alarm that pings and ends silent links
-  (`CONNECT_LIMITS`), and one live link per cluster: a new one replaces the old one (closed 4409, written to `bridge_audit`).
+  (`CONNECT_LIMITS`), and one live link per cluster: a new one replaces the old one (closed 4409, written to `bridge_audit`). The alarm prunes `bridge_audit` to 30 days and at most 10,000 rows (`BRIDGE_AUDIT_KEEP`).
   Mux frames pass untouched; phase 1 only answers pings. `apps/server/src/connect/tunnel/bridgeWorker.test.ts` dials it with the
   real `dialTunnel` (opt-in: `CLAUDEPILOT_WORKER_TESTS=1`).
 - `test/spike/` (PILOT-1159, G6): the server's tunnel code (mux, streams, open) run unchanged inside `BridgeDO`, with HTTP/1.1 and an

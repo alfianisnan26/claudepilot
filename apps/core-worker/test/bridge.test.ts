@@ -8,12 +8,16 @@ import {
   CONNECT_SUBPROTOCOL,
   CONNECT_TEST_VECTORS,
   connectB64u,
+  connectPublicKeyProblem,
   connectSignChallenge,
   type ConnectAuth,
   type ConnectChallenge,
 } from '@portal/contracts';
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { bridgeAuthorize, bridgeRegistry } from '../src/bridge/registry.js';
+import { bridgeUpgrade } from '../src/bridge/route.js';
+import { BRIDGE_AUDIT_KEEP } from '../src/do/bridge.js';
 import { locate } from '../src/locate.js';
 
 const URL_BRIDGE = 'https://core.test/bridge';
@@ -294,5 +298,132 @@ describe('redaction', () => {
     expect(lines.length).toBeGreaterThan(0); // the refusals were logged, so the check below looked at something
     for (const line of lines) expect(line).not.toContain(env.TEST_BRIDGE_TOKEN);
     expect(JSON.stringify(await stub().audit(500))).not.toContain(env.TEST_BRIDGE_TOKEN);
+  });
+});
+
+// PILOT-1172 (review of PILOT-1144, minors 1 and 2): the registry is fail closed, and refuses the keys the portal refuses.
+describe('BRIDGE_CLUSTERS: absent, not JSON or malformed refuses every dial', () => {
+  const good = () => (JSON.parse(env.BRIDGE_CLUSTERS!) as Record<string, Record<string, string>>)[env.TEST_BRIDGE_CLUSTER]!;
+  const bytes = (first: number[], fill = 0, last?: number) => {
+    const b = new Uint8Array(32).fill(fill);
+    first.forEach((v, i) => (b[i] = v));
+    if (last !== undefined) b[31] = last;
+    return connectB64u(b);
+  };
+  /** Keys that are 32 bytes of base64url but no usable Ed25519 key: small order (all zero, the identity) and off the curve (y = p). */
+  const badKeys: [string, string][] = [
+    ['the all-zero key (order 4)', bytes([])],
+    ['the identity (y = 1)', bytes([1])],
+    ['y = p, not canonical', bytes([0xed], 0xff, 0x7f)],
+  ];
+  const withEntry = (patch: Record<string, unknown>, name = env.TEST_BRIDGE_CLUSTER) => JSON.stringify({ [name]: { ...good(), ...patch } });
+  const cases: [string, string | undefined][] = [
+    ['absent', undefined],
+    ['empty', ''],
+    ['not JSON', '{"test-cluster":'],
+    ['a JSON array', '[]'],
+    ['JSON null', 'null'],
+    ['a JSON number', '42'],
+    ['an entry that is not an object', JSON.stringify({ [env.TEST_BRIDGE_CLUSTER]: 'x' })],
+    ['a node id of the wrong shape', withEntry({ node: 'node-1' })],
+    ['a 31-byte key', withEntry({ publicKey: connectB64u(new Uint8Array(31).fill(7)) })],
+    ['a key that is not base64url', withEntry({ publicKey: `${'A'.repeat(42)}!` })],
+    ['a token hash that is not 64 lowercase hex', withEntry({ tokenSha256: good().tokenSha256!.toUpperCase() })],
+    ['a cluster name that is not a DNS label', withEntry({}, 'Test_Cluster')],
+    ...badKeys.map(([what, key]): [string, string] => [`a key: ${what}`, withEntry({ publicKey: key })]),
+  ];
+
+  it('the real registry opens the test cluster (so the cases below fail on the registry, not on the dial)', async () => {
+    expect(await bridgeAuthorize(env.BRIDGE_CLUSTERS, env.TEST_BRIDGE_CLUSTER, env.TEST_BRIDGE_TOKEN)).not.toBeNull();
+    expect(connectPublicKeyProblem(good().publicKey)).toBeNull();
+  });
+
+  for (const [what, raw] of cases) {
+    it(what, async () => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const warns = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        expect(bridgeRegistry(raw).size).toBe(0);
+        expect(await bridgeAuthorize(raw, env.TEST_BRIDGE_CLUSTER, env.TEST_BRIDGE_TOKEN)).toBeNull();
+        const res = await bridgeUpgrade(new Request(URL_BRIDGE, { headers: upgradeHeaders() }), { ...env, BRIDGE_CLUSTERS: raw });
+        expect(res.status).toBe(404);
+        expect(res.webSocket).toBeNull();
+        expect(await res.json()).toEqual(new AppError('NOT_FOUND', 'Not found.').toJSON());
+      } finally {
+        errors.mockRestore();
+        warns.mockRestore();
+      }
+    });
+  }
+
+  it('a bad entry is dropped, never the good one beside it', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const raw = JSON.stringify({ [env.TEST_BRIDGE_CLUSTER]: good(), 'other-cluster': { ...good(), publicKey: badKeys[0]![1] } });
+      expect([...bridgeRegistry(raw).keys()]).toEqual([env.TEST_BRIDGE_CLUSTER]);
+      expect(errors.mock.calls.flat().join(' ')).toMatch(/malformed and was dropped/);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('the shared key check refuses every small-order point (libsodium list, both sign bits) inside workerd', () => {
+    const hexKey = (h: string) => connectB64u(new Uint8Array(h.match(/../g)!.map((x) => parseInt(x, 16))));
+    for (const h of [
+      '0000000000000000000000000000000000000000000000000000000000000000',
+      '0100000000000000000000000000000000000000000000000000000000000000',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+      'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+      '0000000000000000000000000000000000000000000000000000000000000080',
+      '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85',
+      'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa',
+    ]) {
+      expect(connectPublicKeyProblem(hexKey(h)), h).not.toBeNull();
+    }
+  });
+});
+
+// PILOT-1172 (review of PILOT-1144, nit 3): bridge_audit is pruned by the alarm, by age and by row count.
+describe('BridgeDO: the audit is pruned', () => {
+  it('the alarm drops rows older than the keep time and keeps the younger ones', async () => {
+    await runInDurableObject(stub(), async (_i, state) => {
+      const sql = state.storage.sql;
+      sql.exec('DELETE FROM bridge_audit');
+      const now = Date.now();
+      sql.exec("INSERT INTO bridge_audit (at, event) VALUES (?, 'test.old')", now - BRIDGE_AUDIT_KEEP.ms - 60_000);
+      sql.exec("INSERT INTO bridge_audit (at, event) VALUES (?, 'test.young')", now - BRIDGE_AUDIT_KEEP.ms + 60_000);
+      sql.exec("INSERT INTO bridge_audit (at, event) VALUES (?, 'test.now')", now);
+      await state.storage.setAlarm(now);
+    });
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    expect((await stub().audit()).map((r) => r.event)).toEqual(['test.now', 'test.young']);
+  });
+
+  it('the alarm keeps at most the newest rows', async () => {
+    const extra = 5;
+    await runInDurableObject(stub(), async (_i, state) => {
+      const sql = state.storage.sql;
+      sql.exec('DELETE FROM bridge_audit');
+      const now = Date.now();
+      sql.exec("INSERT INTO bridge_audit (at, event) VALUES (?, 'test.old')", now - BRIDGE_AUDIT_KEEP.ms - 60_000);
+      sql.exec(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) INSERT INTO bridge_audit (at, event, detail) SELECT ?, 'test.row', i FROM n",
+        BRIDGE_AUDIT_KEEP.rows + extra,
+        now,
+      );
+      await state.storage.setAlarm(now);
+    });
+    expect(await runDurableObjectAlarm(stub())).toBe(true);
+    await runInDurableObject(stub(), (_i, state) => {
+      const r = state.storage.sql
+        .exec<{ n: number; old: number; first: number }>(
+          "SELECT COUNT(*) AS n, SUM(event = 'test.old') AS old, MIN(CAST(detail AS INTEGER)) AS first FROM bridge_audit",
+        )
+        .one();
+      expect(r.n).toBe(BRIDGE_AUDIT_KEEP.rows);
+      expect(r.old).toBe(0);
+      expect(r.first).toBe(extra + 1); // the oldest `extra` recent rows went, the newest `rows` stayed
+    });
   });
 });

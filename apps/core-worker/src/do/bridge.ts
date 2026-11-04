@@ -39,6 +39,8 @@ const BRIDGE_MIGRATIONS = [
 const PENDING_MAX = 8;
 /** How long a used nonce is remembered (far past any challenge's life). */
 const NONCE_KEEP_MS = 3_600_000;
+/** How much of `bridge_audit` the alarm keeps (PILOT-1172): rows younger than `ms`, and of those at most the newest `rows`. */
+export const BRIDGE_AUDIT_KEEP = { ms: 30 * 86_400_000, rows: 10_000 } as const;
 /** lastReceived is written at most this often (each write is an attachment serialisation). */
 const SEEN_EVERY_MS = 1_000;
 
@@ -141,7 +143,7 @@ export class BridgeDO extends SchemaDO {
     if (att?.stage === 'live') this.#audit('bridge.error', att.connId, null);
   }
 
-  /** Pings live links, ends silent ones, and ends handshakes that ran out of time. */
+  /** Pings live links, ends silent ones, ends handshakes that ran out of time, and prunes the used nonces and the audit. */
   override async alarm(): Promise<void> {
     const now = Date.now();
     let next = Infinity;
@@ -164,6 +166,12 @@ export class BridgeDO extends SchemaDO {
       }
     }
     this.ctx.storage.sql.exec('DELETE FROM used_nonce WHERE at < ?', now - NONCE_KEEP_MS);
+    // A flapping link, or a scanner holding a valid token, must not grow the audit without bound.
+    this.ctx.storage.sql.exec(
+      'DELETE FROM bridge_audit WHERE at < ? OR id <= (SELECT MAX(id) FROM bridge_audit) - ?',
+      now - BRIDGE_AUDIT_KEEP.ms,
+      BRIDGE_AUDIT_KEEP.rows,
+    );
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
   }
 
