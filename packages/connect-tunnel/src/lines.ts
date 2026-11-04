@@ -31,7 +31,11 @@ const EMPTY = Buffer.alloc(0);
  * Reads one line from `stream` (the text before the first newline, which must come within `maxBytes`) and leaves whatever follows it in the
  * stream, so the rest can be read as raw bytes, records or more lines. Resolves null when the stream ended with nothing read.
  */
-export function readLine(stream: Readable, maxBytes: number, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<string | null> {
+export function readLine(
+  stream: Readable,
+  maxBytes: number,
+  opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<string | null> {
   if (stream.readableEnded && stream.readableLength === 0) return Promise.resolve(null);
   if (stream.destroyed && stream.readableLength === 0) return Promise.reject(new LineEnded('The stream is closed.'));
   return new Promise((resolve, reject) => {
@@ -54,7 +58,8 @@ export function readLine(stream: Readable, maxBytes: number, opts: { timeoutMs?:
       while ((chunk = stream.read() as Buffer | null) !== null) {
         held = held.length ? Buffer.concat([held, chunk]) : chunk;
         const nl = held.indexOf(0x0a);
-        if (nl >= 0 ? nl > maxBytes : held.length > maxBytes) return done(() => reject(new LineTooLong(`A line is longer than ${maxBytes} bytes.`)));
+        if (nl >= 0 ? nl > maxBytes : held.length > maxBytes)
+          return done(() => reject(new LineTooLong(`A line is longer than ${maxBytes} bytes.`)));
         if (nl >= 0) {
           const rest = held.subarray(nl + 1);
           const line = held.subarray(0, nl).toString('utf8');
@@ -75,7 +80,8 @@ export function readLine(stream: Readable, maxBytes: number, opts: { timeoutMs?:
     stream.once('error', onError);
     stream.once('close', onClose);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
-    if (opts.timeoutMs !== undefined) timer = setTimeout(() => done(() => reject(new LineTimeout('No line arrived in time.'))), opts.timeoutMs);
+    if (opts.timeoutMs !== undefined)
+      timer = setTimeout(() => done(() => reject(new LineTimeout('No line arrived in time.'))), opts.timeoutMs);
     onReadable();
   });
 }
@@ -83,7 +89,8 @@ export function readLine(stream: Readable, maxBytes: number, opts: { timeoutMs?:
 /** `JSON.stringify` plus the newline, as bytes; refuses a line over `maxBytes` (a sender bug, not something to put on the wire). */
 export function encodeLine(value: unknown, maxBytes?: number): Buffer {
   const buf = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
-  if (maxBytes !== undefined && buf.length - 1 > maxBytes) throw new LineTooLong(`A line of ${buf.length - 1} bytes is over the limit of ${maxBytes}.`);
+  if (maxBytes !== undefined && buf.length - 1 > maxBytes)
+    throw new LineTooLong(`A line of ${buf.length - 1} bytes is over the limit of ${maxBytes}.`);
   return buf;
 }
 

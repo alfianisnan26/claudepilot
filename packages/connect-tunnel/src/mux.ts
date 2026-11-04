@@ -19,16 +19,7 @@
 // Shared by the portal and the agent: only `node:*` and the contract are imported.
 
 import { CONNECT_LIMITS, CONNECT_MUX } from '@portal/contracts';
-import {
-  FRAME_FLAG,
-  FRAME_TYPE,
-  FrameDecoder,
-  ProtocolError,
-  goAwayFrame,
-  pingFrame,
-  rstFrame,
-  type Frame,
-} from './frame.js';
+import { FRAME_FLAG, FRAME_TYPE, FrameDecoder, ProtocolError, goAwayFrame, pingFrame, rstFrame, type Frame } from './frame.js';
 import { MuxStream, StreamReset, type ControlKind, type StreamHost } from './stream.js';
 
 export { MuxStream, StreamReset };
@@ -203,7 +194,13 @@ export class MuxSession implements StreamHost {
   }
 
   stats(): { bytesIn: number; bytesOut: number; framesIn: number; framesOut: number; streams: number } {
-    return { bytesIn: this.#bytesIn, bytesOut: this.#bytesOut, framesIn: this.#framesIn, framesOut: this.#framesOut, streams: this.#streams.size };
+    return {
+      bytesIn: this.#bytesIn,
+      bytesOut: this.#bytesOut,
+      framesIn: this.#framesIn,
+      framesOut: this.#framesOut,
+      streams: this.#streams.size,
+    };
   }
 
   onClose(fn: (info: MuxCloseInfo) => void): () => void {
@@ -369,7 +366,8 @@ export class MuxSession implements StreamHost {
 
   /** Queues a frame the peer asked for; a peer that asks faster than it reads is cut off instead of growing the queue. */
   #answer(raw: Buffer): void {
-    if (this.#control.length >= CONTROL_BACKLOG) return this.#protocolError(`the peer asks for more than it reads (${CONTROL_BACKLOG} control frames waiting)`);
+    if (this.#control.length >= CONTROL_BACKLOG)
+      return this.#protocolError(`the peer asks for more than it reads (${CONTROL_BACKLOG} control frames waiting)`);
     this.#control.push({ raw });
     this.#pump();
   }
