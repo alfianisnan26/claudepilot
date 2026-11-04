@@ -21,10 +21,10 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- PILOT-1180: review PASS 59423 on 582ae8d5c5c0, merge HELD for one minor (an unknown arg like `--plna` deploys for real). cf-sec fixes it on the same branch, then cf-review re-checks the delta. Then cf-sec: PILOT-1184.
-- cf-review (worker 68d76aeb, opus, auto): idle until the 1180 delta.
-- cf-bridge (worker 5bc808ae, opus): idle (pacing); next gaps 1161, 1163.
-- cf-worker (worker 6562167d, opus): phase-2 PILOT-1148 SPA assets. Note for 1171: kube() path check must refuse `..`/encoded dots/query (review 59409).
+- cf-review (worker 68d76aeb, opus, auto): reviewing, in order: 1180 delta (c09d6d213081, job d62aafa4 7/7), PILOT-1184 (eb39f815510a, job e1e6c4a8 21/21), PILOT-1148 SPA assets (0cfac02fe1c8, job 3cd68541; HIGH: headers + deploy script).
+- cf-sec (worker e28ec1b4, opus): idle, waits on the reviews. Finding (comment 59468): PILOT-1182 blocks the public go-live unless the server code is random or code sign-in is off on the public host.
+- cf-bridge (worker 5bc808ae, opus): PILOT-1163 (G2, HIGH) + 1161 (G8), branch ticket/T-3721-kube-resize-ids.
+- cf-worker (worker 6562167d, opus): PILOT-1171 slice 1 (REST client in BridgeDO + kube() path refusal), branch ticket/T-3737-worker-kube-client. 1148 may need a replay after 1180 (both edit deploy-stg.mjs).
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -49,6 +49,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Standing (operator, 21:50): crew runs in auto mode, so the classifier refuses DNS/domain changes. Any later deploy that needs one goes here as the exact command.
 - PILOT-1142: service account isnan-claudepilot:ws-isnan-jobs needs create/list/delete on `dev-rig-*` namespaces + the rights in comment 58722 (refused again, comment 59344).
 - PILOT-1145: the cp-next-healthcheck service-token secret is stored nowhere; a path into the cp-next pool without an agent seeing it.
+- PILOT-1184 (comment 59468): a separate Traefik entrypoint for the tunnel that drops CF-Connecting-IP elsewhere; confirm the server sign-in code is random (or code sign-in off on the public host).
 - PILOT-1179: a stable address range for cloudflared, then narrow PORTAL_CLOUDFLARE_HOPS (deploy/k3s/portal.yaml, now 10.42.0.0/16). PILOT-1182: a NetworkPolicy so only Traefik reaches the portal's public port.
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
