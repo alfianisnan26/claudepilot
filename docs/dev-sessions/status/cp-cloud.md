@@ -22,9 +22,10 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - MERGES HELD: cf/integration d651c999 fails agent.e2e kube case every run (PILOT-1183, jobs bd56aa58, 4d7bea57). Red until the cause is known; an incident if a cf merge caused it.
 - cf-bridge (worker 5bc808ae, opus): PILOT-1183 bisect + fix, branch ticket/T-3830-kube-e2e.
 - Ready to merge after 1183: PILOT-1179 (review PASS 59397 on d59cdd4d3275, job d2d1935b 154; go-live items -> PILOT-1184).
-- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1170 (+1169) on ticket/T-3735-tunnel-pkg-r2 0ab6789bfa2c (job 4d7bea57 545/1 fail = 1183). r2 also fixes flaky prune tests (PILOT-1181).
-- cf-sec (worker e28ec1b4, opus): PILOT-1180 (deploy script safe re-run), branch ticket/T-3827-deploy-rerun.
-- cf-worker (worker 6562167d, opus): idle (pacing); next PILOT-1148.
+- Ready to merge after 1183: PILOT-1169 + 1170 (+1181) on ticket/T-3735-tunnel-pkg-r2 0ab6789bfa2c (review PASS 59409; job 4d7bea57 545, 1 fail = 1183).
+- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1180 on 582ae8d5c5c0 (job c461fc65 6/6, plan job 54aa782b).
+- cf-sec (worker e28ec1b4, opus): idle, waits on the 1180 review; next PILOT-1184.
+- cf-worker (worker 6562167d, opus): phase-2 PILOT-1148 SPA assets. Note for 1171: kube() path check must refuse `..`/encoded dots/query (review 59409).
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
