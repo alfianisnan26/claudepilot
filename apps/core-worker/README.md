@@ -3,8 +3,8 @@
 The ClaudePilot core on Cloudflare Workers + Durable Objects (epic PILOT-1131). Phase 1: a skeleton, on staging behind Access (below). The live portal
 (`apps/server`) is unchanged and stays on k3s until cutover.
 
-- `src/app.ts`: the Hono app. `GET /healthz` answers `{ ok, service, version, commit, connectProtocol }`; any other path is the
-  portal's plain 404 body (`AppError('NOT_FOUND', 'Not found.')`).
+- `src/app.ts`: the Hono app. `GET /healthz` answers `{ ok, service, version, commit, connectProtocol }`; any other path that reaches
+  the Worker is the portal's plain 404 body (`AppError('NOT_FOUND', 'Not found.')`); the rest is the SPA (below).
 - `src/do/`: the shards (D2), each a SQLite Durable Object with a `schema_version` table and a `ping()` RPC: `PlatformDO`, `OrgDO`,
   `WorkspaceDO`, `ChatSessionDO`, `BridgeDO`. Their migrations (`SchemaDO`) are append only; so are the `migrations` tags in
   `wrangler.jsonc`.
@@ -23,13 +23,36 @@ The ClaudePilot core on Cloudflare Workers + Durable Objects (epic PILOT-1131). 
   exec written straight onto a `kube` stream. Kept out of the typecheck (it imports `apps/server`); the finding is in
   `docs/prd/cf-bridge.md` ("G6 finding").
 - `wrangler.jsonc`: name `cp-next-core`, `nodejs_compat`, no account id and no route (they come from the environment at deploy),
-  workers.dev and preview URLs off, an empty static-assets binding (`public/`, the SPA comes in phase 2).
+  workers.dev and preview URLs off, and the SPA as static assets (below).
+
+## The SPA (PILOT-1148)
+
+`npm run build` (here) builds `apps/web` and `scripts/webAssets.mjs` copies `apps/web/dist` into `public/` (git keeps only
+`.assetsignore`), fails over the Workers asset limits (20,000 files, 25 MiB each) and prints the file count and bytes. The asset
+router (`not_found_handling: single-page-application`) serves every path that is not in `run_worker_first`: a file, or `index.html`
+for a client-side route (`/`, `/admin/...`), navigation or not. `run_worker_first` sends `/api/*`, `/mcp`, `/mcp/*`, `/bridge`,
+`/connect/*`, `/healthz` and `/assets/*` to the Worker; an unknown Worker path is the plain 404 body.
+
+- Headers, the same as the portal's (`apps/server/src/app.ts`): the asset router's responses get `public/_headers`, written by
+  `webAssets.mjs` from hono `secureHeaders` with the portal's options (no HSTS) and its CSP (`apps/server/src/csp.ts`: the inline
+  theme script by hash), plus `Cache-Control: no-cache` (the shell, `sw.js` and the manifest are re-checked, so an update reaches
+  installed copies). The Worker's own responses get the same secure headers without the CSP (none of them is a document); `/api/*`
+  is `no-store`.
+- `/assets/*` (hashed): through the Worker, `public, max-age=31536000, immutable` and `Cross-Origin-Resource-Policy: cross-origin`
+  on a file that exists; a missing one is `404 Not found`, `no-store`, never the shell (the portal's rule for a tab left open across
+  a deploy).
+- The PWA: `sw.js` and `manifest.webmanifest` are at the root with scope `/`, and the web app uses only relative paths and
+  `location.host`, so they work on the new host as they are.
+- `test/assets.test.ts` checks all of this in workerd against a small build made by `vitest.config.ts`, whose expected headers come
+  from the portal's own code. Not yet routed to the Worker (they have no handler there yet): `/hooks/*`, `/admin-api/*`,
+  `/reporter/v1/*`; each is added to `run_worker_first` with its route.
 
 Commands (in the cluster only, through `scripts/job-run.sh`; never in the pod):
 
 ```sh
 npm run typecheck -w @portal/core-worker
 npm test -w @portal/core-worker              # vitest inside workerd (@cloudflare/vitest-plugin)
+npm run build -w @portal/core-worker         # the SPA into public/ (apps/web build + _headers)
 npm run build:dry -w @portal/core-worker     # wrangler deploy --dry-run: the build check, needs no token
 (cd apps/server && CLAUDEPILOT_WORKER_TESTS=1 node --import tsx --test src/connect/tunnel/bridgeWorker.test.ts)  # real client vs workerd
 ```

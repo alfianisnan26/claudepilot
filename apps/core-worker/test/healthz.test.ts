@@ -13,8 +13,9 @@ describe('cp-next-core HTTP', () => {
     expect(body).toEqual({ ok: true, service: 'cp-next-core', version: '0.0.0', commit: 'dev', connectProtocol: CONNECT_PROTOCOL });
   });
 
-  it('an unknown path is the portal’s plain 404 body', async () => {
-    for (const path of ['/nope', '/api/workspaces/x', '/bridge']) {
+  // Paths outside run_worker_first are the SPA's (test/assets.test.ts).
+  it('an unknown path of the Worker is the portal’s plain 404 body', async () => {
+    for (const path of ['/api/workspaces/x', '/bridge']) {
       const res = await SELF.fetch(`https://core.test${path}`);
       expect(res.status, path).toBe(404);
       expect(await res.json(), path).toEqual(new AppError('NOT_FOUND', 'Not found.').toJSON());
