@@ -250,7 +250,7 @@ export function ticketRows(
 
 /** The default of `lab.metricsPrograms`: what the live tickets are tagged with (most carry `claudepilot` or `konfersi`, few `program-*`). */
 export const DEFAULT_METRICS_PROGRAMS =
-  'all=All|*|4/24/2;claudepilot=ClaudePilot|claudepilot,program-claudepilot;konfersi=Konfersi|konfersi,konfersi-migration,program-konfersi;memor-id=memor.id|commits';
+  'all=All|*|4/24/2;claudepilot=ClaudePilot|claudepilot,program-claudepilot;konfersi=Konfersi|konfersi,konfersi-migration,program-konfersi;memor-id=memor.id|memorid,program-memorid';
 export const DEFAULT_TARGETS: MetricsTargets = { closuresPerHour: 2, resolveHours: 24, reviewHours: 2 };
 export const DEFAULT_ALL_TARGETS: MetricsTargets = { closuresPerHour: 4, resolveHours: 24, reviewHours: 2 };
 

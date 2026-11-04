@@ -275,7 +275,7 @@ test('parseMetricsPrograms: the default parses clean; bad entries are named and 
       ['all', 'all'],
       ['claudepilot', 'tickets'],
       ['konfersi', 'tickets'],
-      ['memor-id', 'commits'],
+      ['memor-id', 'tickets'],
     ],
   );
   assert.deepEqual(ok.programs[0]!.targets, { closuresPerHour: 4, resolveHours: 24, reviewHours: 2 });
@@ -330,7 +330,10 @@ test('resolvePrograms: all first, then the setting, then uncovered program-* tag
       ['event', 'flow'],
     ],
   );
-  assert.equal(p.find((x) => x.id === 'memor-id')!.unavailable?.reason, 'no_source');
+  // Owner 2026-11-04: memor.id is counted by its tickets (memorid, program-memorid), no longer shown as unavailable.
+  assert.equal(p.find((x) => x.id === 'memor-id')!.unavailable, undefined);
+  assert.ok(inProgram(['memorid'], p.find((x) => x.id === 'memor-id')!));
+  assert.ok(inProgram(['program-memorid'], p.find((x) => x.id === 'memor-id')!));
   assert.deepEqual(p.find((x) => x.id === 'kohi')!.targets, DEFAULT_TARGETS);
   // No setting at all: a builtin `all` with its own targets.
   const bare = resolvePrograms({ setting: undefined, programTags: [], flow: [] });

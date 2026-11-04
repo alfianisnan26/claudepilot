@@ -30,7 +30,7 @@ test('the settings store refuses a bad flow.programs on save and keeps the old v
     () => settings.set(FLOW_SETTING_KEYS.programs, `konfersi|konfersi-migration|1|${LEAD_C}`, { actor: 'ui' }),
     (e) => isAppError(e) && e.code === 'VALIDATION_FAILED',
   );
-  assert.equal(settings.get(FLOW_SETTING_KEYS.programs), 'konfersi|konfersi-migration||');
+  assert.equal(settings.get(FLOW_SETTING_KEYS.programs), 'konfersi|konfersi-migration||;memorid|memorid||');
   settings.set(FLOW_SETTING_KEYS.programs, `konfersi|konfersi-migration|1|${LEAD_B}`, { actor: 'ui' });
   assert.equal(settings.get(FLOW_SETTING_KEYS.programs), `konfersi|konfersi-migration|1|${LEAD_B}`);
   store.close();

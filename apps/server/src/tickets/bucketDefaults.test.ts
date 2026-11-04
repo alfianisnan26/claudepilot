@@ -20,6 +20,7 @@ test('the rules: exact tags beat prefix-*, a tie decides nothing, a bucket that 
       ['PILOT', ['claudepilot', 'program-claudepilot'], []],
       ['KONF', ['konfersi-migration'], ['area-']],
       ['TB', ['tradingbot'], []],
+      ['MEMOR', ['memorid'], []],
     ],
   );
   const all = () => true;
@@ -32,6 +33,7 @@ test('the rules: exact tags beat prefix-*, a tie decides nothing, a bucket that 
   assert.equal(routeByTags(r, ['claudepilot', 'konfersi-migration'], all), null, 'two buckets by exact tags: no guess');
   assert.equal(routeByTags(r, ['area-'], all), null, 'the bare prefix is not a match');
   assert.equal(routeByTags(r, ['frontend'], all), null);
+  assert.deepEqual(routeByTags(r, ['memorid'], all), { bucket: 'MEMOR', tag: 'memorid', rule: 'memorid' });
   assert.equal(routeByTags(r, ['tradingbot'], (k) => k !== 'TB'), null, 'a bucket that does not exist or is not the caller’s');
   assert.deepEqual(parseBucketRoutes('t: a; NOPE7: b; KONF: OK, bad!, -x, *, x*; konf: more'), [{ bucket: 'KONF', tags: ['ok', 'more'], prefixes: [] }]);
   assert.deepEqual(parseBucketRoutes(42), []);

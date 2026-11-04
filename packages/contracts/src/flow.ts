@@ -98,5 +98,5 @@ export const FLOW_SETTING_KEYS = {
   notifyAfterHours: 'flow.notifyAfterHours',
 } as const;
 
-/** The default program: Konfersi's migration work, its leads the first matching group of `tickets.leadPeerGroups`. */
-export const FLOW_DEFAULT_PROGRAMS = 'konfersi|konfersi-migration||';
+/** The default programs: Konfersi's migration work and memor.id's tickets (owner, 2026-11-04), each led by the first matching group of `tickets.leadPeerGroups`. */
+export const FLOW_DEFAULT_PROGRAMS = 'konfersi|konfersi-migration||;memorid|memorid||';
