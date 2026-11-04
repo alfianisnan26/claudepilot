@@ -80,6 +80,7 @@ done
 if [ -L "$nm/@portal" ]; then rm "$nm/@portal"; fi
 mkdir -p "$nm/@portal"
 link "$wt/packages/contracts" "$nm/@portal/contracts"
+link "$wt/packages/connect-tunnel" "$nm/@portal/connect-tunnel"
 link "$wt/apps/server" "$nm/@portal/server"
 link "$wt/apps/web" "$nm/@portal/web"
 # Each workspace's own install, when the main checkout has one.
