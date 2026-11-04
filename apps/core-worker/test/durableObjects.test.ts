@@ -28,7 +28,9 @@ describe('Durable Object stubs', () => {
       expect(rows.map((r) => r.version)).toEqual([1]);
       const tables = await runInDurableObject(stub, (_instance, state) =>
         state.storage.sql
-          .exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'schema_version') ORDER BY name")
+          .exec<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'schema_version') ORDER BY name",
+          )
           .toArray()
           .map((r) => r.name),
       );

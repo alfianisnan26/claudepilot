@@ -18,7 +18,13 @@ export function createApp() {
   const app = new Hono<{ Bindings: Env }>();
 
   app.get('/healthz', (c) =>
-    c.json({ ok: true, service: 'cp-next-core', version: c.env.CP_VERSION, commit: c.env.CP_COMMIT, connectProtocol: CONNECT_PROTOCOL } satisfies Healthz),
+    c.json({
+      ok: true,
+      service: 'cp-next-core',
+      version: c.env.CP_VERSION,
+      commit: c.env.CP_COMMIT,
+      connectProtocol: CONNECT_PROTOCOL,
+    } satisfies Healthz),
   );
 
   // The same bodies as the portal (apps/server/src/app.ts): an unknown path is the authz seam's plain 404.
