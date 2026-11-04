@@ -10,8 +10,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { AppError, isAppError } from '@isnanme/core';
 import { LOGIN_LIMITS } from '@portal/contracts';
 import { Hono, type Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { CODE_LOCKOUT, codeLockKey, createApp } from '../app.js';
 import { config } from '../config.js';
 import { createInstallRoutes } from '../connect/install/routes.js';
@@ -19,6 +21,7 @@ import type { InstallDeps } from '../connect/seams.js';
 import { lockMsFor, Throttle } from '../identity/throttle.js';
 import { Portal } from '../portal.js';
 import { clientIp as mcpClientIp } from '../portalmcp/routes.js';
+import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
 import { visitorOfRequest } from '../visitor.js';
@@ -42,20 +45,26 @@ type Init = { body?: unknown; headers?: Record<string, string>; ip?: string };
 const via = (visitor: string): Init => ({ ip: TUNNEL, headers: { 'x-forwarded-for': TUNNEL, 'cf-connecting-ip': visitor } });
 const forged = (claimed: string): Init => ({ ip: PUBLIC_HOP, headers: { 'x-forwarded-for': PUBLIC_HOP, 'cf-connecting-ip': claimed } });
 
-async function build(at?: { dataDir: string; key: string }) {
+async function build(at?: { dataDir: string; key: string }, mcp?: Awaited<ReturnType<typeof portalMcpHarness>>) {
   const dataDir = at?.dataDir ?? mkdtempSync(join(tmpdir(), 'cp-route-keys-'));
   const key = at?.key ?? generateSecretKey();
-  const store = await Store.open({ dataDir, secretKey: parseSecretKey(key) });
+  const store = mcp?.store ?? (await Store.open({ dataDir, secretKey: parseSecretKey(key) }));
   const rows: { kind: string; detail: unknown }[] = [];
   const platform = { audit: { record: (r: { kind: string; detail: unknown }) => void rows.push(r) }, bus: { emit: async () => {} }, useReauth: () => {}, routes: () => [], hooks: new Hono() };
-  const app = make(new Portal(CODE, 60_000), stub, store, stub, stub, stub, stub, stub, { serveWeb: false, poolService: stub, mcp: stub, skills: stub, platform });
+  // The VS Code routes are mounted only with a Portal MCP module (their tokens are its tokens).
+  const app = make(new Portal(CODE, 60_000), stub, store, stub, stub, stub, stub, stub, { serveWeb: false, poolService: stub, mcp: stub, skills: stub, platform, ...(mcp ? { portalMcp: mcp.module } : {}) });
   const call = (method: string, path: string, init: Init = {}) =>
     app.request(
       `http://localhost:3000${path}`,
       { method, headers: { host: 'localhost:3000', 'content-type': 'application/json', ...init.headers }, body: init.body === undefined ? undefined : JSON.stringify(init.body) },
       { incoming: { socket: { remoteAddress: init.ip ?? '127.0.0.1' } } },
     );
-  return { call, rows, dataDir, key, close: () => store.close(), done: () => (store.close(), rmSync(dataDir, { recursive: true, force: true })) };
+  const done = () => {
+    if (mcp) mcp.done();
+    else store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  };
+  return { call, rows, dataDir, key, close: () => store.close(), done };
 }
 
 /** Runs `fn` as the cluster does: behind the trusted proxy, with Cloudflare in front (config is read per request). */
@@ -172,8 +181,13 @@ test('email sign-in behind the tunnel: the per-address lockout counts per visito
 test('VS Code device sign-ins behind the tunnel: the per-address start limit counts per visitor; a forged header is ignored', async () => {
   // The start limit is 10 per address in 10 minutes (vscode/routes.ts). Its own message tells it apart from the pending cap (20 codes
   // waiting at once), so each half gets a fresh portal.
+  const vscodeOn = async () => {
+    const mcp = await portalMcpHarness();
+    mcp.module.settings.update({ enabled: true, sessionControl: true });
+    return mcp;
+  };
   const fromHere = async (r: Response) => r.status === 429 && /from here/.test(((await r.json()) as { error: { message: string } }).error.message);
-  const one = await build();
+  const one = await build(undefined, await vscodeOn());
   const start = (call: typeof one.call, init: Init) => call('POST', '/api/vscode/device', { ...init, body: { client: 'vscode' } });
   try {
     await behindCloudflare(async () => {
@@ -185,7 +199,7 @@ test('VS Code device sign-ins behind the tunnel: the per-address start limit cou
   } finally {
     one.done();
   }
-  const two = await build();
+  const two = await build(undefined, await vscodeOn());
   try {
     await behindCloudflare(async () => {
       let last: Response | null = null;
@@ -200,7 +214,12 @@ test('VS Code device sign-ins behind the tunnel: the per-address start limit cou
 test('connect installer routes: wrong tokens count per visitor behind the tunnel (the default address), not per hop', async () => {
   const failed: string[] = [];
   const deps = { enrollments: { lookup: () => null }, log: () => {} } as unknown as InstallDeps;
-  const app = createInstallRoutes(deps, { limiter: { blocked: () => false, fail: (ip) => void failed.push(ip) } });
+  const app = new Hono();
+  app.onError((e, c) => {
+    const err = isAppError(e) ? e : new AppError('INTERNAL_ERROR', undefined, { cause: e });
+    return c.json(err.toJSON(), err.status as ContentfulStatusCode);
+  });
+  app.route('/', createInstallRoutes(deps, { limiter: { blocked: () => false, fail: (ip) => void failed.push(ip) } }));
   const get = (init: Init) => app.request('/connect/v1/plan', { headers: { authorization: 'Bearer nope', ...init.headers } }, { incoming: { socket: { remoteAddress: init.ip } } });
   await behindCloudflare(async () => {
     assert.equal((await get(via('198.51.100.50'))).status, 401);
