@@ -16,18 +16,24 @@ import { lastSeenText, Reachability } from './link.js';
 
 const DEFAULT_NAMESPACE = 'claudepilot-workspaces';
 
-/** A loopback listener whose connections are `kube` streams on `link`. */
+/**
+ * A loopback listener whose connections are `kube` streams on `link`, each opened for `namespace` (T-3720): the agent refuses a namespace
+ * it does not serve, and the stream's proxy then forwards only that namespace's paths. Without a namespace the agent's own is used.
+ */
 export class KubeLoopback {
   readonly #server: net.Server;
   readonly #sockets = new Set<net.Socket>();
 
-  private constructor(private readonly link: Pick<NodeLink, 'open'>) {
+  private constructor(
+    private readonly link: Pick<NodeLink, 'open'>,
+    namespace?: string,
+  ) {
     this.#server = net.createServer((socket) => {
       this.#sockets.add(socket);
       socket.on('close', () => this.#sockets.delete(socket));
       socket.on('error', () => undefined);
       socket.pause();
-      this.link.open('kube').then(
+      this.link.open('kube', namespace ? { namespace } : undefined).then(
         (stream) => {
           stream.on('error', () => socket.destroy());
           socket.on('error', () => stream.destroy());
@@ -42,8 +48,8 @@ export class KubeLoopback {
     });
   }
 
-  static async listen(link: Pick<NodeLink, 'open'>): Promise<KubeLoopback> {
-    const lb = new KubeLoopback(link);
+  static async listen(link: Pick<NodeLink, 'open'>, namespace?: string): Promise<KubeLoopback> {
+    const lb = new KubeLoopback(link, namespace);
     await new Promise<void>((resolve, reject) => {
       lb.#server.once('error', reject);
       lb.#server.listen(0, '127.0.0.1', () => resolve());
@@ -153,7 +159,7 @@ export class ConnectKubeRuntime implements Runtime {
     if (!token) throw new TargetUnreachableError(this.record.id, this.#reach.downSince);
     if (this.#inner?.token === token) return this.#inner.runtime;
     if (this.#inner) this.#close();
-    this.#making ??= KubeLoopback.listen(this.#link).then((loopback) => {
+    this.#making ??= KubeLoopback.listen(this.#link, this.#namespace).then((loopback) => {
       const runtime = new KubernetesRuntime(
         {
           namespace: this.#namespace,

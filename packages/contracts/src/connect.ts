@@ -677,11 +677,23 @@ export type ConnectService = (typeof CONNECT_SERVICES)[number];
 export interface ConnectOpenRequest {
   v: 1;
   service: ConnectService;
-  /** `host` only. */
-  args?: ConnectHostOpen;
+  /** `host`: the operation. `kube`: the namespace the stream is for (absent: the agent's own, PILOT_KUBE_NAMESPACE). */
+  args?: ConnectOpenArgs;
   /** 8 hex characters, in both sides' logs, to follow one request across the tunnel. */
   trace?: string;
 }
+
+/**
+ * What a `kube` stream is for (T-3720): one of the namespaces the agent serves (PILOT_KUBE_NAMESPACE and PILOT_KUBE_NAMESPACES). The agent
+ * refuses any other namespace (`denied`), and the stream's proxy forwards only paths under this namespace, so a stream opened for A never
+ * reaches B.
+ */
+export interface ConnectKubeOpen {
+  namespace: string;
+}
+
+/** The `args` of an open request, by service. */
+export type ConnectOpenArgs = ConnectHostOpen | ConnectKubeOpen;
 
 export const CONNECT_STREAM_ERRORS = ['bad_open', 'service_unavailable', 'busy', 'denied', 'upstream_unreachable', 'timeout', 'internal'] as const;
 export type ConnectStreamError = (typeof CONNECT_STREAM_ERRORS)[number];
@@ -936,6 +948,8 @@ export const CONNECT_AGENT_ENV = {
   /** Comma-separated image references the Docker policy allows containers to be created from. */
   images: 'PILOT_IMAGES',
   kubeNamespace: 'PILOT_KUBE_NAMESPACE',
+  /** Kubernetes: comma-separated further namespaces the agent serves besides PILOT_KUBE_NAMESPACE (one kube target each; T-3720). */
+  kubeNamespaces: 'PILOT_KUBE_NAMESPACES',
   nodeName: 'PILOT_NODE_NAME',
   ca: 'PILOT_CA',
   headers: 'PILOT_HEADERS',

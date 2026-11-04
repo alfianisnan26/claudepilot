@@ -12,6 +12,7 @@ export function agentConfig(over: Partial<AgentConfig> & Pick<AgentConfig, 'data
     dockerSocket: '/nonexistent/docker.sock',
     docker: { allowImages: [], allowBinds: [] },
     kubeNamespace: null,
+    kubeNamespaces: [],
     nodeName: null,
     caFile: null,
     headers: {},

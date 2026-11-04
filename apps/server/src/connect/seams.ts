@@ -2,7 +2,7 @@
 // Additions are allowed; a changed signature goes through the coordinator.
 import type { Duplex } from 'node:stream';
 import type {
-  ConnectAgentHello, ConnectEnrollment, ConnectEnrollStatus, ConnectHostOpen, ConnectInstallOptions, ConnectKind, ConnectNodeView,
+  ConnectAgentHello, ConnectEnrollment, ConnectEnrollStatus, ConnectInstallOptions, ConnectKind, ConnectOpenArgs, ConnectNodeView,
   ConnectStatusMessage, ConnectStreamError, ConnectTargetSettings, Workspace,
 } from '@portal/contracts';
 import type { Runtime } from '../workspaces/runtime.js';
@@ -26,7 +26,7 @@ export interface NodeLink {
   readonly targetId: string;
   connected(): boolean;
   /** Resolves when the agent accepted the stream; rejects with ConnectError. `args` is for `host` only. */
-  open(service: 'docker' | 'kube' | 'host', args?: ConnectHostOpen, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream>;
+  open(service: 'docker' | 'kube' | 'host', args?: ConnectOpenArgs, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream>;
   info(): NodeInfo | null;
   /** Fires on connect (true) and on disconnect (false). Returns an unsubscribe. */
   onChange(fn: (connected: boolean) => void): () => void;

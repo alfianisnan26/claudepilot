@@ -17,8 +17,10 @@ export interface KubeServiceOptions {
   tokenFile?: string;
   /** The CA of the API server's certificate; null: Node's roots (a test's plain-HTTP fake has none). */
   caFile?: string | null;
-  /** The connector's namespace (PILOT_KUBE_NAMESPACE, or the service account's own). */
+  /** The connector's namespace (PILOT_KUBE_NAMESPACE, or the service account's own): its identity Secret, and a stream opened without one. */
   namespace: string;
+  /** Further namespaces it serves (PILOT_KUBE_NAMESPACES; T-3720), each with its own proxy and allowlist. */
+  namespaces?: string[];
   /** The per-connection bearer from the portal's `config` message. */
   localToken(): string | null;
   log: Logger;
@@ -40,30 +42,47 @@ export function inClusterServer(env: NodeJS.ProcessEnv = process.env): string | 
   return `https://${host.includes(':') && !host.startsWith('[') ? `[${host}]` : host}:${port}`;
 }
 
+/**
+ * The namespace a `kube` stream is for: the open request's `{ namespace }`, or the agent's own when there are no args (a portal from
+ * before T-3720). Null when the args name no namespace, or one the agent does not serve: the stream is refused.
+ */
+export function streamNamespace(args: unknown, home: string, served: ReadonlySet<string>): string | null {
+  if (args === undefined) return home;
+  const ns = args && typeof args === 'object' ? (args as { namespace?: unknown }).namespace : undefined;
+  return typeof ns === 'string' && served.has(ns) ? ns : null;
+}
+
 export function createService(opts: KubeServiceOptions): KubeService {
   const server = opts.server ?? inClusterServer(opts.env);
-  if (!validNamespace(opts.namespace)) throw new Error('The Kubernetes namespace is not valid.');
-  let proxy: KubeProxy | null = null;
+  const namespaces = [...new Set([opts.namespace, ...(opts.namespaces ?? [])])];
+  for (const ns of namespaces) if (!validNamespace(ns)) throw new Error('The Kubernetes namespace is not valid.');
+  const served: ReadonlySet<string> = new Set(namespaces);
+  // One proxy per namespace: each one's allowlist and body checks are for its own namespace only, so a stream opened for A can't reach B.
+  const proxies = new Map<string, KubeProxy>();
   let changed: (() => void) | undefined;
   let status: ConnectServiceStatus = { name: 'kube', ok: false, error: server ? 'Not checked yet.' : 'Not running in a Kubernetes cluster (no KUBERNETES_SERVICE_HOST).' };
   let lastCode = '';
   let probedAt = 0;
 
-  const ensure = (): KubeProxy | null => {
-    if (!server) return null;
-    proxy ??= new KubeProxy({
-      server,
-      tokenFile: opts.tokenFile ?? `${SA_DIR}/token`,
-      caFile: opts.caFile === undefined ? `${SA_DIR}/ca.crt` : opts.caFile,
-      namespace: opts.namespace,
-      localToken: opts.localToken,
-      log: opts.log,
-      ...(opts.now ? { now: opts.now } : {}),
-      ...(opts.readFile ? { readFile: opts.readFile } : {}),
-      ...(opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {}),
-      onChange: () => changed?.(),
-      images: opts.images?.length ? new ImageAllow(opts.images) : null,
-    });
+  const ensure = (ns: string = opts.namespace): KubeProxy | null => {
+    if (!server || !served.has(ns)) return null;
+    let proxy = proxies.get(ns);
+    if (!proxy) {
+      proxy = new KubeProxy({
+        server,
+        tokenFile: opts.tokenFile ?? `${SA_DIR}/token`,
+        caFile: opts.caFile === undefined ? `${SA_DIR}/ca.crt` : opts.caFile,
+        namespace: ns,
+        localToken: opts.localToken,
+        log: opts.log,
+        ...(opts.now ? { now: opts.now } : {}),
+        ...(opts.readFile ? { readFile: opts.readFile } : {}),
+        ...(opts.idleMs !== undefined ? { idleMs: opts.idleMs } : {}),
+        onChange: () => changed?.(),
+        images: opts.images?.length ? new ImageAllow(opts.images) : null,
+      });
+      proxies.set(ns, proxy);
+    }
     return proxy;
   };
   // Build the proxy now when there is a server: a missing CA or token file is a configuration problem to say at start, not at the first stream.
@@ -99,13 +118,18 @@ export function createService(opts: KubeServiceOptions): KubeService {
       return p;
     },
 
-    async accept(): Promise<StreamRefusal | null> {
+    async accept(args?: unknown): Promise<StreamRefusal | null> {
+      if (streamNamespace(args, opts.namespace, served) === null) {
+        opts.log.warn('policy.denied', { service: 'kube', rule: 'namespace' });
+        return { code: 'denied', message: 'That namespace is not served by this connector.' };
+      }
       if (!status.ok || Date.now() - probedAt > 3000) await refresh();
       return status.ok ? null : { code: server ? 'upstream_unreachable' : 'service_unavailable', message: status.error ?? 'Kubernetes is not available.' };
     },
 
-    handle(stream: TunnelStream, trace: string) {
-      const p = ensure();
+    handle(stream: TunnelStream, trace: string, args?: unknown) {
+      const ns = streamNamespace(args, opts.namespace, served);
+      const p = ns === null ? null : ensure(ns);
       if (!p) return void stream.destroy();
       p.serve(stream, trace);
     },
@@ -115,12 +139,14 @@ export function createService(opts: KubeServiceOptions): KubeService {
     onChange: (fn) => void (changed = fn),
 
     report(): Pick<ConnectStatusMessage, 'denied'> {
-      const denied = proxy?.takeDenied() ?? [];
+      const counts = new Map<string, number>();
+      for (const p of proxies.values()) for (const d of p.takeDenied()) counts.set(d.rule, (counts.get(d.rule) ?? 0) + d.count);
+      const denied = [...counts].map(([rule, count]) => ({ rule, count }));
       return denied.length ? { denied } : {};
     },
 
     close() {
-      proxy?.close();
+      for (const p of proxies.values()) p.close();
     },
   };
 }

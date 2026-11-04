@@ -55,6 +55,10 @@ describe('ConnectKubeRuntime', () => {
     // Every call carried this connection's bearer (the agent's proxy checks and drops it).
     assert.ok(api.requests.every((r) => r.auth === `Bearer ${link.kubeToken()}`));
     assert.ok(api.requests.every((r) => r.path.includes('/namespaces/cx3-ns/') || r.path.endsWith('/namespaces/cx3-ns')));
+    // T-3720: every kube stream names the target's namespace, so an agent serving several picks this one's allowlist (and refuses others).
+    const kube = link.opened.filter((o) => o.service === 'kube');
+    assert.ok(kube.length > 0);
+    assert.ok(kube.every((o) => JSON.stringify(o.args) === JSON.stringify({ namespace: 'cx3-ns' })), JSON.stringify(kube));
     [w] = await rt.list();
     assert.equal(w, undefined);
   });

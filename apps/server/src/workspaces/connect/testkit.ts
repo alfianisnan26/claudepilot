@@ -3,7 +3,7 @@
 // pipe to a TCP port: a fake API server) and `host` (T2's host service). `connect()` and `drop()` make and break the tunnel, so a test
 // can do to a runtime what a dropped WebSocket does. Nothing in the portal imports this file.
 import net from 'node:net';
-import type { ConnectHostOpen, ConnectStatusMessage, ConnectStreamError } from '@portal/contracts';
+import type { ConnectOpenArgs, ConnectStatusMessage, ConnectStreamError } from '@portal/contracts';
 import { ConnectError, type NodeInfo, type NodeLink, type RuntimeDeps, type TunnelStream, type ConnectTargetRecord } from '../../connect/seams.js';
 import { memoryPair } from '../../connect/tunnel/memory.js';
 import { MuxSession, type MuxStream } from '../../connect/tunnel/mux.js';
@@ -36,7 +36,7 @@ export class FakeLink implements NodeLink {
   #info: NodeInfo | null = null;
   readonly #listeners = new Set<(connected: boolean) => void>();
   /** Every stream the portal opened, by service (the tests' view of what crossed the tunnel). */
-  readonly opened: { service: string; args?: ConnectHostOpen }[] = [];
+  readonly opened: { service: string; args?: ConnectOpenArgs }[] = [];
 
   constructor(
     readonly nodeId: string,
@@ -87,7 +87,7 @@ export class FakeLink implements NodeLink {
     if (this.#info) this.#info = { ...this.#info, status: { ...this.#info.status!, ...status } };
   }
 
-  async open(service: 'docker' | 'kube' | 'host', args?: ConnectHostOpen, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream> {
+  async open(service: 'docker' | 'kube' | 'host', args?: ConnectOpenArgs, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<TunnelStream> {
     const session = this.#portal;
     if (!session || session.closed) throw new ConnectError('agent_offline', 'The node is offline.');
     this.opened.push({ service, ...(args ? { args } : {}) });

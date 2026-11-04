@@ -9,7 +9,7 @@ import {
   CONNECT_LIMITS,
   CONNECT_SERVICES,
   CONNECT_STREAM_ERRORS,
-  type ConnectHostOpen,
+  type ConnectOpenArgs,
   type ConnectOpenRequest,
   type ConnectOpenResponse,
   type ConnectService,
@@ -23,7 +23,7 @@ const noop = () => undefined;
 
 export interface OpenRequest {
   service: ConnectService;
-  args?: ConnectHostOpen;
+  args?: ConnectOpenArgs;
   trace?: string;
 }
 

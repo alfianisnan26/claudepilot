@@ -218,7 +218,7 @@ describe('a kubernetes agent against the real hub (A6 in its fake form)', () => 
     const loopbacks: net.Server[] = [];
     try {
       const t = portal.target({ id: 'e2e-kube', kind: 'kubernetes', options: { namespace: fake.namespace } });
-      const cfg = { mode: 'kubernetes' as const, dataDir: join(dir, 'agent-kube'), enrollToken: t.token, kubeNamespace: fake.namespace, identitySecret: 'claudepilot-agent-identity' };
+      const cfg = { mode: 'kubernetes' as const, dataDir: join(dir, 'agent-kube'), enrollToken: t.token, kubeNamespace: fake.namespace, kubeNamespaces: ['e2e-other'], identitySecret: 'claudepilot-agent-identity' };
       const kube = { server: fake.url, tokenFile, caFile: null };
       const first = start(cfg, { serviceDeps: { kube } });
       await first.h.whenConnected();
@@ -244,6 +244,10 @@ describe('a kubernetes agent against the real hub (A6 in its fake form)', () => 
       loopbacks.push(listener);
       await new Promise<void>((r) => listener.listen(0, '127.0.0.1', r));
       await until(() => link.kubeToken() !== null);
+      // T-3720: across the real tunnel, a kube stream for a namespace the agent serves opens; any other is refused before the proxy.
+      (await link.open('kube', { namespace: 'e2e-other' })).destroy();
+      (await link.open('kube', { namespace: fake.namespace })).destroy();
+      await assert.rejects(link.open('kube', { namespace: 'not-served' }), { code: 'denied' });
       const kc = new KubeConfig();
       kc.loadFromOptions({
         clusters: [{ name: 't', server: `http://127.0.0.1:${(listener.address() as AddressInfo).port}`, skipTLSVerify: true }],
