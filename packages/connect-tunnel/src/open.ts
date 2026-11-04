@@ -32,7 +32,11 @@ export interface OpenRequest {
  * line (anything the acceptor already sent behind it is still in the stream). Rejects with a ConnectError: `agent_offline` when the tunnel is
  * gone, `busy` at the stream cap, `timeout`, or the acceptor's own typed refusal.
  */
-export async function openService(session: MuxSession, request: OpenRequest, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<MuxStream> {
+export async function openService(
+  session: MuxSession,
+  request: OpenRequest,
+  opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<MuxStream> {
   let stream: MuxStream;
   try {
     stream = session.open();
@@ -44,10 +48,19 @@ export async function openService(session: MuxSession, request: OpenRequest, opt
   // Nothing listens to the stream yet: an error on it (a reset, the tunnel ending) must reach the awaiting code, not the process.
   stream.on('error', noop);
   try {
-    const line: ConnectOpenRequest = { v: 1, service: request.service, ...(request.args ? { args: request.args } : {}), ...(request.trace ? { trace: request.trace } : {}) };
+    const line: ConnectOpenRequest = {
+      v: 1,
+      service: request.service,
+      ...(request.args ? { args: request.args } : {}),
+      ...(request.trace ? { trace: request.trace } : {}),
+    };
     await writeLine(stream, line, CONNECT_LIMITS.maxOpenLine);
-    const answer = await readLine(stream, CONNECT_LIMITS.maxOpenLine, { timeoutMs: opts.timeoutMs ?? CONNECT_LIMITS.openMs, signal: opts.signal });
-    if (answer === null) throw new ConnectError(session.closed ? 'agent_offline' : 'internal', 'The other end closed the stream without answering.');
+    const answer = await readLine(stream, CONNECT_LIMITS.maxOpenLine, {
+      timeoutMs: opts.timeoutMs ?? CONNECT_LIMITS.openMs,
+      signal: opts.signal,
+    });
+    if (answer === null)
+      throw new ConnectError(session.closed ? 'agent_offline' : 'internal', 'The other end closed the stream without answering.');
     const response = answerOf(answer);
     if (!response.ok) throw new ConnectError(response.code, response.message);
     stream.off('error', noop);
@@ -78,7 +91,8 @@ function answerOf(line: string): ConnectOpenResponse {
 function asConnectError(e: unknown, session: MuxSession): ConnectError {
   if (e instanceof ConnectError) return e;
   if (e instanceof LineTimeout) return new ConnectError('timeout', 'The other end did not answer the stream open in time.');
-  if (e instanceof LineEnded || e instanceof LineTooLong || e instanceof LineMalformed) return new ConnectError(session.closed ? 'agent_offline' : 'internal', e.message);
+  if (e instanceof LineEnded || e instanceof LineTooLong || e instanceof LineMalformed)
+    return new ConnectError(session.closed ? 'agent_offline' : 'internal', e.message);
   if (session.closed) return new ConnectError('agent_offline', 'The tunnel is closed.');
   // a reset by the peer, or a write that failed because the stream ended
   return new ConnectError('internal', e instanceof Error ? e.message : String(e));
@@ -124,7 +138,8 @@ export async function acceptService(
   let request: ConnectOpenRequest;
   try {
     const v = parseLine(line) as Partial<ConnectOpenRequest> | null;
-    if (!v || typeof v !== 'object' || v.v !== 1 || !CONNECT_SERVICES.includes(v.service as ConnectService)) throw new LineMalformed('bad request');
+    if (!v || typeof v !== 'object' || v.v !== 1 || !CONNECT_SERVICES.includes(v.service as ConnectService))
+      throw new LineMalformed('bad request');
     request = { v: 1, service: v.service as ConnectService };
     if (v.args !== undefined) {
       if (!v.args || typeof v.args !== 'object' || Array.isArray(v.args)) throw new LineMalformed('bad args');

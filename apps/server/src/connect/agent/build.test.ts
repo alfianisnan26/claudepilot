@@ -36,9 +36,19 @@ describe('the generated bundle', () => {
       return true;
     });
     assert.deepEqual(unexpected, [], 'the bundle imports something it must not');
-    assert.ok(out.imports.some((i) => i.path === '@lydell/node-pty' && i.kind === 'dynamic-import'), 'the pty package stays a run-time import');
+    assert.ok(
+      out.imports.some((i) => i.path === '@lydell/node-pty' && i.kind === 'dynamic-import'),
+      'the pty package stays a run-time import',
+    );
 
-    const allowedSource = [/^src\/connect\/agent\//, /^src\/connect\/tunnel\//, /^src\/connect\/seams\.ts$/, /^src\/workspaces\/(hostexec|runtime)\.ts$/, /^\.\.\/\.\.\/packages\/contracts\/src\/connect\.ts$/, /^\.\.\/\.\.\/packages\/connect-tunnel\/src\//];
+    const allowedSource = [
+      /^src\/connect\/agent\//,
+      /^src\/connect\/tunnel\//,
+      /^src\/connect\/seams\.ts$/,
+      /^src\/workspaces\/(hostexec|runtime)\.ts$/,
+      /^\.\.\/\.\.\/packages\/contracts\/src\/connect\.ts$/,
+      /^\.\.\/\.\.\/packages\/connect-tunnel\/src\//,
+    ];
     const allowedPackages = new Set(['ws', 'tar-stream', 'streamx', 'fast-fifo', 'b4a', 'text-decoder', 'events-universal']);
     const stray: string[] = [];
     for (const input of Object.keys(metafile.inputs)) {
@@ -48,7 +58,11 @@ describe('the generated bundle', () => {
         if (!allowedPackages.has(name)) stray.push(input);
       } else if (!allowedSource.some((re) => re.test(input))) stray.push(input);
     }
-    assert.deepEqual(stray, [], 'something outside the allowed set was bundled (a dependency, or a server module the agent must not carry)');
+    assert.deepEqual(
+      stray,
+      [],
+      'something outside the allowed set was bundled (a dependency, or a server module the agent must not carry)',
+    );
   });
 });
 
@@ -67,12 +81,20 @@ describe('the bundle as a program', () => {
   });
 
   const run = (args: string[], env: Record<string, string> = {}, input?: string) =>
-    spawnSync(process.execPath, [file, ...args], { env: { PATH: process.env.PATH!, HOME: dir, ...env }, input, encoding: 'utf8', timeout: 20_000 });
+    spawnSync(process.execPath, [file, ...args], {
+      env: { PATH: process.env.PATH!, HOME: dir, ...env },
+      input,
+      encoding: 'utf8',
+      timeout: 20_000,
+    });
 
   /** The same, without blocking this process: the portal under test lives in it and must be able to answer. */
   const runAsync = (args: string[], env: Record<string, string> = {}, input?: string) =>
     new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
-      const c = spawn(process.execPath, [file, ...args], { env: { PATH: process.env.PATH!, HOME: dir, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+      const c = spawn(process.execPath, [file, ...args], {
+        env: { PATH: process.env.PATH!, HOME: dir, ...env },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
       let stdout = '';
       let stderr = '';
       c.stdout.on('data', (d: Buffer) => (stdout += d));
@@ -99,7 +121,12 @@ describe('the bundle as a program', () => {
     symlinkSync(current, chained);
     const expected = `pilot-agent ${CONNECT_AGENT_VERSION} (build ${PILOT_AGENT_BUILD}, protocol 1)`;
     const via = (script: string, args: string[], cwd: string, env: Record<string, string> = {}) =>
-      spawnSync(process.execPath, [script, ...args], { cwd, env: { PATH: process.env.PATH!, HOME: dir, ...env }, encoding: 'utf8', timeout: 20_000 });
+      spawnSync(process.execPath, [script, ...args], {
+        cwd,
+        env: { PATH: process.env.PATH!, HOME: dir, ...env },
+        encoding: 'utf8',
+        timeout: 20_000,
+      });
     for (const [what, script, cwd] of [
       ['an absolute symlink', current, dir],
       ['a relative path to the symlink', './current.mjs', var_],
@@ -114,7 +141,12 @@ describe('the bundle as a program', () => {
     // The commands the installer uses all do their work (or say why not) through the link: none of them is a silent exit 0.
     const help = via(current, ['help'], dir);
     assert.match(help.stdout, /enroll \[--token-stdin\]/);
-    const noToken = via(current, ['enroll', '--token-stdin'], dir, { PILOT_MODE: 'host', PILOT_DATA_DIR: join(dir, 'none'), PILOT_URL: 'http://127.0.0.1:1', PILOT_ALLOW_HTTP: '1' });
+    const noToken = via(current, ['enroll', '--token-stdin'], dir, {
+      PILOT_MODE: 'host',
+      PILOT_DATA_DIR: join(dir, 'none'),
+      PILOT_URL: 'http://127.0.0.1:1',
+      PILOT_ALLOW_HTTP: '1',
+    });
     assert.equal(noToken.status, 12, 'enroll with no token on stdin says so and exits 12');
     assert.match(noToken.stderr, /No token/);
     const identity = via(current, ['identity'], dir, { PILOT_MODE: 'host', PILOT_DATA_DIR: join(dir, 'none') });
@@ -131,11 +163,19 @@ describe('the bundle as a program', () => {
     assert.match(idle.stderr, /not enrolled/);
     assert.equal(run(['identity'], {}).status, 10, 'no mode: a configuration error (the installer’s exit 10)');
     const argToken = ['cpen_', 'arguments_are_ignored'].join('');
-    const noToken = run(['enroll', '--token', argToken], { PILOT_MODE: 'host', PILOT_DATA_DIR: join(dir, 'none'), PILOT_URL: 'http://127.0.0.1:1' });
+    const noToken = run(['enroll', '--token', argToken], {
+      PILOT_MODE: 'host',
+      PILOT_DATA_DIR: join(dir, 'none'),
+      PILOT_URL: 'http://127.0.0.1:1',
+    });
     assert.equal(noToken.status, 12);
     assert.match(noToken.stderr, /No token/);
     assert.equal(`${noToken.stdout}${noToken.stderr}`.includes(argToken), false);
-    const unreachable = run(['enroll', '--token-stdin'], { PILOT_MODE: 'host', PILOT_DATA_DIR: join(dir, 'none'), PILOT_URL: 'http://127.0.0.1:1', PILOT_ALLOW_HTTP: '1' }, `cpen_${'B'.repeat(43)}\n`);
+    const unreachable = run(
+      ['enroll', '--token-stdin'],
+      { PILOT_MODE: 'host', PILOT_DATA_DIR: join(dir, 'none'), PILOT_URL: 'http://127.0.0.1:1', PILOT_ALLOW_HTTP: '1' },
+      `cpen_${'B'.repeat(43)}\n`,
+    );
     assert.equal(unreachable.status, 11);
     assert.equal(`${unreachable.stdout}${unreachable.stderr}`.includes('B'.repeat(43)), false, 'the token is not echoed');
   });
@@ -146,7 +186,14 @@ describe('the bundle as a program', () => {
     const dataDir = join(dir, 'agent');
     const home = join(dir, 'home');
     mkdirSync(home);
-    const env = { PILOT_MODE: 'host', PILOT_URL: portal.origin, PILOT_DATA_DIR: dataDir, PILOT_HOME: home, PILOT_ALLOW_HTTP: '1', PILOT_LOG_LEVEL: 'info' };
+    const env = {
+      PILOT_MODE: 'host',
+      PILOT_URL: portal.origin,
+      PILOT_DATA_DIR: dataDir,
+      PILOT_HOME: home,
+      PILOT_ALLOW_HTTP: '1',
+      PILOT_LOG_LEVEL: 'info',
+    };
 
     const enrolled = await runAsync(['enroll', '--token-stdin'], env, `${t.token}\r\n`);
     assert.equal(enrolled.status, 0, enrolled.stderr);
@@ -160,7 +207,10 @@ describe('the bundle as a program', () => {
     assert.match(who.stdout, /fingerprint [0-9a-f]{32}/);
     assert.equal(who.stdout.includes('privateKey'), false);
 
-    const child = spawn(process.execPath, [file, 'run'], { env: { PATH: process.env.PATH!, HOME: dir, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [file, 'run'], {
+      env: { PATH: process.env.PATH!, HOME: dir, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const logs: string[] = [];
     child.stdout.on('data', (c: Buffer) => logs.push(c.toString()));
     child.stderr.on('data', (c: Buffer) => logs.push(c.toString()));
@@ -171,7 +221,11 @@ describe('the bundle as a program', () => {
         if (Date.now() - start > 15_000) throw new Error(`the bundle did not connect; its log:\n${logs.join('')}`);
         await new Promise((r) => setTimeout(r, 50));
       }
-      assert.equal(portal.hub.hub.connection(nodeId)!.hello.agentBuild, PILOT_AGENT_BUILD, 'the agent reports the hash of its own file as its build');
+      assert.equal(
+        portal.hub.hub.connection(nodeId)!.hello.agentBuild,
+        PILOT_AGENT_BUILD,
+        'the agent reports the hash of its own file as its build',
+      );
 
       // T-PERF: the idle agent's memory (budget: 100 MB resident), read from the kernel for the running process.
       await new Promise((r) => setTimeout(r, 1500));
@@ -179,7 +233,9 @@ describe('the bundle as a program', () => {
       ctx.diagnostic(`idle resident memory of the bundle: ${(rssKb / 1024).toFixed(1)} MB`);
       assert.ok(rssKb > 0 && rssKb < 100 * 1024, `the idle agent uses ${(rssKb / 1024).toFixed(1)} MB (budget 100)`);
 
-      const stream = await portal.hub.hub.link({ id: nodeId, targetId: 'bundle1' }).open('host', { op: 'exec', argv: ['sh', '-c', 'echo from the bundle; pwd'] });
+      const stream = await portal.hub.hub
+        .link({ id: nodeId, targetId: 'bundle1' })
+        .open('host', { op: 'exec', argv: ['sh', '-c', 'echo from the bundle; pwd'] });
       const parser = new RecordParser();
       const text: Buffer[] = [];
       let result: unknown = null;
