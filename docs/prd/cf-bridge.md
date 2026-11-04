@@ -77,8 +77,9 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
   `deploy/k3s/workspace-orgs.yaml`), bound to the bridge's SA. The proxy's allowlist is stricter than that Role (first wall); RBAC is
   the second. Not in it: `secrets` (the generic Connect manifest grants secrets in the workspace namespace, `connect/install/testdata/manifest-kubernetes.yaml:41-42`; the portal has no such right today, so the bridge does not get it).
 - In the namespace the bridge serves (`PILOT_KUBE_NAMESPACE`), NOT its own: the agent keeps its identity Secret there
-  (`agent/client.ts:371-374`, `agent/identity.kube.ts:26`), so `secrets` get/update on `claudepilot-agent-identity` by `resourceNames`,
-  plus `create` on secrets (create can't be limited by name). This is the one right beyond the portal's. The enrollment-token Secret is
+  (`agent/client.ts:371-374`, `agent/identity.kube.ts:26`), so `secrets` get/update on `claudepilot-agent-identity` by `resourceNames`
+  only. No `create` (it can't be limited by name): the coordinator creates the empty Secret before the first apply, and the agent's
+  first write is an update (T-3699 review). This is the one right beyond the portal's. The enrollment-token Secret is
   read by the kubelet for the pod's env and needs no Role. Built in `deploy/k3s-bridge/rbac.yaml` (T-3699).
 - Not needed: `deploy/k3s/workspace-jobs-rbac.yaml` (the workspaces' own Job accounts for job-run and gate-job; the portal never uses them),
   the namespace-create ClusterRole (`rbac.yaml:68-89`; namespaces come from git).
