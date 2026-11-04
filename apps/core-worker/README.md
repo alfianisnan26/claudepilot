@@ -44,7 +44,8 @@ for a client-side route (`/`, `/admin/...`), navigation or not. `run_worker_firs
 - The PWA: `sw.js` and `manifest.webmanifest` are at the root with scope `/`, and the web app uses only relative paths and
   `location.host`, so they work on the new host as they are.
 - `test/assets.test.ts` checks all of this in workerd against a small build made by `vitest.config.ts`, whose expected headers come
-  from the portal's own code. Not yet routed to the Worker (they have no handler there yet): `/hooks/*`, `/admin-api/*`,
+  from the portal's own code; vitest's `SELF` goes past the asset router, so the router's own answers are fetched there through the
+  `ASSETS` binding, and `test-node/router.test.mjs` (`npm run test:router`, wrangler dev) checks which path goes where. Not yet routed to the Worker (they have no handler there yet): `/hooks/*`, `/admin-api/*`,
   `/reporter/v1/*`; each is added to `run_worker_first` with its route.
 
 Commands (in the cluster only, through `scripts/job-run.sh`; never in the pod):
@@ -52,6 +53,7 @@ Commands (in the cluster only, through `scripts/job-run.sh`; never in the pod):
 ```sh
 npm run typecheck -w @portal/core-worker
 npm test -w @portal/core-worker              # vitest inside workerd (@cloudflare/vitest-plugin)
+npm run test:router -w @portal/core-worker   # the asset router in front of the Worker (wrangler dev, node:test)
 npm run build -w @portal/core-worker         # the SPA into public/ (apps/web build + _headers)
 npm run build:dry -w @portal/core-worker     # wrangler deploy --dry-run: the build check, needs no token
 (cd apps/server && CLAUDEPILOT_WORKER_TESTS=1 node --import tsx --test src/connect/tunnel/bridgeWorker.test.ts)  # real client vs workerd

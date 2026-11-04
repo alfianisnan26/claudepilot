@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 // PILOT-1148: the SPA as static assets (wrangler.jsonc `assets`, scripts/webAssets.mjs, src/app.ts), against the test web build of
 // vitest.config.ts. The expected headers are what the portal sends today, computed from its own code there.
+// SELF calls the Worker directly, past the asset router: what the router serves is fetched here through the ASSETS binding (the same
+// asset worker, with not_found_handling and _headers), and which path goes where (run_worker_first) is test-node/router.test.mjs.
 const base = 'https://core.test';
 const shellHeaders = JSON.parse(env.TEST_PORTAL_SHELL_HEADERS) as Record<string, string>;
 const assetHeaders = JSON.parse(env.TEST_PORTAL_ASSET_HEADERS) as Record<string, string>;
@@ -26,7 +28,7 @@ describe('the SPA', () => {
   ] as const) {
     it(`/ and a deep link are the shell, with the portal’s headers and no-cache (${label})`, async () => {
       for (const path of ['/', '/admin/sessions', '/admin/sessions/abc?new=1', '/nope']) {
-        const res = await SELF.fetch(`${base}${path}`, init);
+        const res = await env.ASSETS.fetch(`${base}${path}`, init);
         expect(res.status, path).toBe(200);
         expect(res.headers.get('content-type'), path).toMatch(/^text\/html/);
         const html = await res.text();
@@ -39,12 +41,12 @@ describe('the SPA', () => {
   }
 
   it('the service worker and the manifest are served at the root with no-cache (scope / on any host)', async () => {
-    const sw = await SELF.fetch(`${base}/sw.js`);
+    const sw = await env.ASSETS.fetch(`${base}/sw.js`);
     expect(sw.status).toBe(200);
     expect(sw.headers.get('content-type')).toMatch(/javascript/);
     expect(sw.headers.get('cache-control')).toBe('no-cache');
     expectHeaders(sw, shellHeaders, '/sw.js');
-    const manifest = await SELF.fetch(`${base}/manifest.webmanifest`);
+    const manifest = await env.ASSETS.fetch(`${base}/manifest.webmanifest`);
     expect(manifest.status).toBe(200);
     expect(manifest.headers.get('cache-control')).toBe('no-cache');
     expect(await manifest.json()).toMatchObject({ id: '/', start_url: '/', scope: '/' });
@@ -69,7 +71,7 @@ describe('the SPA', () => {
     }
   });
 
-  it('/api, /mcp, /bridge and /connect reach the Worker, not the SPA, even as a navigation', async () => {
+  it('the Worker answers /api, /mcp, /bridge and /connect with its plain 404 and the portal’s secure headers', async () => {
     for (const path of ['/api/x', '/api/workspaces/a/b', '/mcp', '/mcp/x', '/bridge', '/connect/enroll']) {
       const res = await SELF.fetch(`${base}${path}`, { headers: { 'Sec-Fetch-Mode': 'navigate' } });
       expect(res.status, path).toBe(404);

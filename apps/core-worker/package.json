@@ -7,6 +7,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:router": "node --test test-node/router.test.mjs",
     "build": "npm run build -w @portal/web && node scripts/webAssets.mjs",
     "build:dry": "wrangler deploy --dry-run --outdir dist"
   },
