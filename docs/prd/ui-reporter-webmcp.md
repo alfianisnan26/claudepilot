@@ -41,7 +41,7 @@ Owner, 2026-11-03: "auto approve ... should consent user". The Allow sheet offer
 ## How to try it
 
 - **Chrome.** Per secondary sources (not checked against chromestatus): `chrome://flags/#enable-webmcp-testing` locally, or an origin trial token for a live site (from Chrome 149). Firefox and Safari have none: the panel registers nothing and is unchanged.
-- **The iframe must allow it.** WebMCP is a permissions-policy feature (`tools`, default `'self'`), and the panel is a cross-origin iframe of the host page. Until the SDK's iframe says `allow="clipboard-write; tools"` (a change in the SDK repo `alfianisnan26/pilot-reporter`, then `scripts/vendor-reporter.sh`), Chrome refuses the registration and the panel stays quiet.
+- **The iframe allows it.** WebMCP is a permissions-policy feature (`tools`, default `'self'`), and the panel is a cross-origin iframe of the host page: the SDK's iframe says `allow="clipboard-write; tools"` since pilot-reporter bcd83ea (vendored as `0.1.0+bcd83ea`). An older SDK build leaves it out, and Chrome then refuses the registration (the panel stays quiet).
 - **Without such a browser.** The web dev server only: open the panel with `?webmcp=shim`; a small stand-in (`webmcpShim.ts`, never in a production build) answers `document.modelContext.list()` and `document.modelContext.call(name, input)` in the panel frame's console. The reference polyfill (`@mcp-b/webmcp-polyfill`, `@mcp-b/global`) is not bundled: the panel's CSP loads nothing from outside.
 
 ## Not in this slice
