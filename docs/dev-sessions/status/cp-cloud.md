@@ -12,7 +12,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - cf-bridge (worker 5bc808ae, opus, two.claude): PILOT-1141 manifests: fixing the review FAIL (was ef7d6fbd0); next PILOT-1162.
 - cf-review (worker 68d76aeb, opus, auto, two.claude): blind review of PILOT-1141; then the other HIGH PRs (1144, 1138, 1139, 1162).
 - cf-worker (worker 6562167d, opus, two.claude): PILOT-1143 Worker skeleton, then PILOT-1144 BridgeDO.
-- cf-sec (worker e28ec1b4, opus, two.claude): PILOT-1138 rate limits, then PILOT-1139 origin/CSRF; PAUSED (pacing), WIP pushed, wakes when a builder slot frees.
+- cf-sec (worker e28ec1b4, opus, two.claude): PILOT-1138 (7601a74be, job a05837fd 500) and PILOT-1139 (e34ac8989, job 65e012f1 5194) built and self-tested, both in blind review at cf-review; idle (pacing) for any fixes. Expect a small doc conflict in authorization.md §12.6/§12.7 at merge.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
 ## DECISIONS
