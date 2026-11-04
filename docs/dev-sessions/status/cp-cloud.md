@@ -16,15 +16,14 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1168 route limiter keys merged 7e4b34d01..103716ada (job 4e2cda31 222, review PASS 58772), closed. Follow-up PILOT-1179 (go-live blocker).
 - PILOT-1145 DONE by the operator as coordinator (job 5afb4f9e on 27102ae): https://pilot-next.kohi-labs.com serves cp-next-core behind Access (anon 403, service token 200), closed by the operator. Script merged 599c96411..0022bff07 (review PASS on 27102ae67f10, in cf-review's report; ticket closed). Minors -> PILOT-1180.
 - PILOT-1158 (G5 app ports on enrolled kube) + PILOT-1160 (G7 big stdin / long exec) merged 2c033546f..2fa3b2e53 (job 05ad0b6b 35), closed (NORMAL, self-test).
+- INCIDENT PILOT-1183: the 1172 merge (e7a3df776) turned agent.e2e's kube case red on cf/integration (bisect in comment 59420). Test-only fix 86a54acf0, closed.
+- Merged 86a54acf0..92c02662b: 1183, 1179 (82a7ed112..ba8674e60, review PASS 59397), 1169 (ac6e7e9d3..4e5c3cb3a), 1170 (6e4eae6b4..ea72d35fa, review PASS 59409), 1181 (92c02662b). Merged-tree check: job a8c65a26 typecheck clean, pack fresh, core-worker 68 pass; job 141c483f server connect/auth/appports/limiter 553 pass 0 fail. All five closed.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- MERGES HELD: cf/integration d651c999 fails agent.e2e kube case every run (PILOT-1183, jobs bd56aa58, 4d7bea57). Red until the cause is known; an incident if a cf merge caused it.
-- cf-bridge (worker 5bc808ae, opus): PILOT-1183 bisect + fix, branch ticket/T-3830-kube-e2e.
-- Ready to merge after 1183: PILOT-1179 (review PASS 59397 on d59cdd4d3275, job d2d1935b 154; go-live items -> PILOT-1184).
-- Ready to merge after 1183: PILOT-1169 + 1170 (+1181) on ticket/T-3735-tunnel-pkg-r2 0ab6789bfa2c (review PASS 59409; job 4d7bea57 545, 1 fail = 1183).
-- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1180 on 582ae8d5c5c0 (job c461fc65 6/6, plan job 54aa782b).
-- cf-sec (worker e28ec1b4, opus): idle, waits on the 1180 review; next PILOT-1184.
+- PILOT-1180: review PASS 59423 on 582ae8d5c5c0, merge HELD for one minor (an unknown arg like `--plna` deploys for real). cf-sec fixes it on the same branch, then cf-review re-checks the delta. Then cf-sec: PILOT-1184.
+- cf-review (worker 68d76aeb, opus, auto): idle until the 1180 delta.
+- cf-bridge (worker 5bc808ae, opus): idle (pacing); next gaps 1161, 1163.
 - cf-worker (worker 6562167d, opus): phase-2 PILOT-1148 SPA assets. Note for 1171: kube() path check must refuse `..`/encoded dots/query (review 59409).
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
@@ -37,6 +36,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - 11:45 Operator pacing (one account): at most 2 builders at once; cf-review takes review asks only. Only cf-migration tickets.
 - 21:45 Operator: resume after the 21:40 reset; 1145 deploy + 1142 rig first, then phase 2 (1146-1148); 2 workers. cf-worker retries the exact 1145 command once on that instruction; a second refusal stops it (no other path).
 - Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 UTC. Resume everyone right after each reset; note the reset here.
+- 22:35 After incident PILOT-1183: before every cf/integration push, the lead runs ONE job on the merged tree: typecheck, context pack, core-worker tests and the server test directories the merged branches touch.
 - 12:00 Builders put all trailers in one final block (`%(trailers)` reads only the last paragraph).
 - 12:20 PILOT-1168: key the route limiters on visitorAddress (default b). Rejected: the tunnel hop as a key; no limit until the CF binding.
 - 16:45 Operator: 1145 and 1142 first. 1172 and 1169/1170 are parked as pushed WIP. Access goes in front before any route (D3).
