@@ -3,6 +3,7 @@ import { CONNECT_PROTOCOL, type ApiErrorBody } from '@portal/contracts';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { bridgeUpgrade } from './bridge/route.js';
 import type { Env } from './env.js';
 
 export interface Healthz {
@@ -26,6 +27,9 @@ export function createApp() {
       connectProtocol: CONNECT_PROTOCOL,
     } satisfies Healthz),
   );
+
+  // The cluster bridge's dial-out link (PILOT-1144): checked before the upgrade, then handed to the cluster's BridgeDO.
+  app.get('/bridge', (c) => bridgeUpgrade(c.req.raw, c.env));
 
   // The same bodies as the portal (apps/server/src/app.ts): an unknown path is the authz seam's plain 404.
   app.notFound((c) => c.json(new AppError('NOT_FOUND', 'Not found.').toJSON() satisfies ApiErrorBody, 404));
