@@ -3,7 +3,6 @@
 // live topic `triggers`). Routes: `/api/triggers` behind the session guard; the receiver: `POST /hooks/<token>`, its own door.
 
 import type { Context } from 'hono';
-import { config } from '../config.js';
 import type { Platform, PlatformModule } from '../platform/index.js';
 import type { Tickets } from '../tickets/service.js';
 import { declareTriggerPolicies, registerTriggerAuthz } from './authz.js';
@@ -16,6 +15,7 @@ import { TriggerScheduler } from './scheduler.js';
 import { TriggerService } from './service.js';
 import { triggerSettings } from './settings.js';
 import { TriggerStore } from './store.js';
+import { visitorAddress } from '../visitor.js';
 
 export { nextRuns, parseCron, cronProblem, CronError } from './cron.js';
 
@@ -25,10 +25,8 @@ type ChatLike = TriggerChat & {
   eligibility?: (id: string) => { ok: boolean };
 };
 
-const clientAddress = (c: Context): string => {
-  const forwarded = config.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
-  return forwarded || ((c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? 'unknown');
-};
+/** The receiver's per-address key: the visitor behind the Cloudflare tunnel, else the hop (visitor.ts, PILOT-1168). */
+const clientAddress = (c: Context): string => visitorAddress(c);
 
 export interface TriggersModule extends PlatformModule {
   service: TriggerService;

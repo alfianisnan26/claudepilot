@@ -21,6 +21,7 @@ import { pack } from 'tar-stream';
 import { declarePolicies } from '../../authz/seam.js';
 import { config as portalConfig } from '../../config.js';
 import { RateLimiter } from '../../rateLimit.js';
+import { visitorAddress } from '../../visitor.js';
 import type { InstallDeps } from '../seams.js';
 import { INSTALL_PS1, INSTALL_SH } from './installers.generated.js';
 import { buildManifest } from './manifest.js';
@@ -40,7 +41,7 @@ export type HonoEnv = { Bindings: { incoming?: { socket: { remoteAddress?: strin
 export interface InstallRouteOptions {
   /** Shared with `enroll`, so wrong tokens count once per address across the agent-facing routes. */
   limiter?: Pick<RateLimiter, 'blocked' | 'fail'>;
-  /** The client address (the same rule as sign-in: `X-Forwarded-For` only behind a trusted proxy). */
+  /** The client address (the same rule as sign-in: the visitor behind a trusted tunnel, `X-Forwarded-For` only behind a trusted proxy). */
   clientIp?: (c: Context<HonoEnv>) => string;
   /** Tests: another Node and pty pin than node-manifest.json. */
   node?: NodeManifest;
@@ -83,12 +84,8 @@ const refuse = (reason: ConnectEnrollReason, status = 401) =>
 export function createInstallRoutes(deps: InstallDeps, opts: InstallRouteOptions = {}): Hono<HonoEnv> {
   const app = new Hono<HonoEnv>();
   const limiter = opts.limiter ?? new RateLimiter(CONNECT_LIMITS.enrollFailures.attempts, CONNECT_LIMITS.enrollFailures.windowMs);
-  const clientIp: (c: Context<HonoEnv>) => string =
-    opts.clientIp ??
-    ((c: Context<HonoEnv>) => {
-      const forwarded = portalConfig.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
-      return forwarded || (c.env?.incoming?.socket.remoteAddress ?? 'unknown');
-    });
+  // Default: the visitor behind the Cloudflare tunnel, else the hop (visitor.ts, PILOT-1168).
+  const clientIp: (c: Context<HonoEnv>) => string = opts.clientIp ?? ((c: Context<HonoEnv>) => visitorAddress(c));
 
   // The token, or a refusal. A browser never acts as an installer: a request with an Origin is refused like a wrong token, uncounted.
   const lookup = (c: Context<HonoEnv>) => {

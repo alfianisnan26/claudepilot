@@ -2,7 +2,6 @@
 // takes bearer tokens, never the session cookie. The admin routes carry no auth middleware of their own:
 // app.ts mounts them under a guarded group, as it does every other /api route.
 
-import type { IncomingMessage } from 'node:http';
 import { AppError, success } from '@isnanme/core';
 import type {
   CreatePortalTokenRequest,
@@ -16,6 +15,7 @@ import type {
 import { Hono, type Context } from 'hono';
 import { actorOf, actorString, actorUserId, requireCan } from '../authz/seam.js';
 import { config } from '../config.js';
+import { visitorAddress } from '../visitor.js';
 import { declarePortalMcpPolicies, tokenRef } from './authz.js';
 import type { PortalMcpModule } from './module.js';
 
@@ -28,10 +28,9 @@ async function body<T>(c: Context): Promise<Partial<T>> {
   }
 }
 
-/** The caller's address: the socket's, or the last `X-Forwarded-For` entry behind a proxy the operator trusts. */
+/** The caller's address, the key of /mcp's per-address limits: the visitor behind the tunnel, else the hop (visitor.ts, PILOT-1168). */
 export function clientIp(c: Context): string {
-  const forwarded = config.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
-  return forwarded || ((c.env as { incoming?: IncomingMessage } | undefined)?.incoming?.socket.remoteAddress ?? 'unknown');
+  return visitorAddress(c);
 }
 
 /** The `/mcp` URL as this request reached the portal, for the snippets Access → MCP shows. */

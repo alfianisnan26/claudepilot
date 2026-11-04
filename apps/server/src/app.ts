@@ -75,7 +75,7 @@ import { PortalUsers } from './identity/users.js';
 import { deviceLabel } from './identity/device.js';
 import { PortalProfiles } from './identity/profile.js';
 import { SessionGrants } from './identity/grants.js';
-import { fingerprint } from './identity/throttle.js';
+import { fingerprint, type LockoutRule } from './identity/throttle.js';
 import { csrf } from 'hono/csrf';
 import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
@@ -157,7 +157,7 @@ import { PortalTeams } from './identity/teams.js';
 import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes, releaseOf } from './reporter/routes.js';
 import type { ReporterService } from './reporter/service.js';
-import { clientAddress } from './clientAddress.js';
+import { visitorAddress } from './visitor.js';
 import { addressKey, MemoryRateLimitStore, retryAfterOf, type RateRule } from './ratelimit/limiter.js';
 import { rateLimit } from './ratelimit/middleware.js';
 import { CROSS_SITE_MESSAGE, crossSite, originAllowed, originExempt, sameHostOrigin } from './originCheck.js';
@@ -188,16 +188,28 @@ export const ADMIN_SIGNIN_LIMIT: RateRule = { name: 'admin_signin', limit: 30, w
 
 export { retryAfterOf };
 
-const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
 /**
- * The visitor's address as Cloudflare saw it (clientAddress.ts): CF-Connecting-IP, read only with trustProxy and trustCloudflare and when
- * the hop the proxy saw is private (the tunnel). Shown and stored about a visitor (the UI reporter's IP), and the key of the edge ceilings
- * (PILOT-1138 review): behind the tunnel the hop is the cloudflared pod for EVERY visitor, so keyed on it one stranger would cut off all.
- * A client inside our networks could set the header itself and spread its count over made-up addresses; the routes' own limits (per
- * token, per email) still hold for it. The routes' own per-address limits stay on clientKey for now (follow-up on the ticket).
+ * The visitor's address (visitor.ts): CF-Connecting-IP behind the tunnel under the trust conditions, else the hop. It is the key of the
+ * edge ceilings (PILOT-1138) AND of every route's own per-address limit (PILOT-1168: the code sign-in lock, the email lockout, the VS Code
+ * API, heartbeats, the reporter, the unlock): keyed on the hop, which is the cloudflared pod for EVERY visitor, one stranger would cut
+ * off all. It is also what is shown and stored about a visitor (the UI reporter's IP, a device sign-in's address).
  */
-const visitorAddress = (c: Context<Env>) =>
-  clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy, { connectingIp: c.req.header('cf-connecting-ip'), trusted: config.trustCloudflare });
+const clientKey = (c: Context<Env>) => visitorAddress(c);
+
+/**
+ * The server-code sign-in lock (PILOT-1168), per visitor, in `auth_throttle` so a restart does not lift it: `loginLimit.attempts` wrong
+ * codes in a day lock the address for `loginLimit.windowMs`, and every further wrong code doubles the lock up to a day (10 -> 10 min,
+ * 11 -> 20 min, ... 18 and on -> 24 h). A right code starts the address over. The window outlasts the longest lock, so waiting a lock out
+ * does not reset the count. Kept under the `ip` scope (no migration: the table's scope list is fixed) with a `code:` key, apart from the
+ * email lockout's per-address keys (bare fingerprints).
+ */
+export const CODE_LOCKOUT: LockoutRule = {
+  failures: config.loginLimit.attempts,
+  windowMs: 24 * 60 * 60 * 1000,
+  baseLockMs: config.loginLimit.windowMs,
+  maxLockMs: 24 * 60 * 60 * 1000,
+};
+export const codeLockKey = (address: string) => `code:${fingerprint(address || 'unknown')}`;
 
 async function body<T>(c: Context<Env>): Promise<Partial<T>> {
   try {
@@ -325,7 +337,6 @@ export function createApp(
   app.use(adminHostMiddleware(adminGate, () => adminConsole));
   // Organizations slice 1 (P4): the whole policy table, whatever was constructed; the session middleware enforces it (enforceRoutePolicy).
   declareAllPolicies();
-  const limiter = new RateLimiter(config.loginLimit.attempts, config.loginLimit.windowMs);
   // T-118 MU1-min: email accounts beside the server code (identity/users.ts).
   // Review #10: reads (roleOf, verify) use the read handle, so a frozen store does not end every account session; writes stay guarded.
   const users = new PortalUsers(() => store.db, undefined, undefined, () => (store.writable ? store.db : null));
@@ -506,7 +517,10 @@ export function createApp(
   });
   app.post(API.login, async (c) => {
     const key = clientKey(c);
-    if (limiter.blocked(key)) throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.');
+    const codeKey = codeLockKey(key);
+    const codeWait = users.throttle.retryAfter('ip', codeKey);
+    if (codeWait > 0)
+      throw new AppError('RATE_LIMITED', `Too many tries. Try again in ${codeWait > 90 ? `${Math.ceil(codeWait / 60)} minutes` : `${codeWait} seconds`}.`, { details: { retryAfterS: codeWait } });
     const { code, email, password } = await body<LoginRequest>(c);
     // Review 2026-10-17 #4: sign-in off answers the same before any check, so a right password is not told apart from a wrong one.
     if (!portal.enabled) throw new AppError('FORBIDDEN', 'Sign-in is turned off on this server.');
@@ -533,10 +547,16 @@ export function createApp(
       try {
         token = portal.signIn(typeof code === 'string' ? code : '', { device: deviceLabel(c.req.header('user-agent')), method: 'code' });
       } catch (e) {
-        if (isAppError(e) && e.is('UNAUTHORIZED')) limiter.fail(key);
+        if (isAppError(e) && e.is('UNAUTHORIZED')) {
+          const lockMs = users.throttle.fail('ip', codeKey, CODE_LOCKOUT);
+          if (lockMs > 0) {
+            audit('portal.signin_locked', null, { method: 'code', address: key, lockS: Math.ceil(lockMs / 1000) }, 'medium');
+            throw new AppError('RATE_LIMITED', 'Too many tries. Wait a few minutes.', { details: { retryAfterS: Math.ceil(lockMs / 1000) } });
+          }
+        }
         throw e;
       }
-      limiter.reset(key);
+      users.throttle.reset('ip', codeKey);
     }
     setCookie(c, cookie, token, {
       httpOnly: true,
@@ -1663,7 +1683,7 @@ export function createApp(
       breakGlass: orgsModule.breakGlass,
       sso,
       ssoRedirectUri: ssoOrigin ? `${ssoOrigin.replace(/\/+$/, '')}${SSO_API.callback}` : '',
-      clientKey: (c) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy),
+      clientKey: (c) => visitorAddress(c),
       consoleDir: serveWeb ? config.paths.adminDist : null,
       // Owner, 2026-11-01: sign-in through git.isnan.me for the allow list only (admin/oidc.ts); unset: off.
       oidc: { config: adminOidcConfig(config.adminOidc, (m) => console.error(m)), client: oidc },

@@ -66,7 +66,7 @@ export const config = {
     cookie: 'portal_session',
     ttlMs: 12 * 60 * 60 * 1000,
   },
-  /** Failed sign-ins allowed per client address in each window. */
+  /** Wrong server codes per visitor before its address locks, and the first lock (PILOT-1168: then doubling, a day at most; app.ts CODE_LOCKOUT). */
   loginLimit: { attempts: 10, windowMs: 10 * 60 * 1000 },
   /**
    * The flow watchdog's read of a Gitea forge, so a merge record the gate left stale (a PR merged, closed, pushed to or conflicting outside
