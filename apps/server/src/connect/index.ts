@@ -16,6 +16,7 @@ import { CONNECT_LIMITS, type Workspace, type WorkspaceTarget } from '@portal/co
 import type { Hono } from 'hono';
 import { RateLimiter } from '../rateLimit.js';
 import type { Store } from '../store/store.js';
+import { visitorOfRequest } from '../visitor.js';
 import { ConnectAdmin } from './admin.js';
 import { registerConnectResolvers, declareConnectPolicies } from './authz.js';
 import type { ConnectConfig } from './config.js';
@@ -107,10 +108,11 @@ export function createConnect(deps: ConnectDeps): ConnectModule {
   registry = new Registry({ store, events, settings, config: deps.config, scannedIds: deps.scannedIds, scanned: deps.scanned, bundle: () => ({ build: bundle().build, version: bundle().version }), now: deps.now });
   const limiter = new RateLimiter(CONNECT_LIMITS.enrollFailures.attempts, CONNECT_LIMITS.enrollFailures.windowMs);
   const enrollments = new EnrollmentService({ store, registry, events, settings, config: deps.config, limiter, portalId: () => deps.store.portalId, portalVersion, now: deps.now });
+  // The visitor behind the Cloudflare tunnel, else the hop (visitor.ts, PILOT-1168): the key of the enrolment and wrong-token limits.
   const clientIp = (req: IncomingMessage | undefined): string | null => {
     if (!req) return null;
-    const forwarded = deps.trustProxy ? String(req.headers['x-forwarded-for'] ?? '').split(',').at(-1)?.trim() : '';
-    return forwarded || req.socket?.remoteAddress || null;
+    const ip = visitorOfRequest(req, !!deps.trustProxy);
+    return ip === 'unknown' ? null : ip;
   };
   const hub = new Hub({ store, registry, events, settings, config: deps.config, portalId: () => deps.store.portalId, portalVersion, bundle, clientIp, notify, log, now: deps.now, timing: deps.timing });
   registry.useLive(hub);

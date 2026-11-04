@@ -50,7 +50,7 @@ test('sign-in: the code limiter refuses with Retry-After; past the ceiling the e
       if (r.status === 429 && !first429) first429 = r;
     }
     assert.ok(first429, 'the code limiter refused');
-    assert.equal(first429.headers.get('retry-after'), '60', "the route's own 429 says when to come back");
+    assert.equal(first429.headers.get('retry-after'), String(config.loginLimit.windowMs / 1000), "the code lock's own 429 says when to come back (PILOT-1168: its first lock)");
     const edge = await call('POST', '/api/login', { body: { code: CODE } });
     assert.equal(edge.status, 429, 'past the ceiling even the right code is not tried');
     assert.match(edge.headers.get('retry-after') ?? '', /^[1-9]\d*$/);

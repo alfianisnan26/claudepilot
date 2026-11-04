@@ -14,7 +14,7 @@ import { HOOK_MAX_BYTES, HOOK_READ_TIMEOUT_S, objectRef } from '@portal/contract
 import { createHmac, randomBytes } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import { asUser, can, ownersOf } from '../authz/seam.js';
-import { config } from '../config.js';
+import { visitorAddress } from '../visitor.js';
 import { verifyBareHmac, verifyPrefixedHmac } from '../triggers/providers/signature.js';
 import { readBody } from '../triggers/receiver.js';
 import type { CiService } from './service.js';
@@ -24,7 +24,7 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MAP_MAX = 10_000;
 
 export interface CiHookDeps {
-  /** The client's address (default: as the triggers' receiver reads it, the proxy's forwarded one when `trustProxy`). */
+  /** The client's address (default: the visitor's, visitor.ts: CF-Connecting-IP behind the trusted tunnel, else the proxy's hop). */
   clientAddress?(c: Context): string;
   now?: () => number;
   /** Called with the body when there is no hook key (default: an HMAC over it with a per-process random key). A test spies on it. */
@@ -37,10 +37,8 @@ export function burnHmac(raw: Buffer): void {
   createHmac('sha256', DUMMY_KEY).update(raw).digest();
 }
 
-const portalAddress = (c: Context): string => {
-  const forwarded = config.trustProxy ? c.req.header('x-forwarded-for')?.split(',').at(-1)?.trim() : undefined;
-  return forwarded || ((c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? 'unknown');
-};
+/** The per-address key: the visitor behind the Cloudflare tunnel, else the hop (visitor.ts, PILOT-1168). */
+const portalAddress = (c: Context): string => visitorAddress(c);
 
 const json = (c: Context, status: number, body: object, headers: Record<string, string> = {}) =>
   c.body(JSON.stringify(body), status as never, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });

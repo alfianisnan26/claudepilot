@@ -150,7 +150,7 @@ export interface ReporterWidgetDeps {
   signedIn: (c: Context) => (Actor & { userId: string }) | null;
   userLabel?: (userId: string) => string;
   clientKey: (c: Context) => string;
-  /** The visitor's address to show and store (Cloudflare's, behind the tunnel; clientAddress.ts); clientKey when absent. Never a rate key. */
+  /** The visitor's address to show and store (visitor.ts); clientKey when absent. In app.ts both are the visitor's (PILOT-1168). */
   visitorIp?: (c: Context) => string;
   audit?: (kind: string, detail: Record<string, unknown>, actor: string) => void;
   /** The clock of the held approvals (tests); Date.now by default. */
