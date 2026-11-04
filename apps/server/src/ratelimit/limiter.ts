@@ -13,7 +13,10 @@ export interface RateLimitStore {
   hit(key: string, windowMs: number, now: number): WindowCount | Promise<WindowCount>;
 }
 
-/** Fixed windows in memory, bounded: past `maxKeys`, ended windows go first, then the oldest. A restart forgets every count. */
+/**
+ * Fixed windows in memory, bounded: at `maxKeys` a sweep drops the ended windows and, if that frees less than a tenth, the oldest tenth
+ * too, so a flood of new keys pays one O(n) sweep per `maxKeys / 10` keys, not one per request. A restart forgets every count.
+ */
 export class MemoryRateLimitStore implements RateLimitStore {
   readonly #hits = new Map<string, WindowCount>();
 
@@ -32,9 +35,10 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
   #sweep(now: number) {
     for (const [k, w] of this.#hits) if (w.resetAt <= now) this.#hits.delete(k);
+    const target = this.maxKeys - Math.max(1, Math.ceil(this.maxKeys / 10));
     for (const k of this.#hits.keys()) {
-      if (this.#hits.size < this.maxKeys) break;
-      this.#hits.delete(k);
+      if (this.#hits.size <= target) break;
+      this.#hits.delete(k); // a Map keeps insertion order: the oldest windows go first
     }
   }
 
@@ -63,4 +67,30 @@ export interface RateVerdict {
 export async function take(store: RateLimitStore, rule: RateRule, key: string, now: number): Promise<RateVerdict> {
   const w = await store.hit(`${rule.name}:${key}`, rule.windowMs, now);
   return { ok: w.count <= rule.limit, retryAfterS: Math.max(1, Math.ceil((w.resetAt - now) / 1000)), first: w.count === rule.limit + 1 };
+}
+
+/**
+ * The key an address is counted under: an IPv4 address as it is, an IPv6 address by its /64 (one subscriber's whole prefix, which a client
+ * can walk through at will), anything else (`unknown`) as it is.
+ */
+export function addressKey(ip: string): string {
+  const v4 = /^(?:::ffff:)?((?:\d{1,3}\.){3}\d{1,3})$/i.exec(ip);
+  if (v4) return v4[1]!;
+  if (!/^[0-9a-f:]+$/i.test(ip) || !ip.includes(':')) return ip;
+  const [head = '', tail] = ip.toLowerCase().split('::', 2) as [string, string | undefined];
+  const left = head ? head.split(':') : [];
+  const right = tail === undefined ? [] : tail ? tail.split(':') : [];
+  const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+  if (groups.length !== 8) return ip;
+  return `${groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
+
+/**
+ * The seconds a 429 asks the client to wait, from the refusal's details: `retryAfterS` (the code limiter) or `retryAfter` (the identity
+ * lockout, identity/throttle.ts), when a positive number, rounded up; else 60.
+ */
+export function retryAfterOf(details: unknown): number {
+  const d = details as { retryAfterS?: unknown; retryAfter?: unknown } | null | undefined;
+  for (const s of [d?.retryAfterS, d?.retryAfter]) if (typeof s === 'number' && Number.isFinite(s) && s >= 1) return Math.ceil(s);
+  return 60;
 }

@@ -296,11 +296,23 @@ Counts come from the policy tables of Appendix A and B (rows whose access names 
 
 ### 12.6 Request limits at the doors without a cookie (PILOT-1138)
 
-Before the portal is reachable from the public internet (epic PILOT-1131), each door a stranger reaches without a cookie has a per-address ceiling in front of its own limits. The ceilings are in `EDGE_LIMITS` in `app.ts`: sign-in 60, `/mcp` 1200, `/connect/*` 600 and `/api/vscode/*` 1200 requests per minute. The routes' own limits stay behind them: wrong codes (`rateLimit.ts`), the email lockout with backoff (`identity/throttle.ts`), per token and per tool on `/mcp` (`portalmcp/limits.ts`), and wrong enrollment tokens on `/connect` (`connect/publicRoutes.ts`).
+Before the portal is reachable from the public internet (epic PILOT-1131), each door a stranger reaches without a cookie has a per-address ceiling in front of its own limits. The ceilings are in `app.ts`: `EDGE_LIMITS` (sign-in 60, `/mcp` 1200, `/connect/*` 600 and `/api/vscode/*` 1200 requests per minute) and `ADMIN_SIGNIN_LIMIT` (`POST /admin-api/session`, 30 per minute, counted before the admin host is handed to the console). The routes' own limits stay behind them: wrong codes (`rateLimit.ts`), the email lockout with backoff (`identity/throttle.ts`), per token and per tool on `/mcp` (`portalmcp/limits.ts`), and wrong enrollment tokens on `/connect` (`connect/publicRoutes.ts`). There is no `/api/agent` route.
 
-- Every 429 carries `Retry-After`: the ceiling's own time left, a route's `retryAfterS` detail, or else 60 seconds (`app.onError`).
+- **The key is the visitor.** Behind the tunnel the hop the proxy sees is the cloudflared pod for every visitor, so the ceilings key on `visitorAddress`: CF-Connecting-IP, read only with `PORTAL_TRUST_PROXY` and `PORTAL_TRUST_CLOUDFLARE` on and when that hop is private (`clientAddress.ts`); otherwise the hop. An IPv6 address counts by its /64 (`addressKey`). A client inside our networks could set the header itself; the routes' own limits (per token, per email) still hold for it.
+- Every 429 carries `Retry-After`: the ceiling's own time left, else a route's `retryAfterS` (the code limiter) or `retryAfter` (the lockout) detail, else 60 seconds (`retryAfterOf`, in `app.onError` and the admin console's).
 - The first refusal for an address in each window writes one `portal.rate_limited` audit row (medium) with the rule, the method, the address and the wait. It never records the path, the query or a header, so a token cannot reach the row.
-- The module `apps/server/src/ratelimit/` has no `node:` imports, and its counter is a `RateLimitStore`. It counts in memory on Node, and the Worker can plug in a Durable Object or the rate-limiting binding. On the Worker the key must be the address Cloudflare saw. Behind a proxy, `clientKey` would otherwise key every visitor as the proxy.
+- The module `apps/server/src/ratelimit/` has no `node:` imports, and its counter is a `RateLimitStore`. It counts in memory on Node (bounded at 10,000 keys; a full store drops the ended windows and the oldest tenth in one sweep), and the Worker can plug in a Durable Object or the rate-limiting binding.
+- Open: the routes' own per-address limits (the code limiter, the per-address lockout) still key on the hop; the code sign-in has a fixed window with no backoff. Both are follow-ups on PILOT-1138.
+
+### 12.7 Requests from another site (PILOT-1139)
+
+The session cookie rides on any request a browser sends, so a page on another site must not be able to change state with it. One rule, `originCheck.ts` (no `node:` import, so it moves to the Worker as is), is used by every door:
+
+- **HTTP.** Every request that is not GET, HEAD or OPTIONS, on **every path** (not only `/api`), is refused with 403 "Refused: this request came from another site." when its `Origin` is not allowed, or, with no `Origin`, when `Sec-Fetch-Site` is `cross-site`. With neither header the caller is not a browser (an agent, a CLI) and carries no cookie a page could ride. Hono's `csrf()` stays on `/api/*` for form posts with no Origin.
+- **Allowed origins.** The request's own Host (the scheme is not compared: TLS ends at the proxy), or exactly one of `PORTAL_ALLOWED_ORIGINS` (comma-separated `http(s)://host[:port]`; an entry with a path, another scheme or junk is dropped, so a typo never widens the list). On Cloudflare it names the public host in front of the origin.
+- **Sockets.** The live, chat, shell and browser (VNC) handshakes require an allowed `Origin` (a browser always sends one). App ports keep their own check (`appports/proxy.ts`): their page is the port's own host, not the portal's. The admin console requires its own host on writes; the Connect hub uses a signed challenge.
+- **Exempt doors**, each cookieless by design: `/mcp` (bearer tokens), `/connect/` (agents) and `/hooks/` (a token in the path). The UI reporter stays checked. A new exemption needs a review: the door must never read the session cookie.
+- **The test** (`authz/originCheck.test.ts`) builds the whole app and sends every unsafe route a valid cookie with a foreign `Origin` and with `Sec-Fetch-Site: cross-site`: each must answer the cross-site 403 unless exempt, and an exempt door must not be refused. A new unsafe route that the check does not cover fails it.
 
 ## 13. Data model
 

@@ -59,6 +59,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { actorOfPrincipal, can, requireCan } from '../authz/seam.js';
 import { isWorkspaceId } from '../names.js';
+import { retryAfterOf } from '../ratelimit/limiter.js';
 import type { PortalMcpModule } from '../portalmcp/module.js';
 import { oneTimePassword, type AccountAdmin } from '../identity/accountAdmin.js';
 import { revokeAccountTokens } from '../identity/accountGate.js';
@@ -215,6 +216,8 @@ export function createAdminApp(d: AdminConsoleDeps): { app: Hono<AdminEnv>; sess
         ? new AppError(codeForStatus(e.status), undefined, { status: e.status, cause: e })
         : new AppError('INTERNAL_ERROR', undefined, { cause: e });
     if (error.status >= 500) console.error(e);
+    // PILOT-1138: a 429 (the sign-in lockout) says when to come back, as on the main portal.
+    if (error.status === 429) c.header('Retry-After', String(retryAfterOf(error.details)));
     return c.json(error.toJSON(), error.status as ContentfulStatusCode);
   });
   app.notFound((c) => c.json(new AppError('NOT_FOUND').toJSON(), 404));

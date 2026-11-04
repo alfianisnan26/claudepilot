@@ -158,8 +158,9 @@ import { assetCompress, jsonCompress } from './jsonCompress.js';
 import { createReporterEvidenceRoutes, createReporterOwnerRoutes, createReporterWidgetRoutes, releaseOf } from './reporter/routes.js';
 import type { ReporterService } from './reporter/service.js';
 import { clientAddress } from './clientAddress.js';
-import { MemoryRateLimitStore, type RateRule } from './ratelimit/limiter.js';
+import { addressKey, MemoryRateLimitStore, retryAfterOf, type RateRule } from './ratelimit/limiter.js';
 import { rateLimit } from './ratelimit/middleware.js';
+import { CROSS_SITE_MESSAGE, crossSite, originAllowed, originExempt, sameHostOrigin } from './originCheck.js';
 import { createVscodeApproveRoutes, createVscodeBearerRoutes, createVscodeFlow, createVscodePublicRoutes, type VscodeDeps } from './vscode/routes.js';
 import { createHeartbeatRoutes } from './schedules/heartbeat.js';
 import { portalHelpers } from './schedules/helpers.js';
@@ -169,19 +170,8 @@ type Env = { Bindings: HttpBindings; Variables: { token: string; actor: Actor } 
 /** Letters, digits, dot, underscore and dash, starting with a letter or digit: what a target or a workspace is ever called. */
 export { PLAIN_NAME };
 
-/**
- * The page that sent this request is this portal: its Origin, exactly as a browser writes it, is http or https and names the
- * request's own Host. The scheme is not compared, since TLS ends at a proxy and the server sees http (T-143); x-forwarded-*
- * is not trusted. Both Origin checks on /api use this one rule.
- */
-export function sameHostOrigin(origin: string, host: string | undefined): boolean {
-  try {
-    const o = new URL(origin);
-    return (o.protocol === 'http:' || o.protocol === 'https:') && o.origin === origin && host !== undefined && o.host === host;
-  } catch {
-    return false;
-  }
-}
+/** The Origin rule (originCheck.ts, PILOT-1139), re-exported where older callers import it. */
+export { sameHostOrigin };
 
 /**
  * PILOT-1138: requests per client address and minute at the doors that need no cookie, in front of each route's own limits. Generous:
@@ -193,17 +183,18 @@ export const EDGE_LIMITS: ReadonlyArray<readonly [string, RateRule]> = [
   ['/connect/*', { name: 'connect', limit: 600, windowMs: 60_000 }],
   ['/api/vscode/*', { name: 'vscode', limit: 1200, windowMs: 60_000 }],
 ];
+/** The Admin console's sign-in (POST only, on the admin host): password hashing on demand, so a lower ceiling. */
+export const ADMIN_SIGNIN_LIMIT: RateRule = { name: 'admin_signin', limit: 30, windowMs: 60_000 };
 
-/** The seconds a 429 asks the client to wait: a route's `retryAfterS` detail when it set one, else 60. */
-export function retryAfterOf(details: unknown): number {
-  const s = (details as { retryAfterS?: unknown } | null | undefined)?.retryAfterS;
-  return typeof s === 'number' && Number.isFinite(s) && s >= 1 ? Math.ceil(s) : 60;
-}
+export { retryAfterOf };
 
 const clientKey = (c: Context<Env>) => clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy);
 /**
- * The visitor's address as Cloudflare saw it (clientAddress.ts): only what is SHOWN and stored about a visitor (the UI reporter's IP).
- * Rate limits stay on clientKey: a pod in the cluster or a device at home could set CF-Connecting-IP itself and change its key with it.
+ * The visitor's address as Cloudflare saw it (clientAddress.ts): CF-Connecting-IP, read only with trustProxy and trustCloudflare and when
+ * the hop the proxy saw is private (the tunnel). Shown and stored about a visitor (the UI reporter's IP), and the key of the edge ceilings
+ * (PILOT-1138 review): behind the tunnel the hop is the cloudflared pod for EVERY visitor, so keyed on it one stranger would cut off all.
+ * A client inside our networks could set the header itself and spread its count over made-up addresses; the routes' own limits (per
+ * token, per email) still hold for it. The routes' own per-address limits stay on clientKey for now (follow-up on the ticket).
  */
 const visitorAddress = (c: Context<Env>) =>
   clientAddress(c.req.header('x-forwarded-for'), c.env.incoming?.socket.remoteAddress, config.trustProxy, { connectingIp: c.req.header('cf-connecting-ip'), trusted: config.trustCloudflare });
@@ -317,6 +308,18 @@ export function createApp(
   app.use(slowRequests());
   // Organizations slice 4 (§6.11): FIRST, the host split. The admin host gets the console's own app (built below, once its services exist) and
   // nothing else of the portal; the console's paths on any other host are the same 404 as an unknown route.
+  // PILOT-1138: the per-address ceilings (EDGE_LIMITS, below) in one store, keyed on the visitor Cloudflare saw (an IPv6 address by its /64).
+  const edgeLimitStore = new MemoryRateLimitStore();
+  const edgeLimit = (rule: RateRule, methods?: readonly string[]) =>
+    rateLimit({
+      store: edgeLimitStore,
+      rule,
+      key: (c) => (methods && !methods.includes(c.req.method) ? null : addressKey(visitorAddress(c as Context<Env>))),
+      onLimited: (e) => audit('portal.rate_limited', null, { rule: e.rule, method: e.method, address: e.key, retryAfterS: e.retryAfterS }, 'medium'),
+      refuse: (c) => c.json(new AppError('RATE_LIMITED', 'Too many requests from this address. Wait a moment.').toJSON(), 429),
+    });
+  // The Admin console's sign-in: before the host split, which hands the admin host to the console's own app.
+  app.use('/admin-api/session', edgeLimit(ADMIN_SIGNIN_LIMIT, ['POST']));
   const adminGate = new AdminHostGate(adminHost, config.trustProxy);
   let adminConsole: ConsoleApp | null = null;
   app.use(adminHostMiddleware(adminGate, () => adminConsole));
@@ -432,18 +435,19 @@ export function createApp(
   });
   // JSON answers gzip-compressed when the client accepts it (T-376); never a stream, a blob or a download (jsonCompress.ts).
   app.use('/api/*', jsonCompress());
-  app.use('/api/*', csrf({ origin: (origin, c) => sameHostOrigin(origin, c.req.header('host')) }));
-  // csrf() only looks at form-like content types. Browsers name the origin on every request that is not a plain
-  // GET, so a JSON request from another origin (or marked cross-site) is refused here too (same host rule as the sockets).
-  app.use('/api/*', async (c, next) => {
-    if (!/^(GET|HEAD|OPTIONS)$/.test(c.req.method)) {
-      const origin = c.req.header('origin');
-      let foreign = c.req.header('sec-fetch-site') === 'cross-site';
-      if (origin !== undefined) foreign = !sameHostOrigin(origin, c.req.header('host'));
-      if (foreign) throw new AppError('FORBIDDEN', 'Forbidden');
+  // PILOT-1139: EVERY request that may change state, on every path (not /api alone), from another site is refused: browsers name the
+  // origin on every request that is not a plain GET, and Sec-Fetch-Site when there is none (originCheck.ts, the same rule as the
+  // sockets). Allowed: this request's host, or an exact origin in PORTAL_ALLOWED_ORIGINS. Outside: the cookieless doors (ORIGIN_EXEMPT).
+  // authz/originCheck.test.ts probes every unsafe route of the whole app with a valid cookie.
+  app.use('*', async (c, next) => {
+    if (!/^(GET|HEAD|OPTIONS)$/.test(c.req.method) && !originExempt(c.req.path)) {
+      if (crossSite({ origin: c.req.header('origin'), secFetchSite: c.req.header('sec-fetch-site'), host: c.req.header('host') }, config.allowedOrigins))
+        throw new AppError('FORBIDDEN', CROSS_SITE_MESSAGE);
     }
     await next();
   });
+  // csrf() only looks at form-like content types; it also refuses a form post with no Origin at all.
+  app.use('/api/*', csrf({ origin: (origin, c) => originAllowed(origin, c.req.header('host'), config.allowedOrigins) }));
   // Bodies are refused by their size before anything reads them into memory: sign-in takes a few bytes (and needs no session, so
   // it must not buffer megabytes for a stranger), a JSON call a few MB; uploads have their own, lower limits (QA-028).
   const limit = (maxSize: number) =>
@@ -462,19 +466,7 @@ export function createApp(
   // PILOT-1138: a per-address ceiling in front of the doors a stranger reaches without a cookie (ratelimit/, portable to the Worker). The
   // routes' own limits (wrong codes, wrong tokens, per token, per tool) stay behind it; this one stops a flood before a route reads a body
   // or a token, answers 429 with Retry-After and writes one audit row per address and window (never the path, query or token).
-  const edgeLimitStore = new MemoryRateLimitStore();
-  for (const [path, rule] of EDGE_LIMITS) {
-    app.use(
-      path,
-      rateLimit({
-        store: edgeLimitStore,
-        rule,
-        key: (c) => clientKey(c as Context<Env>),
-        onLimited: (e) => audit('portal.rate_limited', null, { rule: e.rule, method: e.method, address: e.key, retryAfterS: e.retryAfterS }, 'medium'),
-        refuse: (c) => c.json(new AppError('RATE_LIMITED', 'Too many requests from this address. Wait a moment.').toJSON(), 429),
-      }),
-    );
-  }
+  for (const [path, rule] of EDGE_LIMITS) app.use(path, edgeLimit(rule));
 
   app.onError((e, c) => {
     const error = isAppError(e)

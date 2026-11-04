@@ -1,0 +1,25 @@
+{
+  "name": "@portal/core-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ClaudePilot core on Cloudflare Workers + Durable Objects (cp-next-core, epic PILOT-1131)",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:dry": "wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "@isnanme/core": "^0.1.0",
+    "@portal/contracts": "*",
+    "hono": "4.13.13"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.5.1",
+    "@cloudflare/workers-types": "5.20261104.1",
+    "@isnanme/tsconfig": "^0.1.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12",
+    "wrangler": "4.157.0"
+  }
+}

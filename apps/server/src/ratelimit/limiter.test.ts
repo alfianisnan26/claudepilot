@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Hono } from 'hono';
-import { MemoryRateLimitStore, take, type RateLimitStore, type WindowCount } from './limiter.js';
+import { addressKey, MemoryRateLimitStore, retryAfterOf, take, type RateLimitStore, type WindowCount } from './limiter.js';
 import { rateLimit, type LimitedEvent } from './middleware.js';
 
 const RULE = { name: 'r', limit: 3, windowMs: 10_000 };
@@ -43,6 +43,36 @@ test('the memory store stays bounded: ended windows go first, then the oldest', 
   assert.equal(store.size, 3, 'the ended window of a made room');
   store.hit('e', 1_000, 20);
   assert.equal(store.size, 3, 'the oldest went when nothing had ended');
+});
+
+test('review: a full store evicts the oldest tenth in one sweep, so the next new keys need none (not O(n) per request)', () => {
+  const store = new MemoryRateLimitStore(100);
+  for (let i = 0; i < 100; i++) store.hit(`k${i}`, 60_000, 0);
+  store.hit('new0', 60_000, 1);
+  assert.equal(store.size, 91, 'ten of the oldest went at once, then the new key came in');
+  for (let i = 1; i < 10; i++) store.hit(`new${i}`, 60_000, 1);
+  assert.equal(store.size, 100, 'nine more new keys fit without a sweep');
+  assert.equal(store.hit('k10', 60_000, 2).count, 2, 'a key past the evicted tenth kept its count');
+  assert.equal(store.hit('k0', 60_000, 2).count, 1, 'the oldest key was evicted');
+});
+
+test('addressKey: IPv4 as it is (mapped too), IPv6 by its /64, anything else as it is', () => {
+  assert.equal(addressKey('203.0.113.9'), '203.0.113.9');
+  assert.equal(addressKey('::ffff:203.0.113.9'), '203.0.113.9');
+  const a = addressKey('2001:db8:1:2:aaaa::1');
+  assert.equal(a, '2001:db8:1:2::/64');
+  assert.equal(addressKey('2001:0db8:0001:0002:ffff:ffff:ffff:ffff'), a, 'one subscriber walking its /64 is one key');
+  assert.notEqual(addressKey('2001:db8:1:3::1'), a, 'the next /64 is another key');
+  assert.equal(addressKey('2001:db8::1'), '2001:db8:0:0::/64');
+  assert.equal(addressKey('::1'), '0:0:0:0::/64');
+  assert.equal(addressKey('unknown'), 'unknown');
+});
+
+test('retryAfterOf: the code limiter (retryAfterS) and the identity lockout (retryAfter) both count; else a minute', () => {
+  assert.equal(retryAfterOf({ retryAfterS: 600 }), 600);
+  assert.equal(retryAfterOf({ retryAfter: 30 }), 30);
+  assert.equal(retryAfterOf({ retryAfterS: 1.2 }), 2);
+  for (const d of [undefined, null, {}, { retryAfterS: 0 }, { retryAfter: -5 }, { retryAfterS: '9' }, { retryAfter: Number.NaN }]) assert.equal(retryAfterOf(d), 60);
 });
 
 test('an async store (a Durable Object, a binding) plugs in unchanged', async () => {
