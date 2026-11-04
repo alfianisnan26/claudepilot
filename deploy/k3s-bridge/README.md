@@ -8,7 +8,7 @@ folder is PILOT-1141 (T-3699).
 | File | What |
 | --- | --- |
 | `namespace.yaml` | `isnan-cp-bridge`, PSA `restricted`. Cluster-scoped: the coordinator applies it. |
-| `rbac.yaml` | ServiceAccount `cp-bridge`; in each of the four workspace namespaces, `cp-bridge-workspaces` = a copy of the portal's `claudepilot-workspaces`; in the served namespace, `cp-bridge-identity` (the identity Secret by name, plus create). No ClusterRole. |
+| `rbac.yaml` | ServiceAccount `cp-bridge`; in each of the four workspace namespaces, `cp-bridge-workspaces` = a copy of the portal's `claudepilot-workspaces`; in the served namespace, `cp-bridge-identity` (the identity Secret by name: get, update; no create). No ClusterRole. |
 | `bridge.yaml` | The Deployment: 1 replica, Recreate, uid 65534, read-only root, no escalation, drop ALL, emptyDirs; enrollment token from Secret `cp-bridge-enroll` by name. |
 | `extract-agent.mjs` | Takes `agent.mjs` out of the committed `agent.generated.ts` and checks its SHA-256 (used by `deploy/k3s-build/bridge.Dockerfile`). |
 
@@ -29,6 +29,9 @@ than the portal's, or when the pod loses a guard.
 1. `namespace.yaml` (cluster-scoped).
 2. Build the image, then set its tag and `PILOT_URL` (the cp-next Worker origin) in `bridge.yaml`.
 3. Create the Secret `cp-bridge-enroll` (key `token`) in `isnan-cp-bridge` from an enrollment on the cp-next core. Never commit it.
-4. `rbac.yaml`, then `bridge.yaml`. After the first connect, delete `cp-bridge-enroll`.
+4. Create an empty Opaque Secret `claudepilot-agent-identity` in each served namespace (today `isnan-pilot-ws-isnan`, the
+   `PILOT_KUBE_NAMESPACE` of `bridge.yaml`) before the first apply. The bridge may only get and update it by name; it can't create a Secret.
+5. `rbac.yaml`, then `bridge.yaml`. After the first connect, delete `cp-bridge-enroll`.
 
-Rehearse in a rig first: render with every `isnan-*` namespace replaced by `dev-rig-<name>`, then `kubectl apply --dry-run=server`.
+Rehearse in a rig first: render with every `isnan-*` namespace replaced by `dev-rig-<name>`, then `kubectl apply --dry-run=server`
+against the rig only. Never dry-run against the live namespaces: a client dry run still reads them.

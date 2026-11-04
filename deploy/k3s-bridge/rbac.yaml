@@ -1,11 +1,12 @@
 # What the cp-bridge's account may do (T-3699, docs/prd/cf-bridge.md "RBAC"): in every workspace namespace, exactly the Role the portal's own
-# account has there today (`claudepilot-workspaces`, deploy/k3s/rbac.yaml and workspace-orgs.yaml), and nothing wider. rbac.test.mjs in this
-# folder fails when a rule here grants more than that Role. The proxy's allowlist (apps/server/src/connect/agent/services/kube/rules.ts) is
+# account has there today (`claudepilot-workspaces`, deploy/k3s/rbac.yaml and workspace-orgs.yaml), and nothing wider.
+# apps/server/src/workspaces/bridgeManifests.test.ts fails when a rule here grants more than that Role. The proxy's allowlist (apps/server/src/connect/agent/services/kube/rules.ts) is
 # the first wall and is stricter; this is the second.
 #
 # One addition, in the namespace the bridge serves (PILOT_KUBE_NAMESPACE in bridge.yaml) only: the agent keeps its identity in the Secret
 # `claudepilot-agent-identity` of that namespace (agent/identity.kube.ts, agent/client.ts:371-374), so it may read and write that one
-# Secret by name, and create it (create cannot be limited by name). No other Secret, no list.
+# Secret by name (get, update). No create: create cannot be limited by name, so the coordinator creates the Secret empty before the first
+# apply (README, "Applying"); the agent GETs it, finds no identity in it, enrolls and PUTs. No other Secret, no list.
 #
 # Not here: a ClusterRole. The fit check (claudepilot-portal-fit-check) and namespace creation stay off for the bridge (G3, PILOT-1157).
 apiVersion: v1
@@ -127,9 +128,6 @@ rules:
     resources: ["secrets"]
     resourceNames: ["claudepilot-agent-identity"]
     verbs: ["get", "update"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
