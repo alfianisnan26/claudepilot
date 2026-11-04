@@ -14,17 +14,7 @@ import type { MuxStream } from '../../../server/src/connect/tunnel/mux.js';
 import { MuxSession } from '../../../server/src/connect/tunnel/mux.js';
 import { acceptService, openService } from '../../../server/src/connect/tunnel/open.js';
 import { locate } from '../../src/locate.js';
-import {
-  ByteReader,
-  cfMuxSocket,
-  readHead,
-  readResponse,
-  readWsFrame,
-  wsAccept,
-  wsFrame,
-  writeRequest,
-  type CfMuxSocket,
-} from './wire.js';
+import { ByteReader, cfMuxSocket, readHead, readResponse, readWsFrame, wsAccept, wsFrame, writeRequest, type CfMuxSocket } from './wire.js';
 
 const NS = 'ns-spike';
 const PODS = `/api/v1/namespaces/${NS}/pods`;
