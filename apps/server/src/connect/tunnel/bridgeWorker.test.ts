@@ -51,7 +51,9 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
       bindings: {
         BRIDGE_CLUSTERS: {
           type: 'plain_text',
-          value: JSON.stringify({ [cluster]: { node, publicKey: keys.publicKey, tokenSha256: createHash('sha256').update(token).digest('hex') } }),
+          value: JSON.stringify({
+            [cluster]: { node, publicKey: keys.publicKey, tokenSha256: createHash('sha256').update(token).digest('hex') },
+          }),
         },
       },
       dev: { server: { hostname: '127.0.0.1', port: 0 }, inspector: false, watch: false },
@@ -68,7 +70,14 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
   const headers = (t = token) => ({ authorization: `Bearer ${t}`, 'x-pilot-cluster': cluster });
 
   test('the real client completes the handshake, and the Worker answers its mux pings', async () => {
-    const d = await dialTunnel({ url, nodeId: node, privateKey: keys.privateKey, hello, ws: { headers: headers() }, limits: { pingEveryMs: 200 } });
+    const d = await dialTunnel({
+      url,
+      nodeId: node,
+      privateKey: keys.privateKey,
+      hello,
+      ws: { headers: headers() },
+      limits: { pingEveryMs: 200 },
+    });
     try {
       assert.equal(d.welcome.node, node);
       assert.equal(d.welcome.target, cluster);

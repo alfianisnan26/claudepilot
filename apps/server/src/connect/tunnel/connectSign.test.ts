@@ -14,7 +14,17 @@ import {
   connectTimingSafeEqual,
   connectVerifyChallenge,
 } from '@portal/contracts';
-import { b64u, fromB64u, generateNodeKeyPair, keyPairFromSeed, newConnId, newNonce, sha256Hex, signChallenge, verifyChallenge } from './auth.js';
+import {
+  b64u,
+  fromB64u,
+  generateNodeKeyPair,
+  keyPairFromSeed,
+  newConnId,
+  newNonce,
+  sha256Hex,
+  signChallenge,
+  verifyChallenge,
+} from './auth.js';
 
 const v = CONNECT_TEST_VECTORS.handshake;
 
@@ -32,8 +42,14 @@ describe('connectSign (WebCrypto) against auth.ts (node:crypto)', () => {
       const connId = newConnId();
       const nonce = newNonce();
       const node = `nd_${randomBytes(6).toString('hex')}`;
-      assert.equal(await connectVerifyChallenge(keys.publicKey, signChallenge(keys.privateKey, connId, nonce, node), connId, nonce, node), true);
-      assert.equal(verifyChallenge(keys.publicKey, await connectSignChallenge(keys.privateKey, connId, nonce, node), connId, nonce, node), true);
+      assert.equal(
+        await connectVerifyChallenge(keys.publicKey, signChallenge(keys.privateKey, connId, nonce, node), connId, nonce, node),
+        true,
+      );
+      assert.equal(
+        verifyChallenge(keys.publicKey, await connectSignChallenge(keys.privateKey, connId, nonce, node), connId, nonce, node),
+        true,
+      );
     }
   });
 

@@ -9,7 +9,13 @@
 import { connectSignedMessage } from './connect.js';
 
 interface SubtleLike {
-  importKey(format: 'raw' | 'pkcs8', key: Uint8Array, algorithm: { name: 'Ed25519' }, extractable: boolean, usages: string[]): Promise<unknown>;
+  importKey(
+    format: 'raw' | 'pkcs8',
+    key: Uint8Array,
+    algorithm: { name: 'Ed25519' },
+    extractable: boolean,
+    usages: string[],
+  ): Promise<unknown>;
   sign(algorithm: { name: 'Ed25519' }, key: unknown, data: Uint8Array): Promise<ArrayBuffer>;
   verify(algorithm: { name: 'Ed25519' }, key: unknown, signature: Uint8Array, data: Uint8Array): Promise<boolean>;
   digest(algorithm: 'SHA-256', data: Uint8Array): Promise<ArrayBuffer>;
@@ -64,7 +70,8 @@ export function connectFromB64u(s: string): Uint8Array | null {
 }
 
 /** UTF-8 bytes of a string (TextEncoder through globalThis; every runtime this module targets has it). */
-const utf8 = (s: string): Uint8Array => new (globalThis as unknown as { TextEncoder: new () => { encode(s: string): Uint8Array } }).TextEncoder().encode(s);
+const utf8 = (s: string): Uint8Array =>
+  new (globalThis as unknown as { TextEncoder: new () => { encode(s: string): Uint8Array } }).TextEncoder().encode(s);
 
 const PKCS8_PREFIX = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
 
@@ -78,7 +85,13 @@ export function connectPkcs8FromSeed(seed: Uint8Array): string {
 }
 
 /** Checks the handshake signature; false for anything wrong with the key, the signature or the message, never an exception. */
-export async function connectVerifyChallenge(publicKey: string, signature: string, connId: string, nonce: string, nodeId: string): Promise<boolean> {
+export async function connectVerifyChallenge(
+  publicKey: string,
+  signature: string,
+  connId: string,
+  nonce: string,
+  nodeId: string,
+): Promise<boolean> {
   try {
     const raw = connectFromB64u(publicKey);
     const sig = connectFromB64u(signature);
