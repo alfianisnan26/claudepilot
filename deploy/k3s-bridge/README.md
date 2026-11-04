@@ -39,3 +39,10 @@ than the portal's, or when the pod loses a guard.
 
 Rehearse in a rig first: render with every `isnan-*` namespace replaced by `dev-rig-<name>`, then `kubectl apply --dry-run=server`
 against the rig only. Never dry-run against the live namespaces: a client dry run still reads them.
+
+The end-to-end check in the rig (PILOT-1142) is `tools/qa/bridge-rig.mjs`. It starts a scratch portal with Kubernetes off, enrolls this
+bridge into `dev-rig-cp-bridge`, then creates, execs into and deletes a workspace through the bridge. It times the exec round trip
+against a direct `kubectl exec`. It needs `BRIDGE_RIG_KUBECONFIG` (the rig account's, never `~/.kube/config`) and `BRIDGE_RIG_IMAGE`.
+It also needs the rig namespace, and the rights to create deployments, secrets and pods/exec in it. Without them it prints
+`SKIP: <why>` and exits 0. It refuses any namespace that is not a labelled `dev-rig-*`. Its unit test is
+`node --test tools/qa/bridge-rig.test.mjs`.
