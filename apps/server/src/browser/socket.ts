@@ -2,6 +2,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { config } from '../config.js';
+import { socketOriginAllowed } from '../originCheck.js';
 import { cutOnLostOperate, workspaceSocketActor } from '../authz/socketAccess.js';
 import type { Portal } from '../portal.js';
 import { cookie } from '../workspaces/shell.js';
@@ -22,14 +23,9 @@ import { VncSession } from './view.js';
 const PATH = /^\/api\/workspaces\/([a-z0-9-]+)\/([a-z0-9-]+)\/browser\/(view|preview)$/;
 
 /** Browsers send cookies on cross-site WebSocket handshakes, so the Origin must be this host. */
+// The page that opens this socket is this portal, or an origin in PORTAL_ALLOWED_ORIGINS (originCheck.ts, PILOT-1139).
 function sameOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  if (!origin) return false;
-  try {
-    return new URL(origin).host === req.headers.host;
-  } catch {
-    return false;
-  }
+  return socketOriginAllowed(req.headers.origin, req.headers.host, config.allowedOrigins);
 }
 
 function refuse(socket: Duplex, status: number, text: string) {

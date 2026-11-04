@@ -8,6 +8,8 @@ import { isAppError } from '@isnanme/core';
 import { CHAT_SOCKET_PATH, sessionRef, type Actor, type ChatClientMessage, type ChatServerMessage, type Verb } from '@portal/contracts';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { actorOfSocket, actorUserId, can, onAccessChange, requireCan } from '../authz/seam.js';
+import { config } from '../config.js';
+import { socketOriginAllowed } from '../originCheck.js';
 import type { ChatController } from './controller.js';
 
 const PING_MS = 25_000;
@@ -18,14 +20,9 @@ const PING_MS = 25_000;
 const MAX_PAYLOAD = 24 * 1024 * 1024;
 
 /** Browsers send cookies on cross-site WebSocket handshakes, so the origin must be this host. */
+// The page that opens this socket is this portal, or an origin in PORTAL_ALLOWED_ORIGINS (originCheck.ts, PILOT-1139).
 function sameOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  if (!origin) return false;
-  try {
-    return new URL(origin).host === req.headers.host;
-  } catch {
-    return false;
-  }
+  return socketOriginAllowed(req.headers.origin, req.headers.host, config.allowedOrigins);
 }
 
 function refuse(socket: Duplex, status: number, text: string) {

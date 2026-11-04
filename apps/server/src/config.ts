@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_IMAGE_REPO, claudeImageRef, DEFAULT_CLAUDE_CODE_VERSION } from '@portal/contracts';
+import { parseAllowedOrigins } from './originCheck.js';
 import { parseKubeTargets } from './workspaces/kubeTargets.js';
 import { parseNodeSelector } from './workspaces/nodeSelector.js';
 import { parseRequests } from './workspaces/requests.js';
@@ -27,6 +28,12 @@ export const config = {
    * host name): the console is off and its paths are 404 everywhere. Compared with the request's Host (X-Forwarded-Host only with trustProxy).
    */
   adminHost: env('PORTAL_ADMIN_HOST'),
+  /**
+   * Origins besides the request's own host that may change state with the session cookie and open sockets (PILOT-1139): the public host
+   * in front of this one, e.g. `https://pilot-next.<zone>`. Comma-separated exact `http(s)://host[:port]`; anything else is dropped
+   * (originCheck.ts). Empty: the own host only.
+   */
+  allowedOrigins: parseAllowedOrigins(env('PORTAL_ALLOWED_ORIGINS')),
   /**
    * The Admin console's sign-in through one OIDC provider (owner, 2026-11-01: git.isnan.me, the owner only; admin/oidc.ts). The client id
    * and secret come from the OPTIONAL Secret claudepilot-admin-oidc; the allow list is comma-separated emails (matched on the verified
