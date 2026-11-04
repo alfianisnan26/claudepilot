@@ -9,7 +9,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1140 gap analysis (docs/prd/cf-bridge.md) merged 9be55e4b4 (job 008f03b7), closed; gaps filed as PILOT-1157..1164.
 
 ## IN FLIGHT
-- cf-bridge (worker 5bc808ae, opus, two.claude): PILOT-1141 manifests in blind review (head ef7d6fbd0, job 174e2941 33/33); next PILOT-1162.
+- cf-bridge (worker 5bc808ae, opus, two.claude): PILOT-1141 manifests: fixing the review FAIL (was ef7d6fbd0); next PILOT-1162.
 - cf-review (worker 68d76aeb, opus, auto, two.claude): blind review of PILOT-1141; then the other HIGH PRs (1144, 1138, 1139, 1162).
 - cf-worker (worker 6562167d, opus, two.claude): PILOT-1143 Worker skeleton, then PILOT-1144 BridgeDO.
 - cf-sec (worker e28ec1b4, opus, two.claude): PILOT-1138 rate limits, then PILOT-1139 origin/CSRF.
@@ -21,6 +21,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - 08:55 DECISIONS.md is a rule file (guard, D-60): the D-112 row goes to the coordinator on PILOT-1136.
 - Workers on Opus: backend/infra/security per owner routing 2026-10-25.
 - Reviewer runs in mode auto: dontAsk refused Bash (git diff), so the first reviewer 7ee2ad61 was ended.
+- 09:14 PILOT-1141 review FAIL (comment 58011: unbounded `secrets: create`); fix (a) went back to cf-bridge.
+- ~09:30-11:30 all three builders hit the two.claude session limit; resumed 11:45 after the reset.
 
 ## FOR THE COORDINATOR
 - PILOT-1132: KohiLabs Cloudflare token `CP_NEXT_CF_API_TOKEN` (scopes on ticket) + Workers Paid status.
