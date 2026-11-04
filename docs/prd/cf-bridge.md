@@ -41,7 +41,7 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 | App ports (TCP bridge over exec) | `appports/dial.ts:114-129` | **Gap G5** | refused for every enrolled target (`dial.ts:127`, 501), though the exec it needs passes |
 | Browser pool / VNC (browser container, ConfigMap, NetworkPolicy) | `browser/kube.ts:385-620`, `browser/index.ts:35` | **Gap G4** | `browserAccess()` is null for enrolled (`kubernetes.ts:207-210`); exec only into `workspace` (`rules.ts:103,132`); no `configmaps`/`networkpolicies` rule; root init refused (`schema.ts:66-67`) |
 | Namespace create | `kubernetes.ts:408-414` | Not needed | namespaces come from git (`deploy/k3s/workspace-orgs.yaml:1-7`); enrolled runtime never creates one (`connect/kube.ts:165`) |
-| Several namespaces (`kubernetes`, `isnan`, `konfersi` targets) | `deploy/k3s/portal.yaml:107,119`, `kubeTargets.ts` | **Gap G1** | one namespace per agent (`agent/config.ts:113`, `rules.ts:43`) |
+| Several namespaces (`kubernetes`, `isnan`, `konfersi`, `kohilabs` targets) | `deploy/k3s/portal.yaml:107,119`, `kubeTargets.ts` | **Gap G1** | one namespace per agent (`agent/config.ts:113`, `rules.ts:43`) |
 | Keeping workspace ids (`<target>/<name>`) across the move | `workspaces/manager.ts:225-226` | **Gap G8** | `kubernetes` is a reserved Connect target id (`packages/contracts/src/connect.ts:1111,1124`): the workspaces of `isnan-claudepilot-workspaces` can't keep `kubernetes/<name>` |
 | The portal's half running in a Cloudflare Worker / DO | `connect/hub.ts:9-12`, `tunnel/stream.ts:15`, `connect/kube.ts:7-9,20-75`, `kubernetes.ts:4-15` | **Gap G6** | hub is a `ws` `WebSocketServer` on `node:http`; streams are `node:stream` Duplex; the kube client is `@kubernetes/client-node` (incl. `Exec`) over a `node:net` loopback listener: none of these run in workerd |
 
@@ -72,12 +72,14 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 
 ## RBAC the bridge needs, and nothing wider
 
-- In each workspace namespace (`isnan-claudepilot-workspaces`, `isnan-pilot-ws-isnan`, `isnan-pilot-ws-konfersi`): exactly the rules the
-  portal's SA has there today, the Role `claudepilot-workspaces` (`deploy/k3s/rbac.yaml:11-52`, the same rules in
-  `deploy/k3s/workspace-orgs.yaml:51-93`), bound to the bridge's SA. The proxy's allowlist is stricter than that Role (first wall); RBAC is
+- In each workspace namespace (`isnan-claudepilot-workspaces`, `isnan-pilot-ws-isnan`, `isnan-pilot-ws-konfersi`, `isnan-pilot-ws-kohilabs`):
+  exactly the rules the portal's SA has there today, the Role `claudepilot-workspaces` (`deploy/k3s/rbac.yaml:11-52`, the same rules in
+  `deploy/k3s/workspace-orgs.yaml`), bound to the bridge's SA. The proxy's allowlist is stricter than that Role (first wall); RBAC is
   the second. Not in it: `secrets` (the generic Connect manifest grants secrets in the workspace namespace, `connect/install/testdata/manifest-kubernetes.yaml:41-42`; the portal has no such right today, so the bridge does not get it).
-- In the bridge's own namespace: `secrets` get/update on the identity Secret `claudepilot-agent-identity` (`agent/identity.kube.ts:17-26`)
-  by `resourceNames`, plus `create` on secrets (create can't be limited by name), and get on the enrollment-token Secret by name.
+- In the namespace the bridge serves (`PILOT_KUBE_NAMESPACE`), NOT its own: the agent keeps its identity Secret there
+  (`agent/client.ts:371-374`, `agent/identity.kube.ts:26`), so `secrets` get/update on `claudepilot-agent-identity` by `resourceNames`,
+  plus `create` on secrets (create can't be limited by name). This is the one right beyond the portal's. The enrollment-token Secret is
+  read by the kubelet for the pod's env and needs no Role. Built in `deploy/k3s-bridge/rbac.yaml` (T-3699).
 - Not needed: `deploy/k3s/workspace-jobs-rbac.yaml` (the workspaces' own Job accounts for job-run and gate-job; the portal never uses them),
   the namespace-create ClusterRole (`rbac.yaml:68-89`; namespaces come from git).
 - Cluster-scoped and optional: `claudepilot-portal-fit-check` (G3) only if the fit check moves to the bridge; that binding is the
