@@ -33,6 +33,7 @@ export * from './repos.js';
 export * from './glance.js';
 export * from './attention.js';
 export * from './connect.js';
+export * from './connectSign.js';
 export * from './notify.js';
 export * from './zonedTime.js';
 export * from './triggers.js';

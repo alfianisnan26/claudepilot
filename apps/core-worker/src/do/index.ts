@@ -33,9 +33,5 @@ export class ChatSessionDO extends SchemaDO {
   }
 }
 
-/** One per cluster: the dial-out link from cp-bridge (D4; the endpoint comes with PILOT-1144). */
-export class BridgeDO extends SchemaDO {
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, 'bridge', [BASELINE]);
-  }
-}
+/** One per cluster: the dial-out link from cp-bridge (D4, PILOT-1144). */
+export { BridgeDO } from './bridge.js';

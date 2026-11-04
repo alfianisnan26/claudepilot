@@ -3,19 +3,20 @@ import { describe, expect, it } from 'vitest';
 import type { DoKind, SchemaDO } from '../src/do/schema.js';
 import { locate } from '../src/locate.js';
 
-const shards: ['PLATFORM' | 'ORG' | 'WORKSPACE' | 'CHAT_SESSION' | 'BRIDGE', DoKind][] = [
-  ['PLATFORM', 'platform'],
-  ['ORG', 'org'],
-  ['WORKSPACE', 'workspace'],
-  ['CHAT_SESSION', 'chat-session'],
-  ['BRIDGE', 'bridge'],
+// The last number is the schema version each shard is at (its migrations count).
+const shards: ['PLATFORM' | 'ORG' | 'WORKSPACE' | 'CHAT_SESSION' | 'BRIDGE', DoKind, number][] = [
+  ['PLATFORM', 'platform', 1],
+  ['ORG', 'org', 1],
+  ['WORKSPACE', 'workspace', 1],
+  ['CHAT_SESSION', 'chat-session', 1],
+  ['BRIDGE', 'bridge', 3],
 ];
 
 describe('Durable Object stubs', () => {
-  for (const [binding, kind] of shards) {
-    it(`${kind}: ping() answers over RPC at schema version 1`, async () => {
+  for (const [binding, kind, version] of shards) {
+    it(`${kind}: ping() answers over RPC at schema version ${version}`, async () => {
       const stub = locate(env[binding] as DurableObjectNamespace<SchemaDO>, `test-${kind}`);
-      expect(await stub.ping()).toEqual({ ok: true, kind, schemaVersion: 1 });
+      expect(await stub.ping()).toEqual({ ok: true, kind, schemaVersion: version });
     });
 
     it(`${kind}: the schema-version table holds one row per migration, applied once`, async () => {
@@ -25,7 +26,7 @@ describe('Durable Object stubs', () => {
       const rows = await runInDurableObject(stub, (_instance, state) =>
         state.storage.sql.exec<{ version: number }>('SELECT version FROM schema_version ORDER BY version').toArray(),
       );
-      expect(rows.map((r) => r.version)).toEqual([1]);
+      expect(rows.map((r) => r.version)).toEqual(Array.from({ length: version }, (_, i) => i + 1));
       const tables = await runInDurableObject(stub, (_instance, state) =>
         state.storage.sql
           .exec<{ name: string }>(

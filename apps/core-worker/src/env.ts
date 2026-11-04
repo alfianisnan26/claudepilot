@@ -11,4 +11,6 @@ export interface Env {
   ASSETS: Fetcher;
   CP_VERSION: string;
   CP_COMMIT: string;
+  /** Secret (never in wrangler.jsonc): the clusters that may dial /bridge, see bridge/registry.ts. Absent: every dial is refused. */
+  BRIDGE_CLUSTERS?: string;
 }
