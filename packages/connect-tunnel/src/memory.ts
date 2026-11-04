@@ -96,7 +96,8 @@ export class MemorySocket implements MuxSocket {
   }
 
   send(data: Buffer, cb: (error?: Error | null) => void): void {
-    if (this.#closed || this.#closing) return void queueMicrotask(() => cb(new Error(`WebSocket is not open: readyState ${this.#closed ? 3 : 2}`)));
+    if (this.#closed || this.#closing)
+      return void queueMicrotask(() => cb(new Error(`WebSocket is not open: readyState ${this.#closed ? 3 : 2}`)));
     this.sent++;
     this.sentBytes += data.length;
     const now = Date.now();

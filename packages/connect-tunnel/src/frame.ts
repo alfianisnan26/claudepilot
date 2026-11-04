@@ -64,7 +64,8 @@ export const windowUpdateFrame = (streamId: number, flags: number, delta: number
   encodeHeader({ type: FRAME_TYPE.window, flags, streamId, length: delta });
 
 /** `ack` answers a ping (same value); otherwise it asks (SYN). */
-export const pingFrame = (ack: boolean, value: number): Buffer => encodeHeader({ type: FRAME_TYPE.ping, flags: ack ? FRAME_FLAG.ack : FRAME_FLAG.syn, streamId: 0, length: value });
+export const pingFrame = (ack: boolean, value: number): Buffer =>
+  encodeHeader({ type: FRAME_TYPE.ping, flags: ack ? FRAME_FLAG.ack : FRAME_FLAG.syn, streamId: 0, length: value });
 
 export const goAwayFrame = (code: number): Buffer => encodeHeader({ type: FRAME_TYPE.goAway, flags: 0, streamId: 0, length: code });
 
