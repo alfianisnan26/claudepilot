@@ -24,13 +24,14 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
   - PILOT-1148 SPA assets (edf473a1a..4232195e0, review PASS 59965 + 60023). Left in_review: the staging deploy is FOR THE COORDINATOR (comment 60128).
   - PILOT-1185 slice 1 (2fd100a5d..607f3ffe4, PASS 60025).
   - PILOT-1171 slice 1 (6aabfcaa6..df3f775b3, PASS 60124).
-  - The last two stay open with their builders for slice 2.
+  - 1185 stays open with cf-sec for slice 2.
+- PILOT-1171 slice 2 exec merged 08cb70527..8f8029b10 (PASS 60138; job 3bf3cd84 on 23ceb855f: typecheck, pack, prettier, core-worker 113+10+4, server 201, 0 fail). PILOT-1171 closed. Follow-ups PILOT-1187 (HIGH) and PILOT-1188.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1171 slice 2, 7cfba616bdb5..903cdb23e49f on ticket/T-3737-worker-kube-exec (job a289f813 112 on 842bae222; doc-only head, prettier job 6f87c348). Cherry-pick all 6 incl. debug 490fd63e4 (842bae222 reverts it).
+- cf-review (worker 68d76aeb, opus, auto): idle, waits for review asks (1185 slice 2, 1187).
 - cf-sec (worker e28ec1b4, opus, builder 1 of 2): PILOT-1185 slice 2 (strong generator, long codes end to end, sign-in field, ux-check on a scratch portal), branch ticket/T-3854-signin-code-r2. After it merges, FOR THE COORDINATOR: rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to >=26 chars, then PORTAL_SIGNIN_CODE_STRICT=true.
-- cf-bridge (worker 5bc808ae, opus): idle (builder cap 2 full). Next: PILOT-1186 (minors of 1163/1161), then gaps 1164, 1157, 1167.
+- cf-bridge (worker 5bc808ae, opus): idle (builder cap 2 full). Next: PILOT-1188 (exec hardening, before any exec route), PILOT-1186 (minors of 1163/1161), then gaps 1164, 1157, 1167.
 - cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1187 (T-3864, HIGH) Worker-side pod spec check, one rule table in packages/contracts, branch ticket/T-3864-worker-spec-check.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
