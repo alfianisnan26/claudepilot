@@ -134,7 +134,8 @@ export async function run(deps) {
     policies = await cf('GET', `${acct}/access/apps/${app.id}/policies`);
     const foreign = policies.filter((p) => p.name !== POLICY_NAME);
     const named = foreign.map((p) => `${p.name} (${p.decision})`).join(', ');
-    if (foreign.length && !KEEP_UNKNOWN) fail(`${APP_NAME} has policies this script did not make: ${named}. Remove them, or re-run with --keep-unknown-policies`);
+    if (foreign.length && !KEEP_UNKNOWN)
+      fail(`${APP_NAME} has policies this script did not make: ${named}. Remove them, or re-run with --keep-unknown-policies`);
     if (foreign.length) say(`note: --keep-unknown-policies: the app's other policies are left as they are: ${named}`);
   }
 
@@ -142,7 +143,11 @@ export async function run(deps) {
   let svc = tokens.find((t) => t.name === TOKEN_NAME);
   say(
     `service token ${TOKEN_NAME}: ${
-      !svc ? 'missing, will be created' : ROTATE ? `exists (${svc.id}), will be rotated (--rotate)` : `exists (${svc.id}), kept (no --rotate: the token check is skipped)`
+      !svc
+        ? 'missing, will be created'
+        : ROTATE
+          ? `exists (${svc.id}), will be rotated (--rotate)`
+          : `exists (${svc.id}), kept (no --rotate: the token check is skipped)`
     }`,
   );
 
@@ -251,7 +256,9 @@ export async function run(deps) {
   svcSecret = undefined;
   const loc = anon?.headers.get('location') ?? '';
   const anonOk = !!anon && (anon.status === 403 || ((anon.status === 302 || anon.status === 301) && /\.cloudflareaccess\.com\//.test(loc)));
-  say(`CHECK unauthenticated: ${anon?.status} ${loc ? `-> ${new URL(loc).host}${new URL(loc).pathname}` : ''} ${anonOk ? 'PASS (Access)' : 'FAIL'}`);
+  say(
+    `CHECK unauthenticated: ${anon?.status} ${loc ? `-> ${new URL(loc).host}${new URL(loc).pathname}` : ''} ${anonOk ? 'PASS (Access)' : 'FAIL'}`,
+  );
   let healthOk = false;
   if (skipped) say('CHECK service token: SKIPPED (the token was kept, so its secret is unknown to this run; --rotate checks it)');
   else {
@@ -261,7 +268,9 @@ export async function run(deps) {
     } catch {}
     say(`CHECK service token: ${authed?.status} ${healthOk ? `PASS ${body}` : 'FAIL'}`);
   }
-  say(`ROLLBACK: npx wrangler rollback <previous version id> (cwd apps/core-worker); to take the host off: DELETE /accounts/<account>/workers/domains/<domain id>`);
+  say(
+    `ROLLBACK: npx wrangler rollback <previous version id> (cwd apps/core-worker); to take the host off: DELETE /accounts/<account>/workers/domains/<domain id>`,
+  );
   if (!anonOk) return 1;
   if (skipped) return 3;
   return healthOk ? 0 : 1;
