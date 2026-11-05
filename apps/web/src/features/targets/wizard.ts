@@ -101,7 +101,8 @@ export interface WizardContext {
 /** Field problems, one short line each; empty when the form can continue. */
 export function formProblems(f: WizardForm, ctx: WizardContext): Partial<Record<'id' | 'portalUrl' | 'ttlMinutes' | 'hostAccess' | 'platform', string>> {
   const out: Partial<Record<'id' | 'portalUrl' | 'ttlMinutes' | 'hostAccess' | 'platform', string>> = {};
-  const idProblem = connectTargetIdProblem(f.id);
+  // `taken` holds the scanned ids, so a built-in id no scanned target has passes here (the server decides the same, PILOT-1161).
+  const idProblem = connectTargetIdProblem(f.id, ctx.taken);
   if (idProblem) out.id = idProblem;
   else if (ctx.taken.includes(f.id)) out.id = 'That name is in use.';
   const url = f.portalUrl.trim();

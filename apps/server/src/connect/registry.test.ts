@@ -69,8 +69,13 @@ describe('targets', () => {
     assert.deepEqual(fields(mk('-x')), ['id']);
     assert.deepEqual(fields(mk('a'.repeat(31))), ['id']);
     assert.deepEqual(fields(mk('')), ['id']);
-    assert.equal(code(mk('docker')), '422:VALIDATION_FAILED', 'reserved');
+    assert.equal(code(mk('local')), '422:VALIDATION_FAILED', 'a built-in id this portal scanned stays reserved');
+    for (const word of ['api', 'connect', 'new', 'targets', 'default', 'scanned']) assert.equal(code(mk(word)), '422:VALIDATION_FAILED', `${word} is a route word`);
     assert.equal(code(mk('mybox')), '409:CONFLICT', 'a scanned id the portal found on its own');
+    // PILOT-1161 (G8): a built-in id no scanned target holds is free, so a portal without a static `kubernetes` target can enroll its
+    // bridge as `kubernetes` and the workspaces keep `kubernetes/<name>`.
+    assert.ok(mk('kubernetes', 'Bridge')(), 'a built-in id this portal has no target of');
+    assert.equal(core.registry.requireTarget('kubernetes').id, 'kubernetes');
     assert.ok(mk('lab', 'Home lab')());
     assert.equal(code(mk('lab')), '409:CONFLICT');
     assert.equal(code(mk('lab2', 'home LAB')), '409:CONFLICT', 'labels are unique without case');

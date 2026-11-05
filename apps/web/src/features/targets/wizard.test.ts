@@ -36,6 +36,10 @@ test('name and address problems', () => {
   assert.ok(formProblems({ ...form(), id: '' }, ctx).id);
   assert.ok(formProblems({ ...form(), id: 'Docker' }, ctx).id);
   assert.equal(formProblems({ ...form(), id: 'lab' }, ctx).id, 'That name is in use.');
+  // PILOT-1161 (G8): a built-in id is free when this portal has no target of it; a scanned one and a route word are not.
+  assert.equal(formProblems({ ...form(), id: 'kubernetes' }, ctx).id, undefined);
+  assert.equal(formProblems({ ...form(), id: 'docker' }, ctx).id, 'That name is taken by a built-in target.');
+  assert.equal(formProblems({ ...form(), id: 'api' }, ctx).id, 'That name is taken by a built-in target.');
   assert.ok(formProblems({ ...form(), portalUrl: 'http://portal.example.com' }, ctx).portalUrl);
   assert.equal(formProblems({ ...form(), portalUrl: 'http://portal.example.com' }, { ...ctx, allowHttp: true }).portalUrl, undefined);
   assert.equal(formProblems({ ...form(), portalUrl: 'https://portal.example.com' }, ctx).portalUrl, undefined);

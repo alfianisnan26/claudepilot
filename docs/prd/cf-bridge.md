@@ -42,7 +42,7 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 | Browser pool / VNC (browser container, ConfigMap, NetworkPolicy) | `browser/kube.ts:385-620`, `browser/index.ts:35` | **Gap G4** | `browserAccess()` is null for enrolled (`kubernetes.ts:207-210`); exec only into `workspace` (`rules.ts:103,132`); no `configmaps`/`networkpolicies` rule; root init refused (`schema.ts:66-67`) |
 | Namespace create | `kubernetes.ts:408-414` | Not needed | namespaces come from git (`deploy/k3s/workspace-orgs.yaml:1-7`); enrolled runtime never creates one (`connect/kube.ts:165`) |
 | Several namespaces (`kubernetes`, `isnan`, `konfersi`, `kohilabs` targets) | `deploy/k3s/portal.yaml:107,119`, `kubeTargets.ts` | **Gap G1** | one namespace per agent (`agent/config.ts:113`, `rules.ts:43`) |
-| Keeping workspace ids (`<target>/<name>`) across the move | `workspaces/manager.ts:225-226` | **Gap G8** | `kubernetes` is a reserved Connect target id (`packages/contracts/src/connect.ts:1111,1124`): the workspaces of `isnan-claudepilot-workspaces` can't keep `kubernetes/<name>` |
+| Keeping workspace ids (`<target>/<name>`) across the move | `workspaces/manager.ts:225-226` | Works (G8, PILOT-1161) | a built-in id (`CONNECT_BUILTIN_IDS`: `docker`, `docker-host`, `kubernetes`, `local`) is free for an enrolled target when the portal scanned no target of it (`connectTargetIdProblem(id, scanned)`), so the CF portal enrolls the bridge as `kubernetes`; the manager still refuses it beside a static `kubernetes`; `connect/registry.test.ts`, `workspaces/connect/manager.connect.test.ts` |
 | The portal's half running in a Cloudflare Worker / DO | `connect/hub.ts:9-12`, `tunnel/stream.ts:15`, `connect/kube.ts:7-9,20-75`, `kubernetes.ts:4-15` | **Gap G6** | hub is a `ws` `WebSocketServer` on `node:http`; streams are `node:stream` Duplex; the kube client is `@kubernetes/client-node` (incl. `Exec`) over a `node:net` loopback listener: none of these run in workerd |
 
 ## Gaps (one ticket each, phase-1, 1-4 h)
@@ -76,6 +76,10 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
   data migration of their ids to a new enrolled id or an allowance for an enrolled target to take a reserved id when the portal has no
   static target of that name (the CF portal has none). Decide on the ticket. Stable workspace ids (`ws_` + 12 hex, targets-connect §24,
   T-42) keep `<target>/<name>` only as an alias, so the ticket first lists which stored references still key on the alias.
+  Decided (a) and built: the references are many (the identity and alias rows, every slice-4 column, and code keys such as
+  `MANAGER_RUNTIME_ID = 'kubernetes/general-manager'` and `authz/usageAnchor.ts`), and (b) would be a non-additive rewrite. Route words
+  (`api`, `connect`, `new`, `targets`, `default`, `scanned`) stay reserved; static configuration (`PORTAL_K8S_TARGETS`) still refuses every
+  reserved id.
 
 ## G6 finding: the portal's half in a Durable Object (spike, PILOT-1159)
 

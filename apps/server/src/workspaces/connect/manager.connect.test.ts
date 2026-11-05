@@ -107,6 +107,24 @@ test('create carries node into the runtime and the pending entry, after beforeCr
   assert.deepEqual(asked, [['cx3-c', 'n2'], ['cx3-c', 'full']]);
 });
 
+test('PILOT-1161 (G8): an enrolled `kubernetes` target keeps `kubernetes/<name>` on a portal with no static one, and is refused beside one', async () => {
+  // The Cloudflare portal: no static targets; the in-cluster bridge enrolls as `kubernetes`.
+  const bridge = enrolled('kubernetes');
+  bridge.state.list = [bridge.ws('kohi-event'), bridge.ws('general-manager')];
+  const m = new Workspaces([], memory(), { ttlMs: 0 });
+  m.addRuntime(bridge.runtime);
+  assert.equal(m.runtimeFor('kubernetes'), bridge.runtime);
+  assert.deepEqual((await m.list()).map((w) => w.id).sort(), ['kubernetes/general-manager', 'kubernetes/kohi-event'], 'the same keys as on the static target');
+  await m.start('kubernetes', 'kohi-event');
+
+  // Today's portal: `kubernetes` is configured (static), so an enrolled target of that id would hide it and is refused.
+  const configured = enrolled('kubernetes');
+  (configured.runtime.target as { source: string }).source = 'scanned';
+  const today = new Workspaces([configured.runtime], memory(), { ttlMs: 0 });
+  assert.throws(() => today.addRuntime(enrolled('kubernetes').runtime), (e) => e instanceof AppError && e.code === 'CONFLICT');
+  assert.equal(today.runtimeFor('kubernetes'), configured.runtime);
+});
+
 test('resume waits for settled: a pending create on an enrolled target that arrives within the grace resumes', async () => {
   const pending: Workspace = { id: 'cx3-r/w9', name: 'w9', target: 'cx3-r', image: '', status: 'creating', createdAt: '2026-10-12T00:00:00.000Z', node: 'n1' };
   const store = memory([pending]);
