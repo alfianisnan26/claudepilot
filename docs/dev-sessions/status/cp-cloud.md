@@ -37,7 +37,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Workers on Opus: backend/infra/security per owner routing 2026-10-25. Reviewer in mode auto (dontAsk refused git).
 - 11:45 Operator pacing (one account): at most 2 builders at once; cf-review takes review asks only. Only cf-migration tickets.
 - 21:45 Operator: resume after the 21:40 reset; 1145 deploy + 1142 rig first, then phase 2 (1146-1148); 2 workers. cf-worker retries the exact 1145 command once on that instruction; a second refusal stops it (no other path).
-- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 UTC (2026-11-05; cf-review, cf-bridge, cf-worker resumed 02:53Z). Resume everyone right after each reset; note the reset here.
+- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 UTC (2026-11-05; crew resumed 02:53Z and 07:54Z). Resume everyone right after each reset; note the reset here.
 - 22:35 After incident PILOT-1183: before every cf/integration push, the lead runs ONE job on the merged tree: typecheck, context pack, core-worker tests and the server test directories the merged branches touch.
 - 03:25 Merged-tree job runners: server AND web tests are node --test (not vitest); only core-worker uses vitest (npm test). Two false reds came from the wrong runner.
 - 12:00 Builders put all trailers in one final block (`%(trailers)` reads only the last paragraph).
