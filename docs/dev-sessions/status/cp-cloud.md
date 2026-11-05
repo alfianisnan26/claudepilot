@@ -29,9 +29,9 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): idle, waits for review asks (1185 slice 2, 1187).
-- cf-sec (worker e28ec1b4, opus, builder 1 of 2): PILOT-1185 slice 2 (strong generator, long codes end to end, sign-in field, ux-check on a scratch portal), branch ticket/T-3854-signin-code-r2. After it merges, FOR THE COORDINATOR: rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to >=26 chars, then PORTAL_SIGNIN_CODE_STRICT=true.
-- cf-bridge (worker 5bc808ae, opus): idle (builder cap 2 full). Next: PILOT-1188 (exec hardening, before any exec route), PILOT-1186 (minors of 1163/1161), then gaps 1164, 1157, 1167.
+- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1185 slice 2, b93f78582..072b179c243a on ticket/T-3854-signin-code-r2 (jobs 873ceaf0 61, c9a98001 62, proof 5954753d, UI 6e3625ca 51/51).
+- cf-sec (worker e28ec1b4, opus): idle, waits on the 1185 slice 2 review (takes the fixes). After it merges, FOR THE COORDINATOR: rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to >=26 chars, then PORTAL_SIGNIN_CODE_STRICT=true.
+- cf-bridge (worker 5bc808ae, opus, builder 1 of 2): PILOT-1188 (exec hardening, before any exec route) + PILOT-1186 (minors of 1163/1161), branch ticket/T-3865-exec-hardening. Then gaps 1164, 1157, 1167.
 - cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1187 (T-3864, HIGH) Worker-side pod spec check, one rule table in packages/contracts, branch ticket/T-3864-worker-spec-check.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
