@@ -133,6 +133,24 @@ Worker kube client on streams in place of client-node (G6c, PILOT-1171). Do not 
 - Proof: `apps/server/src/connect/tunnel/bridgeWorker.test.ts` (`CLAUDEPILOT_WORKER_TESTS=1`) lists pods through `/bridge` with the
   real `dialTunnel` agent and the real `KubeProxy` in front of a fake API server, and checks the proxy's walls (403, 401, `denied`).
 
+**G6c slice 1 built (PILOT-1171).** The REST client the Cloudflare portal needs, in `BridgeDO` by RPC; requests are built and answers
+read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per call:
+
+- `kubeList({namespace, bearer, kind: pods|deployments|claims, workspace?})` and `kubeMetrics({..., workspace?})`: GET with the managed
+  selector (`claudepilot.managed=true`, plus `claudepilot.workspace=<label>` when given). The answer is `{ok, items}`.
+- `kubeCreate({..., kind: deployment|claim, object})`: the name must be a workspace's (`ws-*`, a claim `ws-*-home`), the object labelled
+  managed, in no other namespace; apiVersion, kind and namespace are set by the Worker; at most 1 MiB. The answer is `{ok, object}`.
+- `kubeScale({..., name, replicas: 0|1})`: PUT of an `autoscaling/v1` Scale; `{ok, replicas}`.
+- `kubeDelete({..., kind, name})`: a Deployment in the foreground; a missing object is `{ok: true, deleted: false}`.
+- A non-2xx answer is `{ok: false, code: 'kube_status', status, reason, message}` from the Status (409 `AlreadyExists`, the proxy's 403).
+- The first wall is now the Worker's (review of PILOT-1170): `kube()` and every call refuse a path with a `.` or `..` segment, any `%`
+  (so `%2e%2e`, `%2f`), a query string or fragment, `//` or anything but plain segments, before a stream is opened. The agent's proxy
+  and its schema scan stay the second wall, RBAC the third.
+- Proof: `apps/core-worker/test/kubeApi.test.ts`, `test/bridge.test.ts` (the RPCs over a live link with a stand-in API server; refused
+  calls never reach the agent), and `bridgeWorker.test.ts` (a workspace's claim and Deployment created, listed, scaled, measured and
+  deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment refused by the proxy's scan).
+- Next (slice 2): exec (v5, v4 fallback) and resize.
+
 ## RBAC the bridge needs, and nothing wider
 
 - In each workspace namespace (`isnan-claudepilot-workspaces`, `isnan-pilot-ws-isnan`, `isnan-pilot-ws-konfersi`, `isnan-pilot-ws-kohilabs`):
@@ -158,3 +176,5 @@ Worker kube client on streams in place of client-node (G6c, PILOT-1171). Do not 
   Cloudflare's own message-size limit or idle close (the 32 MiB figure is from Cloudflare's docs).
 - G6b ran in local workerd (wrangler `unstable_startWorker`) with the real agent client: hibernation itself is simulated in the tests
   (the in-memory session dropped), not observed on the Cloudflare edge.
+- G6c slice 1 ran against the fake API server only. The agent's proxy does not forward `labelSelector` on the metrics path (not in its
+  listed routes), so a metrics list is the namespace's pods' metrics, not only the managed ones; the Worker sends the selector anyway.
