@@ -18,6 +18,16 @@ import {
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ByteReader } from '../src/bridge/http1.js';
+import {
+  BRIDGE_EXEC_HEADER,
+  BRIDGE_EXEC_PATH,
+  bridgeExecRequest,
+  EXEC_PROTOCOL_HEADER,
+  readWsFrame,
+  wsAccept,
+  wsFrame,
+  type KubeExecSpec,
+} from '../src/bridge/kubeExec.js';
 import { BRIDGE_LINK } from '../src/bridge/link.js';
 import { bridgeAuthorize, bridgeRegistry } from '../src/bridge/registry.js';
 import { bridgeUpgrade } from '../src/bridge/route.js';
@@ -603,6 +613,296 @@ describe('BridgeDO: the REST client by RPC (PILOT-1171)', () => {
     } finally {
       agent.session.destroy();
     }
+  });
+});
+
+interface ExecSeen {
+  namespace: unknown;
+  target: string;
+  headers: Map<string, string>;
+  /** Each message from the bridge after the 101 (channel byte first), and `close <code>` for its close frame. */
+  messages: (number[] | string)[];
+}
+
+/**
+ * The test's end of a live link as the agent and the API server's exec (PILOT-1171 slice 2): it answers the upgrade with the first offered
+ * protocol it `speaks`, then echoes stdin upper-cased on stdout, records resizes, and on `exit` or a closed stdin sends the status and a
+ * close frame. `answer` replaces the 101 (a refusal, or a broken upgrade).
+ */
+function execAgentOn(
+  link: Link,
+  opts: { speaks?: string[]; answer?: (key: string) => Promise<string> | string } = {},
+): { session: MuxSession; seen: ExecSeen[] } {
+  const speaks = opts.speaks ?? ['v5.channel.k8s.io', 'v4.channel.k8s.io'];
+  const seen: ExecSeen[] = [];
+  const session = new MuxSession({
+    role: 'client',
+    socket: cfMuxSocket(link.ws),
+    onStream: (stream) =>
+      void (async () => {
+        const req = await acceptService(stream, (r) =>
+          r.service === 'kube' ? { ok: true } : { ok: false, code: 'service_unavailable', message: 'Only kube here.' },
+        );
+        if (!req) return;
+        const r = new ByteReader(stream);
+        const [line = '', ...rest] = (await r.until('\r\n\r\n')).toString('latin1').split('\r\n');
+        const headers = new Map(rest.map((h) => [h.slice(0, h.indexOf(':')).toLowerCase(), h.slice(h.indexOf(':') + 1).trim()]));
+        const namespace = (req.args as { namespace?: unknown } | undefined)?.namespace;
+        const one: ExecSeen = { namespace, target: line.split(' ')[1] ?? '', headers, messages: [] };
+        seen.push(one);
+        const key = headers.get('sec-websocket-key') ?? '';
+        if (opts.answer) return void stream.write(await opts.answer(key));
+        const offered = (headers.get('sec-websocket-protocol') ?? '').split(',').map((p) => p.trim());
+        const protocol = offered.find((p) => speaks.includes(p))!;
+        stream.write(
+          `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${await wsAccept(key)}\r\nSec-WebSocket-Protocol: ${protocol}\r\n\r\n`,
+        );
+        const send = (ch: number, s: string) => stream.write(wsFrame(2, new Uint8Array([ch, ...new TextEncoder().encode(s)]), false));
+        const end = () => {
+          send(3, '{"metadata":{},"status":"Success"}');
+          stream.write(wsFrame(8, new Uint8Array([0x03, 0xe8]), false));
+        };
+        // The API server opens each output channel with an empty message (the bridge drops them).
+        stream.write(wsFrame(2, new Uint8Array([1]), false));
+        try {
+          for (;;) {
+            const f = await readWsFrame(r);
+            if (!f.masked) throw new Error('an unmasked client frame');
+            if (f.opcode === 8) {
+              one.messages.push(`close ${f.payload.readUInt16BE(0)}`);
+              return void stream.end();
+            }
+            const msg = [...f.payload];
+            one.messages.push(msg);
+            const text = new TextDecoder().decode(new Uint8Array(msg.slice(1)));
+            if (msg[0] === 0 && text === 'exit') end();
+            else if (msg[0] === 0) send(1, text.toUpperCase());
+            else if (msg[0] === 255) end();
+          }
+        } catch {
+          // the stream ended
+        }
+      })(),
+  });
+  return { session, seen };
+}
+
+interface ExecCaller {
+  res: Response;
+  ws: WebSocket;
+  next(): Promise<[number, string]>;
+  closed: Promise<{ code: number; reason: string }>;
+}
+
+/** The caller's side: the exec's 101 and its WebSocket, messages decoded as [channel, text]. */
+async function execCall(spec: KubeExecSpec): Promise<ExecCaller> {
+  const res = await stub().fetch(bridgeExecRequest(spec));
+  if (res.status !== 101) throw new Error(`exec answered ${res.status}: ${await res.text()}`);
+  const ws = res.webSocket!;
+  open.push(ws);
+  const queue: [number, string][] = [];
+  const waiting: ((m: [number, string]) => void)[] = [];
+  let chain = Promise.resolve();
+  ws.addEventListener('message', (e) => {
+    const data = e.data as string | ArrayBuffer | Blob;
+    chain = chain.then(async () => {
+      const b = new Uint8Array(data instanceof Blob ? await data.arrayBuffer() : typeof data === 'string' ? new ArrayBuffer(0) : data);
+      const m: [number, string] = [b[0] ?? -1, new TextDecoder().decode(b.subarray(1))];
+      const w = waiting.shift();
+      if (w) w(m);
+      else queue.push(m);
+    });
+  });
+  const closed = new Promise<{ code: number; reason: string }>((resolve) =>
+    ws.addEventListener('close', (e) => resolve({ code: e.code, reason: e.reason })),
+  );
+  ws.accept();
+  return { res, ws, closed, next: () => (queue.length ? Promise.resolve(queue.shift()!) : new Promise((r) => waiting.push(r))) };
+}
+
+const frame = (ch: number, s: string) => new Uint8Array([ch, ...new TextEncoder().encode(s)]);
+
+describe('BridgeDO: exec in a workspace pod (PILOT-1171 slice 2)', () => {
+  const NS = 'claudepilot-workspaces';
+  const POD = 'ws-0123456789ab-5d8f7c9b4-x2x7q';
+  const execSpec = (bearer: string, over: Partial<KubeExecSpec> = {}): KubeExecSpec => ({
+    namespace: NS,
+    bearer,
+    pod: POD,
+    command: ['sh', '-c', 'cat'],
+    ...over,
+  });
+
+  it('v5: stdin echoes, a resize is checked and passed, a closed stdin ends it with the status and a 1000 close', async () => {
+    const link = await connect();
+    const bearer = crypto.randomUUID();
+    const agent = execAgentOn(link);
+    try {
+      const c = await execCall(execSpec(bearer));
+      expect(c.res.headers.get(EXEC_PROTOCOL_HEADER)).toBe('v5.channel.k8s.io');
+      c.ws.send(frame(0, 'hi\n'));
+      expect(await c.next()).toEqual([1, 'HI\n']);
+      c.ws.send(frame(4, '{"Width":120,"Height":40,"Other":1}'));
+      c.ws.send(new Uint8Array([255, 0]));
+      expect(await c.next()).toEqual([3, '{"metadata":{},"status":"Success"}']);
+      expect((await c.closed).code).toBe(1000);
+
+      const [one] = agent.seen;
+      expect(one?.namespace).toBe(NS);
+      const [path, query] = (one?.target ?? '').split('?');
+      expect(path).toBe(`/api/v1/namespaces/${NS}/pods/${POD}/exec`);
+      expect(query).toBe('container=workspace&command=sh&command=-c&command=cat&stdin=true&stdout=true&stderr=true&tty=false');
+      expect(one?.headers.get('authorization')).toBe(`Bearer ${bearer}`);
+      expect(one?.headers.get('sec-websocket-protocol')).toBe('v5.channel.k8s.io, v4.channel.k8s.io');
+      expect([one?.headers.get('upgrade'), one?.headers.get('connection'), one?.headers.get('sec-websocket-version')]).toEqual([
+        'websocket',
+        'Upgrade',
+        '13',
+      ]);
+      expect(one?.messages.slice(0, 3)).toEqual([[...frame(0, 'hi\n')], [...frame(4, '{"Width":120,"Height":40}')], [255, 0]]);
+      const audit = await stub().audit(500);
+      expect(JSON.stringify(audit)).not.toContain(bearer);
+      expect(audit.find((r) => r.event === 'bridge.exec')?.detail).toBe(`${POD} 3 args v5.channel.k8s.io`);
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('v4 fallback: an API server without v5 is answered on v4, and a stdin close (v5 only) is not sent', async () => {
+    const link = await connect();
+    const agent = execAgentOn(link, { speaks: ['v4.channel.k8s.io'] });
+    try {
+      const c = await execCall(execSpec(crypto.randomUUID(), { tty: true }));
+      expect(c.res.headers.get(EXEC_PROTOCOL_HEADER)).toBe('v4.channel.k8s.io');
+      c.ws.send(new Uint8Array([255, 0]));
+      c.ws.send(frame(4, '{"Width":80,"Height":24}'));
+      c.ws.send(frame(0, 'exit'));
+      expect(await c.next()).toEqual([3, '{"metadata":{},"status":"Success"}']);
+      expect((await c.closed).code).toBe(1000);
+      expect(agent.seen[0]?.messages).toEqual([[...frame(4, '{"Width":80,"Height":24}')], [...frame(0, 'exit')]]);
+      expect(new URLSearchParams(agent.seen[0]?.target.split('?')[1]).get('tty')).toBe('true');
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('the caller closing sends the pod a close frame, and the exec’s stream is released', async () => {
+    const link = await connect();
+    const agent = execAgentOn(link);
+    try {
+      const c = await execCall(execSpec(crypto.randomUUID()));
+      c.ws.send(frame(0, 'a'));
+      expect(await c.next()).toEqual([1, 'A']);
+      c.ws.close(1000, 'done');
+      await vi.waitFor(() => expect(agent.seen[0]?.messages.at(-1)).toBe('close 1000'));
+      await vi.waitFor(async () => expect(await onSession(link.connId, (s) => s?.openStreams)).toBe(0));
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('a caller sending on an output channel is closed 1008', async () => {
+    const link = await connect();
+    const agent = execAgentOn(link);
+    try {
+      const c = await execCall(execSpec(crypto.randomUUID()));
+      c.ws.send(frame(1, 'x'));
+      expect((await c.closed).code).toBe(1008);
+      await vi.waitFor(() => expect(agent.seen[0]?.messages).toEqual(['close 1000']));
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('a refusal by the API server or the agent’s proxy is JSON, not an upgrade: kube_status with its reason', async () => {
+    const link = await connect();
+    const body = JSON.stringify({ kind: 'Status', status: 'Failure', code: 403, reason: 'Forbidden', message: 'exec is not allowed' });
+    const agent = execAgentOn(link, {
+      answer: () => `HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+    });
+    try {
+      const res = await stub().fetch(bridgeExecRequest(execSpec(crypto.randomUUID())));
+      expect(res.status).toBe(502);
+      expect(res.webSocket).toBeNull();
+      expect(await res.json()).toEqual({ ok: false, code: 'kube_status', status: 403, reason: 'Forbidden', message: 'exec is not allowed' });
+      await vi.waitFor(async () => expect(await onSession(link.connId, (s) => s?.openStreams)).toBe(0));
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('a 101 with the wrong accept, or a protocol not offered, is bad_response', async () => {
+    const link = await connect();
+    const answers = [
+      async (key: string) =>
+        `HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: ${await wsAccept(`${key}x`)}\r\nSec-WebSocket-Protocol: v5.channel.k8s.io\r\n\r\n`,
+      async (key: string) =>
+        `HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: ${await wsAccept(key)}\r\nSec-WebSocket-Protocol: base64.channel.k8s.io\r\n\r\n`,
+    ];
+    let n = 0;
+    const agent = execAgentOn(link, { answer: (key) => answers[n++]!(key) });
+    try {
+      for (let i = 0; i < answers.length; i++) {
+        const res = await stub().fetch(bridgeExecRequest(execSpec(crypto.randomUUID())));
+        expect(res.status).toBe(502);
+        expect(await res.json()).toMatchObject({ ok: false, code: 'bad_response' });
+      }
+      expect(agent.seen).toHaveLength(2);
+      await vi.waitFor(async () => expect(await onSession(link.connId, (s) => s?.openStreams)).toBe(0));
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('refuses a bad exec with 400 before anything reaches the agent; no link is 503; not an upgrade is the plain 404', async () => {
+    const link = await connect();
+    const bearer = crypto.randomUUID();
+    const agent = execAgentOn(link);
+    try {
+      const bad: KubeExecSpec[] = [
+        execSpec(bearer, { pod: 'kube-apiserver-node1' }),
+        execSpec(bearer, { namespace: 'kube_system' }),
+        execSpec(bearer, { command: [] }),
+        execSpec(bearer, { command: ['sh', 'a\0b'] }),
+        execSpec(bearer, { command: ['sh', 'x'.repeat(9000)] }),
+        execSpec(bearer, { tty: true, stderr: true }),
+        execSpec('with space'),
+      ];
+      for (const s of bad) {
+        const res = await stub().fetch(bridgeExecRequest(s));
+        expect(res.status, JSON.stringify(s).slice(0, 80)).toBe(400);
+        expect(await res.json()).toMatchObject({ ok: false, code: 'bad_request' });
+      }
+      const notJson = new Request(`https://bridge.internal${BRIDGE_EXEC_PATH}`, { headers: { upgrade: 'websocket', [BRIDGE_EXEC_HEADER]: '{' } });
+      expect((await stub().fetch(notJson)).status).toBe(400);
+      const noUpgrade = new Request(`https://bridge.internal${BRIDGE_EXEC_PATH}`, { headers: { [BRIDGE_EXEC_HEADER]: JSON.stringify(execSpec(bearer)) } });
+      expect((await stub().fetch(noUpgrade)).status).toBe(404);
+      expect(agent.seen).toEqual([]);
+    } finally {
+      agent.session.destroy();
+    }
+    link.ws.close(1000, 'bye');
+    await link.closed;
+    await vi.waitFor(async () => expect((await stub().links()).live).toBe(0));
+    const res = await stub().fetch(bridgeExecRequest(execSpec(bearer)));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ ok: false, code: 'agent_offline' });
+  });
+
+  it('the public route never reaches the exec: /bridge with the exec header is the Connect handshake, and the exec path is not served', async () => {
+    const link = await SELF.fetch(URL_BRIDGE, {
+      headers: upgradeHeaders({ [BRIDGE_EXEC_HEADER]: JSON.stringify(execSpec(crypto.randomUUID())) }),
+    });
+    expect(link.status).toBe(101);
+    expect(link.headers.get('sec-websocket-protocol')).toBe(CONNECT_SUBPROTOCOL);
+    expect(link.headers.get(EXEC_PROTOCOL_HEADER)).toBeNull();
+    open.push(link.webSocket!);
+    link.webSocket!.accept();
+    const direct = await SELF.fetch(`https://core.test${BRIDGE_EXEC_PATH}`, {
+      headers: upgradeHeaders({ [BRIDGE_EXEC_HEADER]: JSON.stringify(execSpec(crypto.randomUUID())) }),
+    });
+    expect(direct.status).not.toBe(101);
+    expect(direct.webSocket).toBeNull();
   });
 });
 

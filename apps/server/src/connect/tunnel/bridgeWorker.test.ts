@@ -7,6 +7,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { WebSocket } from 'ws';
 import { CONNECT_AGENT_VERSION, CONNECT_PROTOCOL, type ConnectAgentHello } from '@portal/contracts';
 import { LOCAL_TOKEN, NAMESPACE, startKubeRig } from '../agent/testkit/kubeRig.js';
 import { generateNodeKeyPair } from './auth.js';
@@ -24,6 +25,14 @@ interface DevWorker {
   url: Promise<URL>;
   ready: Promise<void>;
   dispose(): Promise<void>;
+}
+
+async function waitFor(ok: () => boolean, ms = 5_000): Promise<void> {
+  const until = Date.now() + ms;
+  while (!ok()) {
+    if (Date.now() > until) throw new Error('timed out');
+    await new Promise((r) => setTimeout(r, 20));
+  }
 }
 
 const hello = (): ConnectAgentHello => ({
@@ -275,6 +284,82 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
       assert.deepEqual(await rpc('kubeDelete', { kind: 'claim', name: `${ws}-home` }), { ok: true, deleted: true });
       assert.deepEqual(await rpc('kubeDelete', { kind: 'claim', name: `${ws}-home` }), { ok: true, deleted: false });
       assert.equal(rig.fake.deployments.has(ws), false);
+    } finally {
+      d.session.close(1000, 'test over');
+      await rig.stop();
+    }
+  });
+
+  test('an exec through /bridge: stdin, a resize and the exit status, on v4 (the fake API server’s only protocol) (PILOT-1171 slice 2)', async () => {
+    const rig = await startKubeRig();
+    const pod = `ws-${randomBytes(6).toString('hex')}`;
+    rig.fake.pods.set(pod, { metadata: { name: pod, namespace: NAMESPACE, labels: { 'claudepilot.managed': 'true' } }, status: { phase: 'Running' } });
+    const sizes: { width: number; height: number }[] = [];
+    let command: string[] = [];
+    rig.fake.onExec = (io) => {
+      command = io.command;
+      io.onResize((s) => sizes.push(s));
+      io.onStdin((d) => (d.toString() === 'exit' ? io.exit(3) : io.stdout(d.toString().toUpperCase())));
+    };
+    const onStream = (stream: MuxStream) =>
+      void (async () => {
+        const req = await acceptService(stream, async (r): Promise<OpenDecision> => {
+          if (r.service !== 'kube') return { ok: false, code: 'service_unavailable', message: 'Only kube here.' };
+          const refusal = await rig.service.accept!(r.args);
+          return refusal ? { ok: false, code: refusal.code, message: refusal.message } : { ok: true };
+        });
+        if (req) rig.service.handle(stream, req.trace ?? '--------', req.args);
+      })();
+    const d = await dialTunnel({ url, nodeId: node, privateKey: keys.privateKey, hello, ws: { headers: headers() }, onStream });
+    const exec = (spec: Record<string, unknown>) =>
+      new WebSocket(`ws://${new URL(httpUrl).host}/__interop/exec`, {
+        headers: { 'x-interop-exec': JSON.stringify({ cluster, namespace: NAMESPACE, bearer: LOCAL_TOKEN, pod, command: ['sh'], ...spec }) },
+      });
+    try {
+      const ws = exec({ command: ['sh', '-c', 'cat'] });
+      // Every listener before the first await: `ws` emits 'open' in the same tick as 'upgrade'.
+      const messages: [number, string][] = [];
+      const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+      ws.on('message', (data: Buffer) => messages.push([data[0]!, data.subarray(1).toString('utf8')]));
+      let protocol: string | undefined;
+      ws.once('upgrade', (res) => (protocol = res.headers['x-cp-exec-protocol'] as string | undefined));
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('unexpected-response', (_req, res) => reject(new Error(`exec answered ${res.statusCode}`)));
+        ws.once('error', reject);
+      });
+      assert.equal(protocol, 'v4.channel.k8s.io');
+      const frame = (ch: number, s: string) => Buffer.concat([Buffer.from([ch]), Buffer.from(s)]);
+      ws.send(frame(4, JSON.stringify({ Width: 132, Height: 43 })));
+      ws.send(frame(0, 'hello'));
+      await waitFor(() => messages.some(([ch]) => ch === 1));
+      ws.send(frame(0, 'exit'));
+      assert.equal(await closed, 1000);
+      assert.deepEqual(messages[0], [1, 'HELLO']);
+      const status = JSON.parse(messages.find(([ch]) => ch === 3)?.[1] ?? '{}') as { status?: string; reason?: string };
+      assert.deepEqual([status.status, status.reason], ['Failure', 'NonZeroExitCode']);
+      assert.deepEqual(sizes, [{ width: 132, height: 43 }]);
+      assert.deepEqual(command, ['sh', '-c', 'cat']);
+      // The API server saw the proxy's token, the workspace container and both protocols offered; never the bridge's bearer.
+      const up = rig.fake.upgrades.at(-1)!;
+      assert.equal(up.headers.authorization, `Bearer ${rig.fake.token}`);
+      assert.equal(up.headers['sec-websocket-protocol'], 'v5.channel.k8s.io, v4.channel.k8s.io');
+      assert.equal(new URL(up.url, 'http://x').searchParams.get('container'), 'workspace');
+
+      // Refused before the upgrade: a pod that is not a workspace (the Worker), a pod that does not exist (the API server's 404).
+      for (const [spec, want] of [
+        [{ pod: 'kube-apiserver-x' }, 400],
+        [{ pod: 'ws-ffffffffffff' }, 502],
+      ] as const) {
+        const bad = exec(spec);
+        const code = await new Promise<number>((resolve, reject) => {
+          bad.once('unexpected-response', (_req, res) => (res.resume(), resolve(res.statusCode ?? 0)));
+          bad.once('open', () => reject(new Error('the exec opened')));
+          bad.once('error', reject);
+        });
+        assert.equal(code, want, JSON.stringify(spec));
+        bad.terminate();
+      }
     } finally {
       d.session.close(1000, 'test over');
       await rig.stop();
