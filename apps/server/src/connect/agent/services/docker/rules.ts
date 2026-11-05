@@ -33,7 +33,8 @@ export function normalizeTarget(raw: string): Target | Refusal {
   const rawPath = q < 0 ? raw : raw.slice(0, q);
   const rawQuery = q < 0 ? '' : raw.slice(q + 1);
   // eslint-disable-next-line no-control-regex
-  if (/[\0-\x1f\x7f-￿\\%]/.test(rawPath)) return refuse('path', 'The path has a character the policy does not allow (control, non-ASCII, backslash or %-encoding).');
+  if (/[\0-\x1f\x7f-￿\\%]/.test(rawPath))
+    return refuse('path', 'The path has a character the policy does not allow (control, non-ASCII, backslash or %-encoding).');
   if (rawPath.includes('//') || /(^|\/)\.\.?(\/|$)/.test(rawPath)) return refuse('path', 'The path has an empty or relative segment.');
   if (rawPath.length > 1 && rawPath.endsWith('/')) return refuse('path', 'The path ends in a slash.');
   if (rawPath.length > 2048 || rawQuery.length > 8192) return refuse('path', 'The request target is too long.');
@@ -97,7 +98,11 @@ interface Entry {
   make: (m: RegExpExecArray, method: string) => Route;
 }
 
-const entry = (methods: string[], pattern: RegExp, make: (m: RegExpExecArray, method: string) => Route): Entry => ({ methods, pattern, make });
+const entry = (methods: string[], pattern: RegExp, make: (m: RegExpExecArray, method: string) => Route): Entry => ({
+  methods,
+  pattern,
+  make,
+});
 
 const ROUTES: Entry[] = [
   entry(['GET', 'HEAD'], /^\/_ping$/, () => ({ kind: 'ping', json: false })),
@@ -107,7 +112,12 @@ const ROUTES: Entry[] = [
   entry(['GET'], /^\/containers\/json$/, () => ({ kind: 'list', json: false })),
   entry(['POST'], /^\/containers\/create$/, () => ({ kind: 'create', json: true })),
   entry(['GET'], new RegExp(`^/containers/(${CREF})/json$`), (m) => ({ kind: 'inspect', ref: m[1]!, json: false })),
-  entry(['POST'], new RegExp(`^/containers/(${CREF})/(start|stop|restart|pause|unpause|wait)$`), (m) => ({ kind: 'action', ref: m[1]!, verb: m[2]!, json: false })),
+  entry(['POST'], new RegExp(`^/containers/(${CREF})/(start|stop|restart|pause|unpause|wait)$`), (m) => ({
+    kind: 'action',
+    ref: m[1]!,
+    verb: m[2]!,
+    json: false,
+  })),
   entry(['POST'], new RegExp(`^/containers/(${CREF})/kill$`), (m) => ({ kind: 'kill', ref: m[1]!, json: false })),
   entry(['DELETE'], new RegExp(`^/containers/(${CREF})$`), (m) => ({ kind: 'remove', ref: m[1]!, json: false })),
   entry(['POST'], new RegExp(`^/containers/(${CREF})/exec$`), (m) => ({ kind: 'execCreate', ref: m[1]!, json: true })),
@@ -144,7 +154,8 @@ export function classify(method: string, path: string): Route | Refusal {
 
 /** `1`, `0`, `true` or `false` (what Docker clients send). */
 export const flag = (v: string | null): boolean | null => (v === '1' || v === 'true' ? true : v === '0' || v === 'false' ? false : null);
-export const int = (v: string | null, min = 0, max = 1_000_000_000): number | null => (v !== null && /^-?\d{1,12}$/.test(v) && Number(v) >= min && Number(v) <= max ? Number(v) : null);
+export const int = (v: string | null, min = 0, max = 1_000_000_000): number | null =>
+  v !== null && /^-?\d{1,12}$/.test(v) && Number(v) >= min && Number(v) <= max ? Number(v) : null;
 
 /** The signals `kill` and `stop` may name (PRD appendix A). */
 export const SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', '15', '9', '2', '1']);
