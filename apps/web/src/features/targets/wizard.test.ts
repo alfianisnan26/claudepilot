@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ConnectEnrollment, ConnectNodeView, ConnectTargetView } from '@portal/contracts';
 import { kindsOf } from './kinds';
-import { canAddNode, formProblems, initialForm, offersSudo, platformChoices, platformFromUserAgent, toCreateRequest, withKind, withPlatform, withRole } from './wizard';
+import { canAddNode, formProblems, idWarning, initialForm, offersSudo, platformChoices, platformFromUserAgent, toCreateRequest, withKind, withPlatform, withRole } from './wizard';
 import { enrollmentLive, reachableLine, rowLine } from './view';
 
 const ctx = { taken: ['docker', 'lab'], allowHttp: false };
@@ -45,6 +45,15 @@ test('name and address problems', () => {
   assert.equal(formProblems({ ...form(), portalUrl: 'https://portal.example.com' }, ctx).portalUrl, undefined);
   assert.ok(formProblems({ ...form(), ttlMinutes: '0' }, ctx).ttlMinutes);
   assert.deepEqual(formProblems(form(), ctx), {});
+});
+
+test('a free built-in name passes with a warning; other names and refused ones get none (PILOT-1186)', () => {
+  const warn = (id: string) => idWarning(id, formProblems({ ...form(), id }, ctx).id);
+  assert.match(warn('kubernetes')!, /stops working/);
+  assert.match(warn('local')!, /stops working/);
+  assert.equal(warn('docker'), undefined, 'refused (scanned): the error shows, not the warning');
+  assert.equal(warn('my-server'), undefined);
+  assert.equal(warn('api'), undefined);
 });
 
 test('request carries only what applies', () => {

@@ -11,7 +11,7 @@ import { LiveLine } from './LiveLine';
 import { PlatformPicker } from './PlatformPicker';
 import { PlanSheet, ScriptSheet } from './ScriptSheet';
 import { useEnrollment } from './useEnrollment';
-import { canAddNode, cell, formProblems, idFromInput, initialForm, offersSudo, platformChoices, toCreateRequest, toEnrollmentRequest, withKind, withPlatform, withRole, type WizardForm } from './wizard';
+import { canAddNode, cell, formProblems, idFromInput, idWarning, initialForm, offersSudo, platformChoices, toCreateRequest, toEnrollmentRequest, withKind, withPlatform, withRole, type WizardForm } from './wizard';
 
 /** A new target (step 1, then step 2), or another command for one that exists ("Command", "Add node"). */
 export type WizardMode = { type: 'new' } | { type: 'command'; target: ConnectTargetView };
@@ -205,6 +205,7 @@ export function AddTargetDialog({
               value={form.id}
               onChange={(e) => (set({ id: idFromInput(e.target.value) }), setErrors(({ id: _, ...rest }) => rest))}
               error={err('id')}
+              hint={idWarning(form.id, problems.id ?? err('id'))}
               data-autofocus
             />
             {form.kind === 'host' && (

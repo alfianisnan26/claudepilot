@@ -1124,15 +1124,14 @@ export const CONNECT_CLOSE_OF: Record<ConnectRejectCode, number> = {
   store_locked: CONNECT_CLOSE.unavailable,
 };
 
-/** Ids that can't be an enrolled target's: the scanned targets', and words the routes and pages use. */
-export const CONNECT_RESERVED_IDS: readonly string[] = ['docker', 'docker-host', 'kubernetes', 'local', 'api', 'connect', 'new', 'targets', 'default', 'scanned'];
-
 /**
- * The built-in targets' ids among the reserved ones. An enrolled target may take one when this portal has no scanned target of that id
- * (PILOT-1161, G8: the Cloudflare portal enrolls its in-cluster bridge as `kubernetes`, so `kubernetes/<name>` keeps naming the same
- * workspaces). The other reserved ids are words the routes and pages use, never free.
+ * The built-in targets' ids. An enrolled target may take one when this portal has no scanned target of that id (PILOT-1161, G8: the
+ * Cloudflare portal enrolls its in-cluster bridge as `kubernetes`, so `kubernetes/<name>` keeps naming the same workspaces).
  */
 export const CONNECT_BUILTIN_IDS: readonly string[] = ['docker', 'docker-host', 'kubernetes', 'local'];
+
+/** Ids that can't be an enrolled target's: the built-in targets' (free only as above), and words the routes and pages use (never free). */
+export const CONNECT_RESERVED_IDS: readonly string[] = [...CONNECT_BUILTIN_IDS, 'api', 'connect', 'new', 'targets', 'default', 'scanned'];
 
 export const CONNECT_TARGET_ID_MAX = 30;
 export const CONNECT_LABEL_MAX = 40;

@@ -160,6 +160,25 @@ describe('doctor on a kubernetes agent', () => {
       assert.match(missing['kube.rbac']!.detail, /delete secrets/);
       assert.match(missing['kube.rbac']!.detail, /create pods\/exec/);
       assert.match(missing['kube.rbac']!.hint!, /manifest/);
+
+      // PILOT-1186: without pods/resize and replicasets the resize falls back to a restart: a warning (ok, with a hint), not a failure.
+      fake.rbac = (a) => a.subresource !== 'resize' && a.resource !== 'replicasets';
+      const optional = byId(await runDoctor({ config, build: '0', net: {}, store: new FileIdentityStore(config.dataDir), kube }));
+      const rbac = optional['kube.rbac']!;
+      assert.equal(rbac.ok, true, JSON.stringify(rbac));
+      assert.match(rbac.detail, /patch pods\/resize/);
+      assert.match(rbac.detail, /update replicasets/);
+      assert.match(rbac.hint!, /restarts the workspace/);
+      const shown = formatReport({ agentVersion: '0', agentBuild: '0', protocol: 1, at: '', checks: [{ id: 'kube.rbac', ...rbac }] });
+      assert.match(shown, /-> .*restarts the workspace/);
+      assert.equal(reportFailed({ agentVersion: '0', agentBuild: '0', protocol: 1, at: '', checks: [{ id: 'kube.rbac', ...rbac }] }), false);
+
+      // Both kinds missing: a failure that still names the optional ones and the fallback.
+      fake.rbac = (a) => a.subresource !== 'resize' && a.subresource !== 'exec';
+      const both = byId(await runDoctor({ config, build: '0', net: {}, store: new FileIdentityStore(config.dataDir), kube }))['kube.rbac']!;
+      assert.equal(both.ok, false);
+      assert.match(both.detail, /create pods\/exec/);
+      assert.match(both.detail, /optional\): get pods\/resize, patch pods\/resize\. .*restarts the workspace/);
     } finally {
       await fake.stop();
     }
