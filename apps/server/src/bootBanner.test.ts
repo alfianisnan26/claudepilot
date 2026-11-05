@@ -1,7 +1,8 @@
 // PILOT-1189: the boot banner never holds the server code, and a generated code goes to a file only the portal's user can read, removed
 // when the code changes. Codes are made here at runtime.
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { CODE_ALPHABET, formatCode, normalizeCode } from '@portal/contracts';
 import { bootBanner, codeFilePath, codeLine, removeCodeFile, writeCodeFile } from './bootBanner.js';
@@ -44,6 +45,30 @@ test('the code file: written mode 0600 (also over an older, wider file), in the 
   removeCodeFile(dir);
   assert.ok(!existsSync(path));
   removeCodeFile(dir); // no file: no error
+});
+
+test('review 60273: a symlink at the code file is replaced by a new 0600 file; its target (another file, wider) is untouched', () => {
+  const dir = tempDirectory('cp-boot-banner-');
+  const elsewhere = tempDirectory('cp-boot-banner-target-');
+  const target = join(elsewhere, 'somebody-else');
+  writeFileSync(target, 'theirs\n');
+  chmodSync(target, 0o644);
+  const path = codeFilePath(dir);
+  symlinkSync(target, path);
+  const code = generateCode();
+  writeCodeFile(dir, code);
+  assert.ok(lstatSync(path).isFile() && !lstatSync(path).isSymbolicLink(), 'the link is gone: the code is in a file of its own');
+  assert.equal(lstatSync(path).mode & 0o777, 0o600);
+  assert.equal(normalizeCode(readFileSync(path, 'utf8').trim()), code);
+  assert.equal(readFileSync(target, 'utf8'), 'theirs\n', 'the target never received the code');
+  assert.equal(statSync(target).mode & 0o777, 0o644, 'nor had its mode changed');
+  // A dangling link (its target does not exist) is replaced too, and nothing is created where it pointed.
+  const dangling = join(elsewhere, 'not-there');
+  removeCodeFile(dir);
+  symlinkSync(dangling, path);
+  writeCodeFile(dir, code);
+  assert.ok(!lstatSync(path).isSymbolicLink());
+  assert.ok(!existsSync(dangling), 'not written through the link');
 });
 
 test('Portal.onCodeChanged: called after a rotation (generated or custom); a refused one changes nothing and does not call it', () => {

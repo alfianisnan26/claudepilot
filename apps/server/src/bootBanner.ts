@@ -1,17 +1,21 @@
 // PILOT-1189: the boot banner never holds the server code. It says where the code comes from and whether it is strong; a generated code
 // (which lives only in memory, so the banner used to be the one way to learn it) is written to a file only the portal's user can read.
-import { chmodSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { codeBits, formatCode, MIN_CODE_BITS, type CodeSource } from '@portal/contracts';
 
 /** Where a generated server code is kept: in the data dir, next to the database and the secret key, mode 0600. */
 export const codeFilePath = (dataDir: string): string => join(dataDir, 'server-code');
 
-/** Writes a generated code to its file (only this user can read it) and returns the path. */
+/**
+ * Writes a generated code to its file (only this user can read it) and returns the path. Review 60273: whatever is at the path is unlinked
+ * first (a symlink goes, its target is untouched), then the file is created new (`wx`: O_CREAT|O_EXCL, which never follows a symlink and
+ * fails if anything got there in between) with mode 0600, so the code is never written through a link or into a file with a wider mode.
+ */
 export function writeCodeFile(dataDir: string, code: string): string {
   const path = codeFilePath(dataDir);
-  writeFileSync(path, `${formatCode(code)}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600); // a file left from before keeps its old mode with writeFileSync
+  rmSync(path, { force: true });
+  writeFileSync(path, `${formatCode(code)}\n`, { flag: 'wx', mode: 0o600 });
   return path;
 }
 
