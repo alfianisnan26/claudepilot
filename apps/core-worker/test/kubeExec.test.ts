@@ -18,7 +18,8 @@ import {
 
 const NS = 'claudepilot-workspaces';
 const POD = 'ws-0123456789ab-5d8f7c9b4-x2x7q';
-const spec = (over: Record<string, unknown> = {}) => JSON.stringify({ namespace: NS, bearer: crypto.randomUUID(), pod: POD, command: ['sh'], ...over });
+const spec = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({ namespace: NS, bearer: crypto.randomUUID(), pod: POD, command: ['sh'], ...over });
 
 describe('kubeExecCallOf: the exec check and its request', () => {
   it('builds the exec path and query: the workspace container, each argument, every stream flag explicit', () => {
@@ -100,7 +101,14 @@ describe('the frame codec', () => {
   it('execResize keeps Width and Height (integers 1..10000) and drops the rest', () => {
     const enc = (v: unknown) => new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v));
     expect(execResize(enc({ Width: 80, Height: 24, Extra: 'x' }))).toBe('{"Width":80,"Height":24}');
-    for (const bad of [{ Width: 0, Height: 1 }, { Width: 1.5, Height: 2 }, { Width: '80', Height: 24 }, { Width: 10_001, Height: 1 }, [80, 24], 'nope'])
+    for (const bad of [
+      { Width: 0, Height: 1 },
+      { Width: 1.5, Height: 2 },
+      { Width: '80', Height: 24 },
+      { Width: 10_001, Height: 1 },
+      [80, 24],
+      'nope',
+    ])
       expect(execResize(enc(bad)), JSON.stringify(bad)).toBeNull();
     expect(execResize(new Uint8Array([0xff, 0xfe]))).toBeNull();
   });
@@ -157,7 +165,10 @@ describe('relayExec', () => {
       r.relay.fromPeer(bytes(4, '{"Width":100,"Height":30,"x":1}').buffer as ArrayBuffer);
       r.relay.fromPeer(new Uint8Array([255, 0]));
       const frames = await writtenFrames(r.written);
-      const expected = [[0, ...new TextEncoder().encode('ls\n')], [4, ...new TextEncoder().encode('{"Width":100,"Height":30}')]];
+      const expected = [
+        [0, ...new TextEncoder().encode('ls\n')],
+        [4, ...new TextEncoder().encode('{"Width":100,"Height":30}')],
+      ];
       if (protocol === 'v5.channel.k8s.io') expected.push([255, 0]);
       expect(frames.map((f) => f.data)).toEqual(expected);
       expect(frames.every((f) => f.masked && f.opcode === 2)).toBe(true);

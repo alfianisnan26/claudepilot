@@ -293,7 +293,10 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
   test('an exec through /bridge: stdin, a resize and the exit status, on v4 (the fake API server’s only protocol) (PILOT-1171 slice 2)', async () => {
     const rig = await startKubeRig();
     const pod = `ws-${randomBytes(6).toString('hex')}`;
-    rig.fake.pods.set(pod, { metadata: { name: pod, namespace: NAMESPACE, labels: { 'claudepilot.managed': 'true' } }, status: { phase: 'Running' } });
+    rig.fake.pods.set(pod, {
+      metadata: { name: pod, namespace: NAMESPACE, labels: { 'claudepilot.managed': 'true' } },
+      status: { phase: 'Running' },
+    });
     const sizes: { width: number; height: number }[] = [];
     let command: string[] = [];
     rig.fake.onExec = (io) => {
@@ -313,7 +316,9 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
     const d = await dialTunnel({ url, nodeId: node, privateKey: keys.privateKey, hello, ws: { headers: headers() }, onStream });
     const exec = (spec: Record<string, unknown>) =>
       new WebSocket(`ws://${new URL(httpUrl).host}/__interop/exec`, {
-        headers: { 'x-interop-exec': JSON.stringify({ cluster, namespace: NAMESPACE, bearer: LOCAL_TOKEN, pod, command: ['sh'], ...spec }) },
+        headers: {
+          'x-interop-exec': JSON.stringify({ cluster, namespace: NAMESPACE, bearer: LOCAL_TOKEN, pod, command: ['sh'], ...spec }),
+        },
       });
     try {
       const ws = exec({ command: ['sh', '-c', 'cat'] });

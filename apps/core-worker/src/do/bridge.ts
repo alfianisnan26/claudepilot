@@ -402,7 +402,8 @@ export class BridgeDO extends SchemaDO {
     if ((req.headers.get('upgrade') ?? '').toLowerCase() !== 'websocket') return notFound();
     const checked = kubeExecCallOf(req.headers.get(BRIDGE_EXEC_HEADER));
     if ('ok' in checked) return execRefused(checked);
-    if (this.#execs >= EXEC_LIMITS.maxExecs) return execRefused({ ok: false, code: 'busy', message: 'Too many execs run on this cluster.' });
+    if (this.#execs >= EXEC_LIMITS.maxExecs)
+      return execRefused({ ok: false, code: 'busy', message: 'Too many execs run on this cluster.' });
     const { spec, call } = checked;
     const live = this.#liveSocket();
     const link = live && this.#linkOf(live.ws, live.att);
