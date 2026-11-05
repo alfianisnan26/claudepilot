@@ -7,7 +7,8 @@
 //      people are added by the owner later. A policy on the app that this script did not make stops the run (the app is deny-first, so
 //      an allow rule nobody here knows of is unsafe), unless --keep-unknown-policies is given.
 //   3. `npm run build` (the SPA into public/, PILOT-1148; its env has no CP_NEXT_CF_* or CLOUDFLARE_* value, and a failed build stops
-//      the run before wrangler), then `wrangler deploy` (wrangler.jsonc has no route; CP_VERSION/CP_COMMIT from this commit).
+//      the run before wrangler), then `wrangler deploy` (wrangler.jsonc has no route; CP_VERSION/CP_COMMIT from this commit;
+//      CP_KUBE_IMAGES, the Worker's image allow list, from KUBE_IMAGES below).
 //      --plan and a guard stop never build.
 //   4. the Worker custom domain for the host (this creates its DNS record; nothing else in the zone is touched).
 //   5. the checks: /healthz with no credentials is the Access login redirect or 403; with the service token it is 200 and this commit.
@@ -39,6 +40,15 @@ export const WORKER = 'cp-next-core';
  * an id literal here would only repeat the pool value and give a reader no way to see which account it is.
  */
 export const ACCOUNT_NAME = /^kohi ?labs$/i;
+/**
+ * The Worker's image allow list on stg (PILOT-1190), written as the plain var CP_KUBE_IMAGES at every deploy: the images the portal's
+ * workspaces run today (deploy/k3s/portal.yaml: PORTAL_K8S_IMAGE and the targets' own `image`; deploy-stg.test.mjs fails when they drift).
+ * Not a secret. Without it the Worker refuses every kube create that names an image (apps/core-worker/src/do/bridge.ts).
+ */
+export const KUBE_IMAGES = [
+  'registry.int.isnan.me/claudepilot/workspace:2.1.296-2026.10.15-2',
+  'registry.int.isnan.me/claudepilot/workspace:2.1.296-dev-2026.10.13-1',
+];
 /** The only arguments the script takes; anything else stops it. */
 export const FLAGS = ['--plan', '--rotate', '--keep-unknown-policies'];
 const WORKER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -218,6 +228,9 @@ export async function run(deps) {
     `CP_VERSION:stg-${commit.slice(0, 12)}`,
     '--var',
     `CP_COMMIT:${commit}`,
+    // wrangler splits a --var at its first colon only, so the tags' colons stay in the value.
+    '--var',
+    `CP_KUBE_IMAGES:${KUBE_IMAGES.join(',')}`,
   ]);
   const out = `${deploy.stdout}\n${deploy.stderr}`;
   log(out.replaceAll(ACCOUNT, '<account>'));

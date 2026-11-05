@@ -164,9 +164,16 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
 - Images have a wall on each side (PILOT-1187, decision (a)). The Worker has its own allow list, `CP_KUBE_IMAGES` (a plain var,
   comma-separated, matched after the same `normalizeImageRef` as the agent: `docker.io/library/` dropped, `:latest` implied). Every
   container and init container of a created Deployment must name an image on it, and a non-string image is refused. An empty or missing
-  `CP_KUBE_IMAGES` refuses every Deployment that names an image (a claim, or a Deployment without an image, still passes). Until the first
-  kube route ticket sets the var in the stg deploy, the Worker creates nothing that runs. The agent keeps its own `PILOT_IMAGES`
-  (empty there means not enforced), so with both set an image must be on both lists.
+  `CP_KUBE_IMAGES` refuses every Deployment that names an image (a claim, or a Deployment without an image, still passes). The stg
+  deploy writes it at every run (PILOT-1190): `KUBE_IMAGES` in `apps/core-worker/scripts/deploy-stg.mjs`, the images the portal's
+  workspaces run (`deploy/k3s/portal.yaml`; its test fails when the two drift). The agent keeps its own `PILOT_IMAGES` (empty there
+  means not enforced), so with both set an image must be on both lists.
+- The default service account token (PILOT-1190). Left out, `automountServiceAccountToken` means Kubernetes mounts the namespace's
+  default token, so the table's refusal of `true` alone does not keep a credential out. Expand (built): `KubernetesRuntime` sets
+  `automountServiceAccountToken: false` on every workspace pod it creates. Nothing in a workspace used that token: no RoleBinding names
+  a workspace namespace's default account, and workspace jobs use their own kubeconfig. Contract (later, its own ticket): the table
+  refuses a workload that does not set it to false. It waits until the expand part has shipped and the older workspaces have been
+  recreated, because today's Deployments leave the field out and their replace and patch would be refused.
 - Proof: `apps/core-worker/test/kubeApi.test.ts`, `test/bridge.test.ts` (the RPCs over a live link with a stand-in API server; refused
   calls never reach the agent), and `bridgeWorker.test.ts` (a workspace's claim and Deployment created, listed, scaled, measured and
   deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment and a foreign image refused by the Worker before the agent; the proxy's own scan in `services/kube/kube.test.ts`).
@@ -177,7 +184,8 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
   `bridgeExecRequest` must take the namespace (and the pod or workspace label) from the workspace record it has authorised. It must never take them from the request: the
   Worker checks only their shape, not that they belong to the caller.
 - The Worker checks a created object's spec, its images and its token mounts (PILOT-1187, above); the agent checks them again, and RBAC
-  is behind both. The first route that creates a Deployment ships with `CP_KUBE_IMAGES` set in the stg deploy, or every create is refused.
+  is behind both. The stg deploy sets `CP_KUBE_IMAGES` (PILOT-1190); a deploy from an older commit leaves it empty, and then every
+  create that names an image is refused.
 
 **G6c slice 2 built (PILOT-1171): exec.** Worker code asks the cluster's `BridgeDO` with `bridgeExecRequest({namespace, bearer, pod,
 command, tty?, stdin?, stdout?, stderr?})` (`apps/core-worker/src/bridge/kubeExec.ts`) on its stub. The path (`/__exec`) is reachable from

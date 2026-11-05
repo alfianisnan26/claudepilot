@@ -138,6 +138,8 @@ test('a target runtime: a new workspace gets the target image; a stopped one mad
     const fresh = deployment(fake, 'ws-fresh') as unknown as typeof old;
     assert.deepEqual([...fresh.spec.template.spec.initContainers, ...fresh.spec.template.spec.containers].map((c) => [c.name, c.image]), [['seed-home', 'reg/dev:2'], ['workspace', 'reg/dev:2']]);
     assert.deepEqual(fresh.spec.template.spec.imagePullSecrets, [{ name: 'devpull' }]);
+    // PILOT-1190: no service account token is mounted in a workspace (left out, Kubernetes would mount the default one).
+    assert.equal((fresh.spec.template.spec as { automountServiceAccountToken?: boolean }).automountServiceAccountToken, false);
 
     // A start of a running workspace rolls nothing.
     const puts = () => fake.seen('PUT', '/apis/apps/v1/namespaces/img-workspaces/deployments/ws-old').length;

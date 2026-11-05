@@ -4,8 +4,11 @@
 // Run: node --test scripts/ (from apps/core-worker).
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { APP_NAME, buildEnv, POLICY_NAME, run, Stop, TOKEN_NAME, WORKER } from './deploy-stg.mjs';
+import { fileURLToPath } from 'node:url';
+import { APP_NAME, buildEnv, KUBE_IMAGES, POLICY_NAME, run, Stop, TOKEN_NAME, WORKER } from './deploy-stg.mjs';
 
 const hex = (n) => randomBytes(n).toString('hex');
 const ZONE = 'example.test';
@@ -211,6 +214,28 @@ test('a plain re-run keeps the service token: no rotation, the token check SKIPP
   assert.equal(put.body.include[0].service_token.token_id, w.s.tokens[0].id, 'the policy still names the kept token');
   assert.ok(!w.writes().some((c) => c.path.endsWith('/workers/domains')), 'the attached domain is not attached again');
   w.clean();
+});
+
+test('the deploy writes CP_KUBE_IMAGES, the Worker’s image allow list, as a plain var (PILOT-1190)', async () => {
+  const w = world(deployedState());
+  assert.equal(await run(w.deps([])), 3);
+  const args = w.deployed[0];
+  const vars = args.flatMap((a, i) => (args[i - 1] === '--var' ? [a] : []));
+  const kube = vars.find((v) => v.startsWith('CP_KUBE_IMAGES:'));
+  assert.ok(kube, 'CP_KUBE_IMAGES is written');
+  // wrangler splits at the first colon: the value keeps each tag's colon.
+  assert.deepEqual(kube.slice('CP_KUBE_IMAGES:'.length).split(','), KUBE_IMAGES);
+  assert.ok(KUBE_IMAGES.length > 0 && KUBE_IMAGES.every((r) => /^[a-z0-9.-]+\/[a-z0-9._/-]+:[A-Za-z0-9._-]+$/.test(r)), 'plain tagged references');
+  w.clean();
+});
+
+test('KUBE_IMAGES holds every image the portal’s workspaces run (deploy/k3s/portal.yaml), so stg does not refuse them', () => {
+  const yaml = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../deploy/k3s/portal.yaml'), 'utf8');
+  const base = /- name: PORTAL_K8S_IMAGE\s+value: (\S+)/.exec(yaml)?.[1];
+  const targets = JSON.parse(/- name: PORTAL_K8S_TARGETS\s+value: '([^']+)'/.exec(yaml)?.[1] ?? '[]');
+  const used = new Set([base, ...targets.map((t) => t.image).filter(Boolean)]);
+  assert.ok(base && used.size >= 1, 'portal.yaml still names its images where this test looks');
+  for (const ref of used) assert.ok(KUBE_IMAGES.includes(ref), `${ref} is in KUBE_IMAGES`);
 });
 
 test('--rotate on a re-run rotates the token and checks with its new secret: exit 0', async () => {
