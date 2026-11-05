@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
-import { APP_NAME, POLICY_NAME, run, Stop, TOKEN_NAME, WORKER } from './deploy-stg.mjs';
+import { APP_NAME, buildEnv, POLICY_NAME, run, Stop, TOKEN_NAME, WORKER } from './deploy-stg.mjs';
 
 const hex = (n) => randomBytes(n).toString('hex');
 const ZONE = 'example.test';
@@ -77,13 +77,22 @@ function world(over = {}) {
   };
   const lines = [];
   const deployed = [];
-  const deps = (argv) => ({
+  /** Each SPA build's environment (PILOT-1148), and the order of builds and deploys. */
+  const builds = [];
+  const steps = [];
+  const deps = (argv, { buildStatus = 0 } = {}) => ({
     fetch,
     env,
     argv,
     log: (l) => lines.push(String(l)),
     commit: () => COMMIT,
+    build: (benv) => {
+      builds.push(benv);
+      steps.push('build');
+      return { status: buildStatus };
+    },
     wrangler: (wenv, args) => {
+      steps.push('wrangler');
       deployed.push(args);
       assert.equal(wenv.CLOUDFLARE_API_TOKEN, env.CP_NEXT_CF_API_TOKEN, 'wrangler gets the token through its environment');
       return { status: 0, stdout: `Current Version ID: ${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}`, stderr: '' };
@@ -97,7 +106,7 @@ function world(over = {}) {
     for (const v of [env.CP_NEXT_CF_API_TOKEN, ...secrets]) assert.ok(!all.includes(v), 'a credential reached the log');
     assert.ok(!all.includes(ACCOUNT), 'the account id is not logged');
   };
-  return { s, env, calls, lines, deployed, deps, writes, clean, ACCOUNT };
+  return { s, env, calls, lines, deployed, builds, steps, deps, writes, clean, ACCOUNT };
 }
 
 /** The state after a first successful run: our app with our policy, the token, the domain, the Worker. */
@@ -125,6 +134,7 @@ test('--plan on a fresh account: reads only, pins the account first, says what a
   assert.match(out, /service token cp-next-healthcheck: missing, will be created/);
   assert.match(out, /PLAN only: nothing changed/);
   assert.equal(w.deployed.length, 0);
+  assert.equal(w.builds.length, 0, 'no SPA build (PILOT-1148)');
   w.clean();
 });
 
@@ -134,6 +144,7 @@ test('an unknown argument (a typo of --plan, a stray value) stops before any cal
     await assert.rejects(run(w.deps(argv)), (x) => x instanceof Stop && /unknown argument/.test(x.message), JSON.stringify(argv));
     assert.deepEqual(w.calls, [], `no Cloudflare call at all (${JSON.stringify(argv)})`);
     assert.equal(w.deployed.length, 0);
+    assert.equal(w.builds.length, 0, 'no SPA build (PILOT-1148)');
   }
   const w = world({ account: (id) => ({ id, name: 'Kohi Labs' }) });
   assert.equal(await run(w.deps(['--plan'])), 0, 'the allowed spelling with one space passes');
@@ -153,6 +164,7 @@ test('the account pin: another account name, an unreadable account, or a zone of
       await assert.rejects(run(w.deps(argv)), (x) => x instanceof Stop && why.test(x.message), `${why} (${argv.join(' ') || 'run'})`);
       assert.deepEqual(w.writes(), [], 'nothing written');
       assert.equal(w.deployed.length, 0, 'nothing deployed');
+      assert.equal(w.builds.length, 0, 'no SPA build (PILOT-1148)');
     }
   }
 });
@@ -164,6 +176,7 @@ test('an unknown policy on cp-next-access stops the plan and the run; --keep-unk
     await assert.rejects(run(w.deps(argv)), (x) => x instanceof Stop && /policies this script did not make: everyone \(allow\)/.test(x.message));
     assert.deepEqual(w.writes(), [], `nothing written (${argv.join(' ') || 'run'})`);
     assert.equal(w.deployed.length, 0);
+    assert.equal(w.builds.length, 0, 'no SPA build (PILOT-1148)');
   }
   const w = world(state());
   assert.equal(await run(w.deps(['--keep-unknown-policies', '--rotate'])), 0);
@@ -209,4 +222,47 @@ test('a first run creates the app, the token, the one policy and the domain, in 
   assert.deepEqual(Object.keys(policy.include[0]), ['service_token'], 'the service token only');
   assert.equal(policy.decision, 'non_identity');
   w.clean();
+});
+
+test('the SPA build (PILOT-1148): once per run, after the Access writes and before wrangler, with no Cloudflare value in its env', async () => {
+  const w = world();
+  // Values a job's environment may already hold; built at run time, never a literal.
+  const extra = {
+    CLOUDFLARE_API_TOKEN: randomBytes(30).toString('base64url'),
+    CLOUDFLARE_ACCOUNT_ID: hex(16),
+    cloudflare_api_key: hex(16),
+    CP_NEXT_CF_OTHER: hex(8),
+    PATH: '/usr/bin',
+  };
+  Object.assign(w.env, extra);
+  assert.equal(await run(w.deps([])), 0);
+  assert.deepEqual(w.steps, ['build', 'wrangler']);
+  assert.equal(w.builds.length, 1);
+  const benv = w.builds[0];
+  const leaked = Object.keys(benv).filter((k) => /^(?:CP_NEXT_CF_|CLOUDFLARE_)/i.test(k));
+  assert.deepEqual(leaked, [], 'no CP_NEXT_CF_* or CLOUDFLARE_* name reaches the build');
+  for (const v of [w.env.CP_NEXT_CF_API_TOKEN, w.env.CP_NEXT_CF_ACCOUNT_ID, extra.CLOUDFLARE_API_TOKEN, extra.CLOUDFLARE_ACCOUNT_ID])
+    assert.ok(!Object.values(benv).includes(v), 'no Cloudflare value reaches the build');
+  assert.equal(benv.PATH, '/usr/bin', 'the rest of the environment is kept');
+  assert.equal(benv.CP_NEXT_HOST, w.env.CP_NEXT_HOST);
+  // Every Access write is before the build: a build that fails leaves Access deny-first and deploys nothing.
+  assert.ok(w.writes().slice(0, 3).every((c) => /\/access\//.test(c.path)));
+  w.clean();
+});
+
+test('a failed SPA build stops the run before wrangler and before the custom domain', async () => {
+  const w = world();
+  await assert.rejects(run(w.deps([], { buildStatus: 2 })), (x) => x instanceof Stop && /the SPA build exited 2/.test(x.message));
+  assert.deepEqual(w.steps, ['build']);
+  assert.equal(w.deployed.length, 0);
+  assert.ok(!w.writes().some((c) => c.path.endsWith('/workers/domains')), 'the host is not attached');
+  w.clean();
+});
+
+test('buildEnv drops CP_NEXT_CF_* and CLOUDFLARE_* (any case) and keeps the rest', () => {
+  const t = hex(8);
+  assert.deepEqual(buildEnv({ CP_NEXT_CF_API_TOKEN: t, CLOUDFLARE_API_TOKEN: t, Cloudflare_Account_Id: t, CP_NEXT_HOST: 'h', HOME: '/h' }), {
+    CP_NEXT_HOST: 'h',
+    HOME: '/h',
+  });
 });
