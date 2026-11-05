@@ -169,9 +169,9 @@ describe('doctor on a kubernetes agent', () => {
       assert.match(rbac.detail, /patch pods\/resize/);
       assert.match(rbac.detail, /update replicasets/);
       assert.match(rbac.hint!, /restarts the workspace/);
-      const shown = formatReport({ agentVersion: '0', agentBuild: '0', protocol: 1, at: '', checks: [{ id: 'kube.rbac', ...rbac }] });
-      assert.match(shown, /-> .*restarts the workspace/);
-      assert.equal(reportFailed({ agentVersion: '0', agentBuild: '0', protocol: 1, at: '', checks: [{ id: 'kube.rbac', ...rbac }] }), false);
+      const report = { agentVersion: '0', agentBuild: '0', protocol: 1, at: '', checks: [rbac] };
+      assert.match(formatReport(report), /-> .*restarts the workspace/);
+      assert.equal(reportFailed(report), false);
 
       // Both kinds missing: a failure that still names the optional ones and the fallback.
       fake.rbac = (a) => a.subresource !== 'resize' && a.subresource !== 'exec';
