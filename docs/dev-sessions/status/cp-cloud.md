@@ -28,10 +28,10 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): idle, waits for slice-2 review asks (1185, 1171).
+- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1171 slice 2, 7cfba616bdb5..903cdb23e49f on ticket/T-3737-worker-kube-exec (job a289f813 112 on 842bae222; doc-only head, prettier job 6f87c348). Cherry-pick all 6 incl. debug 490fd63e4 (842bae222 reverts it).
 - cf-sec (worker e28ec1b4, opus, builder 1 of 2): PILOT-1185 slice 2 (strong generator, long codes end to end, sign-in field, ux-check on a scratch portal), branch ticket/T-3854-signin-code-r2. After it merges, FOR THE COORDINATOR: rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to >=26 chars, then PORTAL_SIGNIN_CODE_STRICT=true.
 - cf-bridge (worker 5bc808ae, opus): idle (builder cap 2 full). Next: PILOT-1186 (minors of 1163/1161), then gaps 1164, 1157, 1167.
-- cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1171 slice 2 (exec v5/v4, resize ch 4, relay to caller WS), branch ticket/T-3737-worker-kube-exec from the slice-1 head. 1148 replay and 1171 slice 1 done, in review.
+- cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1187 (T-3864, HIGH) Worker-side pod spec check, one rule table in packages/contracts, branch ticket/T-3864-worker-spec-check.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -63,6 +63,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
 - PILOT-1148 (comment 60128): the staging deploy that ships the SPA. job-run.sh --ref ec9cf77f1705 --pool-env CP_NEXT_CF_API_TOKEN/ACCOUNT_ID/ZONE/HOST -- deploy-stg.mjs --plan, then without --plan.
+- Cleanup: delete scratch branch wip/cf-worker-t3737-dbg1 (debug commit only; agents may not delete branches).
 - PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
 
 ## NEEDS A HUMAN
