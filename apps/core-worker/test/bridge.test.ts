@@ -411,6 +411,192 @@ describe('BridgeDO: the mux on the live link (PILOT-1170)', () => {
   });
 });
 
+interface Seen {
+  namespace: unknown;
+  method: string;
+  path: string;
+  query: string;
+  contentType: string | undefined;
+  body: string;
+}
+
+/**
+ * The test's end of a live link as the agent, with a small API server behind it (PILOT-1171): it records each request and keeps the
+ * objects it was given, answering like the API server (201 or 409 AlreadyExists, a Scale, a Status on delete, 404 NotFound).
+ */
+function apiAgentOn(link: Link, bearer: string): { session: MuxSession; seen: Seen[] } {
+  const seen: Seen[] = [];
+  const store = new Map<string, Record<string, unknown>>();
+  const status = (code: number, reason: string, message: string) => ({
+    kind: 'Status',
+    apiVersion: 'v1',
+    status: 'Failure',
+    code,
+    reason,
+    message,
+  });
+  const answer = (q: Seen, auth: string | undefined): [number, unknown] => {
+    if (auth !== `Bearer ${bearer}`) return [401, status(401, 'Unauthorized', 'Unauthorized')];
+    if (q.path.endsWith('/version')) return [200, { gitVersion: 'v1.31.0' }];
+    const scale = /\/deployments\/([^/]+)\/scale$/.exec(q.path);
+    if (scale) {
+      const d = store.get(q.path.slice(0, -'/scale'.length));
+      if (!d) return [404, status(404, 'NotFound', `deployments.apps "${scale[1]}" not found`)];
+      const replicas = (JSON.parse(q.body) as { spec: { replicas: number } }).spec.replicas;
+      (d.spec as { replicas: number }).replicas = replicas;
+      return [200, { kind: 'Scale', apiVersion: 'autoscaling/v1', spec: { replicas } }];
+    }
+    if (q.method === 'POST') {
+      const o = JSON.parse(q.body) as { metadata: { name: string } };
+      const key = `${q.path}/${o.metadata.name}`;
+      if (store.has(key)) return [409, status(409, 'AlreadyExists', `"${o.metadata.name}" already exists`)];
+      store.set(key, { ...o, metadata: { ...o.metadata, uid: crypto.randomUUID() } });
+      return [201, store.get(key)];
+    }
+    if (q.method === 'DELETE') {
+      if (!store.delete(q.path)) return [404, status(404, 'NotFound', 'not found')];
+      return [200, { kind: 'Status', apiVersion: 'v1', status: 'Success' }];
+    }
+    if (q.path.startsWith('/apis/metrics.k8s.io/'))
+      return [200, { kind: 'PodMetricsList', items: [{ metadata: { name: 'ws-0123456789ab-x' } }] }];
+    return [200, { kind: 'List', items: [...store].filter(([k]) => k.startsWith(`${q.path}/`)).map(([, v]) => v) }];
+  };
+  const session = new MuxSession({
+    role: 'client',
+    socket: cfMuxSocket(link.ws),
+    onStream: (stream) =>
+      void (async () => {
+        const req = await acceptService(stream, (r) =>
+          r.service === 'kube' ? { ok: true } : { ok: false, code: 'service_unavailable', message: 'Only kube here.' },
+        );
+        if (!req) return;
+        const r = new ByteReader(stream);
+        const [line = '', ...rest] = (await r.until('\r\n\r\n')).toString('latin1').split('\r\n');
+        const header = (name: string) =>
+          rest
+            .find((h) => h.toLowerCase().startsWith(`${name}:`))
+            ?.slice(name.length + 1)
+            .trim();
+        const [method = '', target = ''] = line.split(' ');
+        const [path = '', query = ''] = target.split('?');
+        const length = Number(header('content-length') ?? 0);
+        const body = length ? (await r.take(length)).toString('utf8') : '';
+        const namespace = (req.args as { namespace?: unknown } | undefined)?.namespace;
+        const q: Seen = { namespace, method, path, query, contentType: header('content-type'), body };
+        seen.push(q);
+        const [code, doc] = answer(q, header('authorization'));
+        const out = JSON.stringify(doc);
+        stream.write(`HTTP/1.1 ${code} X\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(out)}\r\n\r\n${out}`);
+      })(),
+  });
+  return { session, seen };
+}
+
+describe('BridgeDO: the REST client by RPC (PILOT-1171)', () => {
+  const NS = 'claudepilot-workspaces';
+  const WS = 'ws-0123456789ab';
+  const labels = { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'demo' };
+
+  it('creates, lists, scales and deletes a workspace’s claim and Deployment, each a checked request with the managed selector', async () => {
+    const link = await connect();
+    const bearer = crypto.randomUUID();
+    const agent = apiAgentOn(link, bearer);
+    const auth = { namespace: NS, bearer };
+    try {
+      const claim = await stub().kubeCreate({ ...auth, kind: 'claim', object: { metadata: { name: `${WS}-home`, labels }, spec: {} } });
+      expect(claim).toMatchObject({ ok: true, object: { kind: 'PersistentVolumeClaim', metadata: { name: `${WS}-home`, namespace: NS } } });
+      const deployment = { metadata: { name: WS, labels }, spec: { replicas: 1 } };
+      expect(await stub().kubeCreate({ ...auth, kind: 'deployment', object: deployment })).toMatchObject({ ok: true });
+      expect(await stub().kubeCreate({ ...auth, kind: 'deployment', object: deployment })).toMatchObject({
+        ok: false,
+        code: 'kube_status',
+        status: 409,
+        reason: 'AlreadyExists',
+      });
+
+      const list = await stub().kubeList({ ...auth, kind: 'deployments', workspace: 'demo' });
+      expect(list).toMatchObject({ ok: true, items: [{ metadata: { name: WS } }] });
+      expect(await stub().kubeScale({ ...auth, name: WS, replicas: 0 })).toEqual({ ok: true, replicas: 0 });
+      expect(await stub().kubeScale({ ...auth, name: 'ws-ffffffffffff', replicas: 1 })).toMatchObject({
+        ok: false,
+        status: 404,
+        reason: 'NotFound',
+      });
+      expect(await stub().kubeMetrics(auth)).toMatchObject({ ok: true, items: [{ metadata: { name: 'ws-0123456789ab-x' } }] });
+      expect(await stub().kubeDelete({ ...auth, kind: 'deployment', name: WS })).toEqual({ ok: true, deleted: true });
+      expect(await stub().kubeDelete({ ...auth, kind: 'deployment', name: WS })).toEqual({ ok: true, deleted: false });
+      expect(await stub().kubeDelete({ ...auth, kind: 'claim', name: `${WS}-home` })).toEqual({ ok: true, deleted: true });
+      expect(await stub().kubeList({ ...auth, kind: 'claims' })).toEqual({ ok: true, items: [] });
+
+      const by = (m: string) => agent.seen.filter((s) => s.method === m);
+      expect(new Set(agent.seen.map((s) => s.namespace))).toEqual(new Set([NS]));
+      expect(by('POST').map((s) => [s.path, s.contentType])).toEqual([
+        [`/api/v1/namespaces/${NS}/persistentvolumeclaims`, 'application/json'],
+        [`/apis/apps/v1/namespaces/${NS}/deployments`, 'application/json'],
+        [`/apis/apps/v1/namespaces/${NS}/deployments`, 'application/json'],
+      ]);
+      expect(JSON.parse(by('POST')[1]!.body)).toMatchObject({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { namespace: NS } });
+      for (const s of by('GET')) expect(new URLSearchParams(s.query).get('labelSelector'), s.path).toMatch(/^claudepilot\.managed=true/);
+      expect(by('GET')[0]!.query).toBe('labelSelector=claudepilot.managed%3Dtrue%2Cclaudepilot.workspace%3Ddemo');
+      expect(by('PUT')[0]).toMatchObject({ path: `/apis/apps/v1/namespaces/${NS}/deployments/${WS}/scale`, contentType: 'application/json' });
+      expect(by('DELETE').map((s) => s.query)).toEqual(['propagationPolicy=Foreground', 'propagationPolicy=Foreground', '']);
+      expect(JSON.stringify(await stub().audit(500))).not.toContain(bearer);
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('refuses a bad call before anything reaches the agent', async () => {
+    const link = await connect();
+    const bearer = crypto.randomUUID();
+    const agent = apiAgentOn(link, bearer);
+    const auth = { namespace: NS, bearer };
+    try {
+      const refusals = [
+        stub().kubeList({ ...auth, kind: 'secrets' as never }),
+        stub().kubeList({ ...auth, kind: 'pods', workspace: 'a,claudepilot.managed!=true' }),
+        stub().kubeList({ namespace: '..', bearer, kind: 'pods' }),
+        stub().kubeList({ namespace: NS, bearer: 'with space', kind: 'pods' }),
+        stub().kubeCreate({ ...auth, kind: 'deployment', object: { metadata: { name: 'ws-a/../x', labels } } }),
+        stub().kubeCreate({ ...auth, kind: 'deployment', object: { metadata: { name: WS, namespace: 'kube-system', labels } } }),
+        stub().kubeCreate({ ...auth, kind: 'deployment', object: { metadata: { name: WS, labels: {} } } }),
+        stub().kubeScale({ ...auth, name: WS, replicas: 2 }),
+        stub().kubeScale({ ...auth, name: '%2e%2e', replicas: 0 }),
+        stub().kubeDelete({ ...auth, kind: 'claim', name: '../../secrets/x' }),
+      ];
+      for (const r of await Promise.all(refusals)) expect(r).toMatchObject({ ok: false, code: 'bad_request' });
+      expect(agent.seen).toEqual([]);
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('kube() refuses `..`, percent-encoded dots and a query string in the path (T-3737 comment 59417); a plain path goes through', async () => {
+    const link = await connect();
+    const bearer = crypto.randomUUID();
+    const agent = apiAgentOn(link, bearer);
+    try {
+      for (const path of [
+        `/api/v1/namespaces/${NS}/../../secrets`,
+        '/api/v1/namespaces/x/pods/..',
+        '/api/%2e%2e/v1/secrets',
+        '/api/%2E%2E/v1/secrets',
+        `/api/v1/namespaces/${NS}/pods%2f..%2fsecrets`,
+        `/api/v1/namespaces/${NS}/pods?watch=true`,
+        `/api/v1/namespaces/${NS}/pods?labelSelector=`,
+        '/version#x',
+        '//version',
+      ])
+        expect(await stub().kube({ path, namespace: NS, bearer }), path).toMatchObject({ ok: false, code: 'bad_request' });
+      expect(agent.seen).toEqual([]);
+      expect(await stub().kube({ path: '/version', namespace: NS, bearer })).toMatchObject({ ok: true, status: 200 });
+      expect(agent.seen.map((s) => [s.method, s.path, s.query])).toEqual([['GET', '/version', '']]);
+    } finally {
+      agent.session.destroy();
+    }
+  });
+});
+
 describe('redaction', () => {
   it('the bearer token appears in no log line and no audit row', async () => {
     const lines: string[] = [];

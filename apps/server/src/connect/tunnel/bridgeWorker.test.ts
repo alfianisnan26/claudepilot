@@ -168,6 +168,107 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
     }
   });
 
+  test('the DO’s REST client runs a workspace’s life through /bridge: create, list, scale, metrics, delete (PILOT-1171)', async () => {
+    const rig = await startKubeRig();
+    const onStream = (stream: MuxStream) =>
+      void (async () => {
+        const req = await acceptService(stream, async (r): Promise<OpenDecision> => {
+          if (r.service !== 'kube') return { ok: false, code: 'service_unavailable', message: 'Only kube here.' };
+          const refusal = await rig.service.accept!(r.args);
+          return refusal ? { ok: false, code: refusal.code, message: refusal.message } : { ok: true };
+        });
+        if (req) rig.service.handle(stream, req.trace ?? '--------', req.args);
+      })();
+    const d = await dialTunnel({ url, nodeId: node, privateKey: keys.privateKey, hello, ws: { headers: headers() }, onStream });
+    type Answer = { ok: boolean; code?: string; status?: number; reason?: string; items?: { metadata: { name: string } }[] } & Record<string, unknown>;
+    const rpc = async (name: string, body: Record<string, unknown>) => {
+      const res = await fetch(`${httpUrl}/__interop/kube/${name}`, {
+        method: 'POST',
+        body: JSON.stringify({ cluster, namespace: NAMESPACE, bearer: LOCAL_TOKEN, ...body }),
+      });
+      assert.equal(res.status, 200);
+      return (await res.json()) as Answer;
+    };
+    const ws = `ws-${randomBytes(6).toString('hex')}`;
+    const labels = { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'interop' };
+    const podLabels = { ...labels, app: ws };
+    const deployment = (extra: Record<string, unknown> = {}) => ({
+      metadata: { name: ws, labels },
+      spec: {
+        replicas: 1,
+        strategy: { type: 'Recreate' },
+        selector: { matchLabels: podLabels },
+        template: {
+          metadata: { labels: podLabels },
+          spec: {
+            securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
+            containers: [{ name: 'workspace', image: 'ghcr.io/example/workspace:1', volumeMounts: [{ name: 'home', mountPath: '/home/node' }] }],
+            volumes: [{ name: 'home', persistentVolumeClaim: { claimName: `${ws}-home` } }],
+            ...extra,
+          },
+        },
+      },
+    });
+    try {
+      const claim = await rpc('kubeCreate', {
+        kind: 'claim',
+        object: { metadata: { name: `${ws}-home`, labels }, spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } } } },
+      });
+      assert.equal(claim.ok, true, JSON.stringify(claim));
+      const created = await rpc('kubeCreate', { kind: 'deployment', object: deployment() });
+      assert.equal(created.ok, true, JSON.stringify(created));
+      const again = await rpc('kubeCreate', { kind: 'deployment', object: deployment() });
+      assert.deepEqual([again.ok, again.code, again.status, again.reason], [false, 'kube_status', 409, 'AlreadyExists']);
+
+      const listed = await rpc('kubeList', { kind: 'deployments', workspace: 'interop' });
+      assert.equal(listed.ok, true, JSON.stringify(listed));
+      assert.deepEqual(
+        listed.items!.map((x) => x.metadata.name),
+        [ws],
+      );
+      const claims = await rpc('kubeList', { kind: 'claims' });
+      assert.ok(claims.items!.some((x) => x.metadata.name === `${ws}-home`));
+      assert.deepEqual(await rpc('kubeScale', { name: ws, replicas: 0 }), { ok: true, replicas: 0 });
+      assert.equal((rig.fake.deployments.get(ws)?.spec as { replicas?: number } | undefined)?.replicas, 0);
+      assert.deepEqual(await rpc('kubeScale', { name: ws, replicas: 1 }), { ok: true, replicas: 1 });
+      const metrics = await rpc('kubeMetrics', {});
+      assert.equal(metrics.ok, true, JSON.stringify(metrics));
+      assert.ok(Array.isArray(metrics.items));
+
+      // The second wall: the agent's schema scan refuses what leaves the sandbox, and the Worker reports it as the proxy's Status.
+      const escaped = await rpc('kubeCreate', {
+        kind: 'deployment',
+        object: { ...deployment({ hostNetwork: true }), metadata: { name: `${ws}0`, labels } },
+      });
+      assert.deepEqual([escaped.ok, escaped.code, escaped.status], [false, 'kube_status', 403]);
+      // The first wall: the Worker refuses a dot segment, an encoded dot or a query before anything reaches the agent.
+      const before = rig.fake.requests.length;
+      for (const path of [`/api/v1/namespaces/${NAMESPACE}/../kube-system/pods`, '/api/%2e%2e/v1', `/api/v1/namespaces/${NAMESPACE}/pods?watch=1`]) {
+        const res = await fetch(`${httpUrl}/__interop/kube`, {
+          method: 'POST',
+          body: JSON.stringify({ cluster, path, namespace: NAMESPACE, bearer: LOCAL_TOKEN }),
+        });
+        assert.deepEqual(((await res.json()) as Answer).code, 'bad_request', path);
+      }
+      assert.deepEqual(await rpc('kubeScale', { name: '../x', replicas: 0 }), {
+        ok: false,
+        code: 'bad_request',
+        message: 'The name is not one of the portal’s workspaces.',
+      });
+      assert.equal(rig.fake.requests.length, before);
+
+      assert.deepEqual(await rpc('kubeDelete', { kind: 'deployment', name: ws }), { ok: true, deleted: true });
+      const del = rig.fake.requests.find((r) => r.method === 'DELETE' && r.url.includes(`/deployments/${ws}`));
+      assert.match(del?.url ?? '', /propagationPolicy=Foreground/);
+      assert.deepEqual(await rpc('kubeDelete', { kind: 'claim', name: `${ws}-home` }), { ok: true, deleted: true });
+      assert.deepEqual(await rpc('kubeDelete', { kind: 'claim', name: `${ws}-home` }), { ok: true, deleted: false });
+      assert.equal(rig.fake.deployments.has(ws), false);
+    } finally {
+      d.session.close(1000, 'test over');
+      await rig.stop();
+    }
+  });
+
   test('a second client replaces the first', async () => {
     const a = await dialTunnel({ url, nodeId: node, privateKey: keys.privateKey, hello, ws: { headers: headers() } });
     const closed = new Promise<number>((resolve) => a.ws.on('close', (code) => resolve(code)));

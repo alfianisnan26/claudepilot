@@ -17,8 +17,10 @@ The ClaudePilot core on Cloudflare Workers + Durable Objects (epic PILOT-1131). 
   `apps/server/src/connect/hub.ts` (challenge, auth, welcome or reject) with the WebCrypto Ed25519 check shared in
   `packages/contracts/src/connectSign.ts`, single-use nonces, the Hibernation API, an alarm that pings and ends silent links
   (`CONNECT_LIMITS`), and one live link per cluster: a new one replaces the old one (closed 4409, written to `bridge_audit`). The alarm prunes `bridge_audit` to 30 days and at most 10,000 rows (`BRIDGE_AUDIT_KEEP`).
-  Mux frames pass untouched; phase 1 only answers pings. `apps/server/src/connect/tunnel/bridgeWorker.test.ts` dials it with the
-  real `dialTunnel` (opt-in: `CLAUDEPILOT_WORKER_TESTS=1`).
+  A live link runs a server `MuxSession` (PILOT-1170). The REST client (PILOT-1171) is by RPC: `kube` (one checked GET), `kubeList`,
+  `kubeMetrics`, `kubeCreate`, `kubeScale`, `kubeDelete`; requests are built and answers read in `src/bridge/kubeApi.ts`, which refuses
+  `..`, any `%` and a query string in a path before a stream opens. `apps/server/src/connect/tunnel/bridgeWorker.test.ts` dials it with
+  the real `dialTunnel` and the real `KubeProxy` (opt-in: `CLAUDEPILOT_WORKER_TESTS=1`), through `test/interop/entry.ts`.
 - `test/spike/` (PILOT-1159, G6): the server's tunnel code (mux, streams, open) run unchanged inside `BridgeDO`, with HTTP/1.1 and an
   exec written straight onto a `kube` stream. Kept out of the typecheck (it imports `apps/server`); the finding is in
   `docs/prd/cf-bridge.md` ("G6 finding").
