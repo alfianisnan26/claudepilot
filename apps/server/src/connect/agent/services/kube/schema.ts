@@ -88,12 +88,32 @@ function scan(node: unknown, key: string, depth: number, budget: { n: number }, 
   return null;
 }
 
+/** A resize path: one container's resources, or a part of them (`/spec/containers/0/resources/limits/cpu`). */
+const RESIZE_PATH = /^\/spec\/containers\/\d{1,3}\/resources(?:\/(?:limits|requests)(?:\/[A-Za-z0-9._~-]{1,253})?)?$/;
+
+/**
+ * The in-place resize (PILOT-1163): a JSON Patch (an array) whose every operation adds, replaces or tests a container's `resources`, and
+ * nothing else; a value is scanned too (it can only be resources, but a deny-listed key in it is still refused).
+ */
+function checkResize(doc: unknown, images: ImageAllow | null): KubeRefusal | null {
+  if (!Array.isArray(doc) || doc.length === 0 || doc.length > 64) return spec('A resize is a JSON patch of container resources.');
+  for (const op of doc) {
+    if (!isObj(op) || !['add', 'replace', 'test'].includes(op.op as string) || typeof op.path !== 'string' || !RESIZE_PATH.test(op.path))
+      return spec('A resize may change container resources only.');
+    if (Object.keys(op).some((k) => k !== 'op' && k !== 'path' && k !== 'value')) return spec('A resize may change container resources only.');
+    const r = scan(op.value, 'resources', 0, { n: 0 }, images);
+    if (r) return r;
+  }
+  return null;
+}
+
 /**
  * Checks the body of a write against what a workspace's object may contain. `doc` is the parsed JSON (for a patch, the patch document). Returns
  * a refusal, or null. Names and namespaces are checked by the proxy before this.
  */
 export function checkKubeBody(route: KubeRoute, method: string, doc: unknown, images: ImageAllow | null): KubeRefusal | null {
-  if ((route.kind === 'deploymentList' || route.kind === 'deployment') && typeof doc === 'object' && doc !== null) return scan(doc, 'deployment', 0, { n: 0 }, images);
+  if ((route.kind === 'deploymentList' || route.kind === 'deployment' || route.kind === 'replicaSet') && typeof doc === 'object' && doc !== null) return scan(doc, 'deployment', 0, { n: 0 }, images);
+  if (route.kind === 'resize') return checkResize(doc, images);
   if (!isObj(doc)) return null;
   switch (route.kind) {
     case 'pvcList':

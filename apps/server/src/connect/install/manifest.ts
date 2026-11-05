@@ -24,6 +24,9 @@ export const PART_OF = 'claudepilot-connect';
 export const ROLE_RULES: [string, string[], string[]][] = [
   ['', ['pods'], ['get', 'list', 'watch']],
   ['', ['pods/exec'], ['create', 'get']],
+  // The in-place resize (T-3081, PILOT-1163): the pod's resize subresource, and the owning ReplicaSet written with the same values.
+  ['', ['pods/resize'], ['get', 'patch']],
+  ['apps', ['replicasets'], ['get', 'update']],
   ['', ['persistentvolumeclaims'], ['get', 'list', 'create', 'delete']],
   ['', ['secrets'], ['get', 'list', 'create', 'update', 'patch', 'delete']],
   ['apps', ['deployments'], ['get', 'list', 'create', 'update', 'patch', 'delete']],

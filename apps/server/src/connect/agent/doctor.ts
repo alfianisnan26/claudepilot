@@ -324,6 +324,8 @@ async function kubeApi(o: DoctorOptions): Promise<Result> {
 export const RBAC_NEEDS: { group: string; resource: string; subresource?: string; verbs: string[] }[] = [
   { group: '', resource: 'pods', verbs: ['get', 'list', 'watch'] },
   { group: '', resource: 'pods', subresource: 'exec', verbs: ['create', 'get'] },
+  { group: '', resource: 'pods', subresource: 'resize', verbs: ['get', 'patch'] },
+  { group: 'apps', resource: 'replicasets', verbs: ['get', 'update'] },
   { group: '', resource: 'persistentvolumeclaims', verbs: ['get', 'list', 'create', 'delete'] },
   { group: '', resource: 'secrets', verbs: ['get', 'list', 'create', 'update', 'patch', 'delete'] },
   { group: 'apps', resource: 'deployments', verbs: ['get', 'list', 'create', 'update', 'patch', 'delete'] },

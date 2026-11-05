@@ -301,7 +301,9 @@ export class KubeProxy {
       return refuseKube('body', 'The body is not JSON.');
     }
     // A JSON patch names its targets in path strings (`/spec/template/spec/hostNetwork`), which a scan of the body's keys can't see: not for a pod template.
-    if (/json-patch\+json/i.test(type) && (pre.route.kind === 'deployment' || pre.route.kind === 'pvc')) return refuseKube('spec', 'A JSON patch cannot be checked: use a merge patch.');
+    if (/json-patch\+json/i.test(type) && (pre.route.kind === 'deployment' || pre.route.kind === 'pvc' || pre.route.kind === 'replicaSet')) return refuseKube('spec', 'A JSON patch cannot be checked: use a merge patch.');
+    // The resize subresource is the other way round: only a JSON patch, whose every path is checked (schema.ts), never a merge patch.
+    if (pre.route.kind === 'resize' && !/json-patch\+json/i.test(type)) return refuseKube('spec', 'A resize is a JSON patch of container resources.');
     if (pre.method !== 'DELETE') {
       const images = this.opts.images && this.opts.images.list().length ? this.opts.images : null;
       const unsafe = checkKubeBody(pre.route, pre.method, doc, images);
@@ -311,7 +313,11 @@ export class KubeProxy {
     if (pre.method === 'POST' || pre.method === 'PUT') {
       const meta = doc?.metadata;
       if (pre.method === 'POST' && pre.route.kind !== 'secretCreate' && pre.route.kind !== 'pvcList' && pre.route.kind !== 'deploymentList') return { data };
-      const pattern = pre.route.kind === 'secretCreate' || pre.route.kind === 'secret' ? NAMES.secret : pre.route.kind === 'pvcList' || pre.route.kind === 'pvc' ? NAMES.pvc : NAMES.deployment;
+      const pattern =
+        pre.route.kind === 'secretCreate' || pre.route.kind === 'secret' ? NAMES.secret
+        : pre.route.kind === 'pvcList' || pre.route.kind === 'pvc' ? NAMES.pvc
+        : pre.route.kind === 'replicaSet' ? NAMES.replicaSet
+        : NAMES.deployment;
       if (typeof meta?.name !== 'string' || !pattern.test(meta.name)) return refuseKube('name', 'The object’s name is not one of the portal’s workspaces.');
       if (pre.method === 'PUT' && pre.route.name && meta.name !== pre.route.name) return refuseKube('name', 'The object’s name differs from the path.');
       if (meta.namespace !== undefined && meta.namespace !== this.opts.namespace) return refuseKube('namespace', 'The object names another namespace.');

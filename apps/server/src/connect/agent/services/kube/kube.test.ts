@@ -435,6 +435,81 @@ describe('KubernetesRuntime over the loopback (A6 in its fake form)', () => {
   });
 });
 
+describe('the in-place resize (PILOT-1163, G2): a JSON patch of container resources and the ReplicaSet, nothing more', () => {
+  const rsBody = (podSpec: Record<string, unknown>, name = 'ws-w1-7d9f6c') => ({
+    apiVersion: 'apps/v1',
+    kind: 'ReplicaSet',
+    metadata: { name, labels: MANAGED },
+    spec: { replicas: 1, template: { metadata: { labels: MANAGED }, spec: { containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }], ...podSpec } } },
+  });
+  const jsonPatch = { 'Content-Type': 'application/json-patch+json' };
+
+  it('refuses a resize that patches anything but resources, a merge patch, and a ReplicaSet with a host path; the API server never sees them', async () => {
+    const n = rig.fake.requests.length;
+    const resize = `${base}/pods/ws-w1-7d9f6c-aaaa/resize`;
+    const res = { limits: { cpu: '2', memory: '1Gi' } };
+    const bad: [string, unknown, Record<string, string>?][] = [
+      ['the image', [{ op: 'replace', path: '/spec/containers/0/image', value: 'evil:latest' }]],
+      ['the security context', [{ op: 'add', path: '/spec/containers/0/securityContext', value: { privileged: true } }]],
+      ['the pod spec', [{ op: 'add', path: '/spec/hostNetwork', value: true }]],
+      ['the labels', [{ op: 'add', path: '/metadata/labels/x', value: 'y' }]],
+      ['resources and the image in one patch', [{ op: 'add', path: '/spec/containers/0/resources', value: res }, { op: 'replace', path: '/spec/containers/0/image', value: 'evil:latest' }]],
+      ['a path that only starts like resources', [{ op: 'add', path: '/spec/containers/0/resourcesX', value: res }]],
+      ['a move from elsewhere', [{ op: 'move', from: '/spec/containers/1/resources', path: '/spec/containers/0/resources' }]],
+      ['a copy', [{ op: 'copy', from: '/spec/volumes', path: '/spec/containers/0/resources' }]],
+      ['a remove', [{ op: 'remove', path: '/spec/containers/0/resources' }]],
+      ['an extra key', [{ op: 'add', path: '/spec/containers/0/resources', value: res, from: '/spec/volumes' }]],
+      ['a deny-listed key in the value', [{ op: 'add', path: '/spec/containers/0/resources', value: { hostPath: { path: '/' } } }]],
+      ['an empty patch', []],
+      ['an object, not a patch', { op: 'add', path: '/spec/containers/0/resources', value: res }],
+      ['a merge patch', { spec: { containers: [{ name: 'workspace', resources: res }] } }, { 'Content-Type': 'application/merge-patch+json' }],
+      ['a strategic merge patch', { spec: { containers: [{ name: 'workspace', image: 'evil:latest' }] } }, { 'Content-Type': 'application/strategic-merge-patch+json' }],
+    ];
+    for (const [what, body, headers] of bad) {
+      const a = await rig.request('PATCH', resize, { body, headers: headers ?? jsonPatch });
+      assert.equal(a.status, 403, `${what}: ${a.text}`);
+      assert.equal(a.json().message, 'denied by claudepilot policy (spec)', what);
+    }
+    refused(await rig.request('PATCH', `${base}/pods/other-pod/resize`, { body: [{ op: 'add', path: '/spec/containers/0/resources', value: res }], headers: jsonPatch }), 'name');
+    refused(await rig.request('PUT', `${base}/pods/ws-w1-7d9f6c-aaaa/resize`, { body: {} }), 'method');
+    // The ReplicaSet: scanned like a Deployment, by a workspace name that matches the path, GET and PUT only.
+    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({ volumes: [{ name: 'h', hostPath: { path: '/' } }] }) }), 'spec');
+    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({ hostNetwork: true }) }), 'spec');
+    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({ containers: [{ name: 'workspace', image: 'x', securityContext: { privileged: true } }] }) }), 'spec');
+    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({}, 'ws-other-1') }), 'name');
+    refused(await rig.request('PUT', `${apps}/replicasets/claudepilot-agent-1`, { body: rsBody({}, 'claudepilot-agent-1') }), 'name');
+    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: { ...rsBody({}), metadata: { name: 'ws-w1-7d9f6c', namespace: 'kube-system' } } }), 'namespace');
+    for (const m of ['PATCH', 'DELETE']) refused(await rig.request(m, `${apps}/replicasets/ws-w1-7d9f6c`, { body: m === 'PATCH' ? {} : undefined, headers: m === 'PATCH' ? { 'Content-Type': 'application/merge-patch+json' } : undefined }), 'method');
+    refused(await rig.request('GET', `${apps}/replicasets`), 'resource');
+    refused(await rig.request('POST', `${apps}/replicasets`, { body: rsBody({}) }), 'resource');
+    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+  });
+
+  it('KubernetesRuntime resizes a running workspace in place through the proxy: the same pod, the ReplicaSet written, no refusal', async () => {
+    const fresh = await startKubeRig();
+    try {
+      const rt = new KubernetesRuntime(
+        { namespace: NAMESPACE, image: 'ghcr.io/example/claudepilot-workspace:latest', storage: '1Gi', resize: { pollMs: 5, waitMs: 200 } },
+        { kubeConfig: fresh.kubeConfig, manageNamespace: false, target: { id: 'kube', label: 'Kube', where: 'fake' } },
+      );
+      await rt.create({ name: 'kr', cpus: 4, memoryMb: 8192 }, () => undefined);
+      const before = [...fresh.fake.pods.keys()];
+      const values = { cpus: 2, memoryMb: 4096, cpuRequest: 2, memoryRequestMb: 4096 };
+      const done = await rt.resources.apply('kr', values);
+      assert.deepEqual(done, { how: 'resized', refused: null });
+      assert.deepEqual([...fresh.fake.pods.keys()], before, 'the same pod: no restart');
+      const pod = [...fresh.fake.pods.values()][0] as unknown as { metadata: { name: string } };
+      assert.equal(fresh.fake.seen('PATCH', `/api/v1/namespaces/${NAMESPACE}/pods/${pod.metadata.name}/resize`).length, 1);
+      const rs = [...fresh.fake.replicaSets.values()][0] as unknown as { metadata: { name: string }; spec: { template: { spec: { containers: { name: string; resources: unknown }[] } } } };
+      assert.equal(fresh.fake.seen('PUT', `/apis/apps/v1/namespaces/${NAMESPACE}/replicasets/${rs.metadata.name}`).length, 1);
+      assert.deepEqual(rs.spec.template.spec.containers.find((c) => c.name === 'workspace')!.resources, { limits: { cpu: '2', memory: '4096Mi' }, requests: { cpu: '2', memory: '4096Mi' } });
+      assert.deepEqual(fresh.service.report!().denied ?? [], [], 'the policy refused none of it');
+    } finally {
+      await fresh.stop();
+    }
+  });
+});
+
 describe('the agent’s own identity Secret (outside the portal-facing allowlist)', () => {
   it('writes and reads the identity, keeps a rotation’s next key beside it, and the proxy still refuses the portal that asks for it', async () => {
     const api = rig.service.proxy.api.bind(rig.service.proxy);

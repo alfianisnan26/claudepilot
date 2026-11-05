@@ -29,7 +29,7 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 | Re-apply image on start (`reapplyImage`) | `kubernetes.ts:652-677` | Not used (option off for enrolled) | PUT allowed `rules.ts:55`; image allow list `proxy.ts:306` |
 | CPU/memory figures (metrics API) | `kubernetes.ts:688-711` | Works | `rules.ts:57` |
 | Resize, stopped workspace (Deployment replace) | `kubernetes.ts:551-553` | Works | `rules.ts:55` |
-| Resize, running workspace in place (`pods/resize` + ReplicaSet) | `kubernetes.ts:594-644` | **Gap G2** | no `pods/resize` nor `replicasets` rule in `rules.ts:44-58`: refused, falls back to a restart (`kubernetes.ts:556-558`) |
+| Resize, running workspace in place (`pods/resize` + ReplicaSet) | `kubernetes.ts:594-644` | Works (G2, PILOT-1163) | `pods/{ws-*}/resize` (GET, PATCH; JSON patch of container resources only, `schema.ts` `checkResize`) and `replicasets/{ws-*}` (GET, PUT; scanned like a Deployment) in `rules.ts`; the installer's Role and the doctor ask for both; proven through the proxy in `services/kube/kube.test.ts` |
 | Fit check before create / resize (nodes, all pods) | `kubernetes.ts:433-438,533-544` | **Gap G3** (unavailable) | off for enrolled `kubernetes.ts:170,534`; needs ClusterRole `claudepilot-portal-fit-check` (`deploy/k3s/rbac.yaml:95-118`) |
 | Delivery (pools, secrets, chat host install): `pods/exec` with stdin | `kubernetesDelivery.ts`, `kubernetes.ts:275-329` | Works | `connect/kube.ts:112-121`; proven through the real agent in `connect/agent/kubeDelivery.e2e.test.ts` |
 | Start detection for delivery (`startKeys` poll) | `kubernetes.ts:258-268`, `connect/kube.ts:119` | Works | pod list `rules.ts:46` |
@@ -50,8 +50,11 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 - **G1 Several namespaces in one bridge** (PILOT-1162, T-3720). The agent takes `PILOT_KUBE_NAMESPACES` (a list); each namespace is its own kube target on the
   one connection (the stream open names the namespace, the proxy picks that namespace's rule table). Alternative rejected for now: one
   bridge Deployment and one enrollment per namespace (three identities and three tunnels for one cluster; D4 says one stateless bridge).
-- **G2 In-place resize through the proxy** (PILOT-1163, T-3721). Add `pods/{name}/resize` (GET, PATCH; JSON patch of `/spec/containers/N/resources` only) and
-  `replicasets/{name}` (GET, PUT; name `ws-*`, body scanned like a Deployment) to `rules.ts`/`schema.ts`, with tests.
+- **G2 In-place resize through the proxy** (PILOT-1163, T-3721): built. `pods/{name}/resize` (GET, PATCH; a JSON patch whose every op is `add`, `replace` or
+  `test` on `/spec/containers/N/resources`, a merge patch refused) and `replicasets/{name}` (GET, PUT; name `ws-*`, body scanned like a Deployment). The
+  installer's Role (`connect/install/manifest.ts`) and `doctor`'s RBAC check now include `pods/resize` (get, patch) and `replicasets` (get, update);
+  the bridge's Role (`deploy/k3s-bridge/rbac.yaml`) already had them. An agent installed before this needs its Role re-applied for the resize; until
+  then the cluster refuses it and the runtime restarts the pod, as before.
 - **G3 Fit check on the bridge** (PILOT-1157, T-3715). Either a read-only summarised `nodes` + pod-requests answer from the agent (needs the existing ClusterRole
   `claudepilot-portal-fit-check` bound to the bridge's SA: FOR THE COORDINATOR) or keep "unavailable" (create unchecked, resize refused as
   unchecked, `kubernetes.ts:534`). Default: keep unavailable in phase 1, decide on the ticket.
