@@ -90,6 +90,7 @@ import { PoolService } from './pools/service.js';
 import { createApp, PLAIN_NAME } from './app.js';
 import { bootListening, bootMark } from './bootTiming.js';
 import { cloudflareTrustWarnings } from './clientAddress.js';
+import { signinCodeCheck } from './signinCode.js';
 import { config } from './config.js';
 import { JsonFile } from './jsonFile.js';
 import { Portal } from './portal.js';
@@ -187,6 +188,12 @@ bootMark('store open');
 const portal = new Portal(config.serverCode, config.session.ttlMs);
 // Sign-ins survive restarts (12 hours each); only token hashes are stored.
 portal.useStore(sessionStore(store));
+// PILOT-1185: the server code's strength, now that the store has said whether code sign-in is on. A strict portal does not start with a
+// weak one (the same way a malformed PORTAL_SERVER_CODE stops it above); otherwise one warning line, and one alert once the bus exists.
+portal.requireStrongCode = config.signinCodeStrict;
+const codeCheck = signinCodeCheck(portal, config.signinCodeStrict);
+if (codeCheck.refuse) throw new Error(`[portal] ${codeCheck.line}`);
+if (codeCheck.line) console.warn(`[portal] ${codeCheck.line}`);
 const { workspaces: ws } = config;
 const runtimes: Runtime[] = ws.docker.map(
   (d) =>
@@ -928,6 +935,12 @@ live.onPresence = (connection, presence, req) => platform.presence(connection, p
 // A new Needs you item tells each person who may decide it, once, through the notification pipeline (its quiet hours and matrix).
 bridgeAttentionNotify(attention, platform.bus, () => platform.owner.ownersOf({ type: 'portal', id: 'attention' }));
 platform.start();
+if (codeCheck.weak)
+  try {
+    platform.bus.emit({ kind: 'security', subject: { type: 'portal', id: 'signin-code-weak' }, facts: { what: 'Weak server code', bits: codeCheck.bits } });
+  } catch {
+    // the boot log already said it
+  }
 // App ports (T-948, docs/prd/app-ports.md): a web app on a workspace's loopback at its own host `app-<name>-<port>.<PORT_PROXY_HOST_SUFFIX>`.
 // Its proxy answers those hosts before the portal's routes and socket modules (below); off when the suffix is unset.
 const appPorts = new AppPorts({

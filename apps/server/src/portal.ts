@@ -3,6 +3,8 @@ import {
   CODE_ALPHABET,
   FOUNDING_USER_ID,
   GENERATED_CODE_LENGTH,
+  MIN_CODE_BITS,
+  codeBits,
   codeProblem,
   normalizeCode,
   type AdminState,
@@ -298,13 +300,28 @@ export class Portal {
     if (s) this.#signedOut([s.userId ?? FOUNDING_USER_ID]);
   }
 
+  /**
+   * PILOT-1185 (PORTAL_SIGNIN_CODE_STRICT): with code sign-in on, a code below MIN_CODE_BITS is refused as a new code, and code sign-in is
+   * not turned back on with one. Set by index.ts before the first request; off (today's behaviour) by default.
+   */
+  requireStrongCode = false;
+
+  #assertStrong(code: string) {
+    if (this.requireStrongCode && codeBits(code) < MIN_CODE_BITS) {
+      const problem = `This server needs a code of at least ${MIN_CODE_BITS} bits while code sign-in is on.`;
+      throw new AppError('VALIDATION_FAILED', problem, { details: { code: problem } });
+    }
+  }
+
   /** Sets a new code (given, or generated) and signs out every session but `keep`. */
   rotate(keep: string, input?: string): void {
     if (input !== undefined) {
       const problem = codeProblem(input);
       if (problem) throw new AppError('VALIDATION_FAILED', problem, { details: { code: problem } });
     }
-    this.#code = input === undefined ? generateCode() : normalizeCode(input);
+    const next = input === undefined ? generateCode() : normalizeCode(input);
+    if (this.#codeSignIn) this.#assertStrong(next);
+    this.#code = next;
     this.#source = input === undefined ? 'generated' : 'custom';
     this.#codeUpdatedAt = Date.now();
     const keepHash = tokenHash(keep);
@@ -329,6 +346,7 @@ export class Portal {
    * signed-in admin. Who may turn it off, and the check that an admin can still sign in, are the caller's (admin/routes.ts).
    */
   setCodeSignIn(on: boolean): void {
+    if (on && !this.#codeSignIn) this.#assertStrong(this.#code);
     this.#codeSignIn = on;
     this.#persist((st) => st.setCodeSignIn?.(on));
     if (on) return;
