@@ -29,5 +29,10 @@ export function codeLine(source: CodeSource, code: string, file: string | null):
 
 /** The lines printed once the server listens. */
 export function bootBanner(opts: { dev: boolean; where: string; source: CodeSource; code: string; file: string | null }): string {
-  return ['', `  portal ${opts.dev ? 'dev' : 'production'} server on ${opts.where}`, `  ${codeLine(opts.source, opts.code, opts.file)}`, ''].join('\n');
+  return [
+    '',
+    `  portal ${opts.dev ? 'dev' : 'production'} server on ${opts.where}`,
+    `  ${codeLine(opts.source, opts.code, opts.file)}`,
+    '',
+  ].join('\n');
 }
