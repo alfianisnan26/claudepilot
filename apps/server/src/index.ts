@@ -1059,7 +1059,9 @@ server.listen(config.port, config.host, () => {
         : console.error(`[store] FROZEN: the database failed its integrity check (${result}).`),
     );
   // PILOT-1189: never the code nor any part of it (the log reaches pod logs and any collector); a generated one is in codeFile.
-  console.log(bootBanner({ dev: config.dev, where: `http://localhost:${config.port}`, source: portal.source, code: portal.code, file: codeFile }));
+  console.log(
+    bootBanner({ dev: config.dev, where: `http://localhost:${config.port}`, source: portal.source, code: portal.code, file: codeFile }),
+  );
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const)

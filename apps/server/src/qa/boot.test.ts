@@ -118,7 +118,12 @@ async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>
     await sleep(1500);
     assert.equal(child.exitCode, null, `the portal died after starting:\n${output.slice(-1500)}`);
     const login = async (signInCode = code ?? ''): Promise<string> => {
-      const res = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ code: signInCode }), signal: AbortSignal.timeout(10_000) });
+      const res = await fetch(`${base}/api/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: base },
+        body: JSON.stringify({ code: signInCode }),
+        signal: AbortSignal.timeout(10_000),
+      });
       assert.equal(res.status, 200, 'sign-in works');
       return /portal_session=([^;]+)/.exec(res.headers.get('set-cookie') ?? '')![1]!;
     };
@@ -221,7 +226,8 @@ test('control: a fresh database comes up healthy, and is gone when its test is o
 function assertNoCode(output: string, code: string): void {
   assert.ok(!output.includes(code) && !output.includes(formatCode(code)), 'the code is not in stdout or stderr');
   const flat = output.replace(/-/g, '').toUpperCase();
-  for (let i = 0; i + 8 <= code.length; i++) assert.ok(!flat.includes(code.slice(i, i + 8)), `no 8 characters of the code in a row (at ${i})`);
+  for (let i = 0; i + 8 <= code.length; i++)
+    assert.ok(!flat.includes(code.slice(i, i + 8)), `no 8 characters of the code in a row (at ${i})`);
 }
 
 test('PILOT-1189: a known PORTAL_SERVER_CODE is in neither stdout nor stderr; the banner says only where it comes from and how strong it is', { timeout: 120_000 }, async () => {
