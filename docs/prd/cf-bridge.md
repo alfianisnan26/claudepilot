@@ -54,7 +54,8 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
   `test` on `/spec/containers/N/resources`, a merge patch refused) and `replicasets/{name}` (GET, PUT; name `ws-*`, body scanned like a Deployment). The
   installer's Role (`connect/install/manifest.ts`) and `doctor`'s RBAC check now include `pods/resize` (get, patch) and `replicasets` (get, update);
   the bridge's Role (`deploy/k3s-bridge/rbac.yaml`) already had them. An agent installed before this needs its Role re-applied for the resize; until
-  then the cluster refuses it and the runtime restarts the pod, as before.
+  then the cluster refuses it and the runtime restarts the pod, as before. So the doctor counts those two grants as optional (PILOT-1186): missing,
+  `kube.rbac` stays ok and its hint says a resize restarts the workspace instead.
 - **G3 Fit check on the bridge** (PILOT-1157, T-3715). Either a read-only summarised `nodes` + pod-requests answer from the agent (needs the existing ClusterRole
   `claudepilot-portal-fit-check` bound to the bridge's SA: FOR THE COORDINATOR) or keep "unavailable" (create unchecked, resize refused as
   unchecked, `kubernetes.ts:534`). Default: keep unavailable in phase 1, decide on the ticket.

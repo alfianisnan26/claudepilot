@@ -1,4 +1,5 @@
 import {
+  CONNECT_BUILTIN_IDS,
   CONNECT_LABEL_MAX,
   CONNECT_TOKEN_TTL_MINUTES,
   connectOriginProblem,
@@ -118,6 +119,16 @@ export function formProblems(f: WizardForm, ctx: WizardContext): Partial<Record<
   const c = cell(f);
   if (c.support === 'later' || c.support === 'no') out.platform = c.note || 'Not available.';
   return out;
+}
+
+/**
+ * A warning for a name that passes but may not last (PILOT-1186): a built-in target's id is free only while this portal scans no target
+ * of that id. The built-in list is fixed when the portal starts, so if it later scans one (Docker turned on, say), the enrolled target
+ * with that name is refused.
+ */
+export function idWarning(id: string, problem: string | undefined): string | undefined {
+  if (problem || !CONNECT_BUILTIN_IDS.includes(id)) return undefined;
+  return 'A built-in target’s name: if this portal later finds that target, this one stops working.';
 }
 
 /** Whether the address will travel in the clear: the one line the Advanced section shows (the server refuses it unless the operator allowed it). */
