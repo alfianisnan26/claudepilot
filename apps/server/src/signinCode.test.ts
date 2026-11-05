@@ -22,7 +22,8 @@ test('codeBits: length times log2 of the alphabet actually used; case, spaces an
   near(codeBits(`0I${pick(CODE_ALPHABET, 6)}`), 8 * Math.log2(36)); // letters and digits with look-alikes: 41.4, the most 8 can be
   near(codeBits('abcd-efgh'), codeBits('ABCDEFGH'));
   assert.equal(codeBits(''), 0);
-  for (let i = 0; i < 50; i++) assert.ok(codeBits(generateCode()) >= MIN_CODE_BITS, 'slice 2: a generated code (28 characters) reaches the bar');
+  for (let i = 0; i < 50; i++)
+    assert.ok(codeBits(generateCode()) >= MIN_CODE_BITS, 'slice 2: a generated code (28 characters) reaches the bar');
   assert.ok(codeBits(mixed(26)) >= MIN_CODE_BITS, '26 characters of the generator alphabet: 128.8 bits');
   assert.ok(codeBits(mixed(25)) < MIN_CODE_BITS, '25 are not enough: 123.9');
 });
@@ -40,7 +41,11 @@ test('boot check: a weak code with code sign-in on warns (never the code); stric
     assert.ok(!c.line!.includes(`${code.slice(0, 4)}-${code.slice(4)}`), 'nor its shown form');
   }
   for (const strictOn of [false, true]) {
-    assert.deepEqual(signinCodeCheck({ code, source: 'env', codeSignIn: false }, strictOn), { bits: 39, weak: false, refuse: false, line: null }, 'code sign-in off: nothing to guess');
+    assert.deepEqual(
+      signinCodeCheck({ code, source: 'env', codeSignIn: false }, strictOn),
+      { bits: 39, weak: false, refuse: false, line: null },
+      'code sign-in off: nothing to guess',
+    );
     const strong = signinCodeCheck({ code: mixed(26), source: 'custom', codeSignIn: true }, strictOn);
     assert.deepEqual([strong.weak, strong.refuse, strong.line], [false, false, null]);
   }
