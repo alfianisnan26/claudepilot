@@ -21,6 +21,9 @@ function targetOf(kind: KubeRoute['kind']): KubeSpecTarget | null {
     case 'secretCreate':
     case 'secret':
       return 'secret';
+    case 'networkPolicyCreate':
+    case 'networkPolicy':
+      return 'networkPolicy';
     default:
       return null;
   }

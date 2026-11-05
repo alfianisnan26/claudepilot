@@ -17,11 +17,13 @@ import type { TunnelStream } from '../../../seams.js';
 import type { Logger } from '../../log.js';
 import { framingProblem, relayHeaders } from '../httpcommon.js';
 import type { ImageAllow } from '../docker/rules.js';
-import { NAMES, classifyKube, mayUpgrade, rebuildQuery, type KubeRoute } from './rules.js';
+import { NAMES, classifyKube, mayUpgrade, rebuildQuery, type KubeKind, type KubeRoute } from './rules.js';
 import { checkKubeBody } from './schema.js';
 import { deniedStatus, isKubeRefusal, refuseKube, statusBody, type KubeRefusal } from './status.js';
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+/** The collection POSTs that create a named object: the name in the body must be a workspace's (a pod exec POST is not one). */
+const CREATES = new Set<KubeKind>(['secretCreate', 'pvcList', 'deploymentList', 'configMapCreate', 'networkPolicyCreate']);
 const JSON_TYPES = /^application\/(?:json|merge-patch\+json|strategic-merge-patch\+json|json-patch\+json)(?:\s*;.*)?$/i;
 const SUBPROTOCOL = /^[A-Za-z0-9.+_-]{1,64}(?:\s*,\s*[A-Za-z0-9.+_-]{1,64}){0,7}$/;
 
@@ -312,11 +314,13 @@ export class KubeProxy {
     // A new object, or a replaced one, must be one of the portal's (its name) and in the connector's namespace.
     if (pre.method === 'POST' || pre.method === 'PUT') {
       const meta = doc?.metadata;
-      if (pre.method === 'POST' && pre.route.kind !== 'secretCreate' && pre.route.kind !== 'pvcList' && pre.route.kind !== 'deploymentList') return { data };
+      if (pre.method === 'POST' && !CREATES.has(pre.route.kind)) return { data };
       const pattern =
         pre.route.kind === 'secretCreate' || pre.route.kind === 'secret' ? NAMES.secret
         : pre.route.kind === 'pvcList' || pre.route.kind === 'pvc' ? NAMES.pvc
         : pre.route.kind === 'replicaSet' ? NAMES.replicaSet
+        : pre.route.kind === 'configMapCreate' || pre.route.kind === 'configMap' ? NAMES.configMap
+        : pre.route.kind === 'networkPolicyCreate' || pre.route.kind === 'networkPolicy' ? NAMES.networkPolicy
         : NAMES.deployment;
       if (typeof meta?.name !== 'string' || !pattern.test(meta.name)) return refuseKube('name', 'The object’s name is not one of the portal’s workspaces.');
       if (pre.method === 'PUT' && pre.route.name && meta.name !== pre.route.name) return refuseKube('name', 'The object’s name differs from the path.');

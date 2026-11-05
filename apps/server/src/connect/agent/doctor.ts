@@ -323,6 +323,8 @@ async function kubeApi(o: DoctorOptions): Promise<Result> {
 
 /** Why the in-place resize grants are optional (PILOT-1186): without them the portal falls back to a restart. */
 export const RESIZE_FALLBACK = 'Without it a resize restarts the workspace instead of resizing it in place.';
+/** Why the browser pool's grants are optional (PILOT-1164): without them only the browser pool fails, every workspace still runs. */
+export const BROWSER_FALLBACK = 'Without it the browser pool cannot add a browser to a workspace.';
 
 /**
  * What the connector's Role grants (PRD §13.5): the verbs the proxy needs, asked of the API server with SelfSubjectAccessReview. An
@@ -338,6 +340,8 @@ export const RBAC_NEEDS: { group: string; resource: string; subresource?: string
   { group: 'apps', resource: 'deployments', verbs: ['get', 'list', 'create', 'update', 'patch', 'delete'] },
   { group: 'apps', resource: 'deployments', subresource: 'scale', verbs: ['get', 'update', 'patch'] },
   { group: 'metrics.k8s.io', resource: 'pods', verbs: ['get', 'list'] },
+  { group: '', resource: 'configmaps', verbs: ['get', 'create', 'update', 'delete'], optional: BROWSER_FALLBACK },
+  { group: 'networking.k8s.io', resource: 'networkpolicies', verbs: ['get', 'create', 'update', 'delete'], optional: BROWSER_FALLBACK },
 ];
 
 async function kubeRbac(o: DoctorOptions): Promise<Result> {

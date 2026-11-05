@@ -173,6 +173,14 @@ describe('doctor on a kubernetes agent', () => {
       assert.match(formatReport(report), /-> .*restarts the workspace/);
       assert.equal(reportFailed(report), false);
 
+      // PILOT-1164: an older Role without configmaps and networkpolicies loses only the browser pool: a warning, not a failure.
+      fake.rbac = (a) => a.resource !== 'configmaps' && a.resource !== 'networkpolicies';
+      const noBrowser = byId(await runDoctor({ config, build: '0', net: {}, store: new FileIdentityStore(config.dataDir), kube }))['kube.rbac']!;
+      assert.equal(noBrowser.ok, true, JSON.stringify(noBrowser));
+      assert.match(noBrowser.detail, /create configmaps/);
+      assert.match(noBrowser.detail, /delete networkpolicies/);
+      assert.match(noBrowser.hint!, /browser pool/);
+
       // Both kinds missing: a failure that still names the optional ones and the fallback.
       fake.rbac = (a) => a.subresource !== 'resize' && a.subresource !== 'exec';
       const both = byId(await runDoctor({ config, build: '0', net: {}, store: new FileIdentityStore(config.dataDir), kube }))['kube.rbac']!;

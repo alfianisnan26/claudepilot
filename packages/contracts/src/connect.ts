@@ -1224,8 +1224,11 @@ export function connectOriginProblem(origin: string, allowHttp = false): string 
 // workspace's own sandbox never get through. What the portal creates today (a pod-level security context with uid 1000, a home volume,
 // an init container, resource limits, an image pull secret) is all allowed. Pure: no I/O.
 
-/** What is being written: a Deployment or ReplicaSet (or a patch of one), a claim, a secret, or an in-place resize (a JSON patch). */
-export type KubeSpecTarget = 'workload' | 'claim' | 'secret' | 'resize';
+/**
+ * What is being written: a Deployment or ReplicaSet (or a patch of one), a claim, a secret, an in-place resize (a JSON patch), or the
+ * browser pool's egress NetworkPolicy (PILOT-1164).
+ */
+export type KubeSpecTarget = 'workload' | 'claim' | 'secret' | 'resize' | 'networkPolicy';
 
 /** The images a cluster allows (the agent's PILOT_IMAGES); null: not checked here. */
 export interface KubeImageCheck {
@@ -1243,6 +1246,38 @@ const SAFE_VOLUME_KEYS = new Set(['name', 'persistentVolumeClaim', 'emptyDir', '
 const MAX_NODES = 50_000;
 const MAX_DEPTH = 24;
 
+/**
+ * The browser pool's container (apps/server/src/browser/kube.ts `browserContainer`, PRD browser §10.2; PILOT-1164, G4): its init runs as
+ * root with every capability dropped but SETUID and SETGID, to start Chrome as its own user. This is the one exception to "no root" and
+ * "no added capabilities", and only in exactly that shape: a regular container (never an init or ephemeral one) named `browser`, no
+ * privilege escalation, `drop: [ALL]`, `add` within SETUID and SETGID, the RuntimeDefault seccomp profile, and no other security setting.
+ */
+const BROWSER_CONTAINER = 'browser';
+const BROWSER_CONTEXT_KEYS = new Set(['runAsUser', 'runAsGroup', 'runAsNonRoot', 'allowPrivilegeEscalation', 'readOnlyRootFilesystem', 'capabilities', 'seccompProfile']);
+const BROWSER_CAPS = new Set(['SETUID', 'SETGID']);
+
+/** Whether a container's security context asks for what only the browser's root init may have. */
+function asksRoot(sc: Obj): boolean {
+  return sc.runAsUser === 0 || (isObj(sc.capabilities) && nonEmpty(sc.capabilities.add));
+}
+
+function browserInitProblem(sc: Obj): string | null {
+  const bad = 'The browser container may run its init as root only with SETUID and SETGID, nothing more.';
+  for (const k of Object.keys(sc)) if (!BROWSER_CONTEXT_KEYS.has(k)) return bad;
+  if (sc.allowPrivilegeEscalation !== false) return bad;
+  if (sc.runAsUser !== 0 && sc.runAsUser !== undefined) return bad;
+  if (sc.runAsGroup !== undefined && (typeof sc.runAsGroup !== 'number' || !Number.isInteger(sc.runAsGroup) || sc.runAsGroup < 0)) return bad;
+  if (sc.runAsNonRoot !== undefined && sc.runAsNonRoot !== false) return bad;
+  if (sc.readOnlyRootFilesystem !== undefined && typeof sc.readOnlyRootFilesystem !== 'boolean') return bad;
+  const caps = sc.capabilities;
+  if (!isObj(caps) || Object.keys(caps).some((k) => k !== 'add' && k !== 'drop')) return bad;
+  if (!Array.isArray(caps.drop) || !caps.drop.includes('ALL')) return bad;
+  if (caps.add !== undefined && (!Array.isArray(caps.add) || caps.add.some((c) => typeof c !== 'string' || !BROWSER_CAPS.has(c)))) return bad;
+  const seccomp = sc.seccompProfile;
+  if (!isObj(seccomp) || seccomp.type !== 'RuntimeDefault' || Object.keys(seccomp).length !== 1) return bad;
+  return null;
+}
+
 /** Walks a pod template (or a patch of one) for the settings that leave the sandbox; the refusal's message, or null. */
 function scan(node: unknown, key: string, depth: number, budget: { n: number }, images: KubeImageCheck | null): string | null {
   if (depth > MAX_DEPTH || ++budget.n > MAX_NODES) return 'The object is too deeply nested.';
@@ -1251,6 +1286,16 @@ function scan(node: unknown, key: string, depth: number, budget: { n: number }, 
       if (key === 'volumes' && isObj(item)) {
         for (const k of Object.keys(item))
           if (!SAFE_VOLUME_KEYS.has(k) && !k.startsWith('$')) return `A volume of kind ${JSON.stringify(k.slice(0, 30))} is not allowed.`;
+      }
+      if (key === 'containers' && isObj(item) && item.name === BROWSER_CONTAINER && isObj(item.securityContext) && asksRoot(item.securityContext)) {
+        const p = browserInitProblem(item.securityContext);
+        if (p) return p;
+        // The checked context is the exception; everything else in the container (image, mounts, ports) is scanned as usual.
+        const rest: Obj = { ...item };
+        delete rest.securityContext;
+        const r = scan(rest, key, depth + 1, budget, images);
+        if (r) return r;
+        continue;
       }
       const r = scan(item, key, depth + 1, budget, images);
       if (r) return r;
@@ -1353,5 +1398,16 @@ export function kubeSpecProblem(target: KubeSpecTarget, doc: unknown, images: Ku
       if (!isObj(doc)) return null;
       if (doc.type !== undefined && doc.type !== 'Opaque') return 'A secret is Opaque (a token secret would mint a credential).';
       return null;
+    case 'networkPolicy': {
+      // The browser's egress policy (PILOT-1164): it may limit what the portal's workspace pods reach, never select another pod (the agent
+      // has its own policy, which a second, wider one would add to) and never touch ingress.
+      if (!isObj(doc) || !isObj(doc.spec)) return 'A network policy needs a spec.';
+      const s = doc.spec;
+      const labels = isObj(s.podSelector) && isObj(s.podSelector.matchLabels) ? s.podSelector.matchLabels : null;
+      if (!labels || labels['claudepilot.managed'] !== 'true') return 'A network policy may select the portal’s workspace pods only.';
+      if (!Array.isArray(s.policyTypes) || s.policyTypes.length !== 1 || s.policyTypes[0] !== 'Egress' || s.ingress !== undefined)
+        return 'A network policy may limit egress only.';
+      return null;
+    }
   }
 }

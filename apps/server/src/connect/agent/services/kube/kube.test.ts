@@ -8,6 +8,8 @@ import { writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { after, before, describe, it } from 'node:test';
 import { WebSocket } from 'ws';
+import { BROWSER_POOL_DEFAULTS } from '@portal/contracts';
+import { browserContainer, egressPolicy, KubeBrowsers, withBrowser, type KubePlan } from '../../../../browser/kube.js';
 import { KubernetesRuntime } from '../../../../workspaces/kubernetes.js';
 import { KubeSecretIdentityStore } from '../../identity.kube.js';
 import { parseIdentity } from '../../identity.js';
@@ -125,7 +127,15 @@ describe('confinement', () => {
       ['GET', '/metrics', 'path'],
       ['GET', '/healthz', 'path'],
       ['GET', `${base}/serviceaccounts`, 'resource'],
-      ['GET', `${base}/configmaps`, 'resource'],
+      ['GET', `${base}/configmaps`, 'method'],
+      ['GET', `/apis/networking.k8s.io/v1/namespaces/${NAMESPACE}/networkpolicies`, 'method'],
+      ['GET', `${base}/configmaps/claudepilot-agent-ca`, 'name'],
+      ['GET', `${base}/configmaps/kube-root-ca.crt`, 'name'],
+      ['PUT', `${base}/configmaps/ws-w1`, 'name'],
+      ['PATCH', `${base}/configmaps/ws-w1-browser`, 'method'],
+      ['DELETE', `/apis/networking.k8s.io/v1/namespaces/${NAMESPACE}/networkpolicies/claudepilot-agent`, 'name'],
+      ['DELETE', `/apis/networking.k8s.io/v1/namespaces/${NAMESPACE}/networkpolicies/ws-w1-browser`, 'name'],
+      ['GET', `/apis/networking.k8s.io/v1/namespaces/kube-system/networkpolicies/ws-w1-egress`, 'namespace'],
       ['GET', `${base}/events`, 'resource'],
       ['GET', `${base}/pods/ws-w1-7d9f6c-aaaa/log`, 'resource'],
       ['GET', `${base}/services`, 'resource'],
@@ -363,6 +373,156 @@ describe('exec is a WebSocket for a workspace pod only', () => {
     assert.deepEqual(await dial(wsUrl('ws-w1-7d9f6c-aaaa'), { protocols: ['x'.repeat(100)] }), { error: 'HTTP 403' });
     assert.equal(rig.fake.upgrades.length, n);
     assert.equal(rig.fake.requests.length, requests, 'none of it reached the API server');
+  });
+
+  it('enters the browser container too (PILOT-1164), and still no other, nor two containers at once', async () => {
+    const pod = 'ws-w1-7d9f6c-aaaa';
+    rig.fake.pods.set(pod, { metadata: { name: pod, labels: MANAGED }, status: { phase: 'Running' } } as never);
+    const n = rig.fake.upgrades.length;
+    const got = await dial(wsUrl(pod, 'command=cpb-ctl&command=status&container=browser&stdout=true&stderr=true'));
+    assert.ok('ws' in got, JSON.stringify(got));
+    got.ws.close();
+    assert.equal(rig.fake.upgrades.length, n + 1);
+    assert.equal(new URL(rig.fake.upgrades[n]!.url, 'http://x').searchParams.get('container'), 'browser');
+    assert.deepEqual(await dial(wsUrl(pod, 'command=sh&container=browser&container=workspace')), { error: 'HTTP 403' });
+    assert.deepEqual(await dial(wsUrl(pod, 'command=sh&container=Browser')), { error: 'HTTP 403' });
+    assert.equal(rig.fake.upgrades.length, n + 1, 'the refused ones never reached the API server');
+  });
+});
+
+describe('the browser pool (PILOT-1164, G4): its root init, ConfigMap and egress policy, and nothing wider', () => {
+  const plan: KubePlan = { workspace: 'wb', poolId: 'p', content: BROWSER_POOL_DEFAULTS, portalHosts: [], image: 'registry.example.test/claudepilot/browser:t1' };
+  const WS_IMAGE = 'ghcr.io/example/claudepilot-workspace:latest';
+  const template = () => ({
+    metadata: { labels: { ...MANAGED } },
+    spec: {
+      securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
+      volumes: [{ name: 'home', persistentVolumeClaim: { claimName: 'ws-wb-home' } }],
+      initContainers: [{ name: 'seed-home', image: WS_IMAGE, command: ['sh', '-c', 'true'] }],
+      containers: [{ name: 'workspace', image: WS_IMAGE }],
+    },
+  });
+  /** The Deployment the browser pool writes: the workspace's template with `withBrowser` (the real builder) applied. */
+  const withPool = (name = 'ws-wb') => ({ metadata: { name, labels: { ...MANAGED } }, spec: { replicas: 1, template: withBrowser(template() as never, name, plan) } });
+  /** The browser container with its security context changed, in an otherwise real template. */
+  const browserWith = (sc: Record<string, unknown> | null, where: 'containers' | 'initContainers' = 'containers', name = 'browser') => {
+    const d = withPool();
+    const spec = d.spec.template.spec as unknown as Record<string, Record<string, unknown>[]>;
+    const browser = { ...(spec.containers!.find((c) => c.name === 'browser') as Record<string, unknown>), name, securityContext: sc ?? undefined };
+    spec.containers = spec.containers!.filter((c) => c.name !== 'browser');
+    spec[where] = [...(spec[where] ?? []), browser];
+    return d;
+  };
+  const real = () => structuredClone(browserContainer(plan).securityContext) as Record<string, unknown>;
+  const without = (o: Record<string, unknown>, key: string) => {
+    const copy = { ...o };
+    delete copy[key];
+    return copy;
+  };
+
+  it('the template the pool really writes passes on create and replace; root stays refused everywhere else', async () => {
+    assert.equal((await rig.request('POST', `${apps}/deployments`, { body: withPool() })).status, 201);
+    assert.equal((await rig.request('PUT', `${apps}/deployments/ws-wb`, { body: withPool() })).status, 200);
+    const n = rig.fake.requests.length;
+    const bad: [string, unknown][] = [
+      ['root in the workspace container (the browser’s exact context)', browserWith(real(), 'containers', 'workspace-2')],
+      ['the browser’s context on an init container', browserWith(real(), 'initContainers')],
+      ['another added capability', browserWith({ ...real(), capabilities: { drop: ['ALL'], add: ['SETUID', 'SETGID', 'NET_ADMIN'] } })],
+      ['SYS_ADMIN alone', browserWith({ ...real(), capabilities: { drop: ['ALL'], add: ['SYS_ADMIN'] } })],
+      ['root without dropping ALL', browserWith({ ...real(), capabilities: { add: ['SETUID'] } })],
+      ['root with privilege escalation', browserWith({ ...real(), allowPrivilegeEscalation: true })],
+      ['root without saying no privilege escalation', browserWith(without(real(), 'allowPrivilegeEscalation'))],
+      ['root and privileged', browserWith({ ...real(), privileged: true })],
+      ['root and an SELinux type', browserWith({ ...real(), seLinuxOptions: { type: 'spc_t' } })],
+      ['root unconfined', browserWith({ ...real(), seccompProfile: { type: 'Unconfined' } })],
+      ['root with no seccomp profile', browserWith(without(real(), 'seccompProfile'))],
+      ['root and an unmasked /proc', browserWith({ ...real(), procMount: 'Unmasked' })],
+      ['root in the whole pod', (() => {
+        const d = withPool();
+        (d.spec.template.spec as unknown as Record<string, unknown>).securityContext = { runAsUser: 0 };
+        return d;
+      })()],
+      ['the browser with a host port beside its root init', (() => {
+        const d = withPool();
+        const b = (d.spec.template.spec as unknown as { containers: Record<string, unknown>[] }).containers.find((c) => c.name === 'browser')!;
+        b.ports = [{ containerPort: 5900, hostPort: 5900 }];
+        return d;
+      })()],
+    ];
+    for (const [what, body] of bad) {
+      const a = await rig.request('POST', `${apps}/deployments`, { body });
+      assert.equal(a.status, 403, `${what}: ${a.text}`);
+      assert.equal(a.json().message, 'denied by claudepilot policy (spec)', what);
+    }
+    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+    // A strategic merge patch that gives the workspace container root is refused as before.
+    refused(await rig.request('PATCH', `${apps}/deployments/ws-wb`, { body: { spec: { template: { spec: { containers: [{ name: 'workspace', securityContext: { runAsUser: 0 } }] } } } }, headers: { 'Content-Type': 'application/strategic-merge-patch+json' } }), 'spec');
+    assert.equal((await rig.request('DELETE', `${apps}/deployments/ws-wb`)).status, 200);
+  });
+
+  it('the ConfigMap and the egress policy by their names only; a policy that selects another pod or touches ingress is refused', async () => {
+    const np = `/apis/networking.k8s.io/v1/namespaces/${NAMESPACE}/networkpolicies`;
+    const cm = { metadata: { name: 'ws-wb-browser', labels: { 'claudepilot.managed': 'true' } }, data: { 'config.json': '{}\n' } };
+    const policy = egressPolicy('ws-wb', { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'wb' }, { portal: null });
+    const n = rig.fake.requests.length;
+    refused(await rig.request('POST', `${base}/configmaps`, { body: { ...cm, metadata: { name: 'claudepilot-agent-ca' } } }), 'name');
+    refused(await rig.request('POST', `${base}/configmaps`, { body: { ...cm, metadata: { name: 'ws-wb-browser', namespace: 'kube-system' } } }), 'namespace');
+    refused(await rig.request('PUT', `${base}/configmaps/ws-wb-browser`, { body: { ...cm, metadata: { name: 'ws-other-browser' } } }), 'name');
+    refused(await rig.request('POST', np, { body: { ...policy, metadata: { name: 'claudepilot-agent' } } }), 'name');
+    const spec = policy.spec as unknown as Record<string, unknown>;
+    refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, podSelector: { matchLabels: { 'app.kubernetes.io/name': 'claudepilot-agent' } } } } }), 'spec');
+    refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, podSelector: {} } } }), 'spec');
+    refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, policyTypes: ['Ingress', 'Egress'] } } }), 'spec');
+    refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, ingress: [{}] } } }), 'spec');
+    refused(await rig.request('POST', np, { body: { metadata: { name: 'ws-wb-egress' } } }), 'spec');
+    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+
+    assert.equal((await rig.request('POST', `${base}/configmaps`, { body: cm })).status, 201);
+    assert.equal((await rig.request('GET', `${base}/configmaps/ws-wb-browser`)).status, 200);
+    assert.ok((await rig.request('PUT', `${base}/configmaps/ws-wb-browser`, { body: { ...cm, data: { 'config.json': '{"a":1}\n' } } })).status < 300);
+    assert.equal((await rig.request('DELETE', `${base}/configmaps/ws-wb-browser`)).status, 200);
+    assert.equal((await rig.request('POST', np, { body: policy })).status, 201);
+    assert.equal((await rig.request('GET', `${np}/ws-wb-egress`)).status, 200);
+    assert.ok((await rig.request('PUT', `${np}/ws-wb-egress`, { body: policy })).status < 300);
+    assert.equal((await rig.request('DELETE', `${np}/ws-wb-egress`)).status, 200);
+  });
+
+  it('end to end: an enrolled target offers the browser pool its namespace, and the pool’s writes pass the policy untouched', async () => {
+    const fresh = await startKubeRig();
+    try {
+      const rt = new KubernetesRuntime(
+        { namespace: NAMESPACE, image: WS_IMAGE, storage: '1Gi' },
+        { kubeConfig: fresh.kubeConfig, manageNamespace: false, target: { id: 'kube', label: 'Kube', where: 'fake' } },
+      );
+      const access = rt.browserAccess();
+      assert.ok(access, 'an enrolled target has browser access (it was null before PILOT-1164)');
+      assert.equal(access.namespace, NAMESPACE);
+      await rt.create({ name: 'kb1', cpus: 1, memoryMb: 512 }, () => undefined);
+      await rt.stop('kb1');
+      const kb = new KubeBrowsers('kube', access, plan.image, 'http://claudepilot-portal.portal-ns.svc.cluster.local:3000', { mode: 'isolate', allow: [] });
+      const ws = (await kb.workspace('kb1'))!;
+      assert.ok(ws, 'the workspace is read through the tunnel');
+      const p = { ...plan, workspace: 'kb1' };
+      await kb.setTemplate(ws, p);
+      await kb.ensureConfigMap(ws, p);
+      await kb.ensureEgress(ws, 'kb1');
+      const d = fresh.fake.deployments.get('ws-kb1') as unknown as { spec: { template: { spec: { containers: { name: string }[] } } } };
+      assert.deepEqual(d.spec.template.spec.containers.map((c) => c.name), ['workspace', 'browser']);
+      assert.ok(fresh.fake.configMaps.has('ws-kb1-browser'));
+      assert.ok(fresh.fake.networkPolicies.has('ws-kb1-egress'));
+      // A changed exception replaces the policy (PUT), and the browser's removal deletes both.
+      const wider = new KubeBrowsers('kube', access, plan.image, undefined, { mode: 'isolate', allow: [{ cidr: '203.0.113.0/24' }] });
+      await wider.ensureEgress((await wider.workspace('kb1'))!, 'kb1');
+      await kb.removeExtras((await kb.workspace('kb1'))!);
+      assert.equal(fresh.fake.configMaps.size, 0);
+      assert.equal(fresh.fake.networkPolicies.size, 0);
+      // The fit check reads nodes, which the tunnel never offers: the pool falls back to its Pending rollback, it does not fail.
+      assert.equal(await kb.fit((await kb.workspace('kb1'))!, p, 'kb1'), null);
+      const denied = (fresh.service.report!().denied ?? []).filter((x) => x.rule !== 'path');
+      assert.deepEqual(denied, [], 'the policy refused none of the pool’s writes');
+    } finally {
+      await fresh.stop();
+    }
   });
 });
 

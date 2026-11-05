@@ -166,7 +166,6 @@ export class KubernetesRuntime implements Runtime {
     if (connect) this.#kc = connect.kubeConfig;
     else this.#kc.loadFromDefault();
     this.#manageNamespace = connect ? (connect.manageNamespace ?? true) : (opts.manageNamespace ?? true);
-    this.#enrolled = !!connect;
     this.#fitCheck = opts.fitCheck ?? !connect;
     this.#core = this.#kc.makeApiClient(CoreV1Api);
     this.#apps = this.#kc.makeApiClient(AppsV1Api);
@@ -198,14 +197,14 @@ export class KubernetesRuntime implements Runtime {
   }
 
   #names: RuntimeNames | undefined;
-  readonly #enrolled: boolean;
 
   /**
-   * The browser pool's way into this namespace: none for an enrolled cluster (Connect), whose agent refuses a Deployment that runs anything
-   * as root, which the browser container's init is (with every capability but SETUID and SETGID dropped).
+   * The browser pool's way into this namespace. For an enrolled cluster (Connect) it is the same tunnel loopback as everything else
+   * (PILOT-1164, G4): the agent lets the browser container's root init through in its exact shape (SETUID and SETGID only), its
+   * `ws-*-browser` ConfigMap and `ws-*-egress` NetworkPolicy by name, and an exec into the `browser` container. It never offers the nodes,
+   * so there the fit check answers "unavailable" and the 5-minute Pending rollback is the guard.
    */
-  browserAccess(): KubeBrowserAccess | null {
-    if (this.#enrolled) return null;
+  browserAccess(): KubeBrowserAccess {
     return { kubeConfig: this.#kc, namespace: this.#ns, objectName: (name) => this.#objectName(name) };
   }
 

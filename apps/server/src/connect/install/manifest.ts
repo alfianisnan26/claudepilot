@@ -32,6 +32,9 @@ export const ROLE_RULES: [string, string[], string[]][] = [
   ['apps', ['deployments'], ['get', 'list', 'create', 'update', 'patch', 'delete']],
   ['apps', ['deployments/scale'], ['get', 'update', 'patch']],
   ['metrics.k8s.io', ['pods'], ['get', 'list']],
+  // The browser pool (PILOT-1164): its ConfigMap and egress NetworkPolicy; the proxy allows only `ws-*-browser` and `ws-*-egress`.
+  ['', ['configmaps'], ['get', 'create', 'update', 'delete']],
+  ['networking.k8s.io', ['networkpolicies'], ['get', 'create', 'update', 'delete']],
 ];
 
 export interface ManifestInput extends PlanInput {

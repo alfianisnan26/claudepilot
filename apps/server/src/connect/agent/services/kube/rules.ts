@@ -18,7 +18,11 @@ export type KubeKind =
   | 'scale'
   | 'resize'
   | 'replicaSet'
-  | 'metrics';
+  | 'metrics'
+  | 'configMapCreate'
+  | 'configMap'
+  | 'networkPolicyCreate'
+  | 'networkPolicy';
 
 export interface KubeRoute {
   kind: KubeKind;
@@ -37,7 +41,13 @@ export const NAMES = {
   deployment: new RegExp(`^ws-${DNS}$`),
   /** A workspace Deployment's ReplicaSet: `ws-<name>-<pod-template-hash>`. */
   replicaSet: new RegExp(`^ws-${DNS}$`),
+  /** The browser pool's ConfigMap and egress policy (browser/kube.ts `configMapName`, `egressPolicyName`; PILOT-1164). */
+  configMap: new RegExp(`^ws-${DNS}-browser$`),
+  networkPolicy: new RegExp(`^ws-${DNS}-egress$`),
 };
+
+/** The containers of a workspace pod an exec may enter: the workspace's, and the browser pool's (PILOT-1164). */
+export const EXEC_CONTAINERS: readonly string[] = ['workspace', 'browser'];
 
 /** Whether a namespace name can be used in a path match at all (DNS label). */
 export const validNamespace = (ns: string): boolean => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(ns);
@@ -63,6 +73,12 @@ export function classifyKube(method: string, path: string, ns: string): KubeRout
     [new RegExp(`^/apis/apps/v1/namespaces/${n}/deployments/([^/]+)$`), (m) => named('deployment', m[1]!, ['GET', 'PUT', 'PATCH', 'DELETE'], NAMES.deployment)],
     [new RegExp(`^/apis/apps/v1/namespaces/${n}/deployments/([^/]+)/scale$`), (m) => named('scale', m[1]!, ['GET', 'PUT', 'PATCH'], NAMES.deployment)],
     [new RegExp(`^/apis/metrics\\.k8s\\.io/v1beta1/namespaces/${n}/pods$`), () => ({ kind: 'metrics', methods: ['GET'] })],
+    // The browser pool (PILOT-1164, G4): its ConfigMap and egress NetworkPolicy, by name only (no list), with the Role's verbs
+    // (deploy/k3s-bridge/rbac.yaml: get, create, update, delete).
+    [new RegExp(`^/api/v1/namespaces/${n}/configmaps$`), () => ({ kind: 'configMapCreate', methods: ['POST'] })],
+    [new RegExp(`^/api/v1/namespaces/${n}/configmaps/([^/]+)$`), (m) => named('configMap', m[1]!, ['GET', 'PUT', 'DELETE'], NAMES.configMap)],
+    [new RegExp(`^/apis/networking\\.k8s\\.io/v1/namespaces/${n}/networkpolicies$`), () => ({ kind: 'networkPolicyCreate', methods: ['POST'] })],
+    [new RegExp(`^/apis/networking\\.k8s\\.io/v1/namespaces/${n}/networkpolicies/([^/]+)$`), (m) => named('networkPolicy', m[1]!, ['GET', 'PUT', 'DELETE'], NAMES.networkPolicy)],
   ];
   for (const [re, make] of table) {
     const m = re.exec(path);
@@ -108,7 +124,7 @@ const GET_KEYS: Record<string, Check> = { resourceVersion: LIST_KEYS.resourceVer
 const WRITE_KEYS: Record<string, Check> = { fieldManager: (v) => TOKEN.test(v), fieldValidation: (v) => /^(?:Strict|Warn|Ignore)$/.test(v) };
 const DELETE_KEYS: Record<string, Check> = { propagationPolicy: (v) => /^(?:Foreground|Background|Orphan)$/.test(v), gracePeriodSeconds: (v) => INT.test(v) };
 const EXEC_KEYS: Record<string, Check> = {
-  container: (v) => v === 'workspace',
+  container: (v) => EXEC_CONTAINERS.includes(v),
   stdin: (v) => BOOL.test(v),
   stdout: (v) => BOOL.test(v),
   stderr: (v) => BOOL.test(v),
@@ -137,7 +153,7 @@ export function rebuildQuery(route: KubeRoute, method: string, q: URLSearchParam
     if (problem) return problem;
     const commands = q.getAll('command');
     if (commands.length === 0 || commands.length > 1000 || commands.some((c) => c.length > 65_536 || c.includes('\0'))) return refuseKube('path', 'An exec needs a command.');
-    if (q.getAll('container').length !== 1 || q.get('container') !== 'workspace') return refuseKube('path', 'Only the workspace container may be entered.');
+    if (q.getAll('container').length !== 1 || !EXEC_CONTAINERS.includes(q.get('container')!)) return refuseKube('path', 'Only the workspace and browser containers may be entered.');
     for (const c of commands) out.append('command', c);
   } else if (method === 'GET' && LISTED.has(route.kind)) {
     problem = take(LIST_KEYS);

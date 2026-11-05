@@ -1258,14 +1258,21 @@ All under the connector's namespace `<ns>`; every list and watch on pods, deploy
 | GET | `/version` | |
 | GET (list, watch) | `/api/v1/namespaces/<ns>/pods` | |
 | GET | `/api/v1/namespaces/<ns>/pods/<name>` | `ws-*` |
-| GET, POST (WebSocket upgrade) | `/api/v1/namespaces/<ns>/pods/<name>/exec` | `ws-*`; `container=workspace` |
+| GET, POST (WebSocket upgrade) | `/api/v1/namespaces/<ns>/pods/<name>/exec` | `ws-*`; `container=workspace` or `container=browser` (the browser pool, PILOT-1164) |
 | GET, PATCH | `/api/v1/namespaces/<ns>/pods/<name>/resize` (in-place resize; a JSON patch only, every op `add`, `replace` or `test` on `/spec/containers/<i>/resources[/limits\|requests[/<key>]]`, PILOT-1163) | `ws-*` |
 | GET, PUT | `/apis/apps/v1/namespaces/<ns>/replicasets/<name>` (no list, no create; the body scanned like a Deployment's, PILOT-1163) | `ws-*` |
 | GET, POST, DELETE | `/api/v1/namespaces/<ns>/persistentvolumeclaims[/<name>]` | `ws-*-home` |
 | GET, POST, PUT, PATCH, DELETE | `/api/v1/namespaces/<ns>/secrets[/<name>]` (no list) | `ws-*-claudepilot` |
 | GET, POST, PUT, PATCH, DELETE | `/apis/apps/v1/namespaces/<ns>/deployments[/<name>]` and `/scale` | `ws-*` |
 | GET | `/apis/metrics.k8s.io/v1beta1/namespaces/<ns>/pods` | |
+| GET, POST, PUT, DELETE | `/api/v1/namespaces/<ns>/configmaps[/<name>]` (no list; the browser pool's config, PILOT-1164) | `ws-*-browser` |
+| GET, POST, PUT, DELETE | `/apis/networking.k8s.io/v1/namespaces/<ns>/networkpolicies[/<name>]` (no list; the browser's egress policy: it selects `claudepilot.managed=true` pods and is `Egress` only, PILOT-1164) | `ws-*-egress` |
 | other | deny: a Kubernetes `Status` 403 body | |
+
+Root and added capabilities stay refused in every pod, with one exception (PILOT-1164): a regular container named `browser` may run as
+uid 0 when its security context is exactly the browser pool's (`allowPrivilegeEscalation: false`, `capabilities.drop` with `ALL`, `add`
+within `SETUID` and `SETGID`, `seccompProfile: RuntimeDefault`, and no other security setting). The rule lives in
+`packages/contracts/src/connect.ts` §11, so the agent and the Cloudflare Worker apply the same one.
 
 ## Appendix C: messages by example
 
