@@ -1299,7 +1299,15 @@ const MAX_DEPTH = 24;
  * privilege escalation, `drop: [ALL]`, `add` within SETUID and SETGID, the RuntimeDefault seccomp profile, and no other security setting.
  */
 const BROWSER_CONTAINER = 'browser';
-const BROWSER_CONTEXT_KEYS = new Set(['runAsUser', 'runAsGroup', 'runAsNonRoot', 'allowPrivilegeEscalation', 'readOnlyRootFilesystem', 'capabilities', 'seccompProfile']);
+const BROWSER_CONTEXT_KEYS = new Set([
+  'runAsUser',
+  'runAsGroup',
+  'runAsNonRoot',
+  'allowPrivilegeEscalation',
+  'readOnlyRootFilesystem',
+  'capabilities',
+  'seccompProfile',
+]);
 const BROWSER_CAPS = new Set(['SETUID', 'SETGID']);
 
 /** Whether a container's security context asks for what only the browser's root init may have. */
@@ -1312,13 +1320,15 @@ function browserInitProblem(sc: Obj): string | null {
   for (const k of Object.keys(sc)) if (!BROWSER_CONTEXT_KEYS.has(k)) return bad;
   if (sc.allowPrivilegeEscalation !== false) return bad;
   if (sc.runAsUser !== 0 && sc.runAsUser !== undefined) return bad;
-  if (sc.runAsGroup !== undefined && (typeof sc.runAsGroup !== 'number' || !Number.isInteger(sc.runAsGroup) || sc.runAsGroup < 0)) return bad;
+  if (sc.runAsGroup !== undefined && (typeof sc.runAsGroup !== 'number' || !Number.isInteger(sc.runAsGroup) || sc.runAsGroup < 0))
+    return bad;
   if (sc.runAsNonRoot !== undefined && sc.runAsNonRoot !== false) return bad;
   if (sc.readOnlyRootFilesystem !== undefined && typeof sc.readOnlyRootFilesystem !== 'boolean') return bad;
   const caps = sc.capabilities;
   if (!isObj(caps) || Object.keys(caps).some((k) => k !== 'add' && k !== 'drop')) return bad;
   if (!Array.isArray(caps.drop) || !caps.drop.includes('ALL')) return bad;
-  if (caps.add !== undefined && (!Array.isArray(caps.add) || caps.add.some((c) => typeof c !== 'string' || !BROWSER_CAPS.has(c)))) return bad;
+  if (caps.add !== undefined && (!Array.isArray(caps.add) || caps.add.some((c) => typeof c !== 'string' || !BROWSER_CAPS.has(c))))
+    return bad;
   const seccomp = sc.seccompProfile;
   if (!isObj(seccomp) || seccomp.type !== 'RuntimeDefault' || Object.keys(seccomp).length !== 1) return bad;
   return null;
@@ -1333,7 +1343,13 @@ function scan(node: unknown, key: string, depth: number, budget: { n: number }, 
         for (const k of Object.keys(item))
           if (!SAFE_VOLUME_KEYS.has(k) && !k.startsWith('$')) return `A volume of kind ${JSON.stringify(k.slice(0, 30))} is not allowed.`;
       }
-      if (key === 'containers' && isObj(item) && item.name === BROWSER_CONTAINER && isObj(item.securityContext) && asksRoot(item.securityContext)) {
+      if (
+        key === 'containers' &&
+        isObj(item) &&
+        item.name === BROWSER_CONTAINER &&
+        isObj(item.securityContext) &&
+        asksRoot(item.securityContext)
+      ) {
         const p = browserInitProblem(item.securityContext);
         if (p) return p;
         // The checked context is the exception; everything else in the container (image, mounts, ports) is scanned as usual.

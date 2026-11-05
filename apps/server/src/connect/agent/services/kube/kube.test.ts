@@ -609,7 +609,13 @@ describe('exec is a WebSocket for a workspace pod only', () => {
 });
 
 describe('the browser pool (PILOT-1164, G4): its root init, ConfigMap and egress policy, and nothing wider', () => {
-  const plan: KubePlan = { workspace: 'wb', poolId: 'p', content: BROWSER_POOL_DEFAULTS, portalHosts: [], image: 'registry.example.test/claudepilot/browser:t1' };
+  const plan: KubePlan = {
+    workspace: 'wb',
+    poolId: 'p',
+    content: BROWSER_POOL_DEFAULTS,
+    portalHosts: [],
+    image: 'registry.example.test/claudepilot/browser:t1',
+  };
   const WS_IMAGE = 'ghcr.io/example/claudepilot-workspace:latest';
   const template = () => ({
     metadata: { labels: { ...MANAGED } },
@@ -621,12 +627,19 @@ describe('the browser pool (PILOT-1164, G4): its root init, ConfigMap and egress
     },
   });
   /** The Deployment the browser pool writes: the workspace's template with `withBrowser` (the real builder) applied. */
-  const withPool = (name = 'ws-wb') => ({ metadata: { name, labels: { ...MANAGED } }, spec: { replicas: 1, template: withBrowser(template() as never, name, plan) } });
+  const withPool = (name = 'ws-wb') => ({
+    metadata: { name, labels: { ...MANAGED } },
+    spec: { replicas: 1, template: withBrowser(template() as never, name, plan) },
+  });
   /** The browser container with its security context changed, in an otherwise real template. */
   const browserWith = (sc: Record<string, unknown> | null, where: 'containers' | 'initContainers' = 'containers', name = 'browser') => {
     const d = withPool();
     const spec = d.spec.template.spec as unknown as Record<string, Record<string, unknown>[]>;
-    const browser = { ...(spec.containers!.find((c) => c.name === 'browser') as Record<string, unknown>), name, securityContext: sc ?? undefined };
+    const browser = {
+      ...(spec.containers!.find((c) => c.name === 'browser') as Record<string, unknown>),
+      name,
+      securityContext: sc ?? undefined,
+    };
     spec.containers = spec.containers!.filter((c) => c.name !== 'browser');
     spec[where] = [...(spec[where] ?? []), browser];
     return d;
@@ -655,26 +668,46 @@ describe('the browser pool (PILOT-1164, G4): its root init, ConfigMap and egress
       ['root unconfined', browserWith({ ...real(), seccompProfile: { type: 'Unconfined' } })],
       ['root with no seccomp profile', browserWith(without(real(), 'seccompProfile'))],
       ['root and an unmasked /proc', browserWith({ ...real(), procMount: 'Unmasked' })],
-      ['root in the whole pod', (() => {
-        const d = withPool();
-        (d.spec.template.spec as unknown as Record<string, unknown>).securityContext = { runAsUser: 0 };
-        return d;
-      })()],
-      ['the browser with a host port beside its root init', (() => {
-        const d = withPool();
-        const b = (d.spec.template.spec as unknown as { containers: Record<string, unknown>[] }).containers.find((c) => c.name === 'browser')!;
-        b.ports = [{ containerPort: 5900, hostPort: 5900 }];
-        return d;
-      })()],
+      [
+        'root in the whole pod',
+        (() => {
+          const d = withPool();
+          (d.spec.template.spec as unknown as Record<string, unknown>).securityContext = { runAsUser: 0 };
+          return d;
+        })(),
+      ],
+      [
+        'the browser with a host port beside its root init',
+        (() => {
+          const d = withPool();
+          const b = (d.spec.template.spec as unknown as { containers: Record<string, unknown>[] }).containers.find(
+            (c) => c.name === 'browser',
+          )!;
+          b.ports = [{ containerPort: 5900, hostPort: 5900 }];
+          return d;
+        })(),
+      ],
     ];
     for (const [what, body] of bad) {
       const a = await rig.request('POST', `${apps}/deployments`, { body });
       assert.equal(a.status, 403, `${what}: ${a.text}`);
       assert.equal(a.json().message, 'denied by claudepilot policy (spec)', what);
     }
-    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+    assert.equal(
+      fakeSaw(n).length,
+      0,
+      fakeSaw(n)
+        .map((r) => `${r.method} ${r.url}`)
+        .join(', '),
+    );
     // A strategic merge patch that gives the workspace container root is refused as before.
-    refused(await rig.request('PATCH', `${apps}/deployments/ws-wb`, { body: { spec: { template: { spec: { containers: [{ name: 'workspace', securityContext: { runAsUser: 0 } }] } } } }, headers: { 'Content-Type': 'application/strategic-merge-patch+json' } }), 'spec');
+    refused(
+      await rig.request('PATCH', `${apps}/deployments/ws-wb`, {
+        body: { spec: { template: { spec: { containers: [{ name: 'workspace', securityContext: { runAsUser: 0 } }] } } } },
+        headers: { 'Content-Type': 'application/strategic-merge-patch+json' },
+      }),
+      'spec',
+    );
     assert.equal((await rig.request('DELETE', `${apps}/deployments/ws-wb`)).status, 200);
   });
 
@@ -684,20 +717,40 @@ describe('the browser pool (PILOT-1164, G4): its root init, ConfigMap and egress
     const policy = egressPolicy('ws-wb', { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'wb' }, { portal: null });
     const n = rig.fake.requests.length;
     refused(await rig.request('POST', `${base}/configmaps`, { body: { ...cm, metadata: { name: 'claudepilot-agent-ca' } } }), 'name');
-    refused(await rig.request('POST', `${base}/configmaps`, { body: { ...cm, metadata: { name: 'ws-wb-browser', namespace: 'kube-system' } } }), 'namespace');
-    refused(await rig.request('PUT', `${base}/configmaps/ws-wb-browser`, { body: { ...cm, metadata: { name: 'ws-other-browser' } } }), 'name');
+    refused(
+      await rig.request('POST', `${base}/configmaps`, { body: { ...cm, metadata: { name: 'ws-wb-browser', namespace: 'kube-system' } } }),
+      'namespace',
+    );
+    refused(
+      await rig.request('PUT', `${base}/configmaps/ws-wb-browser`, { body: { ...cm, metadata: { name: 'ws-other-browser' } } }),
+      'name',
+    );
     refused(await rig.request('POST', np, { body: { ...policy, metadata: { name: 'claudepilot-agent' } } }), 'name');
     const spec = policy.spec as unknown as Record<string, unknown>;
-    refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, podSelector: { matchLabels: { 'app.kubernetes.io/name': 'claudepilot-agent' } } } } }), 'spec');
+    refused(
+      await rig.request('POST', np, {
+        body: { ...policy, spec: { ...spec, podSelector: { matchLabels: { 'app.kubernetes.io/name': 'claudepilot-agent' } } } },
+      }),
+      'spec',
+    );
     refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, podSelector: {} } } }), 'spec');
     refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, policyTypes: ['Ingress', 'Egress'] } } }), 'spec');
     refused(await rig.request('POST', np, { body: { ...policy, spec: { ...spec, ingress: [{}] } } }), 'spec');
     refused(await rig.request('POST', np, { body: { metadata: { name: 'ws-wb-egress' } } }), 'spec');
-    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+    assert.equal(
+      fakeSaw(n).length,
+      0,
+      fakeSaw(n)
+        .map((r) => `${r.method} ${r.url}`)
+        .join(', '),
+    );
 
     assert.equal((await rig.request('POST', `${base}/configmaps`, { body: cm })).status, 201);
     assert.equal((await rig.request('GET', `${base}/configmaps/ws-wb-browser`)).status, 200);
-    assert.ok((await rig.request('PUT', `${base}/configmaps/ws-wb-browser`, { body: { ...cm, data: { 'config.json': '{"a":1}\n' } } })).status < 300);
+    assert.ok(
+      (await rig.request('PUT', `${base}/configmaps/ws-wb-browser`, { body: { ...cm, data: { 'config.json': '{"a":1}\n' } } })).status <
+        300,
+    );
     assert.equal((await rig.request('DELETE', `${base}/configmaps/ws-wb-browser`)).status, 200);
     assert.equal((await rig.request('POST', np, { body: policy })).status, 201);
     assert.equal((await rig.request('GET', `${np}/ws-wb-egress`)).status, 200);
@@ -717,7 +770,10 @@ describe('the browser pool (PILOT-1164, G4): its root init, ConfigMap and egress
       assert.equal(access.namespace, NAMESPACE);
       await rt.create({ name: 'kb1', cpus: 1, memoryMb: 512 }, () => undefined);
       await rt.stop('kb1');
-      const kb = new KubeBrowsers('kube', access, plan.image, 'http://claudepilot-portal.portal-ns.svc.cluster.local:3000', { mode: 'isolate', allow: [] });
+      const kb = new KubeBrowsers('kube', access, plan.image, 'http://claudepilot-portal.portal-ns.svc.cluster.local:3000', {
+        mode: 'isolate',
+        allow: [],
+      });
       const ws = (await kb.workspace('kb1'))!;
       assert.ok(ws, 'the workspace is read through the tunnel');
       const p = { ...plan, workspace: 'kb1' };
@@ -725,7 +781,10 @@ describe('the browser pool (PILOT-1164, G4): its root init, ConfigMap and egress
       await kb.ensureConfigMap(ws, p);
       await kb.ensureEgress(ws, 'kb1');
       const d = fresh.fake.deployments.get('ws-kb1') as unknown as { spec: { template: { spec: { containers: { name: string }[] } } } };
-      assert.deepEqual(d.spec.template.spec.containers.map((c) => c.name), ['workspace', 'browser']);
+      assert.deepEqual(
+        d.spec.template.spec.containers.map((c) => c.name),
+        ['workspace', 'browser'],
+      );
       assert.ok(fresh.fake.configMaps.has('ws-kb1-browser'));
       assert.ok(fresh.fake.networkPolicies.has('ws-kb1-egress'));
       // A changed exception replaces the policy (PUT), and the browser's removal deletes both.
