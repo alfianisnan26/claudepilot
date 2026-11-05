@@ -23,10 +23,10 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): idle, waits for review asks. PILOT-1148 PASS on 0cfac02fe1c8 (comment 59965) on one condition: replay on top of 1180, deploy-stg build step re-reviewed as a delta.
-- cf-sec (worker e28ec1b4, opus, builder 2 of 2): PILOT-1185 (T-3854, HIGH) boot check refusing a weak server sign-in code (lifts the 1182 go-live blocker), branch ticket/T-3854-signin-code-strength.
+- cf-review (worker 68d76aeb, opus, auto): reviewing (1) PILOT-1148 delta f20493c9d..4b1f61500e48 on ticket/T-3706-spa-assets-r2 (job d47f5b3e 90); (2) PILOT-1185 slice 1 b93f78582ef8 (job f540d727 50; warn by default, strict flag refuses, comment 60005); (3) PILOT-1171 slice 1 7cfba616bdb5 (job 42251f8b 89; treated HIGH: kube path refusal).
+- cf-sec (worker e28ec1b4, opus, builder 1 of 2): PILOT-1185 slice 2 (strong generator, long codes end to end, sign-in field, ux-check on a scratch portal), branch ticket/T-3854-signin-code-r2. After it merges, FOR THE COORDINATOR: rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to >=26 chars, then PORTAL_SIGNIN_CODE_STRICT=true.
 - cf-bridge (worker 5bc808ae, opus): idle (builder cap 2 full). Next: PILOT-1186 (minors of 1163/1161), then gaps 1164, 1157, 1167.
-- cf-worker (worker 6562167d, opus): PILOT-1171 slice 1 (REST client in BridgeDO + kube() path refusal), branch ticket/T-3737-worker-kube-client. Next for cf-worker (queued): 1148 replay on ticket/T-3706-spa-assets-r2 from edc23a891 (build as deps.build, no CLOUDFLARE_* in build env, Upgrade skip only on /bridge).
+- cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1171 slice 2 (exec v5/v4, resize ch 4, relay to caller WS), branch ticket/T-3737-worker-kube-exec from the slice-1 head. 1148 replay and 1171 slice 1 done, in review.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
