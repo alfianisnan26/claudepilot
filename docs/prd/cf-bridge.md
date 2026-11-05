@@ -54,7 +54,8 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
   `test` on `/spec/containers/N/resources`, a merge patch refused) and `replicasets/{name}` (GET, PUT; name `ws-*`, body scanned like a Deployment). The
   installer's Role (`connect/install/manifest.ts`) and `doctor`'s RBAC check now include `pods/resize` (get, patch) and `replicasets` (get, update);
   the bridge's Role (`deploy/k3s-bridge/rbac.yaml`) already had them. An agent installed before this needs its Role re-applied for the resize; until
-  then the cluster refuses it and the runtime restarts the pod, as before.
+  then the cluster refuses it and the runtime restarts the pod, as before. So the doctor counts those two grants as optional (PILOT-1186): missing,
+  `kube.rbac` stays ok and its hint says a resize restarts the workspace instead.
 - **G3 Fit check on the bridge** (PILOT-1157, T-3715). Either a read-only summarised `nodes` + pod-requests answer from the agent (needs the existing ClusterRole
   `claudepilot-portal-fit-check` bound to the bridge's SA: FOR THE COORDINATOR) or keep "unavailable" (create unchecked, resize refused as
   unchecked, `kubernetes.ts:534`). Default: keep unavailable in phase 1, decide on the ticket.
@@ -186,12 +187,20 @@ Worker code only: the public `/bridge` route always forwards `/bridge` with fres
   a request target of at most 8 KiB (large input goes on stdin), stream flags boolean, `tty` with `stderr` refused. At most 16 execs per
   link at once (the link has 32 streams).
 - The upgrade offers `v5.channel.k8s.io` then `v4.channel.k8s.io` and checks `Sec-WebSocket-Accept`. A refusal (the proxy's or the API
-  server's) is JSON, not an upgrade: 400 `bad_request`, 429 `busy`, 503 `agent_offline`, 502 `kube_status` with the Status reason or
-  `bad_response`.
+  server's) is JSON, not an upgrade: 400 `bad_request`, 429 `busy`, 503 `agent_offline`, 502 `kube_status` with the Status reason,
+  `bad_response` or `internal`.
 - The answer is a 101 with a WebSocket and `x-cp-exec-protocol`. Each message is one channel message. In: 0 stdin, 4 resize (checked
   and rewritten as `{"Width":w,"Height":h}`), `[255, 0]` closes stdin (v5 only; dropped on v4). Out: 1 stdout, 2 stderr, 3 the exit
   Status. A text message, an output channel or a bad resize from the caller closes it (1003/1008); the pod's close closes the caller with
   its code. Messages are at most 1 MiB, and stdin is cut off (1009) past 1 MiB waiting for the stream's window.
+- Output backpressure (PILOT-1188): the caller acks what it has taken with `[254, n]` (n a uint32 big-endian, the length of the messages
+  taken, channel byte included); the ack never reaches the pod. While more than 1 MiB is unacked (`EXEC_LIMITS.maxUnackedOutput`), the
+  object stops reading the pod's stream, so at most about 2 MiB of output waits toward the caller. A caller that never acks stalls
+  there; the agent's stream then holds up to its read bound (about 4 MiB), and past it the exec ends 1011. A bad ack (not 5 bytes, 0,
+  or more than was sent) closes the caller 1008. The DO cannot measure the caller's socket itself: workerd has no `bufferedAmount`.
+- An `internal` refusal (a failure that is not a Connect error) carries fixed text, `The exec could not be started.` (a REST call:
+  `The cluster call failed.`); the cause goes to the audit as `bridge.internal`, redacted (`src/bridge/redact.ts`) and cut to 200
+  characters.
 - The caller's socket is accepted, not hibernatable: the object stays awake while an exec runs, so its stream is not lost. The audit row
   `bridge.exec` names the pod, the argument count and the protocol, never the command or the bearer.
 - workerd delivers the accepted socket's binary messages as a `Blob`: the object reads each one on a single ordered chain, so stdin

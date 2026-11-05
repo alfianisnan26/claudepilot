@@ -84,7 +84,8 @@ export function formatReport(report: ConnectDoctorReport): string {
   for (const c of report.checks) {
     const mark = c.ok === true ? 'ok  ' : c.ok === false ? 'FAIL' : 'skip';
     lines.push(`${mark} ${c.id.padEnd(16)} ${c.detail}`);
-    if (c.ok === false && c.hint) lines.push(`     -> ${c.hint}`);
+    // A passing check with a hint is a warning (an optional grant missing, PILOT-1186): its hint is shown too.
+    if (c.ok !== null && c.hint) lines.push(`     -> ${c.hint}`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -320,12 +321,18 @@ async function kubeApi(o: DoctorOptions): Promise<Result> {
   }
 }
 
-/** What the connector's Role grants (PRD §13.5): the verbs the proxy needs, asked of the API server with SelfSubjectAccessReview. */
-export const RBAC_NEEDS: { group: string; resource: string; subresource?: string; verbs: string[] }[] = [
+/** Why the in-place resize grants are optional (PILOT-1186): without them the portal falls back to a restart. */
+export const RESIZE_FALLBACK = 'Without it a resize restarts the workspace instead of resizing it in place.';
+
+/**
+ * What the connector's Role grants (PRD §13.5): the verbs the proxy needs, asked of the API server with SelfSubjectAccessReview. An
+ * `optional` need only warns: the check stays ok and its hint says what is lost.
+ */
+export const RBAC_NEEDS: { group: string; resource: string; subresource?: string; verbs: string[]; optional?: string }[] = [
   { group: '', resource: 'pods', verbs: ['get', 'list', 'watch'] },
   { group: '', resource: 'pods', subresource: 'exec', verbs: ['create', 'get'] },
-  { group: '', resource: 'pods', subresource: 'resize', verbs: ['get', 'patch'] },
-  { group: 'apps', resource: 'replicasets', verbs: ['get', 'update'] },
+  { group: '', resource: 'pods', subresource: 'resize', verbs: ['get', 'patch'], optional: RESIZE_FALLBACK },
+  { group: 'apps', resource: 'replicasets', verbs: ['get', 'update'], optional: RESIZE_FALLBACK },
   { group: '', resource: 'persistentvolumeclaims', verbs: ['get', 'list', 'create', 'delete'] },
   { group: '', resource: 'secrets', verbs: ['get', 'list', 'create', 'update', 'patch', 'delete'] },
   { group: 'apps', resource: 'deployments', verbs: ['get', 'list', 'create', 'update', 'patch', 'delete'] },
@@ -340,15 +347,26 @@ async function kubeRbac(o: DoctorOptions): Promise<Result> {
   const namespace = o.config.kubeNamespace ?? 'claudepilot-workspaces';
   try {
     const missing: string[] = [];
+    const lacking: string[] = [];
+    const lost = new Set<string>();
     for (const need of RBAC_NEEDS) {
       for (const verb of need.verbs) {
         const body = JSON.stringify({ apiVersion: 'authorization.k8s.io/v1', kind: 'SelfSubjectAccessReview', spec: { resourceAttributes: { namespace, verb, group: need.group, resource: need.resource, ...(need.subresource ? { subresource: need.subresource } : {}) } } });
         const res = await proxy.api('POST', '/apis/authorization.k8s.io/v1/selfsubjectaccessreviews', { body, headers: { 'content-type': 'application/json' } });
         if (res.status !== 201 && res.status !== 200) return bad(`The access review was refused (${res.status}).`, 'The service account may not ask what it can do; check the Role by hand with kubectl auth can-i.');
-        if (!(JSON.parse(res.body.toString('utf8')) as { status?: { allowed?: boolean } }).status?.allowed) missing.push(`${verb} ${need.resource}${need.subresource ? `/${need.subresource}` : ''}`);
+        if ((JSON.parse(res.body.toString('utf8')) as { status?: { allowed?: boolean } }).status?.allowed) continue;
+        const what = `${verb} ${need.resource}${need.subresource ? `/${need.subresource}` : ''}`;
+        if (need.optional) {
+          lacking.push(what);
+          lost.add(need.optional);
+        } else missing.push(what);
       }
     }
-    return missing.length ? bad(`The Role is missing: ${missing.slice(0, 6).join(', ')}${missing.length > 6 ? ` and ${missing.length - 6} more` : ''}.`, 'Apply the connector’s manifest again (it creates the Role).') : ok(`the Role grants every verb the connector needs in ${namespace}`);
+    const reapply = 'Apply the connector’s manifest again (it creates the Role).';
+    const also = lacking.length ? ` Also missing (optional): ${lacking.join(', ')}. ${[...lost].join(' ')}` : '';
+    if (missing.length) return bad(`The Role is missing: ${missing.slice(0, 6).join(', ')}${missing.length > 6 ? ` and ${missing.length - 6} more` : ''}.${also}`, reapply);
+    if (lacking.length) return { ok: true, detail: `the Role grants what the connector needs in ${namespace}, but not: ${lacking.join(', ')}`, hint: `${[...lost].join(' ')} ${reapply}` };
+    return ok(`the Role grants every verb the connector needs in ${namespace}`);
   } catch (e) {
     return bad(`The access review failed (${(e as NodeJS.ErrnoException).code ?? 'ERR'}).`, 'Check the API server and the service account.');
   } finally {

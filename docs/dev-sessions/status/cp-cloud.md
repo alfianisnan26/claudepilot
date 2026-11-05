@@ -30,13 +30,17 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
   - Job 472e2d65 on 4857b59: typecheck, pack, prettier, core-worker 114+10+4, server 478 pass 0 fail, web 4.
   - Job 01e9fac0 on 37c231d: server 341, web 4. Its Prettier red is on AccessPage, ApprovalCard and LoginPage, which were unformatted at the base (job e6e9bc7c: a 187-line diff against 29 merged lines), so they are not reformatted.
   - 1185 can close. 1187 stays open for the image-wall fix.
+- PILOT-1188 exec hardening + PILOT-1186 minors merged 4fb24736a..42cf151cc (self-test job 70b24d13 on f39a72518; NORMAL).
+  - The connect.ts conflict was resolved to the built-in list; the agent bundle was regenerated on the merged tree (job ee234251).
+  - Merged-tree job 3dfacd3c: typecheck, pack, prettier, core-worker 121+10+4, server 499 pass 0 fail, web targets 10.
+  - Both closed.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): idle; takes the next review ask.
-- cf-sec (worker e28ec1b4, opus, builder 2 of 2): PILOT-1189 (T-3866, HIGH) boot banner prints the server code + 60152 nits, branch ticket/T-3866-banner-redact.
-- cf-bridge (worker 5bc808ae, opus, builder 1 of 2): resumed 13:05Z after the 12:50 reset. PILOT-1188 + PILOT-1186, branch ticket/T-3865-exec-hardening. Then gaps 1164, 1157, 1167.
-- cf-worker (worker 6562167d, opus): waits for a builder slot. PILOT-1187 fix round (decision 13:10): a Worker-side image allow list + SA token mounts. The ticket stays open.
+- cf-review (worker 68d76aeb, opus, auto): blind review of PILOT-1189, head c8e69d4d1 (self-test job 9c83c105, 46 pass; proof aa629ff5).
+- cf-sec (worker e28ec1b4, opus): idle; takes the 1189 review fixes.
+- cf-bridge (worker 5bc808ae, opus, builder 2 of 2): gaps PILOT-1164, 1157, 1167 on ticket/T-<first>-gaps from ea1540f11.
+- cf-worker (worker 6562167d, opus, builder 1 of 2): PILOT-1187 fix round (decision 13:10): a Worker-side image allow list + SA token mounts, branch ticket/T-3864-worker-image-wall. The ticket stays open.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 

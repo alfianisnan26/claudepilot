@@ -67,6 +67,7 @@ import {
   type ExecProtocol,
 } from '../bridge/kubeExec.js';
 import { BRIDGE_LINK, bridgeMuxLimits, hibernatedSocket, type HibernatedSocket } from '../bridge/link.js';
+import { redactDetail } from '../bridge/redact.js';
 import { BRIDGE_INTERNAL, notFound } from '../bridge/route.js';
 import type { Env } from '../env.js';
 import { SchemaDO } from './schema.js';
@@ -386,7 +387,7 @@ export class BridgeDO extends SchemaDO {
       return { ok: true, status: res.status, contentType: res.headers.get('content-type') ?? null, body: res.body.toString('utf8') };
     } catch (e) {
       if (e instanceof ConnectError) return { ok: false, code: e.code, message: e.message };
-      return { ok: false, code: link.session.closed ? 'agent_offline' : 'internal', message: (e as Error).message.slice(0, 200) };
+      return this.#internalFailure(live.att.connId, link.session.closed, 'The cluster call failed.', e);
     } finally {
       clearTimeout(timer);
       stream.destroy();
@@ -459,7 +460,7 @@ export class BridgeDO extends SchemaDO {
       failure =
         e instanceof ConnectError
           ? { ok: false, code: e.code, message: e.message }
-          : { ok: false, code: link.session.closed ? 'agent_offline' : 'internal', message: (e as Error).message.slice(0, 200) };
+          : this.#internalFailure(live.att.connId, link.session.closed, 'The exec could not be started.', e);
     } finally {
       clearTimeout(timer);
     }
@@ -667,6 +668,15 @@ export class BridgeDO extends SchemaDO {
       else if (att) pending++;
     }
     return { live, pending };
+  }
+
+  /**
+   * A failure that is not a ConnectError (PILOT-1188): the caller gets fixed text, never the error's own message; the cause goes to the
+   * audit as `bridge.internal`, redacted and cut.
+   */
+  #internalFailure(connId: string, offline: boolean, message: string, e: unknown): KubeFailure {
+    this.#audit('bridge.internal', connId, redactDetail(e instanceof Error ? e.message : String(e)));
+    return { ok: false, code: offline ? 'agent_offline' : 'internal', message };
   }
 
   #audit(event: string, connId: string | null, detail: string | null): void {
