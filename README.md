@@ -64,8 +64,10 @@ Let's Encrypt certificate through a DNS-01 challenge instead (a token with Zone 
 ```sh
 cp deploy/.env.example deploy/.env      # optional: PORTAL_SERVER_CODE, PORTAL_TLS
 NODE_AUTH_TOKEN=$(gh auth token) docker compose -f deploy/compose.yaml up -d --build
-docker compose -f deploy/compose.yaml logs portal   # where a generated server code is (never the code)
 ```
+
+Compose runs only Caddy here; the portal runs elsewhere. With `PORTAL_SERVER_CODE` unset, the generated sign-in code is in the
+file `server-code` in the portal's data dir (`PORTAL_DATA_DIR`, mode 0600). Logs never show the code.
 
 From the devcontainer, add `--context host` after `docker` to run it on the Mac's Docker Desktop.
 Deploy a change by running the same `up -d --build` again. Data and the secret-key file are on the
