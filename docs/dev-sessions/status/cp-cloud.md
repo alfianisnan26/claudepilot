@@ -7,13 +7,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Merged and closed, each with its job and review on the ticket (details in this file's git history): 1140, 1139, 1143, 1141, 1162, 1144, 1138, 1159, 1172, 1168.
 - PILOT-1145 DONE by the operator as coordinator (job 5afb4f9e on 27102ae): https://pilot-next.kohi-labs.com serves cp-next-core behind Access (anon 403, service token 200), closed by the operator. Script merged 599c96411..0022bff07 (review PASS on 27102ae67f10, in cf-review's report; ticket closed). Minors -> PILOT-1180.
 - Also merged and closed (git history of this file): 1158, 1160, 1183 (INCIDENT: the 1172 merge turned agent.e2e red; test fix 86a54acf0), 1179, 1169, 1170, 1181, 1180, 1184.
-- PILOT-1163 resize allowlist + RBAC (5abd1f455..5440c3d89, review PASS 60004) and PILOT-1161 built-in ids (61c7d041c, review PASS 60007) merged; pack d73c10de1. Merged-tree jobs 2293db23 (typecheck, pack) + c89c2515 (server connect/workspaces 670 pass 0 fail, web targets 9, core-worker 68+7). Both closed; minors -> PILOT-1186.
-- Merged a67f318c4..ec9cf77f1 (merged-tree job be235d94 on fc7a0af: core-worker 91 + scripts 10 + router 4, server 361, 0 fail; job 42c2ba41 on ec9cf77: typecheck, pack; ec9cf77 is a prettier-only fix):
-  - PILOT-1148 SPA assets (edf473a1a..4232195e0, review PASS 59965 + 60023). Left in_review: the staging deploy is FOR THE COORDINATOR (comment 60128).
-  - PILOT-1185 slice 1 (2fd100a5d..607f3ffe4, PASS 60025).
-  - PILOT-1171 slice 1 (6aabfcaa6..df3f775b3, PASS 60124).
-  - 1185 stays open with cf-sec for slice 2.
-- PILOT-1171 slice 2 exec merged 08cb70527..8f8029b10 (PASS 60138; job 3bf3cd84 on 23ceb855f: typecheck, pack, prettier, core-worker 113+10+4, server 201, 0 fail). PILOT-1171 closed. Follow-ups PILOT-1187 (HIGH) and PILOT-1188.
+- Also merged and closed: 1163, 1161, 1171 (follow-ups 1187, 1188), 1185 slice 1. PILOT-1148 SPA assets is merged but stays in_review until the coordinator's staging deploy (comment 60128).
 - PILOT-1185 slice 2 (c7e5fb84c..072b179c2 as 0c033b35f..b830ca8e0, PASS 60152) and PILOT-1187 (f417f3bee..49bf27b11 as 579fef0d1..1464c4530, PASS 60154; PRD conflict merged by hand) merged, pack 4857b597b.
   - Job 472e2d65 on 4857b59: typecheck, pack, prettier, core-worker 114+10+4, server 478 pass 0 fail, web 4.
   - Job 01e9fac0 on 37c231d: server 341, web 4. Its Prettier red is on AccessPage, ApprovalCard and LoginPage, which were unformatted at the base (job e6e9bc7c: a 187-line diff against 29 merged lines), so they are not reformatted.
@@ -69,7 +63,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
 - PILOT-1148 (comment 60128): the staging deploy that ships the SPA. job-run.sh --ref ec9cf77f1705 --pool-env CP_NEXT_CF_API_TOKEN/ACCOUNT_ID/ZONE/HOST -- deploy-stg.mjs --plan, then without --plan.
 - PILOT-1185 (after the slice 2 merge on cf/integration and its release by the operator): rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to a random code of 26 or more characters, then set PORTAL_SIGNIN_CODE_STRICT=true. Until then the boot banner prints the code (PILOT-1189).
-- PILOT-1190 (comment 60384): the stg deploy of cp-next-core from the cf/integration head that holds 2c7362d32. Run `job-run.sh --ref <sha> --pool-env CP_NEXT_CF_API_TOKEN --pool-env CP_NEXT_CF_ACCOUNT_ID --pool-env CP_NEXT_ZONE --pool-env CP_NEXT_HOST -- 'node apps/core-worker/scripts/deploy-stg.mjs --plan; exit $?'`, then the same without --plan (exit 3 = deployed, token check skipped). The portal part (no SA token on new workspace pods) ships with the operator's next portal release.
+- PILOT-1190 (comment 60384): the stg deploy of cp-next-core from cf/integration 84c1a5796f27dbd5aa5aad6877f38eb344b15486 (holds 2c7362d32). Run `job-run.sh --ref <sha> --pool-env CP_NEXT_CF_API_TOKEN --pool-env CP_NEXT_CF_ACCOUNT_ID --pool-env CP_NEXT_ZONE --pool-env CP_NEXT_HOST -- 'node apps/core-worker/scripts/deploy-stg.mjs --plan; exit $?'`, then the same without --plan (exit 3 = deployed, token check skipped). The portal part (no SA token on new workspace pods) ships with the operator's next portal release.
 - Cleanup: delete scratch branch wip/cf-worker-t3737-dbg1 (debug commit only; agents may not delete branches).
 - PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
 
