@@ -58,6 +58,11 @@ export const config = {
   orgSsoTrustedIssuers: env('PORTAL_ORG_SSO_TRUSTED_ISSUERS'),
   /** Fixed server code; when unset one is generated at startup. */
   serverCode: env('PORTAL_SERVER_CODE'),
+  /**
+   * PILOT-1185: with code sign-in on, refuse to start with a server code below MIN_CODE_BITS, and refuse a weak new code (signinCode.ts).
+   * Off by default: every 8-character code is weak, so on it needs a long code first (docs/prd/authorization.md §12.6).
+   */
+  signinCodeStrict: env('PORTAL_SIGNIN_CODE_STRICT') === 'true',
   /** Encrypts stored secrets: 32 random bytes in base64url, given directly or as a file. */
   secretKey: { value: env('PORTAL_SECRET_KEY'), file: env('PORTAL_SECRET_KEY_FILE') },
   /** Repo root, web app source and its build output, and where the portal keeps its own files. */
