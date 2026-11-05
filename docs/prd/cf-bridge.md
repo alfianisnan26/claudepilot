@@ -173,6 +173,8 @@ Worker code only: the public `/bridge` route always forwards `/bridge` with fres
   its code. Messages are at most 1 MiB, and stdin is cut off (1009) past 1 MiB waiting for the stream's window.
 - The caller's socket is accepted, not hibernatable: the object stays awake while an exec runs, so its stream is not lost. The audit row
   `bridge.exec` names the pod, the argument count and the protocol, never the command or the bearer.
+- workerd delivers the accepted socket's binary messages as a `Blob`: the object reads each one on a single ordered chain, so stdin
+  keeps its order and the caller's close waits behind it.
 - Proof: `test/kubeExec.test.ts` (the check, the codec, the relay), `test/bridge.test.ts` (v5 and the v4 fallback over a live link with a
   stand-in API server; refusals never reach the agent), and `bridgeWorker.test.ts` (an exec through the real agent and `KubeProxy` to
   the fake API server, which speaks v4 only: stdin, a resize and a non-zero exit status).
