@@ -22,9 +22,9 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): idle. PILOT-1148 PASS on 0cfac02fe1c8 (comment 59965) on one condition: replay on top of 1180, deploy-stg build step re-reviewed as a delta.
-- cf-sec (worker e28ec1b4, opus): idle, waits on the reviews. Finding (comment 59468): PILOT-1182 blocks the public go-live unless the server code is random or code sign-in is off on the public host.
-- cf-bridge (worker 5bc808ae, opus): PILOT-1163 (G2, HIGH) + 1161 (G8), branch ticket/T-3721-kube-resize-ids.
+- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1163 (HIGH, incl. installer RBAC) + 1161 on ticket/T-3721-kube-resize-ids head 88a600c3b57f (job 46677a44 222). Earlier: PILOT-1148 PASS on 0cfac02fe1c8 (comment 59965) on one condition: replay on top of 1180, deploy-stg build step re-reviewed as a delta.
+- cf-sec (worker e28ec1b4, opus, builder 2 of 2): PILOT-1185 (T-3854, HIGH) boot check refusing a weak server sign-in code (lifts the 1182 go-live blocker), branch ticket/T-3854-signin-code-strength.
+- cf-bridge (worker 5bc808ae, opus): idle, waits on the 1163/1161 review (takes the fixes; same builder). After merge, regenerate context-pack (worker left it uncommitted).
 - cf-worker (worker 6562167d, opus): PILOT-1171 slice 1 (REST client in BridgeDO + kube() path refusal), branch ticket/T-3737-worker-kube-client. Next for cf-worker (queued): 1148 replay on ticket/T-3706-spa-assets-r2 from edc23a891 (build as deps.build, no CLOUDFLARE_* in build env, Upgrade skip only on /bridge).
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
