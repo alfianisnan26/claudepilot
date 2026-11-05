@@ -157,6 +157,15 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
   calls never reach the agent), and `bridgeWorker.test.ts` (a workspace's claim and Deployment created, listed, scaled, measured and
   deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment refused by the proxy's scan).
 
+**Boundaries for callers (review of PILOT-1171 slice 1).**
+
+- No route calls these functions yet. The first route that calls `kubeList`, `kubeCreate`, `kubeScale`, `kubeDelete`, `kubeMetrics` or
+  `bridgeExecRequest` must take the namespace (and the pod or workspace label) from the workspace record it has authorised. It must never take them from the request: the
+  Worker checks only their shape, not that they belong to the caller.
+- The Worker does not check a created object's spec. Nothing on the Worker side checks hostNetwork, privileged containers, hostPath mounts, images or
+  service-account tokens. The agent's `KubeProxy` schema scan and image allow list are the only wall for that, and RBAC is behind them.
+  A Worker-side check is ticketed as PILOT-1187 (T-3864).
+
 **G6c slice 2 built (PILOT-1171): exec.** Worker code asks the cluster's `BridgeDO` with `bridgeExecRequest({namespace, bearer, pod,
 command, tty?, stdin?, stdout?, stderr?})` (`apps/core-worker/src/bridge/kubeExec.ts`) on its stub. The path (`/__exec`) is reachable from
 Worker code only: the public `/bridge` route always forwards `/bridge` with fresh headers.
