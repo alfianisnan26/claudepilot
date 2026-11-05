@@ -29,8 +29,9 @@ const AUTHORITY = 'scratch.dev-rig-t3707.svc:8080';
 const config = (target = TARGET, cluster = env.TEST_BRIDGE_CLUSTER) => JSON.stringify({ cluster, target });
 const stub = () => locate(env.BRIDGE, env.TEST_BRIDGE_CLUSTER);
 const app = createApp();
-const call = (path: string, init: RequestInit = {}, proxy: string | undefined = config()) =>
-  app.fetch(new Request(`https://core.test${path}`, init), { ...env, CP_API_PROXY: proxy });
+/** `proxy` null: no CP_API_PROXY at all. */
+const call = (path: string, init: RequestInit = {}, proxy: string | null = config()) =>
+  app.fetch(new Request(`https://core.test${path}`, init), { ...env, ...(proxy === null ? {} : { CP_API_PROXY: proxy }) });
 
 const open: WebSocket[] = [];
 afterEach(() => {
@@ -220,8 +221,15 @@ async function noLiveLink(): Promise<void> {
 
 describe('the target: only a scratch portal in a dev-rig namespace (connectHttpTargetOf, apiProxyConfigOf)', () => {
   it('takes a dev-rig Service by its cluster DNS name and port', () => {
-    expect(connectHttpTargetOf(TARGET)).toEqual({ hostname: 'scratch.dev-rig-t3707.svc', namespace: 'dev-rig-t3707', port: 8080, authority: AUTHORITY });
-    expect(connectHttpTargetOf('http://portal.dev-rig-a.svc.cluster.local:3000/')?.authority).toBe('portal.dev-rig-a.svc.cluster.local:3000');
+    expect(connectHttpTargetOf(TARGET)).toEqual({
+      hostname: 'scratch.dev-rig-t3707.svc',
+      namespace: 'dev-rig-t3707',
+      port: 8080,
+      authority: AUTHORITY,
+    });
+    expect(connectHttpTargetOf('http://portal.dev-rig-a.svc.cluster.local:3000/')?.authority).toBe(
+      'portal.dev-rig-a.svc.cluster.local:3000',
+    );
     expect(apiProxyConfigOf(config())).toEqual({ cluster: env.TEST_BRIDGE_CLUSTER, target: connectHttpTargetOf(TARGET) });
   });
 
@@ -263,7 +271,8 @@ describe('the target: only a scratch portal in a dev-rig namespace (connectHttpT
 
   it('sends only request targets under /api, printable and bounded', () => {
     for (const ok of ['/api', '/api/x', '/api/x?y=1', '/api?x=1']) expect(apiTargetOk(ok), ok).toBe(true);
-    for (const bad of ['/apix', '/', '/bridge', '/api/x y', '/api/é', `/api/${'a'.repeat(9000)}`, null]) expect(apiTargetOk(bad)).toBe(false);
+    for (const bad of ['/apix', '/', '/bridge', '/api/x y', '/api/é', `/api/${'a'.repeat(9000)}`, null])
+      expect(apiTargetOk(bad)).toBe(false);
   });
 });
 
@@ -345,7 +354,7 @@ describe('headers onward and back', () => {
       target,
     );
     expect(out.getSetCookie()).toEqual(['a=1', 'b=2']);
-    expect([...out.keys()].sort()).toEqual(['content-type', 'set-cookie']);
+    expect([...new Set(out.keys())].sort()).toEqual(['content-type', 'set-cookie']);
   });
 });
 
@@ -354,7 +363,8 @@ describe('/api/* through the bridge (stub agent and portal)', () => {
     const link = await connect();
     const { seen } = portalOn(link);
     for (const proxy of [
-      undefined,
+      null,
+      '',
       'nope',
       config('http://portal.claudepilot.svc:3000'),
       config('https://pilot.ai.isnan.me'),
@@ -375,12 +385,16 @@ describe('/api/* through the bridge (stub agent and portal)', () => {
     const { seen } = portalOn(link);
     for (const t of ['http://portal.claudepilot.svc:3000', 'http://pilot.ai.isnan.me:443', '', 'http://10.0.0.1:80']) {
       const res = await stub().fetch(
-        new Request(`https://bridge.internal${BRIDGE_API_PATH}`, { headers: { [API_INTERNAL.target]: t, [API_INTERNAL.path]: '/api/hello' } }),
+        new Request(`https://bridge.internal${BRIDGE_API_PATH}`, {
+          headers: { [API_INTERNAL.target]: t, [API_INTERNAL.path]: '/api/hello' },
+        }),
       );
       expect(res.status, t).toBe(404);
     }
     const badPath = await stub().fetch(
-      new Request(`https://bridge.internal${BRIDGE_API_PATH}`, { headers: { [API_INTERNAL.target]: TARGET, [API_INTERNAL.path]: '/bridge' } }),
+      new Request(`https://bridge.internal${BRIDGE_API_PATH}`, {
+        headers: { [API_INTERNAL.target]: TARGET, [API_INTERNAL.path]: '/bridge' },
+      }),
     );
     expect(badPath.status).toBe(404);
     expect(seen).toEqual([]);
@@ -424,7 +438,11 @@ describe('/api/* through the bridge (stub agent and portal)', () => {
     const link = await connect();
     const { seen } = portalOn(link);
     const body = JSON.stringify({ text: 'héllo', n: [1, 2, 3] });
-    const res = await call('/api/echo', { method: 'POST', body, headers: { 'content-type': 'application/json', origin: 'https://core.test' } });
+    const res = await call('/api/echo', {
+      method: 'POST',
+      body,
+      headers: { 'content-type': 'application/json', origin: 'https://core.test' },
+    });
     expect(res.status).toBe(201);
     expect(await res.text()).toBe(body);
     expect(seen[0]!.line).toBe('POST /api/echo HTTP/1.1');
@@ -474,7 +492,12 @@ describe('/api/* through the bridge (stub agent and portal)', () => {
     const link = await connect();
     const { seen } = portalOn(link);
     const res = await call('/api/live', {
-      headers: { upgrade: 'websocket', 'sec-websocket-protocol': 'pilot.live.v1, other', cookie: 'CF_Authorization=x; sid=abc', origin: 'https://core.test' },
+      headers: {
+        upgrade: 'websocket',
+        'sec-websocket-protocol': 'pilot.live.v1, other',
+        cookie: 'CF_Authorization=x; sid=abc',
+        origin: 'https://core.test',
+      },
     });
     expect(res.status).toBe(101);
     expect(res.headers.get('sec-websocket-protocol')).toBe('pilot.live.v1');
@@ -508,7 +531,7 @@ describe('/api/* through the bridge (stub agent and portal)', () => {
   });
 
   it('an upgrade the proxy refuses is a normal answer with the app’s headers', async () => {
-    const res = await call('/api/live', { headers: { upgrade: 'websocket' } }, undefined);
+    const res = await call('/api/live', { headers: { upgrade: 'websocket' } }, null);
     expect(res.status).toBe(404);
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('cache-control')).toBe('no-store');

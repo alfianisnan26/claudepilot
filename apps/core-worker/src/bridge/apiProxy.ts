@@ -126,7 +126,8 @@ export function forwardHeaders(h: Headers, target: ConnectHttpTarget, publicOrig
   const cookie = cookieOnward(h.get('cookie'));
   if (cookie) out.cookie = cookie;
   const origin = h.get('origin');
-  if (origin && /^[\x21-\x7e]+$/.test(origin)) out.origin = publicOrigin !== null && origin === publicOrigin ? `http://${target.authority}` : origin;
+  if (origin && /^[\x21-\x7e]+$/.test(origin))
+    out.origin = publicOrigin !== null && origin === publicOrigin ? `http://${target.authority}` : origin;
   return out;
 }
 
@@ -205,8 +206,14 @@ export async function apiProxy(req: Request, env: Env): Promise<Response> {
     if (protocols) headers.set('sec-websocket-protocol', protocols);
   }
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD' && req.body !== null;
+  // `manual`: the portal's redirect goes back to the browser as it is; followed here it would be fetched from the object (a 404 at best).
   const res = await locate(env.BRIDGE, config.cluster).fetch(
-    new Request(`https://bridge.internal${BRIDGE_API_PATH}`, { method: req.method, headers, ...(hasBody ? { body: req.body } : {}) }),
+    new Request(`https://bridge.internal${BRIDGE_API_PATH}`, {
+      method: req.method,
+      headers,
+      redirect: 'manual',
+      ...(hasBody ? { body: req.body } : {}),
+    }),
   );
   // A 101 carries its socket and cannot be copied; anything else is copied so the app's middleware can set its headers.
   return res.status === 101 ? res : new Response(res.body, res);

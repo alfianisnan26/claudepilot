@@ -54,7 +54,7 @@ export function relayWs(opts: { stream: Duplex; reader: ByteReader; peer: WsPeer
     resolveEnded(why);
   };
 
-  const utf8 = new TextDecoder('utf-8', { fatal: true });
+  const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
 
   void (async () => {
     const parts: Buffer[] = [];
