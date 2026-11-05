@@ -5,12 +5,14 @@
 // Black box on purpose: it boots src/index.ts as the portal does, so a module added later is covered without a change here.
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import type { SystemStatus } from '@portal/contracts';
+import { formatCode, normalizeCode, type SystemStatus } from '@portal/contracts';
+import { generateCode } from '../portal.js';
 import { MIGRATIONS } from '../store/migrations.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';
@@ -56,7 +58,10 @@ async function freePort(): Promise<number> {
 
 interface Portal {
   child: ChildProcess;
+  base: string;
   output(): string;
+  /** Signs in with `code` (the env code by default) and returns the session cookie's value. */
+  login(code?: string): Promise<string>;
   system(): Promise<SystemStatus>;
 }
 
@@ -71,8 +76,11 @@ async function stop(child: ChildProcess): Promise<void> {
   clearTimeout(hard);
 }
 
-/** Starts the portal on `dataDir`, runs `fn` once it answers /healthz, and kills it whatever `fn` does (a thrown assertion, a hang up to the deadline). */
-async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>): Promise<void> {
+/**
+ * Starts the portal on `dataDir`, runs `fn` once it answers /healthz, and kills it whatever `fn` does (a thrown assertion, a hang up to the
+ * deadline). `code` is PORTAL_SERVER_CODE; null leaves it unset, so the portal generates one (PILOT-1189).
+ */
+async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>, code: string | null = CODE): Promise<void> {
   const port = await freePort();
   const child = spawn(process.execPath, ['--import', 'tsx', '--disable-warning=ExperimentalWarning', 'src/index.ts'], {
     cwd: SERVER_DIR,
@@ -84,7 +92,7 @@ async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>
       PORTAL_HOST: '127.0.0.1',
       PORTAL_PORT: String(port),
       PORTAL_DATA_DIR: dataDir,
-      PORTAL_SERVER_CODE: CODE,
+      ...(code === null ? {} : { PORTAL_SERVER_CODE: code }),
       PORTAL_SECRET_KEY: KEY,
       // Nothing outside this test: no Docker, no cluster, no machine workspace.
       PORTAL_DOCKER_SOCKET: '/nonexistent/docker.sock',
@@ -109,15 +117,18 @@ async function withPortal(dataDir: string, fn: (portal: Portal) => Promise<void>
     // Give start-up work (module scans, background tasks) the time that a crash would take.
     await sleep(1500);
     assert.equal(child.exitCode, null, `the portal died after starting:\n${output.slice(-1500)}`);
+    const login = async (signInCode = code ?? ''): Promise<string> => {
+      const res = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ code: signInCode }), signal: AbortSignal.timeout(10_000) });
+      assert.equal(res.status, 200, 'sign-in works');
+      return /portal_session=([^;]+)/.exec(res.headers.get('set-cookie') ?? '')![1]!;
+    };
     const system = async (): Promise<SystemStatus> => {
-      const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ code: CODE }), signal: AbortSignal.timeout(10_000) });
-      assert.equal(login.status, 200, 'sign-in works');
-      const cookie = /portal_session=([^;]+)/.exec(login.headers.get('set-cookie') ?? '')![1];
+      const cookie = await login();
       const res = await fetch(`${base}/api/admin/system`, { headers: { cookie: `portal_session=${cookie}` }, signal: AbortSignal.timeout(10_000) });
       assert.equal(res.status, 200);
       return ((await res.json()) as { data: SystemStatus }).data;
     };
-    await fn({ child, output: () => output, system });
+    await fn({ child, base, output: () => output, login, system });
   } finally {
     await stop(child);
   }
@@ -201,6 +212,64 @@ test('control: a fresh database comes up healthy, and is gone when its test is o
   });
   assert.ok(child && (child.exitCode !== null || child.signalCode !== null), 'the portal was stopped when its test ended');
   assert.equal(children.size, 0, 'nothing left to kill');
+});
+
+/**
+ * PILOT-1189: asserts the boot output holds neither `code` nor any 8 characters of it in a row, as typed or as shown (`ABCD-EFGH-…`):
+ * dashes and case are taken out of the output first, so a split or a lower-cased copy is caught too.
+ */
+function assertNoCode(output: string, code: string): void {
+  assert.ok(!output.includes(code) && !output.includes(formatCode(code)), 'the code is not in stdout or stderr');
+  const flat = output.replace(/-/g, '').toUpperCase();
+  for (let i = 0; i + 8 <= code.length; i++) assert.ok(!flat.includes(code.slice(i, i + 8)), `no 8 characters of the code in a row (at ${i})`);
+}
+
+test('PILOT-1189: a known PORTAL_SERVER_CODE is in neither stdout nor stderr; the banner says only where it comes from and how strong it is', { timeout: 120_000 }, async () => {
+  const known = generateCode(); // made at runtime: 28 characters, strong
+  const dir = tempDirectory('cp-qa-boot-');
+  await withPortal(
+    dir,
+    async (portal) => {
+      await portal.login(known);
+      const out = portal.output();
+      assertNoCode(out, known);
+      assert.match(out, /server code: from PORTAL_SERVER_CODE, strong/);
+      assert.ok(!existsSync(join(dir, 'server-code')), 'an env code is never written to the file');
+    },
+    known,
+  );
+  await withPortal(tempDirectory('cp-qa-boot-'), async (portal) => {
+    await portal.login();
+    assertNoCode(portal.output(), CODE);
+    assert.match(portal.output(), /server code: from PORTAL_SERVER_CODE, weak \(below 128 bits\)/);
+  });
+});
+
+test('PILOT-1189: a generated code is not printed; it is in <data>/server-code (0600), it signs in, and a rotation removes the file', { timeout: 120_000 }, async () => {
+  const dir = tempDirectory('cp-qa-boot-');
+  await withPortal(
+    dir,
+    async (portal) => {
+      const file = join(dir, 'server-code');
+      assert.ok(existsSync(file), `the generated code is in its file:\n${portal.output().slice(-1500)}`);
+      assert.equal(statSync(file).mode & 0o777, 0o600, 'only the portal user can read it');
+      const generated = normalizeCode(readFileSync(file, 'utf8').trim());
+      assert.equal(generated.length, 28);
+      const out = portal.output();
+      assertNoCode(out, generated);
+      assert.ok(out.includes(`server code: generated, strong; it is in ${file}`), out.slice(-1500));
+      const cookie = await portal.login(generated);
+      const rotated = await fetch(`${portal.base}/api/admin/code`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: portal.base, cookie: `portal_session=${cookie}` },
+        body: '{}',
+        signal: AbortSignal.timeout(10_000),
+      });
+      assert.equal(rotated.status, 200, 'the signed-in session rotates the code');
+      assert.ok(!existsSync(file), 'the file never holds a code that no longer works');
+    },
+    null,
+  );
 });
 
 test('a test that throws still takes its portal down with it', { timeout: 120_000 }, async () => {

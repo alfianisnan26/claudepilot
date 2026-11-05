@@ -125,4 +125,16 @@ test('a strict portal refuses a weak new code and turning code sign-in on with o
   p.rotate(token());
   assert.equal(p.source, 'generated');
   assert.ok(codeBits(p.code) >= MIN_CODE_BITS);
+
+  // PILOT-1189 (review 60152): a well-formed code refused only for its strength says so: 26 letters, no digit, are at most 26 × log2(23) ≈ 117.6.
+  const letters = seeded(CODE_ALPHABET.replace(/[0-9]/g, ''), 26, 9);
+  assert.equal(codeProblem(letters), null, 'well-formed');
+  assert.throws(
+    () => p.rotate(token(), letters),
+    (e: unknown) => {
+      const m = (e as Error).message;
+      return /^This code is too weak: about \d+ bits/.test(m) && /at least 128 bits/.test(m) && !m.includes(letters);
+    },
+  );
+  assert.equal(p.source, 'generated', 'refused: the code is as it was');
 });
