@@ -1,5 +1,5 @@
-import { Button, ConfirmDialog, CopyButton, LoadError, Switch, useToast } from '@isnanme/ui';
-import { formatCode, type AdminState, type CodeSource } from '@portal/contracts';
+import { Button, cn, ConfirmDialog, CopyButton, LoadError, Switch, useToast } from '@isnanme/ui';
+import { formatCode, isLongCode, type AdminState, type CodeSource } from '@portal/contracts';
 import { Eye, EyeOff, LogOut, PenLine, Power, RefreshCw, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { McpAccess } from '@/features/portalmcp/McpAccess';
@@ -26,7 +26,7 @@ const SOURCE: Record<CodeSource, string> = {
  */
 export function AccessPage() {
   const toast = useToast();
-  const { logout } = useAuth();
+  const { logout, refresh } = useAuth();
   const [state, setState] = useState<AdminState | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -49,6 +49,7 @@ export function AccessPage() {
     setBusy(true);
     try {
       setState(await api.rotateCode());
+      void refresh(); // PILOT-1185: a generated code is a long one; re-auth fields follow it
       setRevealed(true);
       setConfirm(null);
       toast('New server code generated');
@@ -110,7 +111,13 @@ export function AccessPage() {
             <div className="mt-1 flex items-center gap-2">
               <p
                 aria-label={revealed ? `Server code ${state.code}` : 'Server code hidden'}
-                className="min-w-0 flex-1 truncate font-mono text-[24px] font-semibold tracking-[0.1em] tabular-nums sm:text-[30px] sm:tracking-[0.14em]"
+                className={cn(
+                  'min-w-0 flex-1 font-mono font-semibold tabular-nums',
+                  // PILOT-1185: a long code (7 groups of 4) wraps at its dashes on a phone instead of being cut off.
+                  revealed && isLongCode(state.code)
+                    ? 'text-[17px] leading-snug tracking-[0.04em] [overflow-wrap:anywhere] sm:text-[20px]'
+                    : 'truncate text-[24px] tracking-[0.1em] sm:text-[30px] sm:tracking-[0.14em]',
+                )}
               >
                 {revealed ? formatCode(state.code) : MASK}
               </p>
@@ -199,6 +206,7 @@ export function AccessPage() {
         onClose={() => setCustomOpen(false)}
         onSave={async (code) => {
           setState(await api.rotateCode({ code }));
+          void refresh();
           setCustomOpen(false);
           setRevealed(true);
           toast('Server code updated');

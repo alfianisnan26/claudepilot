@@ -1,3 +1,4 @@
+import { isLongCode, normalizeCode } from '@portal/contracts';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { removeThisBrowserRegistration } from '@/features/notify/deviceId';
 import { resetNotifyStore } from '@/features/notify/store';
@@ -6,7 +7,7 @@ import { api, onUnauthorized } from './api';
 import { resetMe } from './me';
 import { authStateOf, type AuthState } from './authState';
 
-export { authStateOf, isAdminState, type AuthState } from './authState';
+export { authStateOf, isAdminState, longCodeOf, type AuthState } from './authState';
 
 interface AuthContextValue {
   state: AuthState;
@@ -41,8 +42,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (code: string) => {
     await api.login(code);
     resetMe();
-    // The server code is the platform's own sign-in: always the admin's app.
-    setState({ status: 'in', admin: true });
+    // The server code is the platform's own sign-in: always the admin's app. Its length says whether re-auth takes a long code (PILOT-1185).
+    setState({ status: 'in', admin: true, ...(isLongCode(normalizeCode(code)) ? { longCode: true as const } : {}) });
   }, []);
 
   const loginEmail = useCallback(async (email: string, password: string) => {

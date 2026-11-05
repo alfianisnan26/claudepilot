@@ -1,9 +1,11 @@
 import { Button, Dialog } from '@isnanme/ui';
-import { CODE_LENGTH, REAUTH_REQUIRED, type ChatBypassFacts, type ChatSession } from '@portal/contracts';
+import { REAUTH_REQUIRED, type ChatBypassFacts, type ChatSession } from '@portal/contracts';
 import { useEffect, useRef, useState } from 'react';
 import { InfoTip } from '@/components/InfoTip';
+import { codeTooShort } from '@/features/auth/codeField';
 import { ServerCodeInput } from '@/features/auth/ServerCodeInput';
 import { ApiError, errorText } from '@/lib/api';
+import { longCodeOf, useAuth } from '@/lib/auth';
 import { chatApi } from './api';
 import { BYPASS_LIFETIME, BYPASS_LIFETIME_ABOUT } from './bypassCopy';
 
@@ -39,6 +41,7 @@ export function BypassDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const codeInput = useRef<{ focus: () => void }>(null);
+  const longCode = longCodeOf(useAuth().state); // PILOT-1185 slice 2
 
   useEffect(() => {
     if (!open) return;
@@ -66,8 +69,9 @@ export function BypassDialog({
 
   const check = async (value: string) => {
     if (busy) return;
-    if (value.length < CODE_LENGTH) {
-      setError(`Enter all ${CODE_LENGTH} characters.`);
+    const short = codeTooShort(value, longCode);
+    if (short) {
+      setError(short);
       return codeInput.current?.focus();
     }
     setBusy(true);
@@ -140,6 +144,7 @@ export function BypassDialog({
         <div className="flex flex-col gap-3">
           <ServerCodeInput
             ref={codeInput}
+            long={longCode}
             value={code}
             onChange={(v) => (setCode(v), setError(null))}
             onComplete={(v) => void check(v)}
