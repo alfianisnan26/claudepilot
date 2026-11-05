@@ -684,7 +684,7 @@ export const CONNECT_MUX = {
 } as const;
 
 /** The services a stream can name. `control` is opened by the agent, once per connection; the others only by the portal. */
-export const CONNECT_SERVICES = ['control', 'docker', 'kube', 'host'] as const;
+export const CONNECT_SERVICES = ['control', 'docker', 'kube', 'host', 'http'] as const;
 export type ConnectService = (typeof CONNECT_SERVICES)[number];
 
 /**
@@ -696,7 +696,7 @@ export type ConnectService = (typeof CONNECT_SERVICES)[number];
 export interface ConnectOpenRequest {
   v: 1;
   service: ConnectService;
-  /** `host`: the operation. `kube`: the namespace the stream is for (absent: the agent's own, PILOT_KUBE_NAMESPACE). */
+  /** `host`: the operation. `kube`: the namespace the stream is for (absent: the agent's own, PILOT_KUBE_NAMESPACE). `http`: the target. */
   args?: ConnectOpenArgs;
   /** 8 hex characters, in both sides' logs, to follow one request across the tunnel. */
   trace?: string;
@@ -711,8 +711,45 @@ export interface ConnectKubeOpen {
   namespace: string;
 }
 
+/**
+ * What an `http` stream is for (PILOT-1149): the one in-cluster Service the opener forwards HTTP/1.1 to, as `connectHttpTargetOf` gives
+ * its `authority` (`<service>.<dev-rig namespace>.svc[.cluster.local]:<port>`). After `ok` the stream carries raw HTTP/1.1 bytes (a
+ * WebSocket upgrade included) to that Service. An agent that serves no such target, or another one, refuses it (`denied`).
+ */
+export interface ConnectHttpOpen {
+  target: string;
+}
+
 /** The `args` of an open request, by service. */
-export type ConnectOpenArgs = ConnectHostOpen | ConnectKubeOpen;
+export type ConnectOpenArgs = ConnectHostOpen | ConnectKubeOpen | ConnectHttpOpen;
+
+/** The one in-cluster Service an `http` stream reaches (PILOT-1149). */
+export interface ConnectHttpTarget {
+  /** The Service's DNS name, lowercase: `<service>.<namespace>.svc` or `<service>.<namespace>.svc.cluster.local`. */
+  hostname: string;
+  namespace: string;
+  port: number;
+  /** `hostname:port`: the open's `target` and the forwarded Host header. */
+  authority: string;
+}
+
+// A scratch portal in a rig namespace (scripts/dev-rig.sh makes only `dev-rig-<name>`), by its Service's cluster DNS name and an explicit
+// port: no IP address, no other namespace (so never `claudepilot` or `isnan-claudepilot`, where the live portal runs), no public host
+// (so never pilot.ai.isnan.me), no user info, path, query or fragment, plain HTTP inside the cluster. Matched on the raw text, so no URL
+// parser's leniency (a backslash, `@`, a percent-encoded dot, uppercase) can turn it into another host.
+const HTTP_TARGET_RE =
+  /^http:\/\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(dev-rig-[a-z0-9](?:[a-z0-9-]{0,53}[a-z0-9])?)\.svc(\.cluster\.local)?:([1-9][0-9]{0,4})\/?$/;
+
+/** The target a URL names when it is one an `http` stream may reach, or null (every other URL; the reason is not given on purpose). */
+export function connectHttpTargetOf(url: unknown): ConnectHttpTarget | null {
+  if (typeof url !== 'string' || url.length > 200) return null;
+  const m = HTTP_TARGET_RE.exec(url);
+  if (!m) return null;
+  const port = Number(m[4]);
+  if (port > 65_535) return null;
+  const hostname = `${m[1]}.${m[2]}.svc${m[3] ?? ''}`;
+  return { hostname, namespace: m[2]!, port, authority: `${hostname}:${port}` };
+}
 
 export const CONNECT_STREAM_ERRORS = [
   'bad_open',

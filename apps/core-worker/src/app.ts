@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { secureHeaders } from 'hono/secure-headers';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { apiProxy } from './bridge/apiProxy.js';
 import { bridgeUpgrade } from './bridge/route.js';
 import type { Env } from './env.js';
 
@@ -26,12 +27,24 @@ export function createApp() {
   const assetHeaders = secureHeaders({ strictTransportSecurity: false, crossOriginResourcePolicy: 'cross-origin' });
   // A WebSocket upgrade on /bridge is answered by a Durable Object: its 101 is not a page and its headers cannot be changed. Only
   // /bridge skips the headers; an `Upgrade` header anywhere else changes nothing (review of PILOT-1148).
-  const bridgeUpgradeReq = (c: Context) => c.req.path === '/bridge' && c.req.header('upgrade')?.toLowerCase() === 'websocket';
-  app.use((c, next) => (bridgeUpgradeReq(c) ? next() : c.req.path.startsWith('/assets/') ? assetHeaders(c, next) : appHeaders(c, next)));
+  // The same holds for a socket the /api proxy hands back (PILOT-1149): only its 101 skips them; a refusal is a normal answer and gets them.
+  const isUpgrade = (c: Context) => c.req.header('upgrade')?.toLowerCase() === 'websocket';
+  const bridgeUpgradeReq = (c: Context) => c.req.path === '/bridge' && isUpgrade(c);
+  const socketAnswer = (c: Context) => c.res.status === 101;
+  app.use(async (c, next) => {
+    if (bridgeUpgradeReq(c)) return next();
+    if (c.req.path.startsWith('/assets/')) return assetHeaders(c, next);
+    if (!isUpgrade(c)) return appHeaders(c, next);
+    await next();
+    if (socketAnswer(c)) return;
+    // Not a socket after all (a refusal, or an answer the portal gave): the same headers as any other answer.
+    c.res = new Response(c.res.body, c.res);
+    await appHeaders(c, async () => undefined);
+  });
   // What the API says is for this session only (the portal's rule): never kept by a shared cache.
   app.use('/api/*', async (c, next) => {
     await next();
-    if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
+    if (!socketAnswer(c) && !c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
   });
 
   // The hashed build files (PILOT-1148; run_worker_first sends /assets/* here). With the SPA fallback the asset router answers a
@@ -61,6 +74,9 @@ export function createApp() {
 
   // The cluster bridge's dial-out link (PILOT-1144): checked before the upgrade, then handed to the cluster's BridgeDO.
   app.get('/bridge', (c) => bridgeUpgrade(c.req.raw, c.env));
+
+  // The API of a scratch portal through the bridge (PILOT-1149, bridge/apiProxy.ts): the plain 404 below unless CP_API_PROXY names one.
+  app.all('/api/*', (c) => apiProxy(c.req.raw, c.env));
 
   // The same bodies as the portal (apps/server/src/app.ts): an unknown path that reaches the Worker (run_worker_first in
   // wrangler.jsonc; every other path is the SPA's) is the authz seam's plain 404.

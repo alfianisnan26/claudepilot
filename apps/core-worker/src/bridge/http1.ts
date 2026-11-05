@@ -13,11 +13,19 @@ export class ByteReader {
   #ended = false;
   #over = false;
   #wake: (() => void) | null = null;
+  readonly #stream: Duplex;
+  #paused = false;
 
+  /**
+   * `pauseAt`: past this many unread bytes the stream is paused (the mux grants its window as the application reads, so the agent stops
+   * sending) and resumed once `some` took them under it again. Infinity (the default): never paused; `maxHeld` is the only bound.
+   */
   constructor(
     stream: Duplex,
     private readonly maxHeld = Infinity,
+    private readonly pauseAt = Infinity,
   ) {
+    this.#stream = stream;
     stream.on('data', (chunk: Buffer) => {
       if (this.#over) return;
       this.#held = Buffer.concat([this.#held, chunk]);
@@ -25,6 +33,9 @@ export class ByteReader {
         this.#over = true;
         this.#held = Buffer.alloc(0);
         stream.destroy();
+      } else if (this.#held.length >= this.pauseAt && !this.#paused) {
+        this.#paused = true;
+        stream.pause();
       }
       this.#wake?.();
     });
@@ -59,6 +70,25 @@ export class ByteReader {
     }
   }
 
+  /** What has arrived, at most `max` bytes, waiting for at least one; null once the stream ended and nothing is held (a streamed body). */
+  async some(max: number): Promise<Buffer | null> {
+    for (;;) {
+      if (this.#over) throw new Error('the answer is too large');
+      if (this.#held.length > 0) {
+        const out = this.#held.subarray(0, max);
+        this.#held = this.#held.subarray(out.length);
+        if (this.#paused && this.#held.length < this.pauseAt) {
+          this.#paused = false;
+          this.#stream.resume();
+        }
+        return out;
+      }
+      if (this.#ended) return null;
+      await new Promise<void>((resolve) => (this.#wake = resolve));
+      this.#wake = null;
+    }
+  }
+
   async take(n: number): Promise<Buffer> {
     if (n > this.maxHeld) throw new Error('the answer is too large');
     while (this.#held.length < n) await this.#more();
@@ -70,20 +100,25 @@ export class ByteReader {
 
 export interface Http1Head {
   status: number;
+  /** By lowercase name; a repeated header keeps its last value. */
   headers: Map<string, string>;
+  /** Every header line in order, the name as sent (a repeated Set-Cookie is several entries). Absent on a head made by hand. */
+  list?: [string, string][];
 }
 
 export interface Http1Request {
   method: string;
   path: string;
   headers: Record<string, string>;
-  body?: string;
+  body?: string | Uint8Array;
+  /** The Host header (default `kubernetes`, the kube stream's). */
+  host?: string;
 }
 
 /** One HTTP/1.1 request, written onto the stream as the kube client's socket would have written it. */
 export function writeRequest(stream: Duplex, req: Http1Request): void {
-  const body = req.body === undefined ? null : Buffer.from(req.body, 'utf8');
-  const lines = [`${req.method} ${req.path} HTTP/1.1`, 'Host: kubernetes'];
+  const body = req.body === undefined ? null : typeof req.body === 'string' ? Buffer.from(req.body, 'utf8') : Buffer.from(req.body);
+  const lines = [`${req.method} ${req.path} HTTP/1.1`, `Host: ${req.host ?? 'kubernetes'}`];
   for (const [k, v] of Object.entries(req.headers)) lines.push(`${k}: ${v}`);
   if (body) lines.push(`Content-Length: ${body.length}`);
   stream.write(Buffer.from(`${lines.join('\r\n')}\r\n\r\n`, 'latin1'));
@@ -95,11 +130,15 @@ export async function readHead(r: ByteReader): Promise<Http1Head> {
   const m = /^HTTP\/1\.1 (\d{3}) /.exec(statusLine ?? '');
   if (!m) throw new Error('not an HTTP/1.1 response');
   const headers = new Map<string, string>();
+  const list: [string, string][] = [];
   for (const line of rest) {
     const i = line.indexOf(':');
-    if (i > 0) headers.set(line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim());
+    if (i <= 0) continue;
+    const [name, value] = [line.slice(0, i).trim(), line.slice(i + 1).trim()];
+    headers.set(name.toLowerCase(), value);
+    list.push([name, value]);
   }
-  return { status: Number(m[1]), headers };
+  return { status: Number(m[1]), headers, list };
 }
 
 /** A whole response: Content-Length or chunked (what the API server sends for lists), at most `maxBody` bytes of body. */

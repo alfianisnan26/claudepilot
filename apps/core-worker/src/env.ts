@@ -18,4 +18,9 @@ export interface Env {
    * create that names any image is refused (`kubeImageAllowOf`).
    */
   CP_KUBE_IMAGES?: string;
+  /**
+   * The /api proxy's one target (PILOT-1149), a plain var: `{"cluster":"<bridge cluster>","target":"http://<svc>.dev-rig-<x>.svc:<port>"}`.
+   * Only a scratch portal in a dev-rig namespace parses (`apiProxyConfigOf`). Absent or invalid: every /api path is the plain 404.
+   */
+  CP_API_PROXY?: string;
 }

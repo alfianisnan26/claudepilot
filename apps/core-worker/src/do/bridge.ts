@@ -28,6 +28,7 @@ import {
   CONNECT_PROTOCOL_MIN,
   CONNECT_SUBPROTOCOL,
   connectB64u,
+  connectHttpTargetOf,
   connectVerifyChallenge,
   kubeImageAllowOf,
   type ConnectChallenge,
@@ -35,6 +36,22 @@ import {
   type ConnectRejectCode,
   type ConnectWelcome,
 } from '@portal/contracts';
+import {
+  API_INTERNAL,
+  API_LIMITS,
+  API_METHODS,
+  apiRefused,
+  apiStatusOf,
+  apiTargetOk,
+  bodyStream,
+  BRIDGE_API_PATH,
+  forwardHeaders,
+  isWsUpgrade,
+  noBody,
+  readCapped,
+  responseHeaders,
+  wsProtocolsOf,
+} from '../bridge/apiProxy.js';
 import { ByteReader, readBody, readHead, readResponse, writeRequest, type Http1Head } from '../bridge/http1.js';
 import {
   kubeBadRequest,
@@ -69,6 +86,7 @@ import {
 import { BRIDGE_LINK, bridgeMuxLimits, hibernatedSocket, type HibernatedSocket } from '../bridge/link.js';
 import { redactDetail } from '../bridge/redact.js';
 import { BRIDGE_INTERNAL, notFound } from '../bridge/route.js';
+import { relayWs } from '../bridge/wsRelay.js';
 import type { Env } from '../env.js';
 import { SchemaDO } from './schema.js';
 
@@ -167,6 +185,8 @@ export class BridgeDO extends SchemaDO {
   private readonly sessions = new Map<string, LinkState>();
   /** Execs relayed now (each holds a stream and keeps the object awake). */
   #execs = 0;
+  /** API requests and sockets proxied now (PILOT-1149; each holds an `http` stream). */
+  #apis = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env, 'bridge', BRIDGE_MIGRATIONS);
@@ -174,7 +194,9 @@ export class BridgeDO extends SchemaDO {
 
   /** The upgrade, already authorised by the Worker (bridge/route.ts); or an exec (`bridgeExecRequest`, from Worker code only). */
   override async fetch(req: Request): Promise<Response> {
-    if (new URL(req.url).pathname === BRIDGE_EXEC_PATH) return this.#exec(req);
+    const pathname = new URL(req.url).pathname;
+    if (pathname === BRIDGE_EXEC_PATH) return this.#exec(req);
+    if (pathname === BRIDGE_API_PATH) return this.#api(req);
     const cluster = req.headers.get(BRIDGE_INTERNAL.cluster);
     const node = req.headers.get(BRIDGE_INTERNAL.node);
     const publicKey = req.headers.get(BRIDGE_INTERNAL.key);
@@ -493,6 +515,129 @@ export class BridgeDO extends SchemaDO {
     // The pod and the command count, never the command (it may carry a value) or the bearer.
     this.#audit('bridge.exec', live.att.connId, `${spec.pod} ${spec.command.length} args ${protocol}`);
     return new Response(null, { status: 101, webSocket: client, headers: { [EXEC_PROTOCOL_HEADER]: protocol } });
+  }
+
+  /**
+   * One /api request or WebSocket of a scratch portal (PILOT-1149, src/bridge/apiProxy.ts), from the Worker route only. The target and the
+   * request target are checked again here with the Worker's rules, and the headers filtered again, so a forged internal request cannot widen
+   * either. The answer's body streams as the caller reads it; a WebSocket is accepted (not hibernatable, like an exec's) and relayed.
+   */
+  async #api(req: Request): Promise<Response> {
+    const target = connectHttpTargetOf(req.headers.get(API_INTERNAL.target));
+    const path = req.headers.get(API_INTERNAL.path);
+    const method = req.method;
+    if (!target || !apiTargetOk(path) || !(API_METHODS as readonly string[]).includes(method)) return notFound();
+    const upgrade = isWsUpgrade(req.headers);
+    if (upgrade && method !== 'GET') return notFound();
+    let body: Uint8Array | undefined;
+    if (!upgrade && method !== 'GET' && method !== 'HEAD') {
+      const read = await readCapped(req.body, API_LIMITS.maxRequestBytes);
+      if (!read) return apiRefused(413, 'The request body is too large.');
+      body = read;
+    }
+    if (this.#apis >= API_LIMITS.maxOpen) return apiRefused(429, 'Too many requests run through the bridge.');
+    const live = this.#liveSocket();
+    const link = live && this.#linkOf(live.ws, live.att);
+    if (!live || !link) return apiRefused(503, 'No live link for this cluster.');
+
+    this.#apis++;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      this.#apis--;
+      if (!link.session.closed) this.#save(live.ws, link.session);
+    };
+    let stream: Awaited<ReturnType<typeof openService>>;
+    try {
+      stream = await openService(link.session, { service: 'http', args: { target: target.authority } });
+    } catch (e) {
+      release();
+      return e instanceof ConnectError ? apiRefused(apiStatusOf(e.code), e.message) : apiRefused(502, 'The stream could not be opened.');
+    }
+    this.#save(live.ws, link.session);
+    stream.once('close', release);
+
+    const reader = new ByteReader(stream, BRIDGE_LINK.maxBodyBytes, API_LIMITS.pauseAtBytes);
+    const key = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64');
+    const offered = upgrade ? wsProtocolsOf(req.headers.get('sec-websocket-protocol')) : null;
+    const headers = forwardHeaders(req.headers, target, null);
+    if (upgrade) {
+      Object.assign(headers, { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key });
+      if (offered) headers['Sec-WebSocket-Protocol'] = offered;
+    } else headers.Connection = 'close';
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let head: Http1Head;
+    try {
+      writeRequest(stream, { method, path, host: target.authority, headers, ...(body ? { body } : {}) });
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ConnectError('timeout', 'The portal did not answer in time.')), API_LIMITS.headMs);
+      });
+      head = await Promise.race([readHead(reader), timeout]);
+    } catch (e) {
+      stream.destroy();
+      if (e instanceof ConnectError) return apiRefused(apiStatusOf(e.code), e.message);
+      const f = this.#internalFailure(live.att.connId, link.session.closed, 'The portal’s answer could not be read.', e);
+      return apiRefused(apiStatusOf(f.code), f.message);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (upgrade && head.status === 101) return this.#apiSocket(stream, reader, head, key, offered, live.att.connId);
+    // A 101 nobody asked for, or a status a Response cannot carry (1xx: no Expect is ever sent).
+    if (head.status < 200 || head.status > 599) {
+      stream.destroy();
+      return apiRefused(502, 'The portal’s answer is not understood.');
+    }
+    const outHeaders = responseHeaders(head, target);
+    if (noBody(method, head.status)) {
+      stream.destroy();
+      return new Response(null, { status: head.status, headers: outHeaders });
+    }
+    return new Response(
+      bodyStream(reader, head, () => stream.destroy()),
+      { status: head.status, headers: outHeaders },
+    );
+  }
+
+  /** The portal said 101: checked against the key and the protocols offered, then relayed to a WebSocket for the caller. */
+  async #apiSocket(
+    stream: Awaited<ReturnType<typeof openService>>,
+    reader: ByteReader,
+    head: Http1Head,
+    key: string,
+    offered: string | null,
+    connId: string,
+  ): Promise<Response> {
+    const chosen = head.headers.get('sec-websocket-protocol')?.trim() || null;
+    const offeredList = (offered ?? '').split(',').map((p) => p.trim());
+    if (head.headers.get('sec-websocket-accept') !== (await wsAccept(key)) || (chosen !== null && !offeredList.includes(chosen))) {
+      stream.destroy();
+      return apiRefused(502, 'The portal’s upgrade answer does not match the request.');
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    server.accept();
+    const relay = relayWs({
+      stream,
+      reader,
+      peer: { send: (data) => server.send(data), close: (code, reason) => server.close(code, reason) },
+    });
+    // An accepted socket's binary messages arrive as a Blob: read each in order on one chain, the close behind them (as an exec's).
+    let inbound: Promise<void> = Promise.resolve();
+    const inOrder = (step: () => void | Promise<void>) => {
+      inbound = inbound.then(step).catch(() => relay.peerClosed(1011));
+    };
+    server.addEventListener('message', (ev) => {
+      const data = ev.data as string | ArrayBuffer | Blob;
+      inOrder(async () => relay.fromPeer(data instanceof Blob ? await data.arrayBuffer() : data));
+    });
+    server.addEventListener('close', (ev) => inOrder(() => relay.peerClosed(ev.code)));
+    server.addEventListener('error', () => inOrder(() => relay.peerClosed(1011)));
+    // Never the path (a query may carry a value) or a header.
+    this.#audit('bridge.api.ws', connId, chosen ? `protocol ${chosen.slice(0, 64)}` : null);
+    return new Response(null, { status: 101, webSocket: client, ...(chosen ? { headers: { 'sec-websocket-protocol': chosen } } : {}) });
   }
 
   async #onAuth(ws: WebSocket, att: Pending, message: string | ArrayBuffer): Promise<void> {
