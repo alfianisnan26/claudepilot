@@ -3,7 +3,6 @@ import { createServer } from 'node:http';
 import { getRequestListener } from '@hono/node-server';
 import {
   AUTO_SETTING_KEYS,
-  formatCode,
   isWindowOfFamily,
   PORTAL_TOKEN_CAP_SETTING,
   SETTING_KEYS,
@@ -91,6 +90,7 @@ import { createApp, PLAIN_NAME } from './app.js';
 import { bootListening, bootMark } from './bootTiming.js';
 import { cloudflareTrustWarnings } from './clientAddress.js';
 import { signinCodeCheck } from './signinCode.js';
+import { bootBanner, removeCodeFile, writeCodeFile } from './bootBanner.js';
 import { config } from './config.js';
 import { JsonFile } from './jsonFile.js';
 import { Portal } from './portal.js';
@@ -194,6 +194,22 @@ portal.requireStrongCode = config.signinCodeStrict;
 const codeCheck = signinCodeCheck(portal, config.signinCodeStrict);
 if (codeCheck.refuse) throw new Error(`[portal] ${codeCheck.line}`);
 if (codeCheck.line) console.warn(`[portal] ${codeCheck.line}`);
+// PILOT-1189: a generated code lives only in memory and the banner no longer prints it, so it goes to a file only this user can read. A
+// code from PORTAL_SERVER_CODE, or a later rotation (Access shows the new code), removes the file, so it never holds an old code.
+let codeFile: string | null = null;
+try {
+  if (portal.source === 'generated') codeFile = writeCodeFile(config.paths.data, portal.code);
+  else removeCodeFile(config.paths.data);
+} catch (e) {
+  console.error(`[portal] could not keep the generated server code in its file (${(e as Error).message}); set PORTAL_SERVER_CODE to sign in.`);
+}
+portal.onCodeChanged = () => {
+  try {
+    removeCodeFile(config.paths.data);
+  } catch {
+    // best effort: the file only ever held the boot's code
+  }
+};
 const { workspaces: ws } = config;
 const runtimes: Runtime[] = ws.docker.map(
   (d) =>
@@ -1042,12 +1058,9 @@ server.listen(config.port, config.host, () => {
         ? console.log('[store] integrity check ok')
         : console.error(`[store] FROZEN: the database failed its integrity check (${result}).`),
     );
-  const where = `http://localhost:${config.port}`;
-  const code = portal.source === 'env' ? '(from PORTAL_SERVER_CODE)' : formatCode(portal.code);
+  // PILOT-1189: never the code nor any part of it (the log reaches pod logs and any collector); a generated one is in codeFile.
   console.log(
-    ['', `  portal ${config.dev ? 'dev' : 'production'} server on ${where}`, `  server code: ${code}`, '']
-      .filter((line, i, all) => line || i === 0 || i === all.length - 1)
-      .join('\n'),
+    bootBanner({ dev: config.dev, where: `http://localhost:${config.port}`, source: portal.source, code: portal.code, file: codeFile }),
   );
 });
 

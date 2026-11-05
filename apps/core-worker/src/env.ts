@@ -13,4 +13,9 @@ export interface Env {
   CP_COMMIT: string;
   /** Secret (never in wrangler.jsonc): the clusters that may dial /bridge, see bridge/registry.ts. Absent: every dial is refused. */
   BRIDGE_CLUSTERS?: string;
+  /**
+   * The images a workspace Deployment may run (PILOT-1187): comma-separated references, a plain var (not a secret). Empty or absent: a
+   * create that names any image is refused (`kubeImageAllowOf`).
+   */
+  CP_KUBE_IMAGES?: string;
 }

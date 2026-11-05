@@ -2,17 +2,20 @@
 // live link (BridgeDO's RPCs against a stand-in agent) are in bridge.test.ts; through the real agent, in
 // apps/server/src/connect/tunnel/bridgeWorker.test.ts.
 
-import { CONNECT_LIMITS } from '@portal/contracts';
+import { CONNECT_LIMITS, kubeImageAllowOf } from '@portal/contracts';
 import { describe, expect, it } from 'vitest';
 import { kubeCallOf, kubePathProblem, kubeResultOf, kubeStatusFailure, type KubeCall, type KubeOp } from '../src/bridge/kubeApi.js';
 
 const NS = 'claudepilot-workspaces';
+const IMAGE = 'ghcr.io/example/workspace:1';
+// The Worker's allow list as BridgeDO builds it from CP_KUBE_IMAGES.
+const IMAGES = kubeImageAllowOf(IMAGE);
 const call = (op: KubeOp): KubeCall => {
-  const c = kubeCallOf(NS, op);
+  const c = kubeCallOf(NS, op, IMAGES);
   if ('ok' in c) throw new Error(`refused: ${c.message}`);
   return c;
 };
-const refused = (op: unknown, ns = NS) => kubeCallOf(ns, op as KubeOp);
+const refused = (op: unknown, ns = NS, images = IMAGES) => kubeCallOf(ns, op as KubeOp, images);
 const deployment = (patch: Record<string, unknown> = {}, meta: Record<string, unknown> = {}) => ({
   metadata: { name: 'ws-0123456789ab', labels: { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'demo' }, ...meta },
   spec: { replicas: 1 },
@@ -141,13 +144,13 @@ describe('kubeCallOf: each call is checked and built here', () => {
       },
       { resources: { limits: { cpu: '2', memory: '4Gi' } } },
     );
-    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'deployment', object: ok })).toBe(false);
+    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'deployment', object: ok }, IMAGES)).toBe(false);
 
     const bad: [string, unknown][] = [
       ['the host network', pod({ hostNetwork: true })],
       ['the host PID namespace', pod({ hostPID: 'true' })],
       ['a privileged container', pod({}, { securityContext: { privileged: true } })],
-      ['a privileged init container', pod({ initContainers: [{ name: 'i', image: 'x', securityContext: { privileged: true } }] })],
+      ['a privileged init container', pod({ initContainers: [{ name: 'i', image: IMAGE, securityContext: { privileged: true } }] })],
       ['privilege escalation', pod({}, { securityContext: { allowPrivilegeEscalation: true } })],
       ['root', pod({ securityContext: { runAsUser: 0 } })],
       ['an added capability', pod({}, { securityContext: { capabilities: { add: ['SYS_ADMIN'] } } })],
@@ -163,6 +166,29 @@ describe('kubeCallOf: each call is checked and built here', () => {
       expect(r, what).toMatchObject({ ok: false, code: 'bad_request' });
     }
 
+    // Review 60154, minor 1: no Kubernetes credential in a workspace, automounted or projected.
+    const token: [string, unknown][] = [
+      ['the automounted service account token', pod({ automountServiceAccountToken: true })],
+      ['the automounted token, as a string', pod({ automountServiceAccountToken: 'true' })],
+      ['the automounted token, on the container', pod({}, { automountServiceAccountToken: true })],
+      [
+        'a projected service account token',
+        pod({ volumes: [{ name: 't', projected: { sources: [{ serviceAccountToken: { path: 'token', audience: 'x' } }] } }] }),
+      ],
+    ];
+    for (const [what, object] of token)
+      expect(refused({ op: 'create', kind: 'deployment', object }), what).toMatchObject({
+        ok: false,
+        code: 'bad_request',
+        message: 'A service account token is not mounted in a workspace.',
+      });
+    // Opting out of the token, and a projected volume of plain config, still pass.
+    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'deployment', object: pod({ automountServiceAccountToken: false }) }, IMAGES)).toBe(
+      false,
+    );
+    const projected = pod({ volumes: [{ name: 'c', projected: { sources: [{ configMap: { name: 'ws-0123456789ab-config' } }] } }] });
+    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'deployment', object: projected }, IMAGES)).toBe(false);
+
     const claim = (spec: Record<string, unknown>) => ({
       metadata: { name: 'ws-0123456789ab-home', labels: { 'claudepilot.managed': 'true' } },
       spec: { accessModes: ['ReadWriteOnce'], ...spec },
@@ -174,7 +200,49 @@ describe('kubeCallOf: each call is checked and built here', () => {
       ['a raw block volume', { volumeMode: 'Block' }],
     ] as const)
       expect(refused({ op: 'create', kind: 'claim', object: claim(spec) }), what).toMatchObject({ ok: false, code: 'bad_request' });
-    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'claim', object: claim({ volumeMode: 'Filesystem' }) })).toBe(false);
+    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'claim', object: claim({ volumeMode: 'Filesystem' }) }, IMAGES)).toBe(false);
+  });
+
+  it('a create runs only an image on the Worker’s own allow list, CP_KUBE_IMAGES (PILOT-1187, decision a)', () => {
+    const withImages = (main: unknown, init?: unknown) =>
+      deployment({
+        spec: {
+          replicas: 1,
+          template: {
+            metadata: { labels: { 'claudepilot.managed': 'true' } },
+            spec: {
+              containers: [{ name: 'workspace', image: main }],
+              ...(init === undefined ? {} : { initContainers: [{ name: 'seed-home', image: init }] }),
+            },
+          },
+        },
+      });
+    const create = (object: unknown, images = IMAGES) => refused({ op: 'create', kind: 'deployment', object }, NS, images);
+    expect('ok' in create(withImages(IMAGE, IMAGE))).toBe(false);
+
+    // A foreign image, in the main or the init container, is refused before anything is sent.
+    for (const [what, object] of [
+      ['a foreign image', withImages('ghcr.io/attacker/miner:1')],
+      ['the same repository, another tag', withImages('ghcr.io/example/workspace:2')],
+      ['a foreign init container', withImages(IMAGE, 'docker.io/library/busybox:1')],
+      ['an image that is not a string', withImages({ ref: IMAGE })],
+    ] as const)
+      expect(create(object), what).toMatchObject({ ok: false, code: 'bad_request', message: 'That image is not allowed on this cluster.' });
+
+    // Both sides are normalised the way the agent's PILOT_IMAGES is: docker.io/library/ and an implied :latest.
+    const hub = kubeImageAllowOf(' docker.io/library/ubuntu , ghcr.io/example/workspace:1 ');
+    expect('ok' in create(withImages('ubuntu:latest'), hub)).toBe(false);
+    expect('ok' in create(withImages('index.docker.io/ubuntu'), hub)).toBe(false);
+    expect(create(withImages('ubuntu:24.04'), hub)).toMatchObject({ ok: false, code: 'bad_request' });
+
+    // Empty or absent: every image is refused (the stg deploy sets the list with the first kube route); what names no image still passes.
+    for (const list of [undefined, '', ' , ']) {
+      const none = kubeImageAllowOf(list);
+      expect(create(withImages(IMAGE), none), String(list)).toMatchObject({ ok: false, code: 'bad_request' });
+      expect('ok' in create(deployment(), none), String(list)).toBe(false);
+      const claim = { metadata: { name: 'ws-0123456789ab-home', labels: { 'claudepilot.managed': 'true' } }, spec: {} };
+      expect('ok' in refused({ op: 'create', kind: 'claim', object: claim }, NS, none), String(list)).toBe(false);
+    }
   });
 
   it('a scale is a PUT of a Scale with 0 or 1 replicas', () => {

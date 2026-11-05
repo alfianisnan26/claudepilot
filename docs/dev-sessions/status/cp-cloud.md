@@ -34,13 +34,15 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
   - The connect.ts conflict was resolved to the built-in list; the agent bundle was regenerated on the merged tree (job ee234251).
   - Merged-tree job 3dfacd3c: typecheck, pack, prettier, core-worker 121+10+4, server 499 pass 0 fail, web targets 10.
   - Both closed.
+- PILOT-1189 boot banner: merged fe9a2faf7 + 42521c82c (PASS 60273; job 9b47d193, server 346) and the minors 1cb65b139 (PASS 60289; job d6a5917a, 15 pass). Closed.
+- PILOT-1187 Worker spec check: merged 579fef0d1..1464c4530 and the fix round 15c5cec45..3254fa74c (PASS 60279). Job 66ee067d on 4ac73a8: typecheck, pack, prettier, core-worker 122+10+4, server 509 pass 0 fail. Closed. Follow-ups are in PILOT-1190.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
 - cf-review (worker 68d76aeb, opus, auto): idle; takes the next review ask.
-- cf-sec (worker e28ec1b4, opus, builder 2 of 2): PILOT-1189 (T-3866, HIGH) boot banner prints the server code + 60152 nits, branch ticket/T-3866-banner-redact.
-- cf-bridge (worker 5bc808ae, opus): idle, waits for a builder slot. Next: gaps 1164, 1157, 1167.
-- cf-worker (worker 6562167d, opus, builder 1 of 2): PILOT-1187 fix round (decision 13:10): a Worker-side image allow list + SA token mounts, branch ticket/T-3864-worker-image-wall. The ticket stays open.
+- cf-sec (worker e28ec1b4, opus): idle. Next: one item at a free builder slot (none queued).
+- cf-bridge (worker 5bc808ae, opus, builder 1 of 2): resumed 18:10Z after the 18:00 reset. Gaps PILOT-1164, 1157, 1167 on ticket/T-<first>-gaps.
+- cf-worker (worker 6562167d, opus, builder 2 of 2): resumed 18:10Z. PILOT-1190 (T-3879, HIGH). Workspace pods get automountServiceAccountToken false (the expand part), and CP_KUBE_IMAGES goes into the deploy-stg config. Branch ticket/T-3879-sa-token-images.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -51,7 +53,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Workers on Opus: backend/infra/security per owner routing 2026-10-25. Reviewer in mode auto (dontAsk refused git).
 - 11:45 Operator pacing (one account): at most 2 builders at once; cf-review takes review asks only. Only cf-migration tickets.
 - 21:45 Operator: resume after the 21:40 reset; 1145 deploy + 1142 rig first, then phase 2 (1146-1148); 2 workers. cf-worker retries the exact 1145 command once on that instruction; a second refusal stops it (no other path).
-- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 and ~08:40-12:50 UTC (2026-11-05; crew resumed 02:53Z, 07:54Z and 13:05Z). Resume everyone right after each reset; note the reset here.
+- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 and ~08:40-12:50 and ~13:45-18:00 UTC (2026-11-05; crew resumed 02:53Z, 07:54Z, 13:05Z and 18:10Z). Resume everyone right after each reset; note the reset here.
 - 22:35 After incident PILOT-1183: before every cf/integration push, the lead runs ONE job on the merged tree: typecheck, context pack, core-worker tests and the server test directories the merged branches touch.
 - 03:25 Merged-tree job runners: server AND web tests are node --test (not vitest); only core-worker uses vitest (npm test). Two false reds came from the wrong runner.
 - 08:10 Prettier on apps/server/src/{config,index,portal}.ts already fails at the base: not reformatted (a large unrelated diff). Changed files must pass prettier --check; builders run it in their first job.
