@@ -16,6 +16,8 @@ export type KubeKind =
   | 'deploymentList'
   | 'deployment'
   | 'scale'
+  | 'resize'
+  | 'replicaSet'
   | 'metrics';
 
 export interface KubeRoute {
@@ -33,6 +35,8 @@ export const NAMES = {
   pvc: new RegExp(`^ws-${DNS}-home$`),
   secret: new RegExp(`^ws-${DNS}-claudepilot$`),
   deployment: new RegExp(`^ws-${DNS}$`),
+  /** A workspace Deployment's ReplicaSet: `ws-<name>-<pod-template-hash>`. */
+  replicaSet: new RegExp(`^ws-${DNS}$`),
 };
 
 /** Whether a namespace name can be used in a path match at all (DNS label). */
@@ -46,6 +50,10 @@ export function classifyKube(method: string, path: string, ns: string): KubeRout
     [new RegExp(`^/api/v1/namespaces/${n}/pods$`), () => ({ kind: 'podList', methods: ['GET'] })],
     [new RegExp(`^/api/v1/namespaces/${n}/pods/([^/]+)$`), (m) => named('pod', m[1]!, ['GET'], NAMES.pod)],
     [new RegExp(`^/api/v1/namespaces/${n}/pods/([^/]+)/exec$`), (m) => named('exec', m[1]!, ['GET', 'POST'], NAMES.pod)],
+    // The in-place resize (T-3081, PILOT-1163): a JSON Patch of container resources only (schema.ts), then the owning ReplicaSet replaced
+    // with the same values (its body scanned like a Deployment's). The portal's Role grants both (deploy/k3s/rbac.yaml).
+    [new RegExp(`^/api/v1/namespaces/${n}/pods/([^/]+)/resize$`), (m) => named('resize', m[1]!, ['GET', 'PATCH'], NAMES.pod)],
+    [new RegExp(`^/apis/apps/v1/namespaces/${n}/replicasets/([^/]+)$`), (m) => named('replicaSet', m[1]!, ['GET', 'PUT'], NAMES.replicaSet)],
     [new RegExp(`^/api/v1/namespaces/${n}/persistentvolumeclaims$`), () => ({ kind: 'pvcList', methods: ['GET', 'POST'] })],
     [new RegExp(`^/api/v1/namespaces/${n}/persistentvolumeclaims/([^/]+)$`), (m) => named('pvc', m[1]!, ['GET', 'DELETE'], NAMES.pvc)],
     // Secrets: by name only; a list would show the agent's own two Secrets.

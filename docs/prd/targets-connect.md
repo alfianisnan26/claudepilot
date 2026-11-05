@@ -619,6 +619,8 @@ The fetcher inside containers is `node -e` (the public `node` image has no `curl
 | --- | --- | --- |
 | `""` | `pods` | get, list, watch |
 | `""` | `pods/exec` | create, get |
+| `""` | `pods/resize` | get, patch (in-place resize, PILOT-1163) |
+| `apps` | `replicasets` | get, update (the resized pod's ReplicaSet keeps the values, PILOT-1163) |
 | `""` | `persistentvolumeclaims` | get, list, create, delete |
 | `""` | `secrets` | get, list, create, update, patch, delete (foundation F3's delivery Secrets; the proxy only lets the portal name `ws-*` ones; the agent's own two Secrets are outside that list) |
 | `apps` | `deployments` | get, list, create, update, patch, delete |
@@ -1257,6 +1259,8 @@ All under the connector's namespace `<ns>`; every list and watch on pods, deploy
 | GET (list, watch) | `/api/v1/namespaces/<ns>/pods` | |
 | GET | `/api/v1/namespaces/<ns>/pods/<name>` | `ws-*` |
 | GET, POST (WebSocket upgrade) | `/api/v1/namespaces/<ns>/pods/<name>/exec` | `ws-*`; `container=workspace` |
+| GET, PATCH | `/api/v1/namespaces/<ns>/pods/<name>/resize` (in-place resize; a JSON patch only, every op `add`, `replace` or `test` on `/spec/containers/<i>/resources[/limits\|requests[/<key>]]`, PILOT-1163) | `ws-*` |
+| GET, PUT | `/apis/apps/v1/namespaces/<ns>/replicasets/<name>` (no list, no create; the body scanned like a Deployment's, PILOT-1163) | `ws-*` |
 | GET, POST, DELETE | `/api/v1/namespaces/<ns>/persistentvolumeclaims[/<name>]` | `ws-*-home` |
 | GET, POST, PUT, PATCH, DELETE | `/api/v1/namespaces/<ns>/secrets[/<name>]` (no list) | `ws-*-claudepilot` |
 | GET, POST, PUT, PATCH, DELETE | `/apis/apps/v1/namespaces/<ns>/deployments[/<name>]` and `/scale` | `ws-*` |
