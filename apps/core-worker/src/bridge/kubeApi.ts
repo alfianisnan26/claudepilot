@@ -8,7 +8,7 @@
 // object name is a workspace's (`ws-*`), every list carries the managed selector, and a created object is in the stream's namespace and
 // labelled managed. A kube `Status` answer becomes a typed failure with its HTTP status, reason and message.
 
-import { CONNECT_LIMITS } from '@portal/contracts';
+import { CONNECT_LIMITS, kubeSpecProblem } from '@portal/contracts';
 
 /** The labels the portal puts on what it manages (apps/server/src/workspaces/runtime.ts `LABEL`). */
 export const KUBE_LABEL = { managed: 'claudepilot.managed', workspace: 'claudepilot.workspace' } as const;
@@ -145,6 +145,10 @@ export function kubeCallOf(ns: string, op: KubeOp): KubeCall | KubeFailure {
         return kubeBadRequest('The object is not labelled as the portal’s.');
       if ((o.apiVersion !== undefined && o.apiVersion !== spec.apiVersion) || (o.kind !== undefined && o.kind !== spec.kind))
         return kubeBadRequest(`The object is not a ${spec.kind}.`);
+      // The shared deny-list (PILOT-1187): the agent's proxy runs the same table, so this is the first wall, not the only one. The image
+      // allow list is the agent's own (PILOT_IMAGES) and stays there.
+      const problem = kubeSpecProblem(op.kind === 'deployment' ? 'workload' : 'claim', o, null);
+      if (problem) return kubeBadRequest(problem);
       const body = JSON.stringify({ ...o, apiVersion: spec.apiVersion, kind: spec.kind, metadata: { ...meta, namespace: ns } });
       if (new TextEncoder().encode(body).length > CONNECT_LIMITS.maxJsonBody) return kubeBadRequest('The object is too large.');
       call = { method: 'POST', path: collection(ns, spec.list), query: '', body };
