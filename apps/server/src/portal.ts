@@ -54,7 +54,12 @@ export interface SessionStore {
 
 export function generateCode(): string {
   let code = '';
-  for (let i = 0; i < GENERATED_CODE_LENGTH; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  // PILOT-1185: a draw that happens to hold a run, a sequence or a repeat measures below the bar (codeBits); draw again. Estimated at
+  // about 1 draw in 100,000 (three lost characters out of 28 are needed), so what it takes from the code's strength is nothing worth counting.
+  while (codeBits(code) < MIN_CODE_BITS) {
+    code = '';
+    for (let i = 0; i < GENERATED_CODE_LENGTH; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  }
   return code;
 }
 
