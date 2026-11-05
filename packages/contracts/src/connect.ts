@@ -1127,18 +1127,29 @@ export const CONNECT_CLOSE_OF: Record<ConnectRejectCode, number> = {
 /** Ids that can't be an enrolled target's: the scanned targets', and words the routes and pages use. */
 export const CONNECT_RESERVED_IDS: readonly string[] = ['docker', 'docker-host', 'kubernetes', 'local', 'api', 'connect', 'new', 'targets', 'default', 'scanned'];
 
+/**
+ * The built-in targets' ids among the reserved ones. An enrolled target may take one when this portal has no scanned target of that id
+ * (PILOT-1161, G8: the Cloudflare portal enrolls its in-cluster bridge as `kubernetes`, so `kubernetes/<name>` keeps naming the same
+ * workspaces). The other reserved ids are words the routes and pages use, never free.
+ */
+export const CONNECT_BUILTIN_IDS: readonly string[] = ['docker', 'docker-host', 'kubernetes', 'local'];
+
 export const CONNECT_TARGET_ID_MAX = 30;
 export const CONNECT_LABEL_MAX = 40;
 
 /**
  * Why a target id can't be used, or null when it can. It becomes the first part of every workspace id on the target (`<id>/<name>`), a
  * URL segment and part of container names, so it is a plain lowercase name.
+ *
+ * `scanned`: the ids of the targets this portal scanned. When given, a built-in id (`CONNECT_BUILTIN_IDS`) is refused only if it is among
+ * them; without it every reserved id is refused (static target configuration, which must never take a built-in's id).
  */
-export function connectTargetIdProblem(id: string): string | null {
+export function connectTargetIdProblem(id: string, scanned?: readonly string[]): string | null {
   if (!id) return 'Give it a name.';
   if (id.length > CONNECT_TARGET_ID_MAX) return `Use at most ${CONNECT_TARGET_ID_MAX} characters.`;
   if (!/^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$/.test(id)) return 'Lowercase letters, digits and dashes; start with a letter, don’t end with a dash.';
-  if (CONNECT_RESERVED_IDS.includes(id)) return 'That name is taken by a built-in target.';
+  const freeBuiltIn = scanned !== undefined && CONNECT_BUILTIN_IDS.includes(id) && !scanned.includes(id);
+  if (CONNECT_RESERVED_IDS.includes(id) && !freeBuiltIn) return 'That name is taken by a built-in target.';
   return null;
 }
 

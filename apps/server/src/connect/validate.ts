@@ -43,10 +43,13 @@ export function checkCell(kind: unknown, platform: unknown): { kind: ConnectKind
   return { kind: kind as ConnectKind, platform: platform as ConnectPlatform };
 }
 
-/** The target's id: a plain name that is not reserved, scanned or taken (the caller says which ids are scanned). */
+/**
+ * The target's id: a plain name that is not reserved, scanned or taken (the caller says which ids are scanned). A built-in id no scanned
+ * target holds is free (PILOT-1161, G8); the workspaces manager still refuses an enrolled runtime whose id a configured target has.
+ */
 export function checkId(id: unknown, scanned: readonly string[]): string {
   if (typeof id !== 'string') throw invalid({ id: 'Give it a name.' });
-  const problem = connectTargetIdProblem(id);
+  const problem = connectTargetIdProblem(id, scanned);
   if (problem) throw invalid({ id: problem });
   if (scanned.includes(id)) throw new AppError('CONFLICT', 'That name is taken by a built-in target.', { details: { id: 'That name is taken by a built-in target.' } });
   return id;
