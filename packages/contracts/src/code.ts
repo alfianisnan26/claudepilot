@@ -22,7 +22,14 @@ export function formatCode(code: string): string {
 export const MIN_CODE_BITS = 128;
 
 /** The character sets a code is measured against, smallest first: the first that holds every character is its alphabet. */
-const CODE_SETS = ['23456789', '0123456789', CODE_ALPHABET.replace(/[0-9]/g, ''), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', CODE_ALPHABET, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'];
+const CODE_SETS = [
+  '23456789',
+  '0123456789',
+  CODE_ALPHABET.replace(/[0-9]/g, ''),
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  CODE_ALPHABET,
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+];
 
 /**
  * A code's strength in bits, as length times log2 of the alphabet it actually uses (PILOT-1185): `24681357` is 8 × log2(8) = 24 bits,

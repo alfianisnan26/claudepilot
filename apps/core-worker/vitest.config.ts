@@ -33,7 +33,10 @@ writeFileSync(join(web, 'dist', entry), 'console.log("app");');
 writeFileSync(join(web, 'dist', 'sw.js'), 'self.addEventListener("fetch", () => {});');
 writeFileSync(join(web, 'dist', 'manifest.webmanifest'), JSON.stringify({ name: 'pilot', id: '/', start_url: '/', scope: '/' }));
 await prepareAssets(join(web, 'dist'), assetsDir);
-const portalShellHeaders = await secureHeadersOf({ strictTransportSecurity: false, contentSecurityPolicy: contentSecurityPolicy(join(web, 'dist', 'index.html')) });
+const portalShellHeaders = await secureHeadersOf({
+  strictTransportSecurity: false,
+  contentSecurityPolicy: contentSecurityPolicy(join(web, 'dist', 'index.html')),
+});
 const portalAssetHeaders = await secureHeadersOf({ strictTransportSecurity: false, crossOriginResourcePolicy: 'cross-origin' });
 
 // The tests run inside workerd (Miniflare) with the bindings of wrangler.jsonc; the assets directory is the one made above.

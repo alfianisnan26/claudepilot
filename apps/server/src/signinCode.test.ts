@@ -40,7 +40,11 @@ test('boot check: a weak code with code sign-in on warns (never the code); stric
     assert.ok(!c.line!.includes(`${code.slice(0, 4)}-${code.slice(4)}`), 'nor its shown form');
   }
   for (const strictOn of [false, true]) {
-    assert.deepEqual(signinCodeCheck({ code, source: 'env', codeSignIn: false }, strictOn), { bits: 39, weak: false, refuse: false, line: null }, 'code sign-in off: nothing to guess');
+    assert.deepEqual(
+      signinCodeCheck({ code, source: 'env', codeSignIn: false }, strictOn),
+      { bits: 39, weak: false, refuse: false, line: null },
+      'code sign-in off: nothing to guess',
+    );
     const strong = signinCodeCheck({ code: mixed(26), source: 'custom', codeSignIn: true }, strictOn);
     assert.deepEqual([strong.weak, strong.refuse, strong.line], [false, false, null]);
   }
@@ -57,7 +61,10 @@ test('a strict portal refuses a weak new code and turning code sign-in on with o
   const p = new Portal(envCode, 60_000);
   p.requireStrongCode = true;
   for (const next of [undefined, mixed(CODE_LENGTH)])
-    assert.throws(() => p.rotate(token(), next), (e: unknown) => (e as { code?: string }).code === 'VALIDATION_FAILED' && /at least 128 bits/.test((e as Error).message));
+    assert.throws(
+      () => p.rotate(token(), next),
+      (e: unknown) => (e as { code?: string }).code === 'VALIDATION_FAILED' && /at least 128 bits/.test((e as Error).message),
+    );
   assert.ok(p.matches(envCode), 'a refused rotation leaves the code as it was');
   assert.equal(p.source, 'env');
 
