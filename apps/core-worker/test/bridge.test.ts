@@ -22,6 +22,7 @@ import {
   BRIDGE_EXEC_HEADER,
   BRIDGE_EXEC_PATH,
   bridgeExecRequest,
+  EXEC_LIMITS,
   EXEC_PROTOCOL_HEADER,
   readWsFrame,
   wsAccept,
@@ -855,6 +856,40 @@ describe('BridgeDO: exec in a workspace pod (PILOT-1171 slice 2)', () => {
       }
       expect(agent.seen).toHaveLength(2);
       await vi.waitFor(async () => expect(await onSession(link.connId, (s) => s?.openStreams)).toBe(0));
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('the 17th exec at once is busy (429); nothing of it reaches the agent (PILOT-1188)', async () => {
+    const link = await connect();
+    const agent = execAgentOn(link);
+    try {
+      const running: ExecCaller[] = [];
+      for (let i = 0; i < EXEC_LIMITS.maxExecs; i++) running.push(await execCall(execSpec(crypto.randomUUID())));
+      expect(agent.seen).toHaveLength(EXEC_LIMITS.maxExecs);
+      const res = await stub().fetch(bridgeExecRequest(execSpec(crypto.randomUUID())));
+      expect(res.status).toBe(429);
+      expect(res.webSocket).toBeNull();
+      expect(await res.json()).toMatchObject({ ok: false, code: 'busy' });
+      expect(agent.seen).toHaveLength(EXEC_LIMITS.maxExecs);
+      // The running ones still work.
+      running[0]!.ws.send(frame(0, 'still'));
+      expect(await running[0]!.next()).toEqual([1, 'STILL']);
+    } finally {
+      agent.session.destroy();
+    }
+  });
+
+  it('an internal failure answers fixed text; the cause is in the audit, never in the answer (PILOT-1188)', async () => {
+    const link = await connect();
+    const agent = execAgentOn(link, { answer: () => 'garbage\r\n\r\n' });
+    try {
+      const res = await stub().fetch(bridgeExecRequest(execSpec(crypto.randomUUID())));
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({ ok: false, code: 'internal', message: 'The exec could not be started.' });
+      const audit = await stub().audit(500);
+      expect(audit.find((r) => r.event === 'bridge.internal')?.detail).toBe('not an HTTP/1.1 response');
     } finally {
       agent.session.destroy();
     }
