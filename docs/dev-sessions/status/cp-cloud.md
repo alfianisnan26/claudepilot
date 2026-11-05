@@ -19,12 +19,13 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - INCIDENT PILOT-1183: the 1172 merge (e7a3df776) turned agent.e2e's kube case red on cf/integration (bisect in comment 59420). Test-only fix 86a54acf0, closed.
 - Merged 86a54acf0..92c02662b: 1183, 1179 (82a7ed112..ba8674e60, review PASS 59397), 1169 (ac6e7e9d3..4e5c3cb3a), 1170 (6e4eae6b4..ea72d35fa, review PASS 59409), 1181 (92c02662b). Merged-tree check: job a8c65a26 typecheck clean, pack fresh, core-worker 68 pass; job 141c483f server connect/auth/appports/limiter 553 pass 0 fail. All five closed.
 - PILOT-1180 deploy safe re-run (d08e42831..46edd7284, review PASS 59423+59478) and PILOT-1184 go-live checks (edf1ac0d4..edc23a891, review PASS 59480) merged. Merged-tree job 66ccda39: typecheck, pack fresh, core-worker 68 + scripts 7, server qa/auth 261, 0 fail. Both closed.
+- PILOT-1163 resize allowlist + RBAC (5abd1f455..5440c3d89, review PASS 60004) and PILOT-1161 built-in ids (61c7d041c, review PASS 60007) merged; pack d73c10de1. Merged-tree jobs 2293db23 (typecheck, pack) + c89c2515 (server connect/workspaces 670 pass 0 fail, web targets 9, core-worker 68+7). Both closed; minors -> PILOT-1186.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1163 (HIGH, incl. installer RBAC) + 1161 on ticket/T-3721-kube-resize-ids head 88a600c3b57f (job 46677a44 222). Earlier: PILOT-1148 PASS on 0cfac02fe1c8 (comment 59965) on one condition: replay on top of 1180, deploy-stg build step re-reviewed as a delta.
+- cf-review (worker 68d76aeb, opus, auto): idle, waits for review asks. PILOT-1148 PASS on 0cfac02fe1c8 (comment 59965) on one condition: replay on top of 1180, deploy-stg build step re-reviewed as a delta.
 - cf-sec (worker e28ec1b4, opus, builder 2 of 2): PILOT-1185 (T-3854, HIGH) boot check refusing a weak server sign-in code (lifts the 1182 go-live blocker), branch ticket/T-3854-signin-code-strength.
-- cf-bridge (worker 5bc808ae, opus): idle, waits on the 1163/1161 review (takes the fixes; same builder). After merge, regenerate context-pack (worker left it uncommitted).
+- cf-bridge (worker 5bc808ae, opus): idle (builder cap 2 full). Next: PILOT-1186 (minors of 1163/1161), then gaps 1164, 1157, 1167.
 - cf-worker (worker 6562167d, opus): PILOT-1171 slice 1 (REST client in BridgeDO + kube() path refusal), branch ticket/T-3737-worker-kube-client. Next for cf-worker (queued): 1148 replay on ticket/T-3706-spa-assets-r2 from edc23a891 (build as deps.build, no CLOUDFLARE_* in build env, Upgrade skip only on /bridge).
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
@@ -38,6 +39,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - 21:45 Operator: resume after the 21:40 reset; 1145 deploy + 1142 rig first, then phase 2 (1146-1148); 2 workers. cf-worker retries the exact 1145 command once on that instruction; a second refusal stops it (no other path).
 - Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 UTC (2026-11-05; cf-review, cf-bridge, cf-worker resumed 02:53Z). Resume everyone right after each reset; note the reset here.
 - 22:35 After incident PILOT-1183: before every cf/integration push, the lead runs ONE job on the merged tree: typecheck, context pack, core-worker tests and the server test directories the merged branches touch.
+- 03:25 Merged-tree job runners: server AND web tests are node --test (not vitest); only core-worker uses vitest (npm test). Two false reds came from the wrong runner.
 - 12:00 Builders put all trailers in one final block (`%(trailers)` reads only the last paragraph).
 - 12:20 PILOT-1168: key the route limiters on visitorAddress (default b). Rejected: the tunnel hop as a key; no limit until the CF binding.
 - 16:45 Operator: 1145 and 1142 first. 1172 and 1169/1170 are parked as pushed WIP. Access goes in front before any route (D3).
