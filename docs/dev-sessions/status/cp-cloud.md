@@ -18,13 +18,14 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1158 (G5 app ports on enrolled kube) + PILOT-1160 (G7 big stdin / long exec) merged 2c033546f..2fa3b2e53 (job 05ad0b6b 35), closed (NORMAL, self-test).
 - INCIDENT PILOT-1183: the 1172 merge (e7a3df776) turned agent.e2e's kube case red on cf/integration (bisect in comment 59420). Test-only fix 86a54acf0, closed.
 - Merged 86a54acf0..92c02662b: 1183, 1179 (82a7ed112..ba8674e60, review PASS 59397), 1169 (ac6e7e9d3..4e5c3cb3a), 1170 (6e4eae6b4..ea72d35fa, review PASS 59409), 1181 (92c02662b). Merged-tree check: job a8c65a26 typecheck clean, pack fresh, core-worker 68 pass; job 141c483f server connect/auth/appports/limiter 553 pass 0 fail. All five closed.
+- PILOT-1180 deploy safe re-run (d08e42831..46edd7284, review PASS 59423+59478) and PILOT-1184 go-live checks (edf1ac0d4..edc23a891, review PASS 59480) merged. Merged-tree job 66ccda39: typecheck, pack fresh, core-worker 68 + scripts 7, server qa/auth 261, 0 fail. Both closed.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): reviewing, in order: 1180 delta (c09d6d213081, job d62aafa4 7/7), PILOT-1184 (eb39f815510a, job e1e6c4a8 21/21), PILOT-1148 SPA assets (0cfac02fe1c8, job 3cd68541; HIGH: headers + deploy script).
+- cf-review (worker 68d76aeb, opus, auto): idle. PILOT-1148 PASS on 0cfac02fe1c8 (comment 59965) on one condition: replay on top of 1180, deploy-stg build step re-reviewed as a delta.
 - cf-sec (worker e28ec1b4, opus): idle, waits on the reviews. Finding (comment 59468): PILOT-1182 blocks the public go-live unless the server code is random or code sign-in is off on the public host.
 - cf-bridge (worker 5bc808ae, opus): PILOT-1163 (G2, HIGH) + 1161 (G8), branch ticket/T-3721-kube-resize-ids.
-- cf-worker (worker 6562167d, opus): PILOT-1171 slice 1 (REST client in BridgeDO + kube() path refusal), branch ticket/T-3737-worker-kube-client. 1148 may need a replay after 1180 (both edit deploy-stg.mjs).
+- cf-worker (worker 6562167d, opus): PILOT-1171 slice 1 (REST client in BridgeDO + kube() path refusal), branch ticket/T-3737-worker-kube-client. Next for cf-worker (queued): 1148 replay on ticket/T-3706-spa-assets-r2 from edc23a891 (build as deps.build, no CLOUDFLARE_* in build env, Upgrade skip only on /bridge).
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -59,8 +60,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - none (production cutover and the final hostname come at phase 6, operator + owner).
 
 ## NEXT
-1. PILOT-1142 rig run when the coordinator grants the rights; PILOT-1180 (deploy script safe re-run) at a free slot.
-2. PILOT-1184 (HIGH, go-live checks from the 1179 review). PILOT-1182 (HIGH, filed by cf-sec; review: not a blocker if the server code is long): workspaces reach the portal Service directly and can forge X-Forwarded-For; a NetworkPolicy and an internal port (needs the coordinator).
+1. PILOT-1142 rig run when the coordinator grants the rights.
+2. Go-live: a boot check that refuses a weak server sign-in code (review 59480: lifts the PILOT-1182 blocker), at the next free builder slot. PILOT-1182 (HIGH, filed by cf-sec; review: not a blocker if the server code is long): workspaces reach the portal Service directly and can forge X-Forwarded-For; a NetworkPolicy and an internal port (needs the coordinator).
 3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
 4. cf-bridge (at a free builder slot): gaps 1161, 1163, 1164, 1157, 1167.
 5. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
