@@ -37,10 +37,11 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): blind review of PILOT-1189, head c8e69d4d1 (self-test job 9c83c105, 46 pass; proof aa629ff5).
-- cf-sec (worker e28ec1b4, opus): idle; takes the 1189 review fixes.
+- Lead merge: PILOT-1189 (PASS 60273 on c8e69d4d1) picked as fe9a2faf7 + 42521c82c, pack 8bc6ce0a7. Merged-tree job 9b47d193: typecheck, pack, prettier, core-worker 121+10, server 346 pass 0 fail. Pushed. The ticket stays open for the minors.
+- cf-review (worker 68d76aeb, opus, auto): re-checking the PILOT-1187 delta, head f31dc51fd (self-test job 391fec1b, 616 pass).
+- cf-sec (worker e28ec1b4, opus, builder 1 of 2): PILOT-1189 minors: wx/0600 create without following a symlink, the PRD same-user note, the README line; branch ticket/T-3866-banner-atomic.
 - cf-bridge (worker 5bc808ae, opus, builder 2 of 2): gaps PILOT-1164, 1157, 1167 on ticket/T-<first>-gaps from ea1540f11.
-- cf-worker (worker 6562167d, opus, builder 1 of 2): PILOT-1187 fix round (decision 13:10): a Worker-side image allow list + SA token mounts, branch ticket/T-3864-worker-image-wall. The ticket stays open.
+- cf-worker (worker 6562167d, opus): idle; 1187 is in review. Known gap: stg does not set CP_KUBE_IMAGES yet. The first kube route must set it, or every Deployment with an image is refused.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
