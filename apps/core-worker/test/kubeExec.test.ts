@@ -156,6 +156,19 @@ function relayOn(protocol: ExecProtocol) {
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
 const bytes = (ch: number, s: string) => new Uint8Array([ch, ...new TextEncoder().encode(s)]);
+/** A stdout message of `n` bytes, channel byte included. */
+const out = (n: number) => {
+  const b = new Uint8Array(n).fill(0x61);
+  b[0] = 1;
+  return b;
+};
+/** The caller's ack of `n` bytes: [254, uint32 BE]. */
+const ack = (n: number) => {
+  const b = new Uint8Array(5);
+  b[0] = 254;
+  new DataView(b.buffer).setUint32(1, n);
+  return b;
+};
 
 describe('relayExec', () => {
   it('caller to pod: stdin and a checked resize go as masked binary frames; [255, 0] only on v5', async () => {
@@ -236,6 +249,59 @@ describe('relayExec', () => {
     await tick();
     expect(await b.relay.ended).toBe('The exec stream ended.');
     expect(b.closed[0]?.code).toBe(1011);
+  });
+
+  it('output past maxUnackedOutput waits for the caller’s ack before more is read from the pod (PILOT-1188)', async () => {
+    const r = relayOn('v5.channel.k8s.io');
+    const big = out(600 * 1024);
+    r.feed(wsFrame(2, big, false));
+    r.feed(wsFrame(2, big, false));
+    r.feed(wsFrame(2, bytes(1, 'tail'), false));
+    await tick();
+    // 1.2 MiB unacked is over the 1 MiB cap: the third message stays with the pod's stream.
+    expect(r.sent.map((m) => m.length)).toEqual([big.length, big.length]);
+    r.relay.fromPeer(ack(big.length));
+    await tick();
+    expect(r.sent.map((m) => m.length)).toEqual([big.length, big.length, 5]);
+    expect(r.closed).toEqual([]);
+    // Acks never reach the pod.
+    expect(await writtenFrames(r.written)).toEqual([]);
+    r.stream.destroy();
+  });
+
+  it('a paused relay still ends: the caller closing, or the pod’s stream going away (1011)', async () => {
+    // Two messages of 600 KiB: over the cap (one message is at most maxMessageBytes, the cap's size).
+    const big = out(600 * 1024);
+    const a = relayOn('v5.channel.k8s.io');
+    a.feed(wsFrame(2, big, false));
+    a.feed(wsFrame(2, big, false));
+    await tick();
+    a.relay.peerClosed(1000);
+    expect(await a.relay.ended).toBe('The caller closed.');
+    a.stream.destroy();
+
+    const b = relayOn('v5.channel.k8s.io');
+    b.feed(wsFrame(2, big, false));
+    b.feed(wsFrame(2, big, false));
+    b.feed(wsFrame(2, bytes(1, 'held'), false));
+    await tick();
+    expect(b.sent).toHaveLength(2);
+    b.stream.destroy();
+    expect(await b.relay.ended).toBe('The exec stream ended.');
+    expect(b.closed[0]?.code).toBe(1011);
+  });
+
+  it('a bad ack (wrong length, zero, more than was sent) closes the caller 1008 and tells the pod', async () => {
+    for (const bad of [new Uint8Array([254]), new Uint8Array([254, 0, 0, 0, 1, 0]), ack(0), ack(6)]) {
+      const r = relayOn('v5.channel.k8s.io');
+      r.feed(wsFrame(2, bytes(1, 'four'), false));
+      await tick();
+      r.relay.fromPeer(bad);
+      await r.relay.ended;
+      expect(r.closed[0]?.code, String([...bad])).toBe(1008);
+      expect(await writtenFrames(r.written)).toEqual([{ opcode: 8, masked: true, data: [0x03, 0xe8] }]);
+      r.stream.destroy();
+    }
   });
 
   it('a pod close code a Worker may not send becomes 1000', async () => {

@@ -9,6 +9,8 @@
 //   caller -> pod:  0 stdin, 4 resize (`{"Width":w,"Height":h}`, checked and rewritten), 255 [255, 0] = close stdin (v5 only; dropped on v4).
 //                   Any other channel, or a text message, closes the caller's socket 1008 / 1003.
 //   pod -> caller:  1 stdout, 2 stderr, 3 status (the exit Status as JSON). The pod's close closes the caller's socket with its code.
+//   caller -> bridge: 254 ack `[254, n]` (n uint32 BE: the length of messages it has taken, channel byte included). The relay stops reading the pod while
+//                   more than EXEC_LIMITS.maxUnackedOutput is unacked, so a caller that never acks stalls there (PILOT-1188).
 // BridgeDO offers `v5.channel.k8s.io` then `v4.channel.k8s.io` and checks Sec-WebSocket-Accept. This file builds the request, codes the
 // frames and runs the relay; it opens nothing itself.
 
@@ -26,7 +28,8 @@ export const EXEC_PROTOCOL_HEADER = 'x-cp-exec-protocol';
 export const EXEC_PROTOCOLS = ['v5.channel.k8s.io', 'v4.channel.k8s.io'] as const;
 export type ExecProtocol = (typeof EXEC_PROTOCOLS)[number];
 
-export const EXEC_CHANNEL = { stdin: 0, stdout: 1, stderr: 2, status: 3, resize: 4, close: 255 } as const;
+/** `ack` is the bridge's own (PILOT-1188): `[254, n]`, n a uint32 BE, the output bytes the caller has taken; never sent on to the pod. */
+export const EXEC_CHANNEL = { stdin: 0, stdout: 1, stderr: 2, status: 3, resize: 4, ack: 254, close: 255 } as const;
 
 export const EXEC_LIMITS = {
   /** The container the agent's proxy lets in (apps/server/src/connect/agent/services/kube/rules.ts EXEC_KEYS). */
@@ -38,6 +41,11 @@ export const EXEC_LIMITS = {
   maxMessageBytes: 1024 * 1024,
   /** Stdin written toward the agent and not yet taken by the stream's window: past it the caller's socket is closed 1009. */
   maxQueuedStdin: 1024 * 1024,
+  /**
+   * Output sent to the caller and not yet acked (EXEC_CHANNEL.ack). Past it the relay stops reading the pod's stream until an ack comes
+   * (PILOT-1188): workerd's WebSocket has no `bufferedAmount`, so the caller's acks are the only measure. At most this plus one message waits.
+   */
+  maxUnackedOutput: 1024 * 1024,
   /** Execs one bridge link may run at once, so REST calls keep streams (BRIDGE_LINK.maxStreams is 32). */
   maxExecs: 16,
   maxTerminal: 10_000,
@@ -213,10 +221,19 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
   let done = false;
   let resolveEnded!: (why: string) => void;
   const ended = new Promise<string>((r) => (resolveEnded = r));
+  // Output sent to the caller and not yet acked; while over the cap the read loop waits on `wake` (an ack or the end).
+  let unacked = 0;
+  let wake: (() => void) | null = null;
+  const rouse = () => {
+    const w = wake;
+    wake = null;
+    w?.();
+  };
 
   const finish = (code: number, why: string, closeStream: 'frame' | 'destroy') => {
     if (done) return;
     done = true;
+    rouse();
     try {
       peer.close(passable(code) ? code : 1000, why.slice(0, 100));
     } catch {
@@ -236,6 +253,9 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
     stream.write(wsFrame(2, data, true));
     if (stream.writableLength > EXEC_LIMITS.maxQueuedStdin) finish(1009, 'Too much input waiting for the pod.', 'destroy');
   };
+
+  // A stream that closes while the loop waits for an ack (over its bound, or lost) wakes it, and the next read ends the exec.
+  stream.once('close', rouse);
 
   void (async () => {
     const parts: Buffer[] = [];
@@ -264,7 +284,13 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
         size = 0;
         const ch = msg[0];
         // The API server may open with an empty message per channel: dropped. Only output and the status go to the caller.
-        if (ch === EXEC_CHANNEL.status || ((ch === EXEC_CHANNEL.stdout || ch === EXEC_CHANNEL.stderr) && msg.length > 1)) peer.send(msg);
+        if (ch !== EXEC_CHANNEL.status && !((ch === EXEC_CHANNEL.stdout || ch === EXEC_CHANNEL.stderr) && msg.length > 1)) continue;
+        peer.send(msg);
+        unacked += msg.length;
+        // Backpressure (PILOT-1188): stop reading the pod until the caller acks. Meanwhile the stream's own bound (ByteReader's maxHeld)
+        // holds what the agent keeps sending; past it the read fails and the exec ends 1011.
+        while (unacked > EXEC_LIMITS.maxUnackedOutput && !done && !stream.destroyed) await new Promise<void>((r) => (wake = r));
+        if (done) return;
       }
     } catch (e) {
       if (done) return;
@@ -287,6 +313,13 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
           const size = execResize(bytes.subarray(1));
           if (!size) return finish(1008, 'A resize is {"Width":w,"Height":h}.', 'frame');
           return toPod(Buffer.concat([Buffer.from([EXEC_CHANNEL.resize]), Buffer.from(size)]));
+        }
+        case EXEC_CHANNEL.ack: {
+          const n = bytes.length === 5 ? new DataView(bytes.buffer, bytes.byteOffset, 5).getUint32(1) : 0;
+          if (n === 0 || n > unacked) return finish(1008, 'An ack is [254, n]: n bytes taken, 1 to what was sent.', 'frame');
+          unacked -= n;
+          if (unacked <= EXEC_LIMITS.maxUnackedOutput) rouse();
+          return;
         }
         case EXEC_CHANNEL.close:
           if (bytes.length !== 2 || bytes[1] !== EXEC_CHANNEL.stdin) return finish(1008, 'Only stdin (0) can be closed.', 'frame');
