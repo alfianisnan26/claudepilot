@@ -295,7 +295,11 @@ export class BridgeDO extends SchemaDO {
 
   /** The managed pods, Deployments or claims of a namespace; `workspace` narrows it to one workspace's. */
   async kubeList(req: BridgeKubeAuth & { kind: KubeListKind; workspace?: string }): Promise<KubeItems> {
-    return (await this.#kubeOp(req, { op: 'list', kind: req?.kind, ...(req?.workspace !== undefined ? { workspace: req.workspace } : {}) })) as KubeItems;
+    return (await this.#kubeOp(req, {
+      op: 'list',
+      kind: req?.kind,
+      ...(req?.workspace !== undefined ? { workspace: req.workspace } : {}),
+    })) as KubeItems;
   }
 
   /** Pod metrics of the managed pods. A cluster without metrics-server answers `kube_status` 404 or 503: unknown, not zero. */
