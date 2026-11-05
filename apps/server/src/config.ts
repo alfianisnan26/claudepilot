@@ -74,8 +74,8 @@ export const config = {
     adminDist: `${root}apps/web/dist-admin`,
     data: env('PORTAL_DATA_DIR') ?? `${root}.data`,
   },
+  /** The session's lifetime; its cookie's name and attributes are in sessionCookie.ts (T-976). */
   session: {
-    cookie: 'portal_session',
     ttlMs: 12 * 60 * 60 * 1000,
   },
   /** Wrong server codes per visitor before its address locks, and the first lock (PILOT-1168: then doubling, a day at most; app.ts CODE_LOCKOUT). */

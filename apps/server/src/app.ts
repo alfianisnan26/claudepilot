@@ -70,7 +70,7 @@ import {
 } from '@portal/contracts';
 import type { AppPorts } from './appports/index.js';
 import { Hono, type Context } from 'hono';
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { PortalUsers } from './identity/users.js';
 import { deviceLabel } from './identity/device.js';
@@ -145,7 +145,7 @@ import { declareAllPolicies } from './authz/declarations.js';
 import { enforceRoutePolicy, useWorkspaceAlias } from './authz/routeGuard.js';
 import { actorOf, actorOfPrincipal, actorString, actorUserId, can, requireCan, useAccountRoles, useSocketActor, visible } from './authz/seam.js';
 import { orgScopeFilter, orgScopeOf } from './authz/orgScope.js';
-import { cookie as cookieOf } from './workspaces/shell.js';
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE, overHttps, sessionCookieSpec, sessionFromCookies, sessionOfRequest } from './sessionCookie.js';
 import { AccountAdmin } from './identity/accountAdmin.js';
 import type { HeldShare } from './identity/grants.js';
 import type { OidcClient } from './identity/oidc.js';
@@ -398,7 +398,33 @@ export function createApp(
       return 'unavailable';
     }
   };
-  const { cookie, ttlMs } = config.session;
+  const { ttlMs } = config.session;
+  const https = (c: Context<Env>) => overHttps(c.req.url, c.req.header('x-forwarded-proto'));
+  /**
+   * The session token of a request (sessionCookie.ts: the `__Host-` name wins, the old one only when it is absent). A live session (the
+   * server code's or an account's, a member's too) that came under the old name over https is moved to the new one (and the old cleared), so
+   * the change signs nobody out (T-976).
+   */
+  const sessionToken = (c: Context<Env>): string | undefined => {
+    const { token, legacy } = sessionFromCookies(c.req.header('cookie'));
+    if (token && legacy && https(c) && portal.anySession(token)) {
+      const spec = sessionCookieSpec(true, ttlMs);
+      setCookie(c, spec.name, token, spec.options);
+      deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
+    }
+    return token;
+  };
+  /**
+   * Every sign-in sets the session cookie here (the server code, an email account, SSO in identity/routes.ts): `__Host-portal_session`,
+   * Secure, over https; the old name on plain http. Over https the old name is cleared too (T-976 review 10534): tidiness, not the
+   * protection. The delete has no Domain, so it only removes a host-only `portal_session` (this portal's own, from before T-976); one planted
+   * with Domain=<parent> by a sibling app host stays. What protects is the read rule (sessionCookie.ts): the `__Host-` cookie always wins.
+   */
+  const setSessionCookie = (c: Context<Env>, token: string) => {
+    const spec = sessionCookieSpec(https(c), ttlMs);
+    setCookie(c, spec.name, token, spec.options);
+    if (spec.name !== LEGACY_SESSION_COOKIE) deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
+  };
   /**
    * Organizations slice 0 (P1): the person a FULL session is, set once per request by `requireSession` and read by sockets the same way. The
    * server code is the founding user; an admin account is its OWN user id (the one account marked founder, migration 460, is `u_owner`).
@@ -432,7 +458,7 @@ export function createApp(
   };
   useSocketActor((req) => {
     try {
-      return sessionActor(cookieOf(req, cookie));
+      return sessionActor(sessionOfRequest(req));
     } catch {
       return null;
     }
@@ -506,13 +532,14 @@ export function createApp(
   app.get('/healthz', (c) => c.json({ ok: true, service: 'portal' }));
 
   app.get(API.session, (c) => {
+    const token = sessionToken(c);
     const status: SessionStatus = {
-      authenticated: !!portal.anySession(getCookie(c, cookie)),
+      authenticated: !!portal.anySession(token),
       enabled: portal.enabled,
       codeSignIn: portal.codeSignIn,
       // PILOT-1185 slice 2: only short or long, so a long code typed by hand is not sent (and counted) at its 8th character.
       longCode: isLongCode(portal.code),
-      member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
+      member: !!portal.anySession(token) && !portal.session(token),
       emailSignIn: (() => {
         try {
           return users.any();
@@ -592,12 +619,7 @@ export function createApp(
       }
       users.throttle.reset('ip', codeKey);
     }
-    setCookie(c, cookie, token, {
-      httpOnly: true,
-      sameSite: 'Strict',
-      path: '/',
-      maxAge: Math.floor(ttlMs / 1000),
-    });
+    setSessionCookie(c, token);
     // T-968: a sign-in brings the person's General Manager back when a sign-out had revoked its token (it gets a new one at its restart).
     healManager(portal.anySession(token)?.userId ?? 'u_owner');
     // A member's sign-in answers no admin state (it holds the server code): the web reads /api/me and shows the member page.
@@ -607,7 +629,7 @@ export function createApp(
   // Gap 3 (owner, 2026-10-17): any account changes its own password with the current one (a member too); the other sessions of the
   // account end, this one stays.
   app.post(PORTAL_USER_API.myPassword, async (c) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     const s = portal.anySession(token);
     if (!s || !token) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (!s.userId) throw new AppError('VALIDATION_FAILED', 'The server code has no password to change.');
@@ -638,8 +660,8 @@ export function createApp(
     sso,
     sessions: chatController,
     audit,
-    cookie,
-    ttlMs,
+    sessionToken,
+    setSessionCookie,
     trustProxy: config.trustProxy,
     publicUrl: process.env.PORTAL_SSO_ORIGIN?.trim() || null,
     clientKey,
@@ -655,7 +677,7 @@ export function createApp(
   // Review M1: one account's reads and writes on the door are bounded (the view polls every 2.5 s: 24 a minute).
   const delegateLimiter = new RateLimiter(240, 60 * 1000);
   const delegate = (c: Context<Env>, need: SessionShareCap) => {
-    const s = portal.anySession(getCookie(c, cookie));
+    const s = portal.anySession(sessionToken(c));
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (!s.userId) throw new AppError('NOT_FOUND', 'Not found.');
     if (delegateLimiter.blocked(s.userId)) throw new AppError('RATE_LIMITED', 'Too many requests. Wait a minute.');
@@ -700,7 +722,7 @@ export function createApp(
       : null;
   };
   app.get(SESSION_GRANT_API.mine, (c) => {
-    const s = portal.anySession(getCookie(c, cookie));
+    const s = portal.anySession(sessionToken(c));
     if (!s?.userId) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     const held = grants.sessionsFor(s.userId, teams.idsOf(s.userId), (t) => teams.nameOf(t));
     return c.json(success([...held].map(([id, h]) => delegated(id, h)).filter((x): x is DelegatedSession => !!x)));
@@ -773,14 +795,14 @@ export function createApp(
       : { kind: 'code', founder: profiles.founder(), session: currentSignIn(token) };
   /** The signed-in ACCOUNT (any role) and its token; the server code has no profile of its own. Its own id only, never one from the request. */
   const myAccount = (c: Context<Env>) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     const s = portal.anySession(token);
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     if (!s.userId) throw new AppError('VALIDATION_FAILED', 'The server code has no profile. Sign in with an account.');
     return { token, userId: s.userId };
   };
   app.get(PORTAL_USER_API.me, (c) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     const s = portal.anySession(token);
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     return c.json(success<SignedInAs>(signedInAs(token, s.userId)));
@@ -830,16 +852,17 @@ export function createApp(
   });
   // An account's picture by its content hash: any signed-in session (the account menu, the people lists). Immutable: the hash is the name.
   app.get('/api/users/avatars/:sha', (c) => {
-    if (!portal.anySession(getCookie(c, cookie))) throw new AppError('UNAUTHORIZED', 'Sign in again.');
+    if (!portal.anySession(sessionToken(c))) throw new AppError('UNAUTHORIZED', 'Sign in again.');
     const png = profiles.avatarPng(c.req.param('sha'));
     if (!png) throw new AppError('NOT_FOUND', 'No such picture.');
     return c.body(new Uint8Array(png), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
   });
 
   app.post(API.logout, (c) => {
-    const token = getCookie(c, cookie);
+    const { token } = sessionFromCookies(c.req.header('cookie'));
     if (token) portal.signOut(token);
-    deleteCookie(c, cookie, { path: '/' });
+    if (https(c)) deleteCookie(c, SESSION_COOKIE, { path: '/', secure: true });
+    deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
     return c.json(success({ ok: true }));
   });
 
@@ -863,7 +886,7 @@ export function createApp(
     return null;
   };
   const requireSession = createMiddleware<Env>(async (c, next) => {
-    const token = getCookie(c, cookie);
+    const token = sessionToken(c);
     if (!token || !portal.personSession(token)) {
       // D-82 S1a: an admin's and a member's session both pass; the declared policy decides below. A live session whose account cannot be
       // read right now is not signed out (a 401 would), it is refused for now; everything else is "sign in again".
@@ -1843,7 +1866,7 @@ export function createApp(
         vendorDirs: reporter.vendorDirs,
         portalOrigin,
         signedIn: (c) => {
-          const token = getCookie(c, cookie);
+          const { token } = sessionFromCookies(c.req.header('cookie'));
           // Organizations slice 0 (P2): the reporter token is minted for (and bound to) the person signed in, not the founding user.
           return sessionActor(token);
         },

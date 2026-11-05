@@ -7,20 +7,12 @@ import { config } from '../config.js';
 import { socketOriginAllowed } from '../originCheck.js';
 import { cutOnLostOperate, workspaceSocketActor } from '../authz/socketAccess.js';
 import type { Portal } from '../portal.js';
+import { sessionOfRequest } from '../sessionCookie.js';
 import { runtimeMessage, type Workspaces } from './manager.js';
 import { attachCommand, TERMINAL_ID } from './terminals.js';
 
 const SHELL_PATH = /^\/api\/workspaces\/([a-z0-9-]+)\/([a-z0-9-]+)\/shell$/;
 const PING_MS = 25_000;
-
-/** One cookie from an upgrade request (WebSocket handshakes carry the session cookie). */
-export function cookie(req: IncomingMessage, name: string): string | undefined {
-  for (const part of req.headers.cookie?.split(';') ?? []) {
-    const [k, ...v] = part.trim().split('=');
-    if (k === name) return decodeURIComponent(v.join('='));
-  }
-  return undefined;
-}
 
 /** Browsers send cookies on cross-site WebSocket handshakes, so the origin must be this host. */
 // The page that opens this socket is this portal, or an origin in PORTAL_ALLOWED_ORIGINS (originCheck.ts, PILOT-1139).
@@ -46,7 +38,7 @@ export function attachShell(server: Server, portal: Portal, workspaces: Workspac
     const match = url.pathname.match(SHELL_PATH);
     if (!match) return; // not ours (Vite's HMR socket in dev)
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-    const authorized = (r: IncomingMessage) => !!portal.personSession(cookie(r, config.session.cookie));
+    const authorized = (r: IncomingMessage) => !!portal.personSession(sessionOfRequest(r));
     if (!authorized(req)) return refuse(socket, 401, 'Unauthorized');
 
     const [, target, name] = match as unknown as [string, string, string];

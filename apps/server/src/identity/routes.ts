@@ -48,8 +48,10 @@ export interface IdentityRouteDeps {
   /** The chat sessions: id resolution (aliases), title and mode. */
   sessions: { resolve(id: string): string; get(id: string): { id: string; title: string; workspaceId: string; mode: string } | null };
   audit: (kind: string, subject: string | null, detail: Record<string, unknown>, severity?: 'info' | 'medium', by?: string | null) => void;
-  cookie: string;
-  ttlMs: number;
+  /** The session token of a request: app.ts, by the read rule of sessionCookie.ts (`__Host-portal_session` wins; T-976). */
+  sessionToken: (c: Context<Env>) => string | undefined;
+  /** Sets the session cookie after a sign-in: app.ts (`__Host-` and Secure over https, the old name on plain http; T-976). */
+  setSessionCookie: (c: Context<Env>, token: string) => void;
   trustProxy: boolean;
   /** PORTAL_SSO_ORIGIN when set (https://pilot.example.com): the origin the provider sends the browser back to. */
   publicUrl: string | null;
@@ -97,9 +99,10 @@ export function identityRoutes(d: IdentityRouteDeps) {
 
   /** The signed-in account (any role), or a refusal. */
   const account = (c: Context<Env>) => {
-    const s = portal.anySession(getCookie(c, d.cookie));
+    const token = d.sessionToken(c);
+    const s = portal.anySession(token);
     if (!s) throw new AppError('UNAUTHORIZED', 'Sign in again.');
-    return { userId: s.userId ?? null, full: !!portal.session(getCookie(c, d.cookie)) };
+    return { userId: s.userId ?? null, full: !!portal.session(token) };
   };
   /** Who did it, for the row and the audit: `account:<id>`, or `ui` for the server code. */
   const actorOfAdmin = (c: Context<Env>) => {
@@ -287,7 +290,7 @@ export function identityRoutes(d: IdentityRouteDeps) {
       if (link) {
         // Owner request 2026-11-01: Profile → Link. The signed-in ACCOUNT (never the server code) links the provider its OWN email signs in
         // through; the query names nothing (no provider, no account). The callback attaches the identity only to this account (sso.ts).
-        const token = getCookie(c, d.cookie);
+        const token = d.sessionToken(c);
         const accountId = portal.anySession(token)?.userId;
         let offer: { id: string } | null = null;
         try {
@@ -299,7 +302,7 @@ export function identityRoutes(d: IdentityRouteDeps) {
         step = { account: accountId, sessionHash: d.sessionHash(token), returnTo: '/profile?linked=1', link: true };
         providerId = offer.id;
       } else if (stepUp) {
-        const token = getCookie(c, d.cookie);
+        const token = d.sessionToken(c);
         const account = portal.anySession(token)?.userId;
         const pid = isOrgId(org) ? sso.orgProviderId(org) : null;
         if (!token || !account || !pid || !isOrgId(org) || !d.sessionHash) return c.redirect('/login?sso_error=unavailable', 302);
@@ -359,7 +362,7 @@ export function identityRoutes(d: IdentityRouteDeps) {
         const token = portal.openSession(r.user.id, { device: deviceLabel(c.req.header('user-agent')), method: `sso:${r.providerId}` });
         // Not awaited: a picture fetch never holds the redirect; it lands for the next page load.
         void d.profiles?.adoptClaims(r.user.id, r.profile).catch(() => undefined);
-        setCookie(c, d.cookie, token, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: Math.floor(d.ttlMs / 1000) });
+        d.setSessionCookie(c, token);
         if (r.orgId) {
           try {
             d.orgSignIn?.({ orgId: r.orgId, providerId: r.providerId, userId: principal(r.user.id), groups: r.groups, created: r.created, sessionHash: d.sessionHash ? d.sessionHash(token) : null });

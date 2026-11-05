@@ -5,7 +5,7 @@ import { config } from '../config.js';
 import { socketOriginAllowed } from '../originCheck.js';
 import { cutOnLostOperate, workspaceSocketActor } from '../authz/socketAccess.js';
 import type { Portal } from '../portal.js';
-import { cookie } from '../workspaces/shell.js';
+import { sessionOfRequest } from '../sessionCookie.js';
 import { DEVICE_ID, deviceLabel } from './control.js';
 import { secureContext } from './routes.js';
 import type { BrowserService } from './service.js';
@@ -42,7 +42,7 @@ export function attachBrowserSockets(server: Server, deps: { portal: Portal; ser
     const match = PATH.exec(url.pathname);
     if (!match) return; // not ours
     if (!sameOrigin(req)) return refuse(socket, 403, 'Forbidden');
-    const authorized = (r: IncomingMessage) => !!deps.portal.personSession(cookie(r, config.session.cookie));
+    const authorized = (r: IncomingMessage) => !!deps.portal.personSession(sessionOfRequest(r));
     if (!authorized(req)) return refuse(socket, 401, 'Unauthorized');
     const device = url.searchParams.get('device') ?? '';
     if (!DEVICE_ID.test(device)) return refuse(socket, 400, 'Bad Request');

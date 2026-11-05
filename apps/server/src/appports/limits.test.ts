@@ -8,8 +8,8 @@ import { connect, type AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import { WebSocket, WebSocketServer } from 'ws';
 import { FOUNDING_USER_ID, type Actor } from '@portal/contracts';
-import { config } from '../config.js';
 import { Portal } from '../portal.js';
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from '../sessionCookie.js';
 import { cutOnRevoke } from '../revoke.js';
 import { AppPortGrants } from './grants.js';
 import { AppPorts, routeAppHostUpgrades } from './index.js';
@@ -280,10 +280,10 @@ test('closing the proxy (server shutdown) cuts its live sockets, so no timer hol
   await until('the bridge to be released', () => ports.proxy.open === 0);
 });
 
-test('the portal cookie names come from config, with the __Host- form, and never reach an app', () => {
-  const name = config.session.cookie;
-  assert.ok(PORTAL_COOKIES.has(name));
-  assert.ok(PORTAL_COOKIES.has(`__Host-${name}`));
+test('both names of the portal session cookie (sessionCookie.ts, T-976) are portal cookies and never reach an app', () => {
+  assert.ok(PORTAL_COOKIES.has(LEGACY_SESSION_COOKIE));
+  assert.ok(PORTAL_COOKIES.has(SESSION_COOKIE));
+  assert.equal(SESSION_COOKIE, `__Host-${LEGACY_SESSION_COOKIE}`);
   const v = `v${Date.now()}`;
-  assert.equal(appCookies(`${name}=${v}; __Host-${name}=${v}; theirs=1`), 'theirs=1');
+  assert.equal(appCookies(`${LEGACY_SESSION_COOKIE}=${v}; ${SESSION_COOKIE}=${v}; theirs=1`), 'theirs=1');
 });
