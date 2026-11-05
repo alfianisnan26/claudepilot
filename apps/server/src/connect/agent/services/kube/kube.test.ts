@@ -21,8 +21,14 @@ const MANAGED = { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'w1' }
 
 before(async () => {
   rig = await startKubeRig();
-  rig.fake.deployments.set('ws-w1', { metadata: { name: 'ws-w1', labels: MANAGED }, spec: { replicas: 1, template: { metadata: { labels: MANAGED } } } } as never);
-  rig.fake.pods.set('ws-w1-7d9f6c-aaaa', { metadata: { name: 'ws-w1-7d9f6c-aaaa', labels: MANAGED }, status: { phase: 'Running' } } as never);
+  rig.fake.deployments.set('ws-w1', {
+    metadata: { name: 'ws-w1', labels: MANAGED },
+    spec: { replicas: 1, template: { metadata: { labels: MANAGED } } },
+  } as never);
+  rig.fake.pods.set('ws-w1-7d9f6c-aaaa', {
+    metadata: { name: 'ws-w1-7d9f6c-aaaa', labels: MANAGED },
+    status: { phase: 'Running' },
+  } as never);
   rig.fake.pods.set('other-pod', { metadata: { name: 'other-pod', labels: {} } } as never);
   rig.fake.deployments.set('other', { metadata: { name: 'other', labels: {} }, spec: { replicas: 1 } } as never);
 });
@@ -42,22 +48,41 @@ describe('what the portal needs is allowed, with the service account’s token',
     assert.equal((await rig.request('GET', `${base}/pods/ws-w1-7d9f6c-aaaa`)).status, 200);
     assert.equal((await rig.request('GET', `${apps}/deployments/ws-w1`)).status, 200);
     assert.equal((await rig.request('GET', `${apps}/deployments/ws-nothing`)).status, 404, 'a missing object is the API server’s 404');
-    const scaled = await rig.request('PUT', `${apps}/deployments/ws-w1/scale`, { body: { metadata: { name: 'ws-w1', namespace: NAMESPACE }, spec: { replicas: 0 } } });
+    const scaled = await rig.request('PUT', `${apps}/deployments/ws-w1/scale`, {
+      body: { metadata: { name: 'ws-w1', namespace: NAMESPACE }, spec: { replicas: 0 } },
+    });
     assert.equal(scaled.status, 200, scaled.text);
     assert.equal(rig.fake.pods.has('ws-w1-7d9f6c-aaaa'), false, 'the fake took the pod down');
-    assert.equal((await rig.request('PUT', `${apps}/deployments/ws-w1/scale`, { body: { metadata: { name: 'ws-w1' }, spec: { replicas: 1 } } })).status, 200);
+    assert.equal(
+      (await rig.request('PUT', `${apps}/deployments/ws-w1/scale`, { body: { metadata: { name: 'ws-w1' }, spec: { replicas: 1 } } }))
+        .status,
+      200,
+    );
     const last = rig.fake.requests.at(-1)!;
     assert.equal(last.headers.authorization, `Bearer ${rig.fake.token}`, 'the API server got the service account’s token');
-    assert.ok(rig.fake.requests.every((r) => !JSON.stringify(r.headers).includes(LOCAL_TOKEN)), 'the portal’s local bearer never left the agent');
+    assert.ok(
+      rig.fake.requests.every((r) => !JSON.stringify(r.headers).includes(LOCAL_TOKEN)),
+      'the portal’s local bearer never left the agent',
+    );
   });
 
   it('creates and deletes a claim and a deployment by name, and reads pod metrics', async () => {
-    const claim = { metadata: { name: 'ws-w2-home', labels: { 'claudepilot.managed': 'true' } }, spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } } } };
+    const claim = {
+      metadata: { name: 'ws-w2-home', labels: { 'claudepilot.managed': 'true' } },
+      spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } } },
+    };
     assert.equal((await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim })).status, 201);
     assert.equal((await rig.request('GET', `${base}/persistentvolumeclaims/ws-w2-home`)).status, 200);
-    const dep = { metadata: { name: 'ws-w2', labels: { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'w2' } }, spec: { replicas: 1, template: { metadata: { labels: { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'w2' } } } } };
+    const dep = {
+      metadata: { name: 'ws-w2', labels: { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'w2' } },
+      spec: { replicas: 1, template: { metadata: { labels: { 'claudepilot.managed': 'true', 'claudepilot.workspace': 'w2' } } } },
+    };
     assert.equal((await rig.request('POST', `${apps}/deployments`, { body: dep })).status, 201);
-    assert.equal((await rig.request('GET', `/apis/metrics.k8s.io/v1beta1/namespaces/${NAMESPACE}/pods?labelSelector=claudepilot.managed%3Dtrue`)).status, 200);
+    assert.equal(
+      (await rig.request('GET', `/apis/metrics.k8s.io/v1beta1/namespaces/${NAMESPACE}/pods?labelSelector=claudepilot.managed%3Dtrue`))
+        .status,
+      200,
+    );
     assert.equal((await rig.request('DELETE', `${apps}/deployments/ws-w2?propagationPolicy=Foreground`)).status, 200);
     assert.equal((await rig.request('DELETE', `${base}/persistentvolumeclaims/ws-w2-home`)).status, 200);
   });
@@ -81,14 +106,23 @@ describe('the local bearer, and what is dropped', () => {
     const n = rig.fake.requests.length;
     const a = await rig.request('GET', `${base}/pods`, {
       headers: {
-        'Impersonate-User': 'system:admin', 'Impersonate-Group': 'system:masters', 'Impersonate-Extra-scopes': 'x', 'Impersonate-Uid': '0',
-        'X-Remote-User': 'root', 'X-Remote-Group': 'system:masters', 'X-Remote-Extra-a': 'b', 'X-Forwarded-For': '1.2.3.4', Cookie: 'a=b', 'X-Anything': 'secret-canary',
+        'Impersonate-User': 'system:admin',
+        'Impersonate-Group': 'system:masters',
+        'Impersonate-Extra-scopes': 'x',
+        'Impersonate-Uid': '0',
+        'X-Remote-User': 'root',
+        'X-Remote-Group': 'system:masters',
+        'X-Remote-Extra-a': 'b',
+        'X-Forwarded-For': '1.2.3.4',
+        Cookie: 'a=b',
+        'X-Anything': 'secret-canary',
       },
     });
     assert.equal(a.status, 200);
     const sent = rig.fake.requests.slice(n)[0]!.headers;
     assert.equal(sent.authorization, `Bearer ${rig.fake.token}`);
-    for (const h of Object.keys(sent)) assert.ok(!/^(impersonate|x-remote|x-forwarded|x-anything|cookie)/i.test(h), `${h} reached the API server`);
+    for (const h of Object.keys(sent))
+      assert.ok(!/^(impersonate|x-remote|x-forwarded|x-anything|cookie)/i.test(h), `${h} reached the API server`);
   });
 
   it('re-reads the service account token from its file at most every 60 s (bound tokens rotate)', async () => {
@@ -98,7 +132,11 @@ describe('the local bearer, and what is dropped', () => {
       assert.equal((await local.request('GET', '/version')).status, 200);
       writeFileSync(local.tokenFile, 'rotated-token\n');
       local.fake.token = 'rotated-token';
-      assert.equal((await local.request('GET', '/version')).status, 401, 'within 60 s the cached token is still sent, and the API server (now expecting the new one) refuses it');
+      assert.equal(
+        (await local.request('GET', '/version')).status,
+        401,
+        'within 60 s the cached token is still sent, and the API server (now expecting the new one) refuses it',
+      );
       now += 61_000;
       assert.equal((await local.request('GET', '/version')).status, 200, 'after 60 s the new token is read');
     } finally {
@@ -164,26 +202,49 @@ describe('confinement', () => {
       const a = await rig.request(m, p);
       refused(a, rule, rule === 'upgrade' ? 403 : 403);
     }
-    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+    assert.equal(
+      fakeSaw(n).length,
+      0,
+      fakeSaw(n)
+        .map((r) => `${r.method} ${r.url}`)
+        .join(', '),
+    );
   });
 
   it('only lets a workspace object be created, replaced or addressed under a workspace name, in the connector’s namespace', async () => {
     const n = rig.fake.requests.length;
     const meta = (name: string, extra: object = {}) => ({ metadata: { name, ...extra }, spec: {} });
     refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: meta('data') }), 'name');
-    refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: meta('ws-x-home', { namespace: 'kube-system' }) }), 'namespace');
+    refused(
+      await rig.request('POST', `${base}/persistentvolumeclaims`, { body: meta('ws-x-home', { namespace: 'kube-system' }) }),
+      'namespace',
+    );
     refused(await rig.request('POST', `${apps}/deployments`, { body: meta('claudepilot-agent') }), 'name');
     refused(await rig.request('POST', `${apps}/deployments`, { body: {} }), 'name');
     refused(await rig.request('POST', `${base}/secrets`, { body: meta('claudepilot-agent-identity') }), 'name');
     refused(await rig.request('PUT', `${apps}/deployments/ws-w1`, { body: meta('ws-other') }), 'name');
     refused(await rig.request('POST', `${apps}/deployments`, { rawBody: '{not json' }), 'body');
-    refused(await rig.request('POST', `${apps}/deployments`, { body: meta('ws-z'), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }), 'body');
+    refused(
+      await rig.request('POST', `${apps}/deployments`, {
+        body: meta('ws-z'),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }),
+      'body',
+    );
     assert.equal(fakeSaw(n).length, 0);
     // The secrets the delivery engine will use are by name: a create, a read, an update and a delete of `ws-*-claudepilot`.
     const secret = { metadata: { name: 'ws-w1-claudepilot' }, data: { a: 'Yg==' } };
     assert.equal((await rig.request('POST', `${base}/secrets`, { body: secret })).status, 201);
     assert.equal((await rig.request('GET', `${base}/secrets/ws-w1-claudepilot`)).status, 200);
-    assert.equal((await rig.request('PATCH', `${base}/secrets/ws-w1-claudepilot`, { body: { data: { a: 'Yw==' } }, headers: { 'Content-Type': 'application/merge-patch+json' } })).status, 200);
+    assert.equal(
+      (
+        await rig.request('PATCH', `${base}/secrets/ws-w1-claudepilot`, {
+          body: { data: { a: 'Yw==' } },
+          headers: { 'Content-Type': 'application/merge-patch+json' },
+        })
+      ).status,
+      200,
+    );
     assert.equal((await rig.request('DELETE', `${base}/secrets/ws-w1-claudepilot`)).status, 200);
   });
 });
@@ -191,9 +252,16 @@ describe('confinement', () => {
 describe('what an object may contain: nothing that leaves the workspace’s sandbox', () => {
   const dep = (podSpec: Record<string, unknown>, name = 'ws-body') => ({
     metadata: { name, labels: { 'claudepilot.managed': 'true' } },
-    spec: { replicas: 1, template: { metadata: { labels: { 'claudepilot.managed': 'true' } }, spec: { containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }], ...podSpec } } },
+    spec: {
+      replicas: 1,
+      template: {
+        metadata: { labels: { 'claudepilot.managed': 'true' } },
+        spec: { containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }], ...podSpec },
+      },
+    },
   });
-  const container = (extra: Record<string, unknown>) => dep({ containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest', ...extra }] });
+  const container = (extra: Record<string, unknown>) =>
+    dep({ containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest', ...extra }] });
 
   it('refuses a pod that asks for the host, privileges, another identity or a volume it must not have, on create, replace and patch, and the API server never sees it', async () => {
     const n = rig.fake.requests.length;
@@ -212,63 +280,185 @@ describe('what an object may contain: nothing that leaves the workspace’s sand
       ['the agent’s service account', dep({ serviceAccountName: 'claudepilot-agent' })],
       ['sysctls', dep({ securityContext: { sysctls: [{ name: 'net.ipv4.ip_forward', value: '1' }] } })],
       ['an unconfined seccomp profile', dep({ securityContext: { seccompProfile: { type: 'Unconfined' } } })],
-      ['bidirectional mount propagation', container({ volumeMounts: [{ name: 'home', mountPath: '/h', mountPropagation: 'Bidirectional' }] })],
+      [
+        'bidirectional mount propagation',
+        container({ volumeMounts: [{ name: 'home', mountPath: '/h', mountPropagation: 'Bidirectional' }] }),
+      ],
       ['an unmasked /proc', container({ securityContext: { procMount: 'Unmasked' } })],
       ['a raw block device', container({ volumeDevices: [{ name: 'd', devicePath: '/dev/x' }] })],
       // Review 60154, minor 1 (PILOT-1187): no Kubernetes credential in a workspace, automounted or projected.
       ['the automounted service account token', dep({ automountServiceAccountToken: true })],
-      ['a projected service account token', dep({ volumes: [{ name: 't', projected: { sources: [{ serviceAccountToken: { path: 'token' } }] } }] })],
+      [
+        'a projected service account token',
+        dep({ volumes: [{ name: 't', projected: { sources: [{ serviceAccountToken: { path: 'token' } }] } }] }),
+      ],
     ];
     for (const [what, body] of bad) {
       refused(await rig.request('POST', `${apps}/deployments`, { body }), 'spec');
-      refused(await rig.request('PUT', `${apps}/deployments/ws-w1`, { body: { ...(body as object), metadata: { name: 'ws-w1' } } }), 'spec');
+      refused(
+        await rig.request('PUT', `${apps}/deployments/ws-w1`, { body: { ...(body as object), metadata: { name: 'ws-w1' } } }),
+        'spec',
+      );
       void what;
     }
     // A patch is scanned too: a merge patch that adds a host path, and a JSON patch (which names its target in a path string) altogether.
-    refused(await rig.request('PATCH', `${apps}/deployments/ws-w1`, { body: { spec: { template: { spec: { volumes: [{ name: 'h', hostPath: { path: '/etc' } }] } } } }, headers: { 'Content-Type': 'application/strategic-merge-patch+json' } }), 'spec');
-    refused(await rig.request('PATCH', `${apps}/deployments/ws-w1`, { body: [{ op: 'add', path: '/spec/template/spec/hostNetwork', value: true }], headers: { 'Content-Type': 'application/json-patch+json' } }), 'spec');
-    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+    refused(
+      await rig.request('PATCH', `${apps}/deployments/ws-w1`, {
+        body: { spec: { template: { spec: { volumes: [{ name: 'h', hostPath: { path: '/etc' } }] } } } },
+        headers: { 'Content-Type': 'application/strategic-merge-patch+json' },
+      }),
+      'spec',
+    );
+    refused(
+      await rig.request('PATCH', `${apps}/deployments/ws-w1`, {
+        body: [{ op: 'add', path: '/spec/template/spec/hostNetwork', value: true }],
+        headers: { 'Content-Type': 'application/json-patch+json' },
+      }),
+      'spec',
+    );
+    assert.equal(
+      fakeSaw(n).length,
+      0,
+      fakeSaw(n)
+        .map((r) => `${r.method} ${r.url}`)
+        .join(', '),
+    );
     assert.ok((rig.service.report!().denied ?? []).some((d) => d.rule === 'spec' && d.count >= bad.length * 2));
   });
 
   it('refuses a claim bound to somebody’s volume or filled from another, and a secret that mints a credential', async () => {
     const n = rig.fake.requests.length;
-    const claim = (spec: object) => ({ metadata: { name: 'ws-c-home' }, spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } }, ...spec } });
+    const claim = (spec: object) => ({
+      metadata: { name: 'ws-c-home' },
+      spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } }, ...spec },
+    });
     refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ volumeName: 'pvc-12345' }) }), 'spec');
-    refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ dataSource: { kind: 'PersistentVolumeClaim', name: 'ws-other-home' } }) }), 'spec');
-    refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ dataSourceRef: { kind: 'VolumeSnapshot', name: 's' } }) }), 'spec');
+    refused(
+      await rig.request('POST', `${base}/persistentvolumeclaims`, {
+        body: claim({ dataSource: { kind: 'PersistentVolumeClaim', name: 'ws-other-home' } }),
+      }),
+      'spec',
+    );
+    refused(
+      await rig.request('POST', `${base}/persistentvolumeclaims`, {
+        body: claim({ dataSourceRef: { kind: 'VolumeSnapshot', name: 's' } }),
+      }),
+      'spec',
+    );
     refused(await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ volumeMode: 'Block' }) }), 'spec');
-    refused(await rig.request('POST', `${base}/secrets`, { body: { metadata: { name: 'ws-s-claudepilot', annotations: { 'kubernetes.io/service-account.name': 'claudepilot-agent' } }, type: 'kubernetes.io/service-account-token' } }), 'spec');
+    refused(
+      await rig.request('POST', `${base}/secrets`, {
+        body: {
+          metadata: { name: 'ws-s-claudepilot', annotations: { 'kubernetes.io/service-account.name': 'claudepilot-agent' } },
+          type: 'kubernetes.io/service-account-token',
+        },
+      }),
+      'spec',
+    );
     assert.equal(fakeSaw(n).length, 0);
-    assert.equal((await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ storageClassName: 'fast' }) })).status, 201, 'an ordinary claim is fine');
-    assert.equal((await rig.request('POST', `${base}/secrets`, { body: { metadata: { name: 'ws-s-claudepilot' }, type: 'Opaque', data: { a: 'Yg==' } } })).status, 201);
+    assert.equal(
+      (await rig.request('POST', `${base}/persistentvolumeclaims`, { body: claim({ storageClassName: 'fast' }) })).status,
+      201,
+      'an ordinary claim is fine',
+    );
+    assert.equal(
+      (
+        await rig.request('POST', `${base}/secrets`, {
+          body: { metadata: { name: 'ws-s-claudepilot' }, type: 'Opaque', data: { a: 'Yg==' } },
+        })
+      ).status,
+      201,
+    );
     await rig.request('DELETE', `${base}/persistentvolumeclaims/ws-c-home`);
     await rig.request('DELETE', `${base}/secrets/ws-s-claudepilot`);
   });
 
   it('what KubernetesRuntime really creates passes: a pod security context with uid 1000, a claim volume, an init container, limits, an image pull secret, a merge patch', async () => {
-    const ok = dep({
-      hostname: 'w',
-      terminationGracePeriodSeconds: 5,
-      securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
-      imagePullSecrets: [{ name: 'pull' }],
-      volumes: [{ name: 'home', persistentVolumeClaim: { claimName: 'ws-ok-home' } }, { name: 'scratch', emptyDir: {} }],
-      initContainers: [{ name: 'seed-home', image: 'ghcr.io/example/claudepilot-workspace:latest', command: ['sh', '-c', 'true'], volumeMounts: [{ name: 'home', mountPath: '/seed' }] }],
-      containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest', env: [{ name: 'TERM', value: 'xterm' }], resources: { limits: { cpu: '1', memory: '512Mi' } }, volumeMounts: [{ name: 'home', mountPath: '/home/node' }], securityContext: { allowPrivilegeEscalation: false, privileged: false, capabilities: { drop: ['ALL'] } } }],
-      nodeSelector: { disk: 'ssd' },
-    }, 'ws-ok');
+    const ok = dep(
+      {
+        hostname: 'w',
+        terminationGracePeriodSeconds: 5,
+        securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
+        imagePullSecrets: [{ name: 'pull' }],
+        volumes: [
+          { name: 'home', persistentVolumeClaim: { claimName: 'ws-ok-home' } },
+          { name: 'scratch', emptyDir: {} },
+        ],
+        initContainers: [
+          {
+            name: 'seed-home',
+            image: 'ghcr.io/example/claudepilot-workspace:latest',
+            command: ['sh', '-c', 'true'],
+            volumeMounts: [{ name: 'home', mountPath: '/seed' }],
+          },
+        ],
+        containers: [
+          {
+            name: 'workspace',
+            image: 'ghcr.io/example/claudepilot-workspace:latest',
+            env: [{ name: 'TERM', value: 'xterm' }],
+            resources: { limits: { cpu: '1', memory: '512Mi' } },
+            volumeMounts: [{ name: 'home', mountPath: '/home/node' }],
+            securityContext: { allowPrivilegeEscalation: false, privileged: false, capabilities: { drop: ['ALL'] } },
+          },
+        ],
+        nodeSelector: { disk: 'ssd' },
+      },
+      'ws-ok',
+    );
     assert.equal((await rig.request('POST', `${apps}/deployments`, { body: ok })).status, 201);
-    assert.equal((await rig.request('PATCH', `${apps}/deployments/ws-ok`, { body: { spec: { replicas: 0 } }, headers: { 'Content-Type': 'application/merge-patch+json' } })).status, 200);
+    assert.equal(
+      (
+        await rig.request('PATCH', `${apps}/deployments/ws-ok`, {
+          body: { spec: { replicas: 0 } },
+          headers: { 'Content-Type': 'application/merge-patch+json' },
+        })
+      ).status,
+      200,
+    );
     assert.equal((await rig.request('DELETE', `${apps}/deployments/ws-ok`)).status, 200);
   });
 
   it('with an image allowlist (PILOT_IMAGES on the cluster) only those images run; without one nothing is enforced', async () => {
     const strict = await startKubeRig({ service: { images: ['ghcr.io/example/claudepilot-workspace:latest'] } });
     try {
-      const withImage = (image: string, name: string) => ({ metadata: { name, labels: { 'claudepilot.managed': 'true' } }, spec: { replicas: 1, template: { metadata: { labels: { 'claudepilot.managed': 'true' } }, spec: { containers: [{ name: 'workspace', image }] } } } });
-      assert.equal((await strict.request('POST', `${apps}/deployments`, { body: withImage('ghcr.io/example/claudepilot-workspace:latest', 'ws-img1') })).status, 201);
-      assert.equal((await strict.request('POST', `${apps}/deployments`, { body: withImage('attacker.example/miner:latest', 'ws-img2') })).status, 403);
-      assert.equal((await strict.request('POST', `${apps}/deployments`, { body: { ...withImage('x', 'ws-img3'), spec: { template: { spec: { initContainers: [{ name: 'i', image: 'attacker.example/x' }], containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }] } } } } })).status, 403);
+      const withImage = (image: string, name: string) => ({
+        metadata: { name, labels: { 'claudepilot.managed': 'true' } },
+        spec: {
+          replicas: 1,
+          template: { metadata: { labels: { 'claudepilot.managed': 'true' } }, spec: { containers: [{ name: 'workspace', image }] } },
+        },
+      });
+      assert.equal(
+        (
+          await strict.request('POST', `${apps}/deployments`, {
+            body: withImage('ghcr.io/example/claudepilot-workspace:latest', 'ws-img1'),
+          })
+        ).status,
+        201,
+      );
+      assert.equal(
+        (await strict.request('POST', `${apps}/deployments`, { body: withImage('attacker.example/miner:latest', 'ws-img2') })).status,
+        403,
+      );
+      assert.equal(
+        (
+          await strict.request('POST', `${apps}/deployments`, {
+            body: {
+              ...withImage('x', 'ws-img3'),
+              spec: {
+                template: {
+                  spec: {
+                    initContainers: [{ name: 'i', image: 'attacker.example/x' }],
+                    containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }],
+                  },
+                },
+              },
+            },
+          })
+        ).status,
+        403,
+      );
     } finally {
       await strict.stop();
     }
@@ -291,14 +481,19 @@ describe('selectors are injected, lists are only the portal’s', () => {
       assert.equal(new URL(rig.fake.requests[n]!.url, 'http://x').searchParams.get('labelSelector'), 'claudepilot.managed=true');
     }
     const n = rig.fake.requests.length;
-    await rig.request('GET', `${base}/pods?labelSelector=${encodeURIComponent('claudepilot.workspace=w1')}&fieldSelector=${encodeURIComponent('status.phase=Running')}&limit=5&foo=bar`);
+    await rig.request(
+      'GET',
+      `${base}/pods?labelSelector=${encodeURIComponent('claudepilot.workspace=w1')}&fieldSelector=${encodeURIComponent('status.phase=Running')}&limit=5&foo=bar`,
+    );
     const asked = new URL(rig.fake.requests[n]!.url, 'http://x').searchParams;
     assert.equal(asked.get('labelSelector'), 'claudepilot.workspace=w1,claudepilot.managed=true');
     assert.equal(asked.get('fieldSelector'), 'status.phase=Running');
     assert.equal(asked.get('limit'), '5');
     assert.equal(asked.has('foo'), false, 'an unknown parameter is not forwarded');
     // Asking for everyone's does not work either.
-    const sneaky = (await rig.request('GET', `${base}/pods?labelSelector=${encodeURIComponent('claudepilot.managed!=true')}`)).json() as { items: unknown[] };
+    const sneaky = (await rig.request('GET', `${base}/pods?labelSelector=${encodeURIComponent('claudepilot.managed!=true')}`)).json() as {
+      items: unknown[];
+    };
     assert.equal(sneaky.items.length, 0);
     refused(await rig.request('GET', `${base}/pods?labelSelector=${encodeURIComponent('a=b;c')}`), 'selector');
     refused(await rig.request('GET', `${base}/pods?limit=abc`), 'path');
@@ -307,13 +502,25 @@ describe('selectors are injected, lists are only the portal’s', () => {
   it('streams a watch: the first event arrives while the response is still open, and closing it closes the upstream', async () => {
     const events: string[] = [];
     const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
-      const r = http.request({ host: new URL(rig.loopback).hostname, port: new URL(rig.loopback).port, path: `${base}/pods?watch=true&labelSelector=claudepilot.managed%3Dtrue`, headers: { Authorization: `Bearer ${LOCAL_TOKEN}` }, agent: false }, resolve);
+      const r = http.request(
+        {
+          host: new URL(rig.loopback).hostname,
+          port: new URL(rig.loopback).port,
+          path: `${base}/pods?watch=true&labelSelector=claudepilot.managed%3Dtrue`,
+          headers: { Authorization: `Bearer ${LOCAL_TOKEN}` },
+          agent: false,
+        },
+        resolve,
+      );
       r.on('error', reject);
       r.end();
     });
     res.on('data', (c: Buffer) => events.push(...c.toString().trim().split('\n')));
     await new Promise((r) => setTimeout(r, 150));
-    assert.ok(events.some((l) => (JSON.parse(l) as { type: string }).type === 'ADDED'), 'the existing pod was announced');
+    assert.ok(
+      events.some((l) => (JSON.parse(l) as { type: string }).type === 'ADDED'),
+      'the existing pod was announced',
+    );
     const before = events.length;
     await rig.request('PUT', `${apps}/deployments/ws-w1/scale`, { body: { metadata: { name: 'ws-w1' }, spec: { replicas: 0 } } });
     await rig.request('PUT', `${apps}/deployments/ws-w1/scale`, { body: { metadata: { name: 'ws-w1' }, spec: { replicas: 1 } } });
@@ -325,10 +532,15 @@ describe('selectors are injected, lists are only the portal’s', () => {
 });
 
 describe('exec is a WebSocket for a workspace pod only', () => {
-  const wsUrl = (pod: string, q = 'command=sh&container=workspace&stdin=true&stdout=true&stderr=true&tty=false') => `${rig.loopback.replace('http', 'ws')}${base}/pods/${pod}/exec?${q}`;
+  const wsUrl = (pod: string, q = 'command=sh&container=workspace&stdin=true&stdout=true&stderr=true&tty=false') =>
+    `${rig.loopback.replace('http', 'ws')}${base}/pods/${pod}/exec?${q}`;
   const dial = (url: string, opts: { token?: string | null; protocols?: string[] } = {}) =>
     new Promise<{ ws: WebSocket; protocol: string } | { error: string }>((resolve) => {
-      const ws = new WebSocket(url, opts.protocols ?? ['v4.channel.k8s.io'], { headers: opts.token === null ? {} : { Authorization: `Bearer ${opts.token ?? LOCAL_TOKEN}` }, perMessageDeflate: false, handshakeTimeout: 3000 });
+      const ws = new WebSocket(url, opts.protocols ?? ['v4.channel.k8s.io'], {
+        headers: opts.token === null ? {} : { Authorization: `Bearer ${opts.token ?? LOCAL_TOKEN}` },
+        perMessageDeflate: false,
+        handshakeTimeout: 3000,
+      });
       ws.on('open', () => resolve({ ws, protocol: ws.protocol }));
       ws.on('unexpected-response', (_req, res) => resolve({ error: `HTTP ${res.statusCode}` }));
       ws.on('error', (e) => resolve({ error: e.message }));
@@ -346,7 +558,10 @@ describe('exec is a WebSocket for a workspace pod only', () => {
     got.ws.send(Buffer.concat([Buffer.from([0]), Buffer.from('hello exit\n')]));
     await new Promise((r) => setTimeout(r, 200));
     assert.ok(out.includes('1:hello exit\n'));
-    assert.ok(out.some((l) => l.startsWith('3:') && l.includes('Success')), 'the status channel ended it');
+    assert.ok(
+      out.some((l) => l.startsWith('3:') && l.includes('Success')),
+      'the status channel ended it',
+    );
     const sent = rig.fake.upgrades[n]!;
     assert.equal(sent.headers.authorization, `Bearer ${rig.fake.token}`);
     assert.equal(sent.headers['sec-websocket-protocol'], 'v4.channel.k8s.io');
@@ -372,11 +587,26 @@ describe('exec is a WebSocket for a workspace pod only', () => {
 describe('limits and framing', () => {
   it('refuses a header block over 16 KiB, a body over 1 MiB, duplicate Content-Length and Transfer-Encoding with Content-Length', async () => {
     const n = rig.fake.requests.length;
-    assert.match(await rig.raw(`GET ${base}/pods HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${LOCAL_TOKEN}\r\nX-Pad: ${'a'.repeat(17 * 1024)}\r\n\r\n`), /HTTP\/1\.1 431/);
+    assert.match(
+      await rig.raw(
+        `GET ${base}/pods HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${LOCAL_TOKEN}\r\nX-Pad: ${'a'.repeat(17 * 1024)}\r\n\r\n`,
+      ),
+      /HTTP\/1\.1 431/,
+    );
     const huge = JSON.stringify({ metadata: { name: 'ws-big', labels: { x: 'y'.repeat(1_100_000) } } });
     refused(await rig.request('POST', `${apps}/deployments`, { rawBody: huge }), 'body');
-    assert.match(await rig.raw(`POST ${apps}/deployments HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${LOCAL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}`), /HTTP\/1\.1 4\d\d/);
-    assert.match(await rig.raw(`POST ${apps}/deployments HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${LOCAL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n`), /HTTP\/1\.1 4\d\d/);
+    assert.match(
+      await rig.raw(
+        `POST ${apps}/deployments HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${LOCAL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}`,
+      ),
+      /HTTP\/1\.1 4\d\d/,
+    );
+    assert.match(
+      await rig.raw(
+        `POST ${apps}/deployments HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${LOCAL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n`,
+      ),
+      /HTTP\/1\.1 4\d\d/,
+    );
     assert.equal(fakeSaw(n).length, 0);
   });
 });
@@ -443,7 +673,13 @@ describe('the in-place resize (PILOT-1163, G2): a JSON patch of container resour
     apiVersion: 'apps/v1',
     kind: 'ReplicaSet',
     metadata: { name, labels: MANAGED },
-    spec: { replicas: 1, template: { metadata: { labels: MANAGED }, spec: { containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }], ...podSpec } } },
+    spec: {
+      replicas: 1,
+      template: {
+        metadata: { labels: MANAGED },
+        spec: { containers: [{ name: 'workspace', image: 'ghcr.io/example/claudepilot-workspace:latest' }], ...podSpec },
+      },
+    },
   });
   const jsonPatch = { 'Content-Type': 'application/json-patch+json' };
 
@@ -456,7 +692,13 @@ describe('the in-place resize (PILOT-1163, G2): a JSON patch of container resour
       ['the security context', [{ op: 'add', path: '/spec/containers/0/securityContext', value: { privileged: true } }]],
       ['the pod spec', [{ op: 'add', path: '/spec/hostNetwork', value: true }]],
       ['the labels', [{ op: 'add', path: '/metadata/labels/x', value: 'y' }]],
-      ['resources and the image in one patch', [{ op: 'add', path: '/spec/containers/0/resources', value: res }, { op: 'replace', path: '/spec/containers/0/image', value: 'evil:latest' }]],
+      [
+        'resources and the image in one patch',
+        [
+          { op: 'add', path: '/spec/containers/0/resources', value: res },
+          { op: 'replace', path: '/spec/containers/0/image', value: 'evil:latest' },
+        ],
+      ],
       ['a path that only starts like resources', [{ op: 'add', path: '/spec/containers/0/resourcesX', value: res }]],
       ['a move from elsewhere', [{ op: 'move', from: '/spec/containers/1/resources', path: '/spec/containers/0/resources' }]],
       ['a copy', [{ op: 'copy', from: '/spec/volumes', path: '/spec/containers/0/resources' }]],
@@ -465,27 +707,67 @@ describe('the in-place resize (PILOT-1163, G2): a JSON patch of container resour
       ['a deny-listed key in the value', [{ op: 'add', path: '/spec/containers/0/resources', value: { hostPath: { path: '/' } } }]],
       ['an empty patch', []],
       ['an object, not a patch', { op: 'add', path: '/spec/containers/0/resources', value: res }],
-      ['a merge patch', { spec: { containers: [{ name: 'workspace', resources: res }] } }, { 'Content-Type': 'application/merge-patch+json' }],
-      ['a strategic merge patch', { spec: { containers: [{ name: 'workspace', image: 'evil:latest' }] } }, { 'Content-Type': 'application/strategic-merge-patch+json' }],
+      [
+        'a merge patch',
+        { spec: { containers: [{ name: 'workspace', resources: res }] } },
+        { 'Content-Type': 'application/merge-patch+json' },
+      ],
+      [
+        'a strategic merge patch',
+        { spec: { containers: [{ name: 'workspace', image: 'evil:latest' }] } },
+        { 'Content-Type': 'application/strategic-merge-patch+json' },
+      ],
     ];
     for (const [what, body, headers] of bad) {
       const a = await rig.request('PATCH', resize, { body, headers: headers ?? jsonPatch });
       assert.equal(a.status, 403, `${what}: ${a.text}`);
       assert.equal(a.json().message, 'denied by claudepilot policy (spec)', what);
     }
-    refused(await rig.request('PATCH', `${base}/pods/other-pod/resize`, { body: [{ op: 'add', path: '/spec/containers/0/resources', value: res }], headers: jsonPatch }), 'name');
+    refused(
+      await rig.request('PATCH', `${base}/pods/other-pod/resize`, {
+        body: [{ op: 'add', path: '/spec/containers/0/resources', value: res }],
+        headers: jsonPatch,
+      }),
+      'name',
+    );
     refused(await rig.request('PUT', `${base}/pods/ws-w1-7d9f6c-aaaa/resize`, { body: {} }), 'method');
     // The ReplicaSet: scanned like a Deployment, by a workspace name that matches the path, GET and PUT only.
-    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({ volumes: [{ name: 'h', hostPath: { path: '/' } }] }) }), 'spec');
+    refused(
+      await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({ volumes: [{ name: 'h', hostPath: { path: '/' } }] }) }),
+      'spec',
+    );
     refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({ hostNetwork: true }) }), 'spec');
-    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({ containers: [{ name: 'workspace', image: 'x', securityContext: { privileged: true } }] }) }), 'spec');
+    refused(
+      await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, {
+        body: rsBody({ containers: [{ name: 'workspace', image: 'x', securityContext: { privileged: true } }] }),
+      }),
+      'spec',
+    );
     refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: rsBody({}, 'ws-other-1') }), 'name');
     refused(await rig.request('PUT', `${apps}/replicasets/claudepilot-agent-1`, { body: rsBody({}, 'claudepilot-agent-1') }), 'name');
-    refused(await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, { body: { ...rsBody({}), metadata: { name: 'ws-w1-7d9f6c', namespace: 'kube-system' } } }), 'namespace');
-    for (const m of ['PATCH', 'DELETE']) refused(await rig.request(m, `${apps}/replicasets/ws-w1-7d9f6c`, { body: m === 'PATCH' ? {} : undefined, headers: m === 'PATCH' ? { 'Content-Type': 'application/merge-patch+json' } : undefined }), 'method');
+    refused(
+      await rig.request('PUT', `${apps}/replicasets/ws-w1-7d9f6c`, {
+        body: { ...rsBody({}), metadata: { name: 'ws-w1-7d9f6c', namespace: 'kube-system' } },
+      }),
+      'namespace',
+    );
+    for (const m of ['PATCH', 'DELETE'])
+      refused(
+        await rig.request(m, `${apps}/replicasets/ws-w1-7d9f6c`, {
+          body: m === 'PATCH' ? {} : undefined,
+          headers: m === 'PATCH' ? { 'Content-Type': 'application/merge-patch+json' } : undefined,
+        }),
+        'method',
+      );
     refused(await rig.request('GET', `${apps}/replicasets`), 'resource');
     refused(await rig.request('POST', `${apps}/replicasets`, { body: rsBody({}) }), 'resource');
-    assert.equal(fakeSaw(n).length, 0, fakeSaw(n).map((r) => `${r.method} ${r.url}`).join(', '));
+    assert.equal(
+      fakeSaw(n).length,
+      0,
+      fakeSaw(n)
+        .map((r) => `${r.method} ${r.url}`)
+        .join(', '),
+    );
   });
 
   it('KubernetesRuntime resizes a running workspace in place through the proxy: the same pod, the ReplicaSet written, no refusal', async () => {
@@ -503,9 +785,15 @@ describe('the in-place resize (PILOT-1163, G2): a JSON patch of container resour
       assert.deepEqual([...fresh.fake.pods.keys()], before, 'the same pod: no restart');
       const pod = [...fresh.fake.pods.values()][0] as unknown as { metadata: { name: string } };
       assert.equal(fresh.fake.seen('PATCH', `/api/v1/namespaces/${NAMESPACE}/pods/${pod.metadata.name}/resize`).length, 1);
-      const rs = [...fresh.fake.replicaSets.values()][0] as unknown as { metadata: { name: string }; spec: { template: { spec: { containers: { name: string; resources: unknown }[] } } } };
+      const rs = [...fresh.fake.replicaSets.values()][0] as unknown as {
+        metadata: { name: string };
+        spec: { template: { spec: { containers: { name: string; resources: unknown }[] } } };
+      };
       assert.equal(fresh.fake.seen('PUT', `/apis/apps/v1/namespaces/${NAMESPACE}/replicasets/${rs.metadata.name}`).length, 1);
-      assert.deepEqual(rs.spec.template.spec.containers.find((c) => c.name === 'workspace')!.resources, { limits: { cpu: '2', memory: '4096Mi' }, requests: { cpu: '2', memory: '4096Mi' } });
+      assert.deepEqual(rs.spec.template.spec.containers.find((c) => c.name === 'workspace')!.resources, {
+        limits: { cpu: '2', memory: '4096Mi' },
+        requests: { cpu: '2', memory: '4096Mi' },
+      });
       assert.deepEqual(fresh.service.report!().denied ?? [], [], 'the policy refused none of it');
     } finally {
       await fresh.stop();
@@ -519,13 +807,24 @@ describe('the agent’s own identity Secret (outside the portal-facing allowlist
     const store = new KubeSecretIdentityStore(api, NAMESPACE, 'claudepilot-agent-identity');
     assert.equal(await store.load(), null);
     const keys = generateNodeKeyPair();
-    const identity = { node: 'nd_0123456789ab', target: 'kube', portalUrl: 'https://pilot.example.test', portalId: null, privateKey: keys.privateKey, publicKey: keys.publicKey, enrolledAt: '2026-10-12T09:00:00.000Z' };
+    const identity = {
+      node: 'nd_0123456789ab',
+      target: 'kube',
+      portalUrl: 'https://pilot.example.test',
+      portalId: null,
+      privateKey: keys.privateKey,
+      publicKey: keys.publicKey,
+      enrolledAt: '2026-10-12T09:00:00.000Z',
+    };
     await store.save(identity);
     assert.deepEqual(await store.load(), identity);
     const secret = rig.fake.secrets.get('claudepilot-agent-identity')!;
     assert.equal(secret.metadata.labels!['claudepilot.connect/target'], 'kube');
     assert.equal(secret.metadata.labels!['app.kubernetes.io/part-of'], 'claudepilot-connect');
-    assert.ok(parseIdentity(Buffer.from((secret.data as Record<string, string>)['identity.json']!, 'base64').toString()), 'the Secret holds a valid identity');
+    assert.ok(
+      parseIdentity(Buffer.from((secret.data as Record<string, string>)['identity.json']!, 'base64').toString()),
+      'the Secret holds a valid identity',
+    );
 
     const next = generateNodeKeyPair();
     await store.saveNext({ ...identity, privateKey: next.privateKey, publicKey: next.publicKey });
