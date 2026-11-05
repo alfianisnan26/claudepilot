@@ -4,21 +4,9 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 
 ## DONE
 - Decisions D1-D7 + hard limits recorded on PILOT-1131 (comment 57923). Phase tickets PILOT-1132..1156.
-- PILOT-1140 gap analysis merged 9be55e4b4 (job 008f03b7), closed; gaps PILOT-1157..1164.
-- PILOT-1139 origin/CSRF merged c20382436..33d6d6ffb (job 65e012f1 5194, review PASS 58245), closed.
-- PILOT-1143 Worker skeleton merged 51de2b63c..42f0e097c (job 11fe24f4 16), closed.
-- PILOT-1141 manifests merged bbfedf992..a294e9fb6 + PRD fix ad076bef7 (job bf0d2e6d, review PASS 58258), closed.
-- PILOT-1162 multi-namespace bridge merged 882c8a494..9aa8816a4 (job 1a6d3781 107, review PASS 58261), closed.
-- PILOT-1144 BridgeDO + /bridge merged b213464ff..21f9ae716 (job d8ebfaf4 61, review PASS 58260), closed. Minors -> PILOT-1172.
-- PILOT-1138 rate limits merged as squash d2c92d8ae (= reviewed head 3da7888ee, job 99b742cf 158, review PASS 58332), closed.
-- PILOT-1159 G6 spike merged 9072225a6..3bcca9b37 (job 3a3aee9c 41; skipped e66ef7047, a stale PRD copy), closed. Follow-ups PILOT-1169/1170/1171.
-- PILOT-1172 bridge hardening merged af872f583..929d2ba74 (job 98ef1e94 158, review PASS 58743), closed.
-- PILOT-1168 route limiter keys merged 7e4b34d01..103716ada (job 4e2cda31 222, review PASS 58772), closed. Follow-up PILOT-1179 (go-live blocker).
+- Merged and closed, each with its job and review on the ticket (details in this file's git history): 1140, 1139, 1143, 1141, 1162, 1144, 1138, 1159, 1172, 1168.
 - PILOT-1145 DONE by the operator as coordinator (job 5afb4f9e on 27102ae): https://pilot-next.kohi-labs.com serves cp-next-core behind Access (anon 403, service token 200), closed by the operator. Script merged 599c96411..0022bff07 (review PASS on 27102ae67f10, in cf-review's report; ticket closed). Minors -> PILOT-1180.
-- PILOT-1158 (G5 app ports on enrolled kube) + PILOT-1160 (G7 big stdin / long exec) merged 2c033546f..2fa3b2e53 (job 05ad0b6b 35), closed (NORMAL, self-test).
-- INCIDENT PILOT-1183: the 1172 merge (e7a3df776) turned agent.e2e's kube case red on cf/integration (bisect in comment 59420). Test-only fix 86a54acf0, closed.
-- Merged 86a54acf0..92c02662b: 1183, 1179 (82a7ed112..ba8674e60, review PASS 59397), 1169 (ac6e7e9d3..4e5c3cb3a), 1170 (6e4eae6b4..ea72d35fa, review PASS 59409), 1181 (92c02662b). Merged-tree check: job a8c65a26 typecheck clean, pack fresh, core-worker 68 pass; job 141c483f server connect/auth/appports/limiter 553 pass 0 fail. All five closed.
-- PILOT-1180 deploy safe re-run (d08e42831..46edd7284, review PASS 59423+59478) and PILOT-1184 go-live checks (edf1ac0d4..edc23a891, review PASS 59480) merged. Merged-tree job 66ccda39: typecheck, pack fresh, core-worker 68 + scripts 7, server qa/auth 261, 0 fail. Both closed.
+- Also merged and closed (git history of this file): 1158, 1160, 1183 (INCIDENT: the 1172 merge turned agent.e2e red; test fix 86a54acf0), 1179, 1169, 1170, 1181, 1180, 1184.
 - PILOT-1163 resize allowlist + RBAC (5abd1f455..5440c3d89, review PASS 60004) and PILOT-1161 built-in ids (61c7d041c, review PASS 60007) merged; pack d73c10de1. Merged-tree jobs 2293db23 (typecheck, pack) + c89c2515 (server connect/workspaces 670 pass 0 fail, web targets 9, core-worker 68+7). Both closed; minors -> PILOT-1186.
 - Merged a67f318c4..ec9cf77f1 (merged-tree job be235d94 on fc7a0af: core-worker 91 + scripts 10 + router 4, server 361, 0 fail; job 42c2ba41 on ec9cf77: typecheck, pack; ec9cf77 is a prettier-only fix):
   - PILOT-1148 SPA assets (edf473a1a..4232195e0, review PASS 59965 + 60023). Left in_review: the staging deploy is FOR THE COORDINATOR (comment 60128).
@@ -36,11 +24,16 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
   - Both closed.
 - PILOT-1189 boot banner: merged fe9a2faf7 + 42521c82c (PASS 60273; job 9b47d193, server 346) and the minors 1cb65b139 (PASS 60289; job d6a5917a, 15 pass). Closed.
 - PILOT-1187 Worker spec check: merged 579fef0d1..1464c4530 and the fix round 15c5cec45..3254fa74c (PASS 60279). Job 66ee067d on 4ac73a8: typecheck, pack, prettier, core-worker 122+10+4, server 509 pass 0 fail. Closed. Follow-ups are in PILOT-1190.
+- PILOT-1190 SA token off + CP_KUBE_IMAGES: merged as 1dae9eb54 + 2c7362d32 (PASS 60389 on 256cc6cd4; the diff against it is empty).
+  - Job 27ec29f2 on 385c723: typecheck, pack.
+  - Job 9cfb3ec5: prettier on the clean files, core-worker 122+12+4, server 201, 0 fail.
+  - The Prettier diffs on kubernetes.ts and kubeTargets.test.ts all predate the branch (none on the merged lines 471-473 and 141-142), so they are not reformatted.
+  - Closed. The contract part is PILOT-1192.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): blind review of PILOT-1190, head 256cc6cd4 (self-test job 32a929c8, 658 pass; deploy-stg command is on the ticket FOR THE COORDINATOR).
-- cf-sec (worker e28ec1b4, opus): a read-only audit for PILOT-1137, the security gate before real data. It writes the blocking list and owners, and files a ticket for any gap.
+- cf-review (worker 68d76aeb, opus, auto): read-only check that PILOT-648/114 are superseded by the route guard (asked from the 1137 audit).
+- cf-sec (worker e28ec1b4, opus): PILOT-1191 (T-3890), the full /security:security-audit of cp-next-core + cp-bridge, read only; excludes the files it wrote itself. The PILOT-1137 gate table is done (60391); the blocking list is in NEXT.
 - cf-bridge (worker 5bc808ae, opus, builder 1 of 2): resumed 18:10Z after the 18:00 reset. Gaps PILOT-1164, 1157, 1167 on ticket/T-<first>-gaps.
 - cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1149 (T-3707, HIGH), the /api proxy to a SCRATCH portal over the bridge, stub-tested; branch ticket/T-3707-api-proxy.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
@@ -76,6 +69,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
 - PILOT-1148 (comment 60128): the staging deploy that ships the SPA. job-run.sh --ref ec9cf77f1705 --pool-env CP_NEXT_CF_API_TOKEN/ACCOUNT_ID/ZONE/HOST -- deploy-stg.mjs --plan, then without --plan.
 - PILOT-1185 (after the slice 2 merge on cf/integration and its release by the operator): rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to a random code of 26 or more characters, then set PORTAL_SIGNIN_CODE_STRICT=true. Until then the boot banner prints the code (PILOT-1189).
+- PILOT-1190 (comment 60384): the stg deploy of cp-next-core from the cf/integration head that holds 2c7362d32. Run `job-run.sh --ref <sha> --pool-env CP_NEXT_CF_API_TOKEN --pool-env CP_NEXT_CF_ACCOUNT_ID --pool-env CP_NEXT_ZONE --pool-env CP_NEXT_HOST -- 'node apps/core-worker/scripts/deploy-stg.mjs --plan; exit $?'`, then the same without --plan (exit 3 = deployed, token check skipped). The portal part (no SA token on new workspace pods) ships with the operator's next portal release.
 - Cleanup: delete scratch branch wip/cf-worker-t3737-dbg1 (debug commit only; agents may not delete branches).
 - PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
 
@@ -83,8 +77,8 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - none (production cutover and the final hostname come at phase 6, operator + owner).
 
 ## NEXT
-1. PILOT-1142 rig run when the coordinator grants the rights.
-2. Go-live: a boot check that refuses a weak server sign-in code (review 59480: lifts the PILOT-1182 blocker), at the next free builder slot. PILOT-1182 (HIGH, filed by cf-sec; review: not a blocker if the server code is long): workspaces reach the portal Service directly and can forge X-Forwarded-For; a NetworkPolicy and an internal port (needs the coordinator).
-3. cf-worker: 1169/1170, then 1171, then PILOT-1148 SPA assets, 1150 pipeline (reuses the 1145 deploy script), 1149 proxy.
-4. cf-bridge (at a free builder slot): gaps 1161, 1163, 1164, 1157, 1167.
-5. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
+1. At the next free builder slot: PILOT-1192 (T-3891, HIGH), the contract part of 1190. It starts after the 1190 deploy and once the workspaces are recreated; before then, only its drift-test half.
+2. The PILOT-1137 gate blockers (audit 60391), as one bundle: 654 + 180 (Secure `__Host-` cookie), 186 (redaction), 1123 (heartbeat id check, verify), 113/530 (verify or finish). Then the findings from PILOT-1191.
+3. cf-worker after 1149: 1150 pipeline (reuses the 1145 deploy script).
+4. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
+5. PILOT-1142 rig run when the coordinator grants the rights.
