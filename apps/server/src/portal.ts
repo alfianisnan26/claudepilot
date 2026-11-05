@@ -54,8 +54,9 @@ export interface SessionStore {
 
 export function generateCode(): string {
   let code = '';
-  // PILOT-1185: a draw that happens to hold a run, a sequence or a repeat measures below the bar (codeBits); draw again. Estimated at
-  // about 1 draw in 100,000 (three lost characters out of 28 are needed), so what it takes from the code's strength is nothing worth counting.
+  // PILOT-1185: a draw that measures below the bar (codeBits) is drawn again. PILOT-1189 (review 60152): that is about 1 draw in 4,300, almost
+  // all of them a draw with no digit, (23/31)^28 ≈ 2.3e-4, which is measured against the 23 letters (126.7 bits); a draw with a run or a
+  // repeat is far rarer. Redrawing those takes under a thousandth of a bit from the code's strength.
   while (codeBits(code) < MIN_CODE_BITS) {
     code = '';
     for (let i = 0; i < GENERATED_CODE_LENGTH; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
@@ -89,6 +90,8 @@ export class Portal {
   roleOf: AccountRole = () => null;
   /** Called after sessions end by sign-out or a new code, so what is tied to them (open sockets) can be cut. */
   onRevoked: () => void = () => {};
+  /** PILOT-1189: called after the code changes (a rotation, a custom code), so the boot's code file never holds an old code. */
+  onCodeChanged: () => void = () => {};
   /**
    * T-968 S1 (general-manager PRD Q3, lead decision #11136): called with each person whose session a sign-out, a revoke or a new code just
    * ended, on ANY device, even when another device stays signed in (the server code's session is the founding user's). index.ts revokes
@@ -313,7 +316,8 @@ export class Portal {
 
   #assertStrong(code: string) {
     if (this.requireStrongCode && codeBits(code) < MIN_CODE_BITS) {
-      const problem = `This server needs a code of at least ${MIN_CODE_BITS} bits while code sign-in is on.`;
+      // PILOT-1189 (review 60152): say why. A well-formed code (26 letters, say) is refused only for its strength.
+      const problem = `This code is too weak: about ${Math.floor(codeBits(code))} bits, and this server needs at least ${MIN_CODE_BITS} bits while code sign-in is on. Mix letters and digits, with no runs or repeats (Rotate makes one).`;
       throw new AppError('VALIDATION_FAILED', problem, { details: { code: problem } });
     }
   }
@@ -329,6 +333,7 @@ export class Portal {
     this.#code = next;
     this.#source = input === undefined ? 'generated' : 'custom';
     this.#codeUpdatedAt = Date.now();
+    this.onCodeChanged();
     const keepHash = tokenHash(keep);
     const ended: string[] = [];
     for (const [hash, s] of this.#sessions)

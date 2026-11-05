@@ -64,7 +64,7 @@ Let's Encrypt certificate through a DNS-01 challenge instead (a token with Zone 
 ```sh
 cp deploy/.env.example deploy/.env      # optional: PORTAL_SERVER_CODE, PORTAL_TLS
 NODE_AUTH_TOKEN=$(gh auth token) docker compose -f deploy/compose.yaml up -d --build
-docker compose -f deploy/compose.yaml logs portal   # server code, if generated
+docker compose -f deploy/compose.yaml logs portal   # where a generated server code is (never the code)
 ```
 
 From the devcontainer, add `--context host` after `docker` to run it on the Mac's Docker Desktop.
@@ -79,7 +79,7 @@ Environment variables (see [.env.example](.env.example)):
 
 | Variable | Default | |
 | --- | --- | --- |
-| `PORTAL_SERVER_CODE` | generated | Sign-in code. Unset: a 28-character code is generated at startup and printed in the log. |
+| `PORTAL_SERVER_CODE` | generated | Sign-in code. Unset: a 28-character code is generated at startup and written to `server-code` in the data dir (mode 0600); the log says only where it is and how strong a code is, never the code. |
 | `PORTAL_HOST` | `0.0.0.0` | Bind address. |
 | `PORTAL_PORT` | `3000` | Port. |
 | `PORTAL_TRUST_PROXY` | `false` | `true` behind a reverse proxy: the sign-in rate limit uses the last `X-Forwarded-For` address. Only when the portal is reachable through the proxy alone. |
