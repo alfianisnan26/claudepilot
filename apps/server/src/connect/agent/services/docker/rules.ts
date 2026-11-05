@@ -3,7 +3,10 @@
 //
 // The default is deny: a route that is not in `ROUTES` is refused, a method the route doesn't list is refused, and every query parameter
 // the proxy forwards is one it validated here (the proxy rebuilds the query from them, so what the daemon sees is what was checked).
-import type { ConnectDockerRule } from '@portal/contracts';
+import { normalizeImageRef, type ConnectDockerRule } from '@portal/contracts';
+
+// One normaliser for every image wall: the Docker policy, the agent's kube scan and the Worker's CP_KUBE_IMAGES (PILOT-1187).
+export { normalizeImageRef };
 
 /** Why a request was refused, or what to do about a request that matched. */
 export interface Refusal {
@@ -161,16 +164,6 @@ export function queryOf(pairs: [string, string][]): string {
 export const CONTAINER_NAME = /^claudepilot-[a-z0-9][a-z0-9._-]{0,62}$/;
 /** Volumes: a workspace's home volume. */
 export const VOLUME_NAME = /^claudepilot-[a-z0-9][a-z0-9._-]*-home$/;
-
-/** `ghcr.io/x/y` → itself with `:latest` when it names no tag or digest; `docker.io/library/` and `docker.io/` expanded away. */
-export function normalizeImageRef(ref: string): string {
-  let r = ref.trim();
-  r = r.replace(/^(?:index\.)?docker\.io\//, '').replace(/^library\//, '');
-  const lastSlash = r.lastIndexOf('/');
-  const tail = r.slice(lastSlash + 1);
-  if (!tail.includes(':') && !tail.includes('@')) r += ':latest';
-  return r;
-}
 
 /** The references containers may be created from. An exact match after normalising both sides. */
 export class ImageAllow {

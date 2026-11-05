@@ -215,6 +215,9 @@ describe('what an object may contain: nothing that leaves the workspace’s sand
       ['bidirectional mount propagation', container({ volumeMounts: [{ name: 'home', mountPath: '/h', mountPropagation: 'Bidirectional' }] })],
       ['an unmasked /proc', container({ securityContext: { procMount: 'Unmasked' } })],
       ['a raw block device', container({ volumeDevices: [{ name: 'd', devicePath: '/dev/x' }] })],
+      // Review 60154, minor 1 (PILOT-1187): no Kubernetes credential in a workspace, automounted or projected.
+      ['the automounted service account token', dep({ automountServiceAccountToken: true })],
+      ['a projected service account token', dep({ volumes: [{ name: 't', projected: { sources: [{ serviceAccountToken: { path: 'token' } }] } }] })],
     ];
     for (const [what, body] of bad) {
       refused(await rig.request('POST', `${apps}/deployments`, { body }), 'spec');

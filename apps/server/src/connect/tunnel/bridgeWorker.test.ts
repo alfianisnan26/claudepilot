@@ -72,6 +72,8 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
             [cluster]: { node, publicKey: keys.publicKey, tokenSha256: createHash('sha256').update(token).digest('hex') },
           }),
         },
+        // The Worker's own image wall (PILOT-1187, decision a): the one image the deployment fixture below runs.
+        CP_KUBE_IMAGES: { type: 'plain_text', value: 'ghcr.io/example/workspace:1' },
       },
       dev: { server: { hostname: '127.0.0.1', port: 0 }, inspector: false, watch: false },
     });
@@ -260,6 +262,10 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
         object: { ...deployment({ hostNetwork: true }), metadata: { name: `${ws}0`, labels } },
       });
       assert.deepEqual([escaped.ok, escaped.code, escaped.message], [false, 'bad_request', 'hostNetwork is not allowed.']);
+      const foreign = deployment();
+      foreign.spec.template.spec.containers[0]!.image = 'ghcr.io/attacker/miner:1';
+      const notOurs = await rpc('kubeCreate', { kind: 'deployment', object: { ...foreign, metadata: { name: `${ws}1`, labels } } });
+      assert.deepEqual([notOurs.ok, notOurs.code, notOurs.message], [false, 'bad_request', 'That image is not allowed on this cluster.']);
       for (const path of [
         `/api/v1/namespaces/${NAMESPACE}/../kube-system/pods`,
         '/api/%2e%2e/v1',

@@ -1239,9 +1239,35 @@ export function connectOriginProblem(origin: string, allowHttp = false): string 
 /** What is being written: a Deployment or ReplicaSet (or a patch of one), a claim, a secret, or an in-place resize (a JSON patch). */
 export type KubeSpecTarget = 'workload' | 'claim' | 'secret' | 'resize';
 
-/** The images a cluster allows (the agent's PILOT_IMAGES); null: not checked here. */
+/** The images a cluster allows (the agent's PILOT_IMAGES, the Worker's CP_KUBE_IMAGES); null: not checked here. */
 export interface KubeImageCheck {
   has(ref: string): boolean;
+}
+
+/** `ghcr.io/x/y` → itself with `:latest` when it names no tag or digest; `docker.io/library/` and `docker.io/` expanded away. */
+export function normalizeImageRef(ref: string): string {
+  let r = ref.trim();
+  r = r.replace(/^(?:index\.)?docker\.io\//, '').replace(/^library\//, '');
+  const lastSlash = r.lastIndexOf('/');
+  const tail = r.slice(lastSlash + 1);
+  if (!tail.includes(':') && !tail.includes('@')) r += ':latest';
+  return r;
+}
+
+/**
+ * The Worker's own image wall (PILOT-1187, decision (a)): a comma-separated list (`CP_KUBE_IMAGES`), matched exactly after normalising both
+ * sides. Unlike the agent's PILOT_IMAGES, an empty or missing list is NOT "not enforced": it allows no image at all, so a Worker that was
+ * never told its images creates nothing that runs.
+ */
+export function kubeImageAllowOf(list: string | undefined): KubeImageCheck {
+  const set = new Set(
+    (list ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(normalizeImageRef),
+  );
+  return { has: (ref) => set.has(normalizeImageRef(ref)) };
 }
 
 type Obj = Record<string, unknown>;
@@ -1306,6 +1332,13 @@ function scan(node: unknown, key: string, depth: number, budget: { n: number }, 
       case 'serviceAccount':
         if (nonEmpty(v) && v !== 'default') return 'A workspace runs as the namespace’s default service account, nothing else.';
         break;
+      // A workspace never carries a Kubernetes credential (review 60154, minor 1): not the automounted token, not a projected one.
+      case 'automountServiceAccountToken':
+        if (truthy(v)) return 'A service account token is not mounted in a workspace.';
+        break;
+      case 'serviceAccountToken':
+        if (v !== undefined && v !== null) return 'A service account token is not mounted in a workspace.';
+        break;
       case 'add':
         if (key === 'capabilities' && nonEmpty(v)) return 'Added capabilities are not allowed.';
         break;
@@ -1313,7 +1346,7 @@ function scan(node: unknown, key: string, depth: number, budget: { n: number }, 
         if (key === 'seccompProfile' && v === 'Unconfined') return 'An unconfined seccomp profile is not allowed.';
         break;
       case 'image':
-        if (images && typeof v === 'string' && !images.has(v)) return 'That image is not allowed on this cluster.';
+        if (images && (typeof v !== 'string' || !images.has(v))) return 'That image is not allowed on this cluster.';
         break;
       default:
         break;
