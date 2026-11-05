@@ -137,7 +137,7 @@ describe('namespace targets on one connector (PILOT-1167)', () => {
     assert.deepEqual([bad.status, Object.keys(bad.json.error.details)], [422, ['namespace']]);
     assert.equal((await post('/targets/cpb/namespaces', { id: 'nons' })).status, 422, 'a namespace is required');
     assert.equal((await post('/targets/cpb/namespaces', { id: 'cpb-1', namespace: 'fresh-ns' })).status, 409, 'id taken');
-    assert.equal((await post('/targets/cpb/namespaces', { id: 'docker', namespace: 'fresh-ns' })).status, 409, 'a built-in target’s id');
+    assert.equal((await post('/targets/cpb/namespaces', { id: 'docker', namespace: 'fresh-ns' })).status, 422, 'a scanned target’s id: the same checkId as POST /targets');
     // only an active Kubernetes target carries riders
     await m.admin('POST', '/targets', { kind: 'docker', platform: 'linux', id: 'lab', portalUrl: 'https://pilot.example.com' });
     assert.equal((await post('/targets/lab/namespaces', { id: 'onlab', namespace: 'fresh-ns' })).status, 409, 'not Kubernetes');
