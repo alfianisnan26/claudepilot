@@ -1,5 +1,5 @@
 // What the Kubernetes proxy lets a workspace's objects contain (docs/prd/targets-connect.md §11.5, H7). The rule table itself is shared with
-// the Cloudflare Worker, which checks a create before its stream opens (`kubeSpecProblem` in packages/contracts/src/kubeSpec.ts,
+// the Cloudflare Worker, which checks a create before its stream opens (`kubeSpecProblem` in packages/contracts/src/connect.ts §11,
 // PILOT-1187): this maps the proxy's routes onto it and turns a problem into the proxy's `spec` refusal. The image allow list
 // (PILOT_IMAGES) is the agent's own and is checked here only.
 import { kubeSpecProblem, type KubeSpecTarget } from '@portal/contracts';
