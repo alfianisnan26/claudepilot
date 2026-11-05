@@ -628,7 +628,9 @@ describe('KubernetesRuntime over the loopback (A6 in its fake form)', () => {
       assert.equal(fresh.fake.seen('POST', '/api/v1/namespaces').length, 0, 'no namespace was created (a namespaced Role could not)');
       assert.ok(fresh.fake.claims.has('ws-kw1-home') && fresh.fake.deployments.has('ws-kw1'));
       // PILOT-1190: the Connect kube path carries the pod without a service account token, and the proxy lets it through.
-      const made = fresh.fake.deployments.get('ws-kw1') as unknown as { spec: { template: { spec: { automountServiceAccountToken?: boolean } } } };
+      const made = fresh.fake.deployments.get('ws-kw1') as unknown as {
+        spec: { template: { spec: { automountServiceAccountToken?: boolean } } };
+      };
       assert.equal(made.spec.template.spec.automountServiceAccountToken, false);
 
       await rt.stop('kw1');
