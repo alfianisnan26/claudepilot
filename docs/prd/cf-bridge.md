@@ -158,20 +158,26 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
   `kubeSpecProblem` in `packages/contracts/src/connect.ts` §11, the one contracts file the agent bundle maps
   `@portal/contracts` to. It is a deny-list. It refuses the host's network, PID or IPC; privileged containers and privilege
   escalation; root; added capabilities; host paths, host ports and volume kinds other than a claim, emptyDir, configMap, secret,
-  projected or downwardAPI; another service account; an unconfined seccomp profile; sysctls; raw block devices. A claim may not name a
-  volume, be filled from another one, or be a block volume. A refusal is a 400 `bad_request` before a stream opens. The image allow list
-  (`PILOT_IMAGES`) is the agent's own configuration, so it stays on the agent only.
+  projected or downwardAPI; another service account; a service account token, automounted (`automountServiceAccountToken: true`) or
+  projected (a `serviceAccountToken` source); an unconfined seccomp profile; sysctls; raw block devices. A claim may not name a volume, be
+  filled from another one, or be a block volume. A refusal is a 400 `bad_request` before a stream opens.
+- Images have a wall on each side (PILOT-1187, decision (a)). The Worker has its own allow list, `CP_KUBE_IMAGES` (a plain var,
+  comma-separated, matched after the same `normalizeImageRef` as the agent: `docker.io/library/` dropped, `:latest` implied). Every
+  container and init container of a created Deployment must name an image on it, and a non-string image is refused. An empty or missing
+  `CP_KUBE_IMAGES` refuses every Deployment that names an image (a claim, or a Deployment without an image, still passes). Until the first
+  kube route ticket sets the var in the stg deploy, the Worker creates nothing that runs. The agent keeps its own `PILOT_IMAGES`
+  (empty there means not enforced), so with both set an image must be on both lists.
 - Proof: `apps/core-worker/test/kubeApi.test.ts`, `test/bridge.test.ts` (the RPCs over a live link with a stand-in API server; refused
   calls never reach the agent), and `bridgeWorker.test.ts` (a workspace's claim and Deployment created, listed, scaled, measured and
-  deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment refused by the Worker before the agent; the proxy's own scan in `services/kube/kube.test.ts`).
+  deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment and a foreign image refused by the Worker before the agent; the proxy's own scan in `services/kube/kube.test.ts`).
 
 **Boundaries for callers (review of PILOT-1171 slice 1).**
 
 - No route calls these functions yet. The first route that calls `kubeList`, `kubeCreate`, `kubeScale`, `kubeDelete`, `kubeMetrics` or
   `bridgeExecRequest` must take the namespace (and the pod or workspace label) from the workspace record it has authorised. It must never take them from the request: the
   Worker checks only their shape, not that they belong to the caller.
-- The Worker checks a created object's spec (PILOT-1187, above), but not yet its image or service-account token mounts: the agent's
-  image allow list is the only wall for the image until the PILOT-1187 fix round adds a Worker-side list. RBAC is behind both.
+- The Worker checks a created object's spec, its images and its token mounts (PILOT-1187, above); the agent checks them again, and RBAC
+  is behind both. The first route that creates a Deployment ships with `CP_KUBE_IMAGES` set in the stg deploy, or every create is refused.
 
 **G6c slice 2 built (PILOT-1171): exec.** Worker code asks the cluster's `BridgeDO` with `bridgeExecRequest({namespace, bearer, pod,
 command, tty?, stdin?, stdout?, stderr?})` (`apps/core-worker/src/bridge/kubeExec.ts`) on its stub. The path (`/__exec`) is reachable from

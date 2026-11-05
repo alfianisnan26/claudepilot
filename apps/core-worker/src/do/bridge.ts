@@ -29,6 +29,7 @@ import {
   CONNECT_SUBPROTOCOL,
   connectB64u,
   connectVerifyChallenge,
+  kubeImageAllowOf,
   type ConnectChallenge,
   type ConnectReject,
   type ConnectRejectCode,
@@ -347,7 +348,7 @@ export class BridgeDO extends SchemaDO {
   async #kubeOp(auth: BridgeKubeAuth, op: KubeOp): Promise<KubeOpResult> {
     if (!isObject(auth) || !kubeNamespaceOk(auth.namespace)) return kubeBadRequest('The namespace is not valid.');
     if (typeof auth.bearer !== 'string' || !BEARER_RE.test(auth.bearer)) return kubeBadRequest('The bearer is not valid.');
-    const call = kubeCallOf(auth.namespace, op);
+    const call = kubeCallOf(auth.namespace, op, kubeImageAllowOf(this.env.CP_KUBE_IMAGES));
     if ('ok' in call) return call;
     const res = await this.#roundTrip(auth.namespace, auth.bearer, call);
     return res.ok ? kubeResultOf(op, res.status, res.body) : res;
