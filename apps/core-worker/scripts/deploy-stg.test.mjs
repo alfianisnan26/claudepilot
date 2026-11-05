@@ -28,7 +28,12 @@ function world(over = {}) {
   };
   if (typeof over.account === 'function') s.account = over.account(ACCOUNT);
   if (typeof over.zones === 'function') s.zones = over.zones(ACCOUNT);
-  const env = { CP_NEXT_CF_API_TOKEN: randomBytes(30).toString('base64url'), CP_NEXT_CF_ACCOUNT_ID: ACCOUNT, CP_NEXT_ZONE: ZONE, CP_NEXT_HOST: HOST };
+  const env = {
+    CP_NEXT_CF_API_TOKEN: randomBytes(30).toString('base64url'),
+    CP_NEXT_CF_ACCOUNT_ID: ACCOUNT,
+    CP_NEXT_ZONE: ZONE,
+    CP_NEXT_HOST: HOST,
+  };
   const calls = [];
   const secrets = [];
   const ok = (result) => new Response(JSON.stringify({ success: true, result }), { status: 200 });
@@ -45,7 +50,8 @@ function world(over = {}) {
     if (u.host === HOST) {
       // The Worker behind Access: the service token's current secret gets in, nobody else does.
       const secret = init.headers?.['CF-Access-Client-Secret'];
-      if (secret && secret === secrets.at(-1)) return new Response(JSON.stringify({ ok: true, service: WORKER, commit: COMMIT }), { status: 200 });
+      if (secret && secret === secrets.at(-1))
+        return new Response(JSON.stringify({ ok: true, service: WORKER, commit: COMMIT }), { status: 200 });
       return new Response(null, { status: 302, headers: { location: 'https://team.cloudflareaccess.com/cdn-cgi/access/login/x' } });
     }
     assert.equal(u.host, 'api.cloudflare.com');
@@ -170,10 +176,16 @@ test('the account pin: another account name, an unreadable account, or a zone of
 });
 
 test('an unknown policy on cp-next-access stops the plan and the run; --keep-unknown-policies goes on and leaves it', async () => {
-  const state = () => ({ ...deployedState(), policies: [...deployedState().policies, { id: hex(8), name: 'everyone', decision: 'allow' }] });
+  const state = () => ({
+    ...deployedState(),
+    policies: [...deployedState().policies, { id: hex(8), name: 'everyone', decision: 'allow' }],
+  });
   for (const argv of [['--plan'], [], ['--rotate']]) {
     const w = world(state());
-    await assert.rejects(run(w.deps(argv)), (x) => x instanceof Stop && /policies this script did not make: everyone \(allow\)/.test(x.message));
+    await assert.rejects(
+      run(w.deps(argv)),
+      (x) => x instanceof Stop && /policies this script did not make: everyone \(allow\)/.test(x.message),
+    );
     assert.deepEqual(w.writes(), [], `nothing written (${argv.join(' ') || 'run'})`);
     assert.equal(w.deployed.length, 0);
     assert.equal(w.builds.length, 0, 'no SPA build (PILOT-1148)');
@@ -246,7 +258,12 @@ test('the SPA build (PILOT-1148): once per run, after the Access writes and befo
   assert.equal(benv.PATH, '/usr/bin', 'the rest of the environment is kept');
   assert.equal(benv.CP_NEXT_HOST, w.env.CP_NEXT_HOST);
   // Every Access write is before the build: a build that fails leaves Access deny-first and deploys nothing.
-  assert.ok(w.writes().slice(0, 3).every((c) => /\/access\//.test(c.path)));
+  assert.ok(
+    w
+      .writes()
+      .slice(0, 3)
+      .every((c) => /\/access\//.test(c.path)),
+  );
   w.clean();
 });
 
@@ -261,8 +278,11 @@ test('a failed SPA build stops the run before wrangler and before the custom dom
 
 test('buildEnv drops CP_NEXT_CF_* and CLOUDFLARE_* (any case) and keeps the rest', () => {
   const t = hex(8);
-  assert.deepEqual(buildEnv({ CP_NEXT_CF_API_TOKEN: t, CLOUDFLARE_API_TOKEN: t, Cloudflare_Account_Id: t, CP_NEXT_HOST: 'h', HOME: '/h' }), {
-    CP_NEXT_HOST: 'h',
-    HOME: '/h',
-  });
+  assert.deepEqual(
+    buildEnv({ CP_NEXT_CF_API_TOKEN: t, CLOUDFLARE_API_TOKEN: t, Cloudflare_Account_Id: t, CP_NEXT_HOST: 'h', HOME: '/h' }),
+    {
+      CP_NEXT_HOST: 'h',
+      HOME: '/h',
+    },
+  );
 });
