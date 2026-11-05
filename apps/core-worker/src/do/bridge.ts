@@ -477,7 +477,8 @@ export class BridgeDO extends SchemaDO {
       peer: { send: (data) => server.send(data), close: (code, reason) => server.close(code, reason) },
     });
     server.addEventListener('message', (ev) => relay.fromPeer(ev.data as string | ArrayBuffer));
-    server.addEventListener('close', (ev) => relay.peerClosed(ev.code));
+    server.addEventListener('close', (ev) => (console.log('DBG server close', ev.code), relay.peerClosed(ev.code)));
+    console.log('DBG exec relaying', protocol);
     server.addEventListener('error', () => relay.peerClosed(1011));
     // The pod and the command count, never the command (it may carry a value) or the bearer.
     this.#audit('bridge.exec', live.att.connId, `${spec.pod} ${spec.command.length} args ${protocol}`);
