@@ -12,7 +12,7 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
   portal uses (`workspaces/kubernetes.ts:148`), pointed at a loopback HTTP listener on `127.0.0.1:0` (`connect/kube.ts:20-63`) whose every
   connection is a `kube` stream on the tunnel, with a per-connection bearer (`connect/hub.ts:405`, sent to the agent in `config`, `hub.ts:521-525`).
 - Agent side: `KubeProxy` (`connect/agent/services/kube/proxy.ts:56`) checks that bearer, drops it, matches method and path against the
-  allowlist (`rules.ts:42-70`), rebuilds the query (`rules.ts:114-152`), scans write bodies (`schema.ts:95`), and forwards with the
+  allowlist (`rules.ts:42-70`), rebuilds the query (`rules.ts:114-152`), scans write bodies (`schema.ts`, rules in `packages/contracts/src/kubeSpec.ts`), and forwards with the
   service account's token. Plain bodies are capped at 1 MiB (`proxy.ts:275-276`); a `pods/exec` WebSocket upgrade is piped raw both ways
   with no size cap (`proxy.ts:409-426`), and a connection with a request in flight is never closed for idleness (`proxy.ts:159-178`).
 - The agent serves exactly ONE namespace: `PILOT_KUBE_NAMESPACE` or the file's `namespace` (`agent/config.ts:113`), checked once
@@ -24,12 +24,12 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 | --- | --- | --- | --- |
 | Workspace list (Deployments + pods, managed selector) | `kubernetes.ts:336-364` | Works | `rules.ts:46,54` (GET lists), selector forced `rules.ts:137-140` |
 | Start / stop (scale 1/0) | `kubernetes.ts:504-513,646-678` | Works | `rules.ts:56` (`deployments/scale` PUT) |
-| Create (PVC + Deployment, seed-home init as uid 1000) | `kubernetes.ts:391-502` | Works | `rules.ts:49,54`; body scan allows it `schema.ts:1-6`; namespace not created (`connect/kube.ts:165`) |
+| Create (PVC + Deployment, seed-home init as uid 1000) | `kubernetes.ts:391-502` | Works | `rules.ts:49,54`; body scan allows it `kubeSpec.ts:1-8`; namespace not created (`connect/kube.ts:165`) |
 | Remove (Deployment + PVC) | `kubernetes.ts:680-686` | Works | `rules.ts:50,55` (DELETE) |
 | Re-apply image on start (`reapplyImage`) | `kubernetes.ts:652-677` | Not used (option off for enrolled) | PUT allowed `rules.ts:55`; image allow list `proxy.ts:306` |
 | CPU/memory figures (metrics API) | `kubernetes.ts:688-711` | Works | `rules.ts:57` |
 | Resize, stopped workspace (Deployment replace) | `kubernetes.ts:551-553` | Works | `rules.ts:55` |
-| Resize, running workspace in place (`pods/resize` + ReplicaSet) | `kubernetes.ts:594-644` | Works (G2, PILOT-1163) | `pods/{ws-*}/resize` (GET, PATCH; JSON patch of container resources only, `schema.ts` `checkResize`) and `replicasets/{ws-*}` (GET, PUT; scanned like a Deployment) in `rules.ts`; the installer's Role and the doctor ask for both; proven through the proxy in `services/kube/kube.test.ts` |
+| Resize, running workspace in place (`pods/resize` + ReplicaSet) | `kubernetes.ts:594-644` | Works (G2, PILOT-1163) | `pods/{ws-*}/resize` (GET, PATCH; JSON patch of container resources only, `kubeSpec.ts` `resizeProblem`) and `replicasets/{ws-*}` (GET, PUT; scanned like a Deployment) in `rules.ts`; the installer's Role and the doctor ask for both; proven through the proxy in `services/kube/kube.test.ts` |
 | Fit check before create / resize (nodes, all pods) | `kubernetes.ts:433-438,533-544` | **Gap G3** (unavailable) | off for enrolled `kubernetes.ts:170,534`; needs ClusterRole `claudepilot-portal-fit-check` (`deploy/k3s/rbac.yaml:95-118`) |
 | Delivery (pools, secrets, chat host install): `pods/exec` with stdin | `kubernetesDelivery.ts`, `kubernetes.ts:275-329` | Works | `connect/kube.ts:112-121`; proven through the real agent in `connect/agent/kubeDelivery.e2e.test.ts` |
 | Start detection for delivery (`startKeys` poll) | `kubernetes.ts:258-268`, `connect/kube.ts:119` | Works | pod list `rules.ts:46` |
@@ -39,7 +39,7 @@ from `cf/integration` 6150655e5 (T-3698). Every gap is a ticket on the epic (the
 | CI runner (`cp-ci` via exec) | `ci/host.ts:128` | Works | generic `workspaces.exec` → `connect/kube.ts:207` |
 | Workspace git (repos host via exec) | `repos/host.ts:26` | Works | same |
 | App ports (TCP bridge over exec) | `appports/dial.ts:114-129` | Works (G5, PILOT-1158) | enrolled `kubernetes` gets the bridge (`BRIDGED_ENROLLED`); other enrolled kinds still 501; proven in `connect/agent/kubeExec.e2e.test.ts` |
-| Browser pool / VNC (browser container, ConfigMap, NetworkPolicy) | `browser/kube.ts:385-620`, `browser/index.ts:35` | **Gap G4** | `browserAccess()` is null for enrolled (`kubernetes.ts:207-210`); exec only into `workspace` (`rules.ts:103,132`); no `configmaps`/`networkpolicies` rule; root init refused (`schema.ts:66-67`) |
+| Browser pool / VNC (browser container, ConfigMap, NetworkPolicy) | `browser/kube.ts:385-620`, `browser/index.ts:35` | **Gap G4** | `browserAccess()` is null for enrolled (`kubernetes.ts:207-210`); exec only into `workspace` (`rules.ts:103,132`); no `configmaps`/`networkpolicies` rule; root init refused (`kubeSpec.ts` `runAsUser`) |
 | Namespace create | `kubernetes.ts:408-414` | Not needed | namespaces come from git (`deploy/k3s/workspace-orgs.yaml:1-7`); enrolled runtime never creates one (`connect/kube.ts:165`) |
 | Several namespaces (`kubernetes`, `isnan`, `konfersi`, `kohilabs` targets) | `deploy/k3s/portal.yaml:107,119`, `kubeTargets.ts` | **Gap G1** | one namespace per agent (`agent/config.ts:113`, `rules.ts:43`) |
 | Keeping workspace ids (`<target>/<name>`) across the move | `workspaces/manager.ts:225-226` | Works (G8, PILOT-1161) | a built-in id (`CONNECT_BUILTIN_IDS`: `docker`, `docker-host`, `kubernetes`, `local`) is free for an enrolled target when the portal scanned no target of it (`connectTargetIdProblem(id, scanned)`), so the CF portal enrolls the bridge as `kubernetes`; the manager still refuses it beside a static `kubernetes`; `connect/registry.test.ts`, `workspaces/connect/manager.connect.test.ts` |
@@ -153,18 +153,24 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
 - The first wall is now the Worker's (review of PILOT-1170): `kube()` and every call refuse a path with a `.` or `..` segment, any `%`
   (so `%2e%2e`, `%2f`), a query string or fragment, `//` or anything but plain segments, before a stream is opened. The agent's proxy
   and its schema scan stay the second wall, RBAC the third.
+- A create's spec is checked by the Worker too (PILOT-1187), against ONE rule table shared with the agent's proxy:
+  `kubeSpecProblem` in `packages/contracts/src/kubeSpec.ts`, re-exported by `connect.ts` because the agent bundle maps
+  `@portal/contracts` to that file. It is a deny-list. It refuses the host's network, PID or IPC; privileged containers and privilege
+  escalation; root; added capabilities; host paths, host ports and volume kinds other than a claim, emptyDir, configMap, secret,
+  projected or downwardAPI; another service account; an unconfined seccomp profile; sysctls; raw block devices. A claim may not name a
+  volume, be filled from another one, or be a block volume. A refusal is a 400 `bad_request` before a stream opens. The image allow list
+  (`PILOT_IMAGES`) is the agent's own configuration, so it stays on the agent only.
 - Proof: `apps/core-worker/test/kubeApi.test.ts`, `test/bridge.test.ts` (the RPCs over a live link with a stand-in API server; refused
   calls never reach the agent), and `bridgeWorker.test.ts` (a workspace's claim and Deployment created, listed, scaled, measured and
-  deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment refused by the proxy's scan).
+  deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment refused by the Worker before the agent; the proxy's own scan in `services/kube/kube.test.ts`).
 
 **Boundaries for callers (review of PILOT-1171 slice 1).**
 
 - No route calls these functions yet. The first route that calls `kubeList`, `kubeCreate`, `kubeScale`, `kubeDelete`, `kubeMetrics` or
   `bridgeExecRequest` must take the namespace (and the pod or workspace label) from the workspace record it has authorised. It must never take them from the request: the
   Worker checks only their shape, not that they belong to the caller.
-- The Worker does not check a created object's spec. Nothing on the Worker side checks hostNetwork, privileged containers, hostPath mounts, images or
-  service-account tokens. The agent's `KubeProxy` schema scan and image allow list are the only wall for that, and RBAC is behind them.
-  A Worker-side check is ticketed as PILOT-1187 (T-3864).
+- The Worker checks a created object's spec (PILOT-1187, above), but not yet its image or service-account token mounts: the agent's
+  image allow list is the only wall for the image until the PILOT-1187 fix round adds a Worker-side list. RBAC is behind both.
 
 **G6c slice 2 built (PILOT-1171): exec.** Worker code asks the cluster's `BridgeDO` with `bridgeExecRequest({namespace, bearer, pod,
 command, tty?, stdin?, stdout?, stderr?})` (`apps/core-worker/src/bridge/kubeExec.ts`) on its stub. The path (`/__exec`) is reachable from

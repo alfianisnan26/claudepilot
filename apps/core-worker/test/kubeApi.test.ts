@@ -117,6 +117,66 @@ describe('kubeCallOf: each call is checked and built here', () => {
     expect(refused({ op: 'create', kind: 'toString', object: deployment() })).toMatchObject({ ok: false, code: 'bad_request' });
   });
 
+  it('a create is refused for what leaves the sandbox, by the same table as the agent’s proxy (PILOT-1187)', () => {
+    const pod = (podSpec: Record<string, unknown>, container: Record<string, unknown> = {}) =>
+      deployment({
+        spec: {
+          replicas: 1,
+          template: {
+            metadata: { labels: { 'claudepilot.managed': 'true' } },
+            spec: { containers: [{ name: 'workspace', image: 'ghcr.io/example/workspace:1', ...container }], ...podSpec },
+          },
+        },
+      });
+    // What the portal creates today passes: uid 1000, a home claim, scratch space, an init container, limits, a pull secret.
+    const ok = pod(
+      {
+        securityContext: { runAsUser: 1000, fsGroup: 1000 },
+        volumes: [
+          { name: 'home', persistentVolumeClaim: { claimName: 'ws-0123456789ab-home' } },
+          { name: 'tmp', emptyDir: {} },
+        ],
+        initContainers: [{ name: 'seed-home', image: 'ghcr.io/example/workspace:1', securityContext: { runAsUser: 1000 } }],
+        imagePullSecrets: [{ name: 'pull' }],
+      },
+      { resources: { limits: { cpu: '2', memory: '4Gi' } } },
+    );
+    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'deployment', object: ok })).toBe(false);
+
+    const bad: [string, unknown][] = [
+      ['the host network', pod({ hostNetwork: true })],
+      ['the host PID namespace', pod({ hostPID: 'true' })],
+      ['a privileged container', pod({}, { securityContext: { privileged: true } })],
+      ['a privileged init container', pod({ initContainers: [{ name: 'i', image: 'x', securityContext: { privileged: true } }] })],
+      ['privilege escalation', pod({}, { securityContext: { allowPrivilegeEscalation: true } })],
+      ['root', pod({ securityContext: { runAsUser: 0 } })],
+      ['an added capability', pod({}, { securityContext: { capabilities: { add: ['SYS_ADMIN'] } } })],
+      ['a host path', pod({ volumes: [{ name: 'h', hostPath: { path: '/' } }] })],
+      ['an unsafe volume kind', pod({ volumes: [{ name: 'n', nfs: { server: 'x', path: '/' } }] })],
+      ['a host port', pod({}, { ports: [{ containerPort: 80, hostPort: 80 }] })],
+      ['another service account', pod({ serviceAccountName: 'cp-bridge' })],
+      ['an unconfined seccomp profile', pod({ securityContext: { seccompProfile: { type: 'Unconfined' } } })],
+      ['sysctls', pod({ securityContext: { sysctls: [{ name: 'net.ipv4.ip_forward', value: '1' }] } })],
+    ];
+    for (const [what, object] of bad) {
+      const r = refused({ op: 'create', kind: 'deployment', object });
+      expect(r, what).toMatchObject({ ok: false, code: 'bad_request' });
+    }
+
+    const claim = (spec: Record<string, unknown>) => ({
+      metadata: { name: 'ws-0123456789ab-home', labels: { 'claudepilot.managed': 'true' } },
+      spec: { accessModes: ['ReadWriteOnce'], ...spec },
+    });
+    for (const [what, spec] of [
+      ['a named volume', { volumeName: 'pvc-other' }],
+      ['another volume as its source', { dataSource: { kind: 'PersistentVolumeClaim', name: 'ws-other-home' } }],
+      ['a snapshot as its source', { dataSourceRef: { kind: 'VolumeSnapshot', name: 's' } }],
+      ['a raw block volume', { volumeMode: 'Block' }],
+    ] as const)
+      expect(refused({ op: 'create', kind: 'claim', object: claim(spec) }), what).toMatchObject({ ok: false, code: 'bad_request' });
+    expect('ok' in kubeCallOf(NS, { op: 'create', kind: 'claim', object: claim({ volumeMode: 'Filesystem' }) })).toBe(false);
+  });
+
   it('a scale is a PUT of a Scale with 0 or 1 replicas', () => {
     const c = call({ op: 'scale', name: 'ws-0123456789ab', replicas: 0 });
     expect(c).toMatchObject({ method: 'PUT', path: `/apis/apps/v1/namespaces/${NS}/deployments/ws-0123456789ab/scale`, query: '' });

@@ -14,6 +14,10 @@
 
 import type { RuntimeKind } from './workspace.js';
 
+// What a workspace's Kubernetes objects may contain: the agent's KubeProxy and the Cloudflare Worker share it (PILOT-1187). Re-exported
+// here because the agent's bundle maps `@portal/contracts` to this file alone (apps/server/src/connect/agent/build.ts).
+export * from './kubeSpec.js';
+
 /* ------------------------------------------------------------------------------------------------------------------------------- *
  * 1. Kinds, roles, platforms
  * ------------------------------------------------------------------------------------------------------------------------------- */

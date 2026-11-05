@@ -252,14 +252,14 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
       assert.equal(metrics.ok, true, JSON.stringify(metrics));
       assert.ok(Array.isArray(metrics.items));
 
-      // The second wall: the agent's schema scan refuses what leaves the sandbox, and the Worker reports it as the proxy's Status.
+      // The first wall: the Worker refuses what leaves the sandbox (the same table as the agent's proxy, PILOT-1187; the proxy's own
+      // refusal is proven in services/kube/kube.test.ts), a dot segment, an encoded dot or a query, before anything reaches the agent.
+      const before = rig.fake.requests.length;
       const escaped = await rpc('kubeCreate', {
         kind: 'deployment',
         object: { ...deployment({ hostNetwork: true }), metadata: { name: `${ws}0`, labels } },
       });
-      assert.deepEqual([escaped.ok, escaped.code, escaped.status], [false, 'kube_status', 403]);
-      // The first wall: the Worker refuses a dot segment, an encoded dot or a query before anything reaches the agent.
-      const before = rig.fake.requests.length;
+      assert.deepEqual([escaped.ok, escaped.code, escaped.message], [false, 'bad_request', 'hostNetwork is not allowed.']);
       for (const path of [
         `/api/v1/namespaces/${NAMESPACE}/../kube-system/pods`,
         '/api/%2e%2e/v1',
