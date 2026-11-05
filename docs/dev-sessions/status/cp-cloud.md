@@ -37,9 +37,9 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): idle; takes the next review ask.
-- cf-sec (worker e28ec1b4, opus, builder 2 of 2): PILOT-1189 (T-3866, HIGH) boot banner prints the server code + 60152 nits, branch ticket/T-3866-banner-redact.
-- cf-bridge (worker 5bc808ae, opus): idle, waits for a builder slot. Next: gaps 1164, 1157, 1167.
+- cf-review (worker 68d76aeb, opus, auto): blind review of PILOT-1189, head c8e69d4d1 (self-test job 9c83c105, 46 pass; proof aa629ff5).
+- cf-sec (worker e28ec1b4, opus): idle; takes the 1189 review fixes.
+- cf-bridge (worker 5bc808ae, opus, builder 2 of 2): gaps PILOT-1164, 1157, 1167 on ticket/T-<first>-gaps from ea1540f11.
 - cf-worker (worker 6562167d, opus, builder 1 of 2): PILOT-1187 fix round (decision 13:10): a Worker-side image allow list + SA token mounts, branch ticket/T-3864-worker-image-wall. The ticket stays open.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
