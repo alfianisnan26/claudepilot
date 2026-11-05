@@ -39,10 +39,10 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): idle; takes the next review ask.
-- cf-sec (worker e28ec1b4, opus): idle. Next: one item at a free builder slot (none queued).
+- cf-review (worker 68d76aeb, opus, auto): blind review of PILOT-1190, head 256cc6cd4 (self-test job 32a929c8, 658 pass; deploy-stg command is on the ticket FOR THE COORDINATOR).
+- cf-sec (worker e28ec1b4, opus): a read-only audit for PILOT-1137, the security gate before real data. It writes the blocking list and owners, and files a ticket for any gap.
 - cf-bridge (worker 5bc808ae, opus, builder 1 of 2): resumed 18:10Z after the 18:00 reset. Gaps PILOT-1164, 1157, 1167 on ticket/T-<first>-gaps.
-- cf-worker (worker 6562167d, opus, builder 2 of 2): resumed 18:10Z. PILOT-1190 (T-3879, HIGH). Workspace pods get automountServiceAccountToken false (the expand part), and CP_KUBE_IMAGES goes into the deploy-stg config. Branch ticket/T-3879-sa-token-images.
+- cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1149 (T-3707, HIGH), the /api proxy to a SCRATCH portal over the bridge, stub-tested; branch ticket/T-3707-api-proxy.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
