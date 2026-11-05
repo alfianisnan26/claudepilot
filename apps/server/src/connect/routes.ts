@@ -75,6 +75,8 @@ export function createConnectRoutes(admin: ConnectAdmin, opts: { clientIp(req: I
     return c.json(success({ ok: true }));
   });
   r.post('/targets/:id/check', async (c) => c.json(success(await admin.check(actorOf(c), idOf(c, 'id')))));
+  // PILOT-1167: another Kubernetes target on this target's connector (a namespace it also serves).
+  r.post('/targets/:id/namespaces', async (c) => c.json(success(admin.createNamespaceTarget(actorOf(c), idOf(c, 'id'), await body(c), meta(c))), 201));
 
   // ---- tokens ----------------------------------------------------------------------------------------------------------------------
   r.get('/targets/:id/enrollments', (c) => c.json(success(admin.enrollments(actorOf(c), idOf(c, 'id')))));

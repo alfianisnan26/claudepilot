@@ -151,6 +151,10 @@ export function checkSettingsPatch(kind: ConnectKind, current: ConnectTargetSett
         if (kind !== 'kubernetes') details.namespace = 'Only a Kubernetes target has a namespace.';
         else if (v !== (current.namespace ?? DEFAULT_NAMESPACE)) throw new AppError('CONFLICT', 'The namespace is fixed when the connector is installed. Enroll again to change it.', { details: { namespace: 'Fixed at install.' } });
         break;
+      case 'via':
+        // PILOT-1167: fixed when the target is made; the same value (a form sending its whole settings back) is fine.
+        if ((v ?? undefined) !== current.via) throw new AppError('CONFLICT', 'Which connector a target rides on is fixed when it is made.', { details: { via: 'Fixed when made.' } });
+        break;
       case 'storageClass':
       case 'storage': {
         if (kind !== 'kubernetes') details[key] = 'Only a Kubernetes target has this.';

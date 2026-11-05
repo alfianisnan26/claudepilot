@@ -752,11 +752,12 @@ Admin routes use the session cookie and the Origin check, like every `/api` rout
 | `GET /api/connect/targets` | → `ConnectTargetRow[]` | |
 | `POST /api/connect/targets` | `CreateConnectTargetRequest` → 201 `ConnectEnrollmentCreated` | 409 id or label taken; 422 `id`, `portalUrl`, `hostAccess`, or a matrix cell that is `later`/`no`; 503 `store_locked` |
 | `GET /api/connect/targets/:id` | → `ConnectTargetView` | 404 |
-| `PATCH /api/connect/targets/:id` | `UpdateConnectTargetRequest` → view | 409 namespace is fixed; 422 |
-| `DELETE /api/connect/targets/:id?onWorkspaces=keep\|remove` (`CONNECT_API.removeTarget`; not `workspaces`: the session guard refuses that name unless it holds a workspace id) | → `{ ok: true }` | 428 `CONFIRM_REQUIRED` with `ConnectRemoveBlocked`; 409 `remove` needs the target connected |
+| `PATCH /api/connect/targets/:id` | `UpdateConnectTargetRequest` → view | 409 namespace or `via` is fixed; 422 |
+| `DELETE /api/connect/targets/:id?onWorkspaces=keep\|remove` (`CONNECT_API.removeTarget`; not `workspaces`: the session guard refuses that name unless it holds a workspace id) | → `{ ok: true }` | 428 `CONFIRM_REQUIRED` with `ConnectRemoveBlocked`; 409 `remove` needs the target connected; 409 other targets ride on its connector |
 | `POST /api/connect/targets/:id/check` | → view (a fresh check) | |
+| `POST /api/connect/targets/:id/namespaces` (PILOT-1167) | `CreateConnectNamespaceTargetRequest` → 201 `ConnectTargetView` (active, `settings.via = :id`, no token) | 404 a target the actor may not see; 409 `:id` not an active Kubernetes target, or itself riding, or the namespace taken on that connector; 422 `id`, `namespace` |
 | `GET /api/connect/targets/:id/enrollments` | → `ConnectEnrollment[]` | |
-| `POST /api/connect/targets/:id/enrollments` | `CreateConnectEnrollmentRequest` → 201 `ConnectEnrollmentCreated` | 409 `target_enrolled` (a single with a live node) |
+| `POST /api/connect/targets/:id/enrollments` | `CreateConnectEnrollmentRequest` → 201 `ConnectEnrollmentCreated` | 409 `target_enrolled` (a single with a live node); 409 a target riding on another's connector |
 | `DELETE /api/connect/targets/:id/enrollments/:eid` | revoke → `{ ok: true }` | |
 | `GET /api/connect/targets/:id/enrollments/:eid/plan` | → `ConnectPlanPreview` (no secrets) | |
 | `GET /api/connect/targets/:id/events?limit&before` | → `ConnectEvent[]` | |

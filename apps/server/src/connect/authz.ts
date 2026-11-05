@@ -67,6 +67,8 @@ export function declareConnectPolicies(): void {
     'PATCH /api/connect/targets/:id': { ...target('manage'), audit: 'connect.target.update' },
     'DELETE /api/connect/targets/:id': { ...target('manage'), audit: 'connect.target.remove' },
     'POST /api/connect/targets/:id/check': target('view'),
+    // PILOT-1167: makes a target riding on `:id`'s connector; the handler also asks `manage` on the targets area.
+    'POST /api/connect/targets/:id/namespaces': { ...target('manage'), audit: 'connect.target.create' },
     'GET /api/connect/targets/:id/enrollments': target('manage'),
     'POST /api/connect/targets/:id/enrollments': { ...target('manage'), audit: 'connect.enrollment.create' },
     'DELETE /api/connect/targets/:id/enrollments/:eid': { ...target('manage'), audit: 'connect.enrollment.revoke' },

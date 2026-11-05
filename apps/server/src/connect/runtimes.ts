@@ -46,7 +46,13 @@ export class Runtimes {
       },
       log: (line) => d.log(line),
     };
-    d.registry.onChange((c) => this.sync(c.targetId));
+    d.registry.onChange((c) => this.#withRiders(c.targetId, (id) => this.sync(id)));
+  }
+
+  /** Calls `fn` for a target and for every target riding on its connector (PILOT-1167): a node change of the host is theirs too. */
+  #withRiders(targetId: string, fn: (id: string) => void): void {
+    fn(targetId);
+    for (const r of this.d.registry.riders(targetId)) fn(r.id);
   }
 
   useFactory(f: RuntimeFactory): void {
@@ -61,7 +67,8 @@ export class Runtimes {
 
   /** The nodes a runtime is given: the live ones, or (so that a target whose every node was revoked still shows its workspaces as Unreachable) the revoked ones, drained. */
   #nodesOf(t: TargetRow): { record: ConnectNodeRecord; link: ReturnType<Hub['link']> }[] {
-    const all = this.d.store.nodes(t.id);
+    // A namespace target rides on its host's node and tunnel (PILOT-1167); its runtime names its own namespace on each stream.
+    const all = this.d.store.nodes(this.d.registry.nodeHost(t));
     const live = all.filter((n) => !n.revokedAt);
     const use: NodeRow[] = live.length ? live : all;
     return use.map((n) => ({ record: { ...this.d.registry.nodeRecord(n), drained: n.drained || !!n.revokedAt }, link: this.d.hub.link(n) }));
@@ -129,7 +136,7 @@ export class Runtimes {
   canCreate(targetId: string, node?: string): void {
     const t = this.d.registry.target(targetId);
     if (!t || CONNECT_ROLE[t.kind] !== 'cluster') return;
-    const nodes = this.d.registry.liveNodes(targetId);
+    const nodes = this.d.registry.liveNodes(this.d.registry.nodeHost(t));
     if (node) {
       const n = nodes.find((x) => x.id === node || x.name === node);
       if (!n) throw new AppError('CONFLICT', 'There is no such node on this target.');
@@ -160,12 +167,13 @@ export class Runtimes {
     });
   }
 
+  /** Called with a target id when one of its nodes connects; the targets riding on it are called too (PILOT-1167). */
   onReturned(fn: (targetId: string) => void): () => void {
-    return this.d.hub.onConnected((targetId) => fn(targetId));
+    return this.d.hub.onConnected((targetId) => this.#withRiders(targetId, fn));
   }
 
-  /** Called with a target id when one of its nodes' tunnels ends (the manager's cached answer for the target is then out of date). */
+  /** Called with a target id when one of its nodes' tunnels ends (the manager's cached answer for the target is then out of date); riders too. */
   onLost(fn: (targetId: string) => void): () => void {
-    return this.d.hub.onDisconnected((targetId) => fn(targetId));
+    return this.d.hub.onDisconnected((targetId) => this.#withRiders(targetId, fn));
   }
 }

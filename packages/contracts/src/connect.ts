@@ -248,6 +248,12 @@ export interface ConnectTargetSettings {
   running?: boolean;
   /** Whether pools, secrets and the chat host may be delivered into workspaces here (default true). Off: delivery reads "unsupported". */
   delivery?: boolean;
+  /**
+   * Kubernetes (PILOT-1167): the enrolled Kubernetes target whose connector also serves this target's namespace (its PILOT_KUBE_NAMESPACES).
+   * Such a target has no node and no enrollment of its own: it rides on that target's node and tunnel, and each of its streams names its own
+   * namespace. Fixed when the target is made.
+   */
+  via?: string;
 }
 
 /** An enrolled target in the registry. */
@@ -347,6 +353,20 @@ export interface CreateConnectTargetRequest {
   ttlMinutes?: number;
   /** A cluster can enroll several nodes with one token; a single is always 1. */
   maxUses?: number;
+}
+
+/**
+ * `POST /api/connect/targets/:id/namespaces` (PILOT-1167): another Kubernetes target on the connector of target `:id`, for a namespace that
+ * connector also serves. Active at once, with no token: it answers the new target's view.
+ */
+export interface CreateConnectNamespaceTargetRequest {
+  /** The new target's id (see `connectTargetIdProblem`). */
+  id: string;
+  label?: string;
+  /** The namespace, which the connector must serve (PILOT_KUBE_NAMESPACES); never the one of `:id` or of another target on it. */
+  namespace: string;
+  storageClass?: string;
+  storage?: string;
 }
 
 /** `POST /api/connect/targets/:id/enrollments`: another token for a target ("Add node", or a lost agent). */

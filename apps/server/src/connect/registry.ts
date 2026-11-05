@@ -20,6 +20,7 @@ import {
   type ConnectStatusMessage,
   type ConnectTargetRow,
   type ConnectTargetView,
+  type CreateConnectNamespaceTargetRequest,
   type CreateConnectTargetRequest,
   type UpdateConnectNodeRequest,
   type UpdateConnectTargetRequest,
@@ -33,7 +34,7 @@ import type { ConnectNodeRecord, ConnectTargetRecord } from './seams.js';
 import type { ConnectSettingsStore } from './settings.js';
 import type { ConnectStore, NodeRow, TargetRow } from './store.js';
 import { enrollmentState, toEnrollment } from './tokens.js';
-import { checkCell, checkId, checkLabel, checkOptions, checkSettingsPatch, initialSettings, invalid } from './validate.js';
+import { checkCell, checkId, checkLabel, checkOptions, checkSettingsPatch, DEFAULT_NAMESPACE, initialSettings, invalid } from './validate.js';
 
 /** Who is acting: the audit string (`user:u_owner`), the user id for `created_by`, and the client address. Never taken from a request body. */
 export interface ActorCtx {
@@ -139,9 +140,25 @@ export class Registry {
     return this.d.store.targets();
   }
 
-  /** Nodes of a target that are not revoked. */
+  /** Nodes of a target that are not revoked (its own: a target riding on another's connector has none). */
   liveNodes(targetId: string): NodeRow[] {
     return this.d.store.nodes(targetId).filter((n) => !n.revokedAt);
+  }
+
+  /** The target whose nodes carry this one (PILOT-1167): `settings.via` for a namespace target, else itself. */
+  nodeHost(t: TargetRow): string {
+    return t.settings.via ?? t.id;
+  }
+
+  /** The targets that ride on this one's connector (PILOT-1167). */
+  riders(targetId: string): TargetRow[] {
+    return this.targets().filter((t) => t.settings.via === targetId);
+  }
+
+  /** 409 while other targets ride on this one's connector: they would lose their node. */
+  assertNoRiders(targetId: string): void {
+    const riders = this.riders(targetId).map((t) => t.id);
+    if (riders.length) throw new AppError('CONFLICT', `${riders.join(', ')} ride${riders.length === 1 ? 's' : ''} on this target’s connector. Remove ${riders.length === 1 ? 'it' : 'them'} first.`, { details: { riders: riders.join(',') } });
   }
 
   // ---- the seams' records ------------------------------------------------------------------------------------------------------------
@@ -172,6 +189,36 @@ export class Registry {
       const at = this.#now().toISOString();
       this.d.store.insertTarget({ id, label, kind, state: 'pending', portalUrl, settings: initialSettings(kind, options), ownerId: ctx.userId, createdAt: at, createdBy: ctx.userId });
       this.d.events.record({ type: 'target.created', targetId: id, actor: ctx.actor, ip: ctx.ip, detail: { kind, platform, label } });
+      return this.requireTarget(id);
+    });
+  }
+
+  /**
+   * Another Kubernetes target on the connector of `viaId` (PILOT-1167, G1): a namespace that connector also serves. It is active at once and
+   * has no node or token of its own; its runtime uses `viaId`'s node and tunnel and names its own namespace on every stream (the agent refuses a
+   * namespace it does not serve). Refused: a `viaId` that is not an enrolled Kubernetes target or itself rides on another, and a namespace that
+   * `viaId` or another of its riders already has.
+   */
+  createNamespaceTarget(viaId: string, req: Partial<CreateConnectNamespaceTargetRequest>, ctx: ActorCtx): TargetRow {
+    if (!req || typeof req !== 'object') throw new AppError('BAD_REQUEST', 'Expected a JSON body.');
+    const via = this.requireTarget(viaId);
+    if (via.kind !== 'kubernetes') throw new AppError('CONFLICT', 'Only a Kubernetes target serves more namespaces.');
+    if (via.settings.via) throw new AppError('CONFLICT', 'That target rides on another one’s connector: add the namespace there.');
+    if (via.state !== 'active') throw new AppError('CONFLICT', 'Enroll that target’s connector first.');
+    const id = checkId(req.id, this.d.scannedIds());
+    const label = checkLabel(req.label, id);
+    const options = checkOptions('kubernetes', 'linux', { namespace: req.namespace, storageClass: req.storageClass, storage: req.storage }, false);
+    if (!options.namespace) throw invalid({ namespace: 'A Kubernetes name: lowercase letters, digits and dashes.' });
+    const namespace = options.namespace;
+    return this.d.store.tx(() => {
+      if (this.d.store.target(id)) throw new AppError('CONFLICT', 'That name is taken.', { details: { id: 'That name is taken.' } });
+      if (this.d.store.targetByLabel(label)) throw new AppError('CONFLICT', 'That label is taken.', { details: { label: 'That label is taken.' } });
+      const taken = [via, ...this.riders(via.id)].some((t) => (t.settings.namespace ?? DEFAULT_NAMESPACE) === namespace);
+      if (taken) throw new AppError('CONFLICT', 'A target on this connector already has that namespace.', { details: { namespace: 'Taken on this connector.' } });
+      const at = this.#now().toISOString();
+      const settings = { ...initialSettings('kubernetes', options), via: via.id };
+      this.d.store.insertTarget({ id, label, kind: 'kubernetes', state: 'active', portalUrl: via.portalUrl, settings, ownerId: ctx.userId, createdAt: at, createdBy: ctx.userId });
+      this.d.events.record({ type: 'target.created', targetId: id, actor: ctx.actor, ip: ctx.ip, detail: { kind: 'kubernetes', via: via.id, namespace, label } });
       return this.requireTarget(id);
     });
   }
@@ -229,6 +276,7 @@ export class Registry {
    */
   forgetTarget(id: string, ctx: ActorCtx, how: { workspaces: 'none' | 'kept' | 'removed'; reason?: string }): string[] {
     const t = this.requireTarget(id);
+    this.assertNoRiders(id);
     const nodeIds = this.d.store.nodes(id).filter((n) => !n.revokedAt).map((n) => n.id);
     this.d.store.tx(() => {
       this.d.settings.addTombstones(id, nodeIds);
@@ -339,7 +387,8 @@ export class Registry {
   }
 
   view(t: TargetRow): ConnectTargetView {
-    const all = this.d.store.nodes(t.id);
+    // A namespace target shows the node it rides on (PILOT-1167): one cp-bridge node behind several targets.
+    const all = this.d.store.nodes(this.nodeHost(t));
     const cutoff = new Date(this.#now().getTime() - REVOKED_LISTED_DAYS * 86_400_000).toISOString();
     const views = all.filter((n) => !n.revokedAt || n.revokedAt >= cutoff).map((n) => this.nodeView(n));
     const live = views.filter((v) => v.state === 'enrolled');
@@ -375,7 +424,7 @@ export class Registry {
 
   /** `docker 28.1 · 2 nodes`, `kubernetes v1.30 / claudepilot-workspaces`, `lab-box (host)`. */
   #where(t: TargetRow, connected: ConnectNodeView[]): string {
-    const all = this.d.store.nodes(t.id).filter((n) => !n.revokedAt);
+    const all = this.d.store.nodes(this.nodeHost(t)).filter((n) => !n.revokedAt);
     const first = connected.find((v) => v.docker) ?? connected[0] ?? (all[0] ? this.nodeView(all[0]) : null);
     const hostname = all[0]?.info.hostname ?? all[0]?.name ?? t.id;
     switch (t.kind) {
@@ -398,6 +447,7 @@ export class Registry {
 
   #problem(t: TargetRow, link: ConnectLink, live: ConnectNodeView[], connected: ConnectNodeView[]): string | undefined {
     if (link === 'pending') return 'No node has connected yet.';
+    if (live.length === 0 && t.settings.via) return `It rides on ${t.settings.via}, which has no node.`;
     if (live.length === 0) return 'Every node was revoked. Enroll again.';
     if (link === 'offline') {
       const seen = live.map((v) => v.lastSeenAt).filter((x): x is string => !!x).sort().at(-1);

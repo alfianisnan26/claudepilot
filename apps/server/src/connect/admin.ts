@@ -20,6 +20,7 @@ import {
   type ConnectTargetRow,
   type ConnectTargetView,
   type CreateConnectEnrollmentRequest,
+  type CreateConnectNamespaceTargetRequest,
   type CreateConnectTargetRequest,
   type UpdateConnectNodeRequest,
   type UpdateConnectScannedRequest,
@@ -109,6 +110,20 @@ export class ConnectAdmin {
     return this.#created(made.target, made.row, made.enrollment, made.token);
   }
 
+  /**
+   * Another Kubernetes target on the connector of `id` (PILOT-1167): a namespace that connector also serves. Needs `manage` on `id` (a 404 for a
+   * target the actor may not see) and on the targets area (it makes a target). No token: it is active at once and answers its view.
+   */
+  createNamespaceTarget(actor: Actor, id: string, req: Partial<CreateConnectNamespaceTargetRequest>, meta: RequestMeta): ConnectTargetView {
+    requireCan(actor, 'manage', targetRef(id));
+    requireCan(actor, 'manage', targetsArea);
+    this.#enabled();
+    const made = this.d.registry.createNamespaceTarget(id, req, ctxOf(actor, meta.ip));
+    this.d.registry.notifyChange({ what: 'target-added', targetId: made.id });
+    this.d.notify();
+    return this.d.registry.view(made);
+  }
+
   update(actor: Actor, id: string, req: UpdateConnectTargetRequest, meta: RequestMeta): ConnectTargetView {
     requireCan(actor, 'manage', targetRef(id));
     const t = this.d.registry.updateTarget(id, req, ctxOf(actor, meta.ip));
@@ -124,6 +139,7 @@ export class ConnectAdmin {
   async remove(actor: Actor, id: string, workspaces: string | undefined, meta: RequestMeta): Promise<void> {
     requireCan(actor, 'manage', targetRef(id));
     const t = this.d.registry.requireTarget(id);
+    this.d.registry.assertNoRiders(id);
     if (workspaces !== undefined && workspaces !== 'keep' && workspaces !== 'remove') throw invalid({ [CONNECT_REMOVE_QUERY]: 'keep or remove.' });
     const list = CONNECT_ROLE[t.kind] === 'single' ? [] : await this.d.workspacesOn(id);
     const connected = this.d.registry.liveNodes(id).some((n) => this.d.hub.isConnected(n.id));
@@ -163,6 +179,7 @@ export class ConnectAdmin {
     this.#enabled();
     const target = this.d.registry.requireTarget(id);
     if (!req || typeof req !== 'object') throw new AppError('BAD_REQUEST', 'Expected a JSON body.');
+    if (target.settings.via) throw new AppError('CONFLICT', `This target rides on the connector of ${target.settings.via}: enroll there.`);
     const made = this.d.enrollments.create(target, { platform: req.platform, options: req.options, ttlMinutes: req.ttlMinutes, maxUses: req.maxUses }, ctxOf(actor, meta.ip));
     this.d.notify();
     return this.#created(target, made.row, made.enrollment, made.token);
