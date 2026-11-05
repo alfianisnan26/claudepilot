@@ -18,7 +18,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 if (!CODE) throw new Error('SC_CODE is not set');
 mkdirSync(OUT, { recursive: true });
 
-const chrome = spawn('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', `--remote-debugging-port=${CDP}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'sc-'))}`, 'about:blank'], { stdio: 'ignore' });
+const chrome = spawn(
+  'chromium',
+  [
+    '--headless=new',
+    '--no-sandbox',
+    '--disable-gpu',
+    `--remote-debugging-port=${CDP}`,
+    `--user-data-dir=${mkdtempSync(join(tmpdir(), 'sc-'))}`,
+    'about:blank',
+  ],
+  { stdio: 'ignore' },
+);
 let t;
 for (let i = 0; i < 50 && !t; i++) {
   try {
@@ -34,8 +45,14 @@ ws.on('message', (m) => {
   const d = JSON.parse(m);
   if (d.id && pend.has(d.id)) (pend.get(d.id)(d), pend.delete(d.id));
 });
-const cmd = (method, params = {}) => new Promise((r) => { const id = ++n; pend.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
-const ev = async (expr) => (await cmd('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true })).result?.result?.value;
+const cmd = (method, params = {}) =>
+  new Promise((r) => {
+    const id = ++n;
+    pend.set(id, r);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+const ev = async (expr) =>
+  (await cmd('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true })).result?.result?.value;
 const fails = [];
 const check = (ok, msg) => (console.log(`${ok ? 'PASS' : 'FAIL'}: ${msg}`), ok || fails.push(msg));
 const shot = async (name) => {
@@ -44,7 +61,10 @@ const shot = async (name) => {
 };
 const session = () => ev(`fetch('/api/session').then(r=>r.json()).then(j=>j.data)`);
 const noHScroll = () => ev(`document.scrollingElement.scrollWidth <= window.innerWidth`);
-const fieldHeight = () => ev(`(()=>{const i=document.querySelector('input[aria-label="Server code"]');if(!i)return 0;const b=(i.offsetHeight>0&&getComputedStyle(i).opacity!=='0')?i:i.parentElement;return b.getBoundingClientRect().height})()`);
+const fieldHeight = () =>
+  ev(
+    `(()=>{const i=document.querySelector('input[aria-label="Server code"]');if(!i)return 0;const b=(i.offsetHeight>0&&getComputedStyle(i).opacity!=='0')?i:i.parentElement;return b.getBoundingClientRect().height})()`,
+  );
 const type = async (text) => {
   for (const ch of text) {
     await cmd('Input.insertText', { text: ch });
@@ -56,7 +76,10 @@ await cmd('Page.enable');
 const long = (await (await fetch(`${P}/api/session`)).json()).data.longCode === true;
 check(long === CODE.length > 8, `the session answer says ${long ? 'long' : 'short'} for a ${CODE.length}-character code`);
 
-for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]])
+for (const [w, h, mobile] of [
+  [390, 844, true],
+  [1280, 800, false],
+])
   for (const scheme of ['light', 'dark']) {
     const tag = `${long ? 'long' : 'short'}-${w}-${scheme}`;
     await cmd('Network.enable');
@@ -90,8 +113,13 @@ for (const [w, h, mobile] of [[390, 844, true], [1280, 800, false]])
     await sleep(500);
     await shot(`${tag}-3-access`);
     check(await noHScroll(), `${tag}: Access has no horizontal scroll with the code shown`);
-    const shown = await ev(`(()=>{const p=document.querySelector('[aria-label^="Server code "]');if(!p)return null;return {text:p.textContent,clipped:p.scrollWidth>p.clientWidth}})()`);
-    check(!!shown && shown.text.replace(/-/g, '') === CODE && !shown.clipped, `${tag}: Access shows the whole code${long ? ', in groups of 4' : ''}, not cut off`);
+    const shown = await ev(
+      `(()=>{const p=document.querySelector('[aria-label^="Server code "]');if(!p)return null;return {text:p.textContent,clipped:p.scrollWidth>p.clientWidth}})()`,
+    );
+    check(
+      !!shown && shown.text.replace(/-/g, '') === CODE && !shown.clipped,
+      `${tag}: Access shows the whole code${long ? ', in groups of 4' : ''}, not cut off`,
+    );
     await ev(`fetch('/api/logout',{method:'POST'})`);
   }
 
