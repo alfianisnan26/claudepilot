@@ -26,13 +26,17 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
   - PILOT-1171 slice 1 (6aabfcaa6..df3f775b3, PASS 60124).
   - 1185 stays open with cf-sec for slice 2.
 - PILOT-1171 slice 2 exec merged 08cb70527..8f8029b10 (PASS 60138; job 3bf3cd84 on 23ceb855f: typecheck, pack, prettier, core-worker 113+10+4, server 201, 0 fail). PILOT-1171 closed. Follow-ups PILOT-1187 (HIGH) and PILOT-1188.
+- PILOT-1185 slice 2 (c7e5fb84c..072b179c2 as 0c033b35f..b830ca8e0, PASS 60152) and PILOT-1187 (f417f3bee..49bf27b11 as 579fef0d1..1464c4530, PASS 60154; PRD conflict merged by hand) merged, pack 4857b597b.
+  - Job 472e2d65 on 4857b59: typecheck, pack, prettier, core-worker 114+10+4, server 478 pass 0 fail, web 4.
+  - Job 01e9fac0 on 37c231d: server 341, web 4. Its Prettier red is on AccessPage, ApprovalCard and LoginPage, which were unformatted at the base (job e6e9bc7c: a 187-line diff against 29 merged lines), so they are not reformatted.
+  - 1185 can close. 1187 stays open for the image-wall fix.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): reviewing PILOT-1185 slice 2, b93f78582..072b179c243a on ticket/T-3854-signin-code-r2 (jobs 873ceaf0 61, c9a98001 62, proof 5954753d, UI 6e3625ca 51/51).
-- cf-sec (worker e28ec1b4, opus): idle, waits on the 1185 slice 2 review (takes the fixes). After it merges, FOR THE COORDINATOR: rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to >=26 chars, then PORTAL_SIGNIN_CODE_STRICT=true.
-- cf-bridge (worker 5bc808ae, opus, builder 1 of 2): PILOT-1188 (exec hardening, before any exec route) + PILOT-1186 (minors of 1163/1161), branch ticket/T-3865-exec-hardening. Then gaps 1164, 1157, 1167.
-- cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1187 (T-3864, HIGH) Worker-side pod spec check, one rule table in packages/contracts, branch ticket/T-3864-worker-spec-check.
+- cf-review (worker 68d76aeb, opus, auto): idle; takes the next review ask.
+- cf-sec (worker e28ec1b4, opus, builder 2 of 2): PILOT-1189 (T-3866, HIGH) boot banner prints the server code + 60152 nits, branch ticket/T-3866-banner-redact.
+- cf-bridge (worker 5bc808ae, opus, builder 1 of 2): resumed 13:05Z after the 12:50 reset. PILOT-1188 + PILOT-1186, branch ticket/T-3865-exec-hardening. Then gaps 1164, 1157, 1167.
+- cf-worker (worker 6562167d, opus): waits for a builder slot. PILOT-1187 fix round (decision 13:10): a Worker-side image allow list + SA token mounts. The ticket stays open.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
 
@@ -43,10 +47,11 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Workers on Opus: backend/infra/security per owner routing 2026-10-25. Reviewer in mode auto (dontAsk refused git).
 - 11:45 Operator pacing (one account): at most 2 builders at once; cf-review takes review asks only. Only cf-migration tickets.
 - 21:45 Operator: resume after the 21:40 reset; 1145 deploy + 1142 rig first, then phase 2 (1146-1148); 2 workers. cf-worker retries the exact 1145 command once on that instruction; a second refusal stops it (no other path).
-- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 UTC (2026-11-05; crew resumed 02:53Z and 07:54Z). Resume everyone right after each reset; note the reset here.
+- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 and ~08:40-12:50 UTC (2026-11-05; crew resumed 02:53Z, 07:54Z and 13:05Z). Resume everyone right after each reset; note the reset here.
 - 22:35 After incident PILOT-1183: before every cf/integration push, the lead runs ONE job on the merged tree: typecheck, context pack, core-worker tests and the server test directories the merged branches touch.
 - 03:25 Merged-tree job runners: server AND web tests are node --test (not vitest); only core-worker uses vitest (npm test). Two false reds came from the wrong runner.
 - 08:10 Prettier on apps/server/src/{config,index,portal}.ts already fails at the base: not reformatted (a large unrelated diff). Changed files must pass prettier --check; builders run it in their first job.
+- 13:10 PILOT-1187 major 1 (a foreign image is not refused by the Worker): option (a), a Worker-side image allow list from Worker config, where empty means refuse, with a test, plus SA token mounts. Rejected: (b), amending done-when, because the threat is a replaced agent. Head 49bf27b11 merges first, since it only adds a wall. I couldn't comment on the ticket (worker-held), so cf-worker posts the decision.
 - 12:00 Builders put all trailers in one final block (`%(trailers)` reads only the last paragraph).
 - 12:20 PILOT-1168: key the route limiters on visitorAddress (default b). Rejected: the tunnel hop as a key; no limit until the CF binding.
 - 16:45 Operator: 1145 and 1142 first. 1172 and 1169/1170 are parked as pushed WIP. Access goes in front before any route (D3).
@@ -64,6 +69,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
 - PILOT-1148 (comment 60128): the staging deploy that ships the SPA. job-run.sh --ref ec9cf77f1705 --pool-env CP_NEXT_CF_API_TOKEN/ACCOUNT_ID/ZONE/HOST -- deploy-stg.mjs --plan, then without --plan.
+- PILOT-1185 (after the slice 2 merge on cf/integration and its release by the operator): rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to a random code of 26 or more characters, then set PORTAL_SIGNIN_CODE_STRICT=true. Until then the boot banner prints the code (PILOT-1189).
 - Cleanup: delete scratch branch wip/cf-worker-t3737-dbg1 (debug commit only; agents may not delete branches).
 - PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
 
