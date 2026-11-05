@@ -156,7 +156,26 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
 - Proof: `apps/core-worker/test/kubeApi.test.ts`, `test/bridge.test.ts` (the RPCs over a live link with a stand-in API server; refused
   calls never reach the agent), and `bridgeWorker.test.ts` (a workspace's claim and Deployment created, listed, scaled, measured and
   deleted through the real agent and `KubeProxy`; a `hostNetwork` Deployment refused by the proxy's scan).
-- Next (slice 2): exec (v5, v4 fallback) and resize.
+
+**G6c slice 2 built (PILOT-1171): exec.** Worker code asks the cluster's `BridgeDO` with `bridgeExecRequest({namespace, bearer, pod,
+command, tty?, stdin?, stdout?, stderr?})` (`apps/core-worker/src/bridge/kubeExec.ts`) on its stub. The path (`/__exec`) is reachable from
+Worker code only: the public `/bridge` route always forwards `/bridge` with fresh headers.
+
+- Checked before a stream opens: the pod is a workspace's (`ws-*`), the container is always `workspace`, 1..1000 arguments without NUL,
+  a request target of at most 8 KiB (large input goes on stdin), stream flags boolean, `tty` with `stderr` refused. At most 16 execs per
+  link at once (the link has 32 streams).
+- The upgrade offers `v5.channel.k8s.io` then `v4.channel.k8s.io` and checks `Sec-WebSocket-Accept`. A refusal (the proxy's or the API
+  server's) is JSON, not an upgrade: 400 `bad_request`, 429 `busy`, 503 `agent_offline`, 502 `kube_status` with the Status reason or
+  `bad_response`.
+- The answer is a 101 with a WebSocket and `x-cp-exec-protocol`. Each message is one channel message. In: 0 stdin, 4 resize (checked
+  and rewritten as `{"Width":w,"Height":h}`), `[255, 0]` closes stdin (v5 only; dropped on v4). Out: 1 stdout, 2 stderr, 3 the exit
+  Status. A text message, an output channel or a bad resize from the caller closes it (1003/1008); the pod's close closes the caller with
+  its code. Messages are at most 1 MiB, and stdin is cut off (1009) past 1 MiB waiting for the stream's window.
+- The caller's socket is accepted, not hibernatable: the object stays awake while an exec runs, so its stream is not lost. The audit row
+  `bridge.exec` names the pod, the argument count and the protocol, never the command or the bearer.
+- Proof: `test/kubeExec.test.ts` (the check, the codec, the relay), `test/bridge.test.ts` (v5 and the v4 fallback over a live link with a
+  stand-in API server; refusals never reach the agent), and `bridgeWorker.test.ts` (an exec through the real agent and `KubeProxy` to
+  the fake API server, which speaks v4 only: stdin, a resize and a non-zero exit status).
 
 ## RBAC the bridge needs, and nothing wider
 
@@ -185,3 +204,5 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
   (the in-memory session dropped), not observed on the Cloudflare edge.
 - G6c slice 1 ran against the fake API server only. The agent's proxy does not forward `labelSelector` on the metrics path (not in its
   listed routes), so a metrics list is the namespace's pods' metrics, not only the managed ones; the Worker sends the selector anyway.
+- G6c slice 2 (exec): v5 was exercised only against the stand-in in workerd; the real agent path ran against the fake API server, which
+  speaks v4 only. No route reaches the exec yet: a caller (terminal, chat tail) is a later slice.

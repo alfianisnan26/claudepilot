@@ -3,7 +3,9 @@
 // with WebCrypto (`connectVerifyChallenge`, packages/contracts/src/connectSign.ts). After the welcome only binary mux frames flow, into the
 // portal's own MuxSession (@portal/connect-tunnel, role server; PILOT-1170), which answers pings and carries the streams the object opens
 // (`kube`: HTTP/1.1 written on the stream, src/bridge/http1.ts; the REST calls the portal needs, checked and built by src/bridge/kubeApi.ts,
-// are RPCs: kubeList, kubeMetrics, kubeCreate, kubeScale, kubeDelete).
+// are RPCs: kubeList, kubeMetrics, kubeCreate, kubeScale, kubeDelete). An exec in a workspace pod is a fetch of BRIDGE_EXEC_PATH from Worker
+// code (`bridgeExecRequest`, src/bridge/kubeExec.ts): a WebSocket upgrade on a `kube` stream, v5.channel.k8s.io then v4, relayed to a
+// WebSocket handed back to the caller (stdin and resize in, stdout, stderr and the exit status out).
 //
 // Differences from hub.ts, on purpose: a new link REPLACES the live one (hub.ts refuses a healthy duplicate): the old one is closed 4409 and
 // the replacement is written to the audit table. Sockets use the Hibernation API, so an idle link costs no duration; the state a socket
@@ -32,13 +34,14 @@ import {
   type ConnectRejectCode,
   type ConnectWelcome,
 } from '@portal/contracts';
-import { ByteReader, readResponse, writeRequest } from '../bridge/http1.js';
+import { ByteReader, readBody, readHead, readResponse, writeRequest, type Http1Head } from '../bridge/http1.js';
 import {
   kubeBadRequest,
   kubeCallOf,
   kubeNamespaceOk,
   kubePathProblem,
   kubeResultOf,
+  kubeStatusFailure,
   type KubeCall,
   type KubeCreated,
   type KubeDeleted,
@@ -50,6 +53,18 @@ import {
   type KubeOpResult,
   type KubeScaled,
 } from '../bridge/kubeApi.js';
+import {
+  BRIDGE_EXEC_HEADER,
+  BRIDGE_EXEC_PATH,
+  EXEC_LIMITS,
+  EXEC_PROTOCOL_HEADER,
+  execProtocolOf,
+  execUpgradeHeaders,
+  kubeExecCallOf,
+  relayExec,
+  wsAccept,
+  type ExecProtocol,
+} from '../bridge/kubeExec.js';
 import { BRIDGE_LINK, bridgeMuxLimits, hibernatedSocket, type HibernatedSocket } from '../bridge/link.js';
 import { BRIDGE_INTERNAL, notFound } from '../bridge/route.js';
 import type { Env } from '../env.js';
@@ -141,17 +156,23 @@ const attachment = (ws: WebSocket): Attachment | null => (ws.deserializeAttachme
 const textBytes = (s: string): number => new TextEncoder().encode(s).length;
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const noop = (): void => undefined;
+/** An exec that did not start, as JSON: 400 refused here, 429 too many, 503 no link, 502 the API server or the agent said no. */
+const execRefused = (f: KubeFailure): Response =>
+  Response.json(f, { status: f.code === 'bad_request' ? 400 : f.code === 'busy' ? 429 : f.code === 'agent_offline' ? 503 : 502 });
 
 export class BridgeDO extends SchemaDO {
   /** By connId. Empty after a wake from hibernation: `#linkOf` rebuilds. TS-private, not #: a test clears it to stand in for hibernation. */
   private readonly sessions = new Map<string, LinkState>();
+  /** Execs relayed now (each holds a stream and keeps the object awake). */
+  #execs = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env, 'bridge', BRIDGE_MIGRATIONS);
   }
 
-  /** The upgrade, already authorised by the Worker (bridge/route.ts). */
+  /** The upgrade, already authorised by the Worker (bridge/route.ts); or an exec (`bridgeExecRequest`, from Worker code only). */
   override async fetch(req: Request): Promise<Response> {
+    if (new URL(req.url).pathname === BRIDGE_EXEC_PATH) return this.#exec(req);
     const cluster = req.headers.get(BRIDGE_INTERNAL.cluster);
     const node = req.headers.get(BRIDGE_INTERNAL.node);
     const publicKey = req.headers.get(BRIDGE_INTERNAL.key);
@@ -370,6 +391,96 @@ export class BridgeDO extends SchemaDO {
       stream.destroy();
       if (!link.session.closed) this.#save(live.ws, link.session);
     }
+  }
+
+  /**
+   * An exec in a workspace pod (PILOT-1171, src/bridge/kubeExec.ts): checked, then upgraded over a new `kube` stream with v5 offered before
+   * v4, and relayed to a WebSocket handed to the caller. That socket is accepted, not hibernatable: the object stays awake while an exec
+   * runs (its stream would be lost otherwise), and the socket is not in getWebSockets, so it is never taken for a link.
+   */
+  async #exec(req: Request): Promise<Response> {
+    if ((req.headers.get('upgrade') ?? '').toLowerCase() !== 'websocket') return notFound();
+    const checked = kubeExecCallOf(req.headers.get(BRIDGE_EXEC_HEADER));
+    if ('ok' in checked) return execRefused(checked);
+    if (this.#execs >= EXEC_LIMITS.maxExecs) return execRefused({ ok: false, code: 'busy', message: 'Too many execs run on this cluster.' });
+    const { spec, call } = checked;
+    const live = this.#liveSocket();
+    const link = live && this.#linkOf(live.ws, live.att);
+    if (!live || !link) return execRefused({ ok: false, code: 'agent_offline', message: 'No live link for this cluster.' });
+
+    this.#execs++;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      this.#execs--;
+      if (!link.session.closed) this.#save(live.ws, link.session);
+    };
+    let stream: Awaited<ReturnType<typeof openService>>;
+    try {
+      stream = await openService(link.session, { service: 'kube', args: { namespace: spec.namespace } });
+    } catch (e) {
+      release();
+      return execRefused(
+        e instanceof ConnectError
+          ? { ok: false, code: e.code, message: e.message }
+          : { ok: false, code: 'internal', message: 'The stream could not be opened.' },
+      );
+    }
+    this.#save(live.ws, link.session);
+    stream.once('close', release);
+
+    const reader = new ByteReader(stream, BRIDGE_LINK.maxBodyBytes + 64 * 1024);
+    const key = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let protocol: ExecProtocol | null = null;
+    let failure: KubeFailure | null = null;
+    try {
+      writeRequest(stream, {
+        method: 'GET',
+        path: `${call.path}?${call.query}`,
+        headers: { Authorization: `Bearer ${spec.bearer}`, ...execUpgradeHeaders(key) },
+      });
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ConnectError('timeout', 'The agent did not answer in time.')), KUBE_REQUEST_MS);
+      });
+      const head: Http1Head = await Promise.race([readHead(reader), timeout]);
+      if (head.status !== 101) {
+        const res = await Promise.race([readBody(reader, head, 64 * 1024), timeout]);
+        failure = kubeStatusFailure(res.status, res.body.toString('utf8'));
+      } else if (head.headers.get('sec-websocket-accept') !== (await wsAccept(key))) {
+        failure = { ok: false, code: 'bad_response', message: 'The upgrade answer does not match the key.' };
+      } else if (!(protocol = execProtocolOf(head.headers.get('sec-websocket-protocol')))) {
+        failure = { ok: false, code: 'bad_response', message: 'The API server chose no exec protocol this side offered.' };
+      }
+    } catch (e) {
+      failure =
+        e instanceof ConnectError
+          ? { ok: false, code: e.code, message: e.message }
+          : { ok: false, code: link.session.closed ? 'agent_offline' : 'internal', message: (e as Error).message.slice(0, 200) };
+    } finally {
+      clearTimeout(timer);
+    }
+    if (failure || !protocol) {
+      stream.destroy();
+      return execRefused(failure ?? { ok: false, code: 'internal', message: 'The exec did not start.' });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = [pair[0], pair[1]];
+    server.accept();
+    const relay = relayExec({
+      stream,
+      reader,
+      protocol,
+      peer: { send: (data) => server.send(data), close: (code, reason) => server.close(code, reason) },
+    });
+    server.addEventListener('message', (ev) => relay.fromPeer(ev.data as string | ArrayBuffer));
+    server.addEventListener('close', (ev) => relay.peerClosed(ev.code));
+    server.addEventListener('error', () => relay.peerClosed(1011));
+    // The pod and the command count, never the command (it may carry a value) or the bearer.
+    this.#audit('bridge.exec', live.att.connId, `${spec.pod} ${spec.command.length} args ${protocol}`);
+    return new Response(null, { status: 101, webSocket: client, headers: { [EXEC_PROTOCOL_HEADER]: protocol } });
   }
 
   async #onAuth(ws: WebSocket, att: Pending, message: string | ArrayBuffer): Promise<void> {

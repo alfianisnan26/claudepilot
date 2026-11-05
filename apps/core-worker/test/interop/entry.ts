@@ -1,8 +1,9 @@
 // PILOT-1170, PILOT-1171: the Worker as apps/server/src/connect/tunnel/bridgeWorker.test.ts starts it (wrangler's unstable_startWorker,
 // `entrypoint`): the real Worker and its Durable Objects, plus test-only routes that call BridgeDO's kube RPCs over the live link (they
 // have no route in src yet): `POST /__interop/kube` (the GET of kube()) and `POST /__interop/kube/<rpc>` for the REST client (kubeList,
-// kubeMetrics, kubeCreate, kubeScale, kubeDelete). Never deployed: wrangler.jsonc's `main` is src/index.ts, and nothing in src imports this.
+// kubeMetrics, kubeCreate, kubeScale, kubeDelete), and `GET /__interop/exec` (a WebSocket upgrade: the exec). Never deployed: wrangler.jsonc's `main` is src/index.ts, and nothing in src imports this.
 
+import { bridgeExecRequest, type KubeExecSpec } from '../../src/bridge/kubeExec.js';
 import type { Env } from '../../src/env.js';
 import worker from '../../src/index.js';
 import { locate } from '../../src/locate.js';
@@ -30,6 +31,12 @@ export default {
         ...(b.namespace ? { namespace: b.namespace } : {}),
       });
       return Response.json(answer);
+    }
+    // An exec (PILOT-1171 slice 2): the caller's WebSocket upgrade, with `{cluster, ...KubeExecSpec}` in x-interop-exec; BridgeDO's 101
+    // (or its JSON refusal) goes back as it is.
+    if (pathname === '/__interop/exec' && (req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket') {
+      const { cluster, ...spec } = JSON.parse(req.headers.get('x-interop-exec') ?? '{}') as { cluster: string } & KubeExecSpec;
+      return locate(env.BRIDGE, cluster).fetch(bridgeExecRequest(spec));
     }
     const rpc = pathname.startsWith('/__interop/kube/') ? pathname.slice('/__interop/kube/'.length) : '';
     if ((RPC as readonly string[]).includes(rpc) && req.method === 'POST') {
