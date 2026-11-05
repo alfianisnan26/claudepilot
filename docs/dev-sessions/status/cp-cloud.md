@@ -20,10 +20,15 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Merged 86a54acf0..92c02662b: 1183, 1179 (82a7ed112..ba8674e60, review PASS 59397), 1169 (ac6e7e9d3..4e5c3cb3a), 1170 (6e4eae6b4..ea72d35fa, review PASS 59409), 1181 (92c02662b). Merged-tree check: job a8c65a26 typecheck clean, pack fresh, core-worker 68 pass; job 141c483f server connect/auth/appports/limiter 553 pass 0 fail. All five closed.
 - PILOT-1180 deploy safe re-run (d08e42831..46edd7284, review PASS 59423+59478) and PILOT-1184 go-live checks (edf1ac0d4..edc23a891, review PASS 59480) merged. Merged-tree job 66ccda39: typecheck, pack fresh, core-worker 68 + scripts 7, server qa/auth 261, 0 fail. Both closed.
 - PILOT-1163 resize allowlist + RBAC (5abd1f455..5440c3d89, review PASS 60004) and PILOT-1161 built-in ids (61c7d041c, review PASS 60007) merged; pack d73c10de1. Merged-tree jobs 2293db23 (typecheck, pack) + c89c2515 (server connect/workspaces 670 pass 0 fail, web targets 9, core-worker 68+7). Both closed; minors -> PILOT-1186.
+- Merged a67f318c4..ec9cf77f1 (merged-tree job be235d94 on fc7a0af: core-worker 91 + scripts 10 + router 4, server 361, 0 fail; job 42c2ba41 on ec9cf77: typecheck, pack; ec9cf77 is a prettier-only fix):
+  - PILOT-1148 SPA assets (edf473a1a..4232195e0, review PASS 59965 + 60023). Left in_review: the staging deploy is FOR THE COORDINATOR (comment 60128).
+  - PILOT-1185 slice 1 (2fd100a5d..607f3ffe4, PASS 60025).
+  - PILOT-1171 slice 1 (6aabfcaa6..df3f775b3, PASS 60124).
+  - The last two stay open with their builders for slice 2.
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): reviewing (1) PILOT-1148 delta f20493c9d..4b1f61500e48 on ticket/T-3706-spa-assets-r2 (job d47f5b3e 90); (2) PILOT-1185 slice 1 b93f78582ef8 (job f540d727 50; warn by default, strict flag refuses, comment 60005); (3) PILOT-1171 slice 1 7cfba616bdb5 (job 42251f8b 89; treated HIGH: kube path refusal).
+- cf-review (worker 68d76aeb, opus, auto): idle, waits for slice-2 review asks (1185, 1171).
 - cf-sec (worker e28ec1b4, opus, builder 1 of 2): PILOT-1185 slice 2 (strong generator, long codes end to end, sign-in field, ux-check on a scratch portal), branch ticket/T-3854-signin-code-r2. After it merges, FOR THE COORDINATOR: rotate PORTAL_SERVER_CODE (Secret claudepilot-server) to >=26 chars, then PORTAL_SIGNIN_CODE_STRICT=true.
 - cf-bridge (worker 5bc808ae, opus): idle (builder cap 2 full). Next: PILOT-1186 (minors of 1163/1161), then gaps 1164, 1157, 1167.
 - cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1171 slice 2 (exec v5/v4, resize ch 4, relay to caller WS), branch ticket/T-3737-worker-kube-exec from the slice-1 head. 1148 replay and 1171 slice 1 done, in review.
@@ -40,6 +45,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 UTC (2026-11-05; crew resumed 02:53Z and 07:54Z). Resume everyone right after each reset; note the reset here.
 - 22:35 After incident PILOT-1183: before every cf/integration push, the lead runs ONE job on the merged tree: typecheck, context pack, core-worker tests and the server test directories the merged branches touch.
 - 03:25 Merged-tree job runners: server AND web tests are node --test (not vitest); only core-worker uses vitest (npm test). Two false reds came from the wrong runner.
+- 08:10 Prettier on apps/server/src/{config,index,portal}.ts already fails at the base: not reformatted (a large unrelated diff). Changed files must pass prettier --check; builders run it in their first job.
 - 12:00 Builders put all trailers in one final block (`%(trailers)` reads only the last paragraph).
 - 12:20 PILOT-1168: key the route limiters on visitorAddress (default b). Rejected: the tunnel hop as a key; no limit until the CF binding.
 - 16:45 Operator: 1145 and 1142 first. 1172 and 1169/1170 are parked as pushed WIP. Access goes in front before any route (D3).
@@ -56,6 +62,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1179: a stable address range for cloudflared, then narrow PORTAL_CLOUDFLARE_HOPS (deploy/k3s/portal.yaml, now 10.42.0.0/16). PILOT-1182: a NetworkPolicy so only Traefik reaches the portal's public port.
 - PILOT-1139: PORTAL_ALLOWED_ORIGINS=https://<public host> before the portal sits behind the Worker host.
 - PILOT-1144: BRIDGE_CLUSTERS secret on cp-next-core; bridge bearer token in the Secrets pool.
+- PILOT-1148 (comment 60128): the staging deploy that ships the SPA. job-run.sh --ref ec9cf77f1705 --pool-env CP_NEXT_CF_API_TOKEN/ACCOUNT_ID/ZONE/HOST -- deploy-stg.mjs --plan, then without --plan.
 - PILOT-1146/1147: Argo repoURL, AppProject, npm tokens (phase 2 entry).
 
 ## NEEDS A HUMAN
