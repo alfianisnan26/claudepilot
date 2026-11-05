@@ -225,7 +225,10 @@ test('the deploy writes CP_KUBE_IMAGES, the Worker’s image allow list, as a pl
   assert.ok(kube, 'CP_KUBE_IMAGES is written');
   // wrangler splits at the first colon: the value keeps each tag's colon.
   assert.deepEqual(kube.slice('CP_KUBE_IMAGES:'.length).split(','), KUBE_IMAGES);
-  assert.ok(KUBE_IMAGES.length > 0 && KUBE_IMAGES.every((r) => /^[a-z0-9.-]+\/[a-z0-9._/-]+:[A-Za-z0-9._-]+$/.test(r)), 'plain tagged references');
+  assert.ok(
+    KUBE_IMAGES.length > 0 && KUBE_IMAGES.every((r) => /^[a-z0-9.-]+\/[a-z0-9._/-]+:[A-Za-z0-9._-]+$/.test(r)),
+    'plain tagged references',
+  );
   w.clean();
 });
 
