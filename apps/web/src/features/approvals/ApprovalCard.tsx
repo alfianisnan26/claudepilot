@@ -1,13 +1,15 @@
 import { Badge, Button } from '@isnanme/ui';
-import { APPROVAL_KIND_LABEL, APPROVAL_REASON_MAX, approvalNeedsValue, CODE_LENGTH, REAUTH_REQUIRED, type Approval } from '@portal/contracts';
+import { APPROVAL_KIND_LABEL, APPROVAL_REASON_MAX, approvalNeedsValue, REAUTH_REQUIRED, type Approval } from '@portal/contracts';
 import { ShieldCheck } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { InfoTip } from '@/components/InfoTip';
+import { codeTooShort } from '@/features/auth/codeField';
 import { ServerCodeInput } from '@/features/auth/ServerCodeInput';
 import { chatApi } from '@/features/chat/api';
 import { BYPASS_LIFETIME, BYPASS_LIFETIME_ABOUT } from '@/features/chat/bypassCopy';
 import { ApiError, errorText } from '@/lib/api';
+import { longCodeOf, useAuth } from '@/lib/auth';
 import { approvalsApi } from './api';
 import { payloadText } from './mask';
 
@@ -35,6 +37,7 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
   const codeInput = useRef<{ focus: () => void }>(null);
   const open = a.status === 'pending' && Date.parse(a.expiresAt) > Date.now();
   const needsValue = approvalNeedsValue(a.kind);
+  const longCode = longCodeOf(useAuth().state); // PILOT-1185 slice 2
 
   const allow = async () => {
     if (needsValue && !value) return setError('Type the value first.');
@@ -57,8 +60,9 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
 
   const check = async (value: string) => {
     if (busy) return;
-    if (value.length < CODE_LENGTH) {
-      setError(`Enter all ${CODE_LENGTH} characters.`);
+    const short = codeTooShort(value, longCode);
+    if (short) {
+      setError(short);
       return codeInput.current?.focus();
     }
     setBusy('allow');
@@ -169,7 +173,7 @@ export function ApprovalCard({ approval, onChange }: { approval: Approval; onCha
       {open && step === 'code' && (
         <div className="flex flex-col gap-3">
           <p className="text-[14px] font-semibold">Enter the server code</p>
-          <ServerCodeInput ref={codeInput} value={code} onChange={(v) => (setCode(v), setError(null))} onComplete={(v) => void check(v)} error={!!error} disabled={!!busy} autoFocus />
+          <ServerCodeInput ref={codeInput} value={code} onChange={(v) => (setCode(v), setError(null))} onComplete={(v) => void check(v)} error={!!error} disabled={!!busy} autoFocus long={longCode} />
           <div className="grid grid-cols-2 gap-3">
             <Button variant="secondary" className="min-h-12" onClick={() => setStep('decide')} disabled={!!busy}>
               Cancel

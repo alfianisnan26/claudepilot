@@ -22,7 +22,7 @@ test('codeBits: length times log2 of the alphabet actually used; case, spaces an
   near(codeBits(`0I${pick(CODE_ALPHABET, 6)}`), 8 * Math.log2(36)); // letters and digits with look-alikes: 41.4, the most 8 can be
   near(codeBits('abcd-efgh'), codeBits('ABCDEFGH'));
   assert.equal(codeBits(''), 0);
-  for (let i = 0; i < 50; i++) assert.ok(codeBits(generateCode()) < MIN_CODE_BITS, 'no 8-character code reaches the bar');
+  for (let i = 0; i < 50; i++) assert.ok(codeBits(generateCode()) >= MIN_CODE_BITS, 'slice 2: a generated code (28 characters) reaches the bar');
   assert.ok(codeBits(mixed(26)) >= MIN_CODE_BITS, '26 characters of the generator alphabet: 128.8 bits');
   assert.ok(codeBits(mixed(25)) < MIN_CODE_BITS, '25 are not enough: 123.9');
 });
@@ -40,17 +40,13 @@ test('boot check: a weak code with code sign-in on warns (never the code); stric
     assert.ok(!c.line!.includes(`${code.slice(0, 4)}-${code.slice(4)}`), 'nor its shown form');
   }
   for (const strictOn of [false, true]) {
-    assert.deepEqual(
-      signinCodeCheck({ code, source: 'env', codeSignIn: false }, strictOn),
-      { bits: 39, weak: false, refuse: false, line: null },
-      'code sign-in off: nothing to guess',
-    );
+    assert.deepEqual(signinCodeCheck({ code, source: 'env', codeSignIn: false }, strictOn), { bits: 39, weak: false, refuse: false, line: null }, 'code sign-in off: nothing to guess');
     const strong = signinCodeCheck({ code: mixed(26), source: 'custom', codeSignIn: true }, strictOn);
     assert.deepEqual([strong.weak, strong.refuse, strong.line], [false, false, null]);
   }
 });
 
-test('a strict portal refuses a weak new code and turning code sign-in on with one; not strict, today’s behaviour', () => {
+test('a strict portal refuses a weak new code and turning code sign-in on with one, takes a long one; not strict, any well-formed code', () => {
   const token = () => 'session-of-the-caller';
   const lax = new Portal(mixed(CODE_LENGTH), 60_000);
   lax.rotate(token());
@@ -60,11 +56,10 @@ test('a strict portal refuses a weak new code and turning code sign-in on with o
   const envCode = mixed(CODE_LENGTH);
   const p = new Portal(envCode, 60_000);
   p.requireStrongCode = true;
-  for (const next of [undefined, mixed(CODE_LENGTH)])
-    assert.throws(
-      () => p.rotate(token(), next),
-      (e: unknown) => (e as { code?: string }).code === 'VALIDATION_FAILED' && /at least 128 bits/.test((e as Error).message),
-    );
+  assert.throws(
+    () => p.rotate(token(), mixed(CODE_LENGTH)),
+    (e: unknown) => (e as { code?: string }).code === 'VALIDATION_FAILED' && /at least 128 bits/.test((e as Error).message),
+  );
   assert.ok(p.matches(envCode), 'a refused rotation leaves the code as it was');
   assert.equal(p.source, 'env');
 
@@ -74,4 +69,14 @@ test('a strict portal refuses a weak new code and turning code sign-in on with o
   assert.throws(() => p.setCodeSignIn(true), /at least 128 bits/);
   assert.equal(p.codeSignIn, false, 'it stays off');
   p.setCodeSignIn(false); // turning it off is never refused
+
+  // Slice 2: a long code is strong, so strict takes it, generated or by hand, and code sign-in goes back on with it.
+  const longCode = mixed(26);
+  p.rotate(token(), longCode);
+  assert.ok(p.matches(longCode));
+  p.setCodeSignIn(true);
+  assert.equal(p.codeSignIn, true, 'with a long code it turns back on');
+  p.rotate(token());
+  assert.equal(p.source, 'generated');
+  assert.ok(codeBits(p.code) >= MIN_CODE_BITS);
 });

@@ -79,14 +79,14 @@ Environment variables (see [.env.example](.env.example)):
 
 | Variable | Default | |
 | --- | --- | --- |
-| `PORTAL_SERVER_CODE` | generated | Sign-in code. Unset: an 8-character code is generated at startup and printed in the log. |
+| `PORTAL_SERVER_CODE` | generated | Sign-in code. Unset: a 28-character code is generated at startup and printed in the log. |
 | `PORTAL_HOST` | `0.0.0.0` | Bind address. |
 | `PORTAL_PORT` | `3000` | Port. |
 | `PORTAL_TRUST_PROXY` | `false` | `true` behind a reverse proxy: the sign-in rate limit uses the last `X-Forwarded-For` address. Only when the portal is reachable through the proxy alone. |
 | `PORTAL_DATA_DIR` | `.data` (repo root) | Where the portal keeps its database (`portal.db`), backups and workspace creates in progress. Mode 0700. |
 | `PORTAL_SECRET_KEY_FILE` / `PORTAL_SECRET_KEY` | none | Encrypts stored secrets: 32 random bytes, base64url. Easiest: leave the file empty and choose **Set up encryption** on the Access page; the portal writes the key there (never overwriting one) and shows it once. Without a key file the key lives in memory and you **Unlock** after restarts. Keep an offline copy: without it stored secrets can't be read. In the devcontainer the file is on the `claudepilot-portal-secrets` volume. |
 
-Codes are exactly 8 letters and digits (one sign-in box each, shown as `XXXX-XXXX`). Case, spaces and
+Codes are 8 letters and digits (one sign-in box each, shown as `XXXX-XXXX`) or 26 to 64 (one text field, shown in groups of 4; at least 26 is needed for `PORTAL_SIGNIN_CODE_STRICT=true`, PILOT-1185). Case, spaces and
 dashes are ignored. A `.env` at the repo root is loaded in dev.
 
 ## Workspaces

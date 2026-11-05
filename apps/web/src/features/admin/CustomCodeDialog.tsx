@@ -1,5 +1,5 @@
 import { Button, Dialog, TextField } from '@isnanme/ui';
-import { codeProblem, CODE_LENGTH } from '@portal/contracts';
+import { codeProblem, CODE_LENGTH, LONG_CODE_MAX, LONG_CODE_MIN } from '@portal/contracts';
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError } from '@/lib/api';
 
@@ -56,7 +56,7 @@ export function CustomCodeDialog({
       <form onSubmit={submit} noValidate>
         <TextField
           label="New code"
-          placeholder={`${CODE_LENGTH} letters or digits`}
+          placeholder={`${CODE_LENGTH}, or ${LONG_CODE_MIN} to ${LONG_CODE_MAX} letters or digits`}
           autoComplete="off"
           autoCapitalize="characters"
           autoCorrect="off"

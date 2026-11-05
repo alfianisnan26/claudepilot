@@ -1,11 +1,12 @@
 import { Button } from '@isnanme/ui';
-import { CODE_LENGTH, type SsoErrorCode } from '@portal/contracts';
+import { type SsoErrorCode } from '@portal/contracts';
 import { CircleOff } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
 import { AuthLayout } from '@/components/AuthLayout';
 import { InfoTip } from '@/components/InfoTip';
 import { api, ApiError, errorText } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
+import { longCodeOf, useAuth } from '@/lib/auth';
+import { codeTooShort } from './codeField';
 import { ServerCodeInput } from './ServerCodeInput';
 
 /** What an SSO sign-in that came back failed says (`/login?sso_error=<code>`). */
@@ -32,6 +33,8 @@ export function LoginPage() {
   const emailFirst = state.status === 'out' && state.emailSignIn;
   // Owner request 2026-11-01: the server code's sign-in turned off: accounts only, no way to the code form.
   const codeOff = state.status === 'out' && !!state.codeOff;
+  // PILOT-1185 slice 2: a long server code is typed or pasted in one field and sent with Sign in, not at the 8th character.
+  const longCode = longCodeOf(state);
   const [mode, setMode] = useState<'email' | 'code' | null>(null);
   const useEmail = codeOff || (mode ?? (emailFirst ? 'email' : 'code')) === 'email';
   const [email, setEmail] = useState('');
@@ -50,8 +53,9 @@ export function LoginPage() {
   const signIn = async (value: string) => {
     if (loading) return;
     setFormError(null);
-    if (value.length < CODE_LENGTH) {
-      setError(`Enter all ${CODE_LENGTH} characters.`);
+    const short = codeTooShort(value, longCode);
+    if (short) {
+      setError(short);
       return input.current?.focus();
     }
     setError(undefined);
@@ -190,6 +194,7 @@ export function LoginPage() {
           </span>
           <ServerCodeInput
             ref={input}
+            long={longCode}
             value={code}
             onChange={(v) => (setCode(v), setError(undefined), setFormError(null))}
             onComplete={(v) => void signIn(v)}
