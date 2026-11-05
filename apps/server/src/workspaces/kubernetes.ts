@@ -468,6 +468,9 @@ export class KubernetesRuntime implements Runtime {
               hostname: spec.name,
               ...placement,
               terminationGracePeriodSeconds: 5,
+              // No Kubernetes credential in a workspace (PILOT-1190): left out, Kubernetes mounts the default service account's token.
+              // Nothing in a workspace uses it (its jobs use their own kubeconfig, deploy/k3s/workspace-jobs-rbac.yaml).
+              automountServiceAccountToken: false,
               securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
               imagePullSecrets: this.opts.imagePullSecret ? [{ name: this.opts.imagePullSecret }] : undefined,
               volumes: [home],
