@@ -2,7 +2,8 @@
 // It speaks the Connect handshake of apps/server/src/connect/hub.ts: challenge -> auth -> welcome | reject, the Ed25519 signature checked
 // with WebCrypto (`connectVerifyChallenge`, packages/contracts/src/connectSign.ts). After the welcome only binary mux frames flow, into the
 // portal's own MuxSession (@portal/connect-tunnel, role server; PILOT-1170), which answers pings and carries the streams the object opens
-// (`kube`: HTTP/1.1 written on the stream, src/bridge/http1.ts).
+// (`kube`: HTTP/1.1 written on the stream, src/bridge/http1.ts; the REST calls the portal needs, checked and built by src/bridge/kubeApi.ts,
+// are RPCs: kubeList, kubeMetrics, kubeCreate, kubeScale, kubeDelete).
 //
 // Differences from hub.ts, on purpose: a new link REPLACES the live one (hub.ts refuses a healthy duplicate): the old one is closed 4409 and
 // the replacement is written to the audit table. Sockets use the Hibernation API, so an idle link costs no duration; the state a socket
@@ -32,6 +33,23 @@ import {
   type ConnectWelcome,
 } from '@portal/contracts';
 import { ByteReader, readResponse, writeRequest } from '../bridge/http1.js';
+import {
+  kubeBadRequest,
+  kubeCallOf,
+  kubeNamespaceOk,
+  kubePathProblem,
+  kubeResultOf,
+  type KubeCall,
+  type KubeCreated,
+  type KubeDeleted,
+  type KubeFailure,
+  type KubeItems,
+  type KubeListKind,
+  type KubeObjectKind,
+  type KubeOp,
+  type KubeOpResult,
+  type KubeScaled,
+} from '../bridge/kubeApi.js';
 import { BRIDGE_LINK, bridgeMuxLimits, hibernatedSocket, type HibernatedSocket } from '../bridge/link.js';
 import { BRIDGE_INTERNAL, notFound } from '../bridge/route.js';
 import type { Env } from '../env.js';
@@ -57,9 +75,6 @@ const SEEN_EVERY_MS = 1_000;
 const STREAMS_LOST = 1011;
 /** How long a kube request may take, from the open to the last body byte. */
 const KUBE_REQUEST_MS = 30_000;
-/** A path the bridge passes on: origin-form, printable, no spaces (the agent's proxy checks the rest against its allowlist). */
-const PATH_RE = /^\/[\x21-\x7e]{0,2047}$/;
-const NAMESPACE_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const BEARER_RE = /^[\x21-\x7e]{1,512}$/;
 
 interface Pending {
@@ -114,9 +129,13 @@ export interface BridgeKubeRequest {
   bearer: string;
 }
 
-export type BridgeKubeResponse =
-  | { ok: true; status: number; contentType: string | null; body: string }
-  | { ok: false; code: string; message: string };
+export type BridgeKubeResponse = { ok: true; status: number; contentType: string | null; body: string } | KubeFailure;
+
+/** What every REST call of G6c (PILOT-1171) carries: the namespace its stream is opened for, and the agent's per-link kube bearer. */
+export interface BridgeKubeAuth {
+  namespace: string;
+  bearer: string;
+}
 
 const attachment = (ws: WebSocket): Attachment | null => (ws.deserializeAttachment() as Attachment | null) ?? null;
 const textBytes = (s: string): number => new TextEncoder().encode(s).length;
@@ -260,22 +279,63 @@ export class BridgeDO extends SchemaDO {
 
   /**
    * One GET through the live link to the agent's `kube` service (RPC; no route reaches it yet). The agent's proxy checks the bearer, the
-   * namespace and its allowlist; this checks only the shape. The answer body is read into memory, at most BRIDGE_LINK.maxBodyBytes.
+   * namespace and its allowlist; this refuses a path that is not plain segments (`..`, percent-encoding, a query: `kubePathProblem`) itself.
+   * The answer body is read into memory, at most BRIDGE_LINK.maxBodyBytes.
    */
   async kube(req: BridgeKubeRequest): Promise<BridgeKubeResponse> {
-    if (!isObject(req) || typeof req.path !== 'string' || !PATH_RE.test(req.path))
-      return { ok: false, code: 'bad_request', message: 'The path is not valid.' };
-    if (req.namespace !== undefined && (typeof req.namespace !== 'string' || !NAMESPACE_RE.test(req.namespace)))
-      return { ok: false, code: 'bad_request', message: 'The namespace is not valid.' };
-    if (typeof req.bearer !== 'string' || !BEARER_RE.test(req.bearer)) return { ok: false, code: 'bad_request', message: 'The bearer is not valid.' };
+    if (!isObject(req)) return kubeBadRequest('The request is not valid.');
+    const problem = kubePathProblem(req.path);
+    if (problem) return kubeBadRequest(problem);
+    if (req.namespace !== undefined && !kubeNamespaceOk(req.namespace)) return kubeBadRequest('The namespace is not valid.');
+    if (typeof req.bearer !== 'string' || !BEARER_RE.test(req.bearer)) return kubeBadRequest('The bearer is not valid.');
+    return this.#roundTrip(req.namespace, req.bearer, { method: 'GET', path: req.path, query: '' });
+  }
 
+  // The REST calls of G6c (PILOT-1171), by RPC: src/bridge/kubeApi.ts checks each and builds its request; nothing a caller gives is sent raw.
+
+  /** The managed pods, Deployments or claims of a namespace; `workspace` narrows it to one workspace's. */
+  async kubeList(req: BridgeKubeAuth & { kind: KubeListKind; workspace?: string }): Promise<KubeItems> {
+    return (await this.#kubeOp(req, { op: 'list', kind: req?.kind, ...(req?.workspace !== undefined ? { workspace: req.workspace } : {}) })) as KubeItems;
+  }
+
+  /** Pod metrics of the managed pods. A cluster without metrics-server answers `kube_status` 404 or 503: unknown, not zero. */
+  async kubeMetrics(req: BridgeKubeAuth & { workspace?: string }): Promise<KubeItems> {
+    return (await this.#kubeOp(req, { op: 'metrics', ...(req?.workspace !== undefined ? { workspace: req.workspace } : {}) })) as KubeItems;
+  }
+
+  /** Creates a workspace's Deployment or home claim. An existing one is `kube_status` 409 `AlreadyExists`. */
+  async kubeCreate(req: BridgeKubeAuth & { kind: KubeObjectKind; object: Record<string, unknown> }): Promise<KubeCreated> {
+    return (await this.#kubeOp(req, { op: 'create', kind: req?.kind, object: req?.object })) as KubeCreated;
+  }
+
+  /** Starts (1) or stops (0) a workspace: its Deployment's scale. */
+  async kubeScale(req: BridgeKubeAuth & { name: string; replicas: number }): Promise<KubeScaled> {
+    return (await this.#kubeOp(req, { op: 'scale', name: req?.name, replicas: req?.replicas })) as KubeScaled;
+  }
+
+  /** Deletes a workspace's Deployment (foreground) or claim; one already gone is `deleted: false`. */
+  async kubeDelete(req: BridgeKubeAuth & { kind: KubeObjectKind; name: string }): Promise<KubeDeleted> {
+    return (await this.#kubeOp(req, { op: 'delete', kind: req?.kind, name: req?.name })) as KubeDeleted;
+  }
+
+  async #kubeOp(auth: BridgeKubeAuth, op: KubeOp): Promise<KubeOpResult> {
+    if (!isObject(auth) || !kubeNamespaceOk(auth.namespace)) return kubeBadRequest('The namespace is not valid.');
+    if (typeof auth.bearer !== 'string' || !BEARER_RE.test(auth.bearer)) return kubeBadRequest('The bearer is not valid.');
+    const call = kubeCallOf(auth.namespace, op);
+    if ('ok' in call) return call;
+    const res = await this.#roundTrip(auth.namespace, auth.bearer, call);
+    return res.ok ? kubeResultOf(op, res.status, res.body) : res;
+  }
+
+  /** One request and its whole answer over a new `kube` stream (opened for `namespace`, or the agent's own when absent), 30 s at most. */
+  async #roundTrip(namespace: string | undefined, bearer: string, call: KubeCall): Promise<BridgeKubeResponse> {
     const live = this.#liveSocket();
     const link = live && this.#linkOf(live.ws, live.att);
     if (!live || !link) return { ok: false, code: 'agent_offline', message: 'No live link for this cluster.' };
 
     let stream: Awaited<ReturnType<typeof openService>>;
     try {
-      stream = await openService(link.session, { service: 'kube', ...(req.namespace ? { args: { namespace: req.namespace } } : {}) });
+      stream = await openService(link.session, { service: 'kube', ...(namespace ? { args: { namespace } } : {}) });
     } catch (e) {
       return e instanceof ConnectError
         ? { ok: false, code: e.code, message: e.message }
@@ -285,7 +345,14 @@ export class BridgeDO extends SchemaDO {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const reader = new ByteReader(stream, BRIDGE_LINK.maxBodyBytes + 64 * 1024);
-      writeRequest(stream, { method: 'GET', path: req.path, headers: { Authorization: `Bearer ${req.bearer}`, Accept: 'application/json' } });
+      const headers: Record<string, string> = { Authorization: `Bearer ${bearer}`, Accept: 'application/json' };
+      if (call.body !== undefined) headers['Content-Type'] = 'application/json';
+      writeRequest(stream, {
+        method: call.method,
+        path: call.query ? `${call.path}?${call.query}` : call.path,
+        headers,
+        ...(call.body !== undefined ? { body: call.body } : {}),
+      });
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new ConnectError('timeout', 'The agent did not answer in time.')), KUBE_REQUEST_MS);
       });
