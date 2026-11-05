@@ -215,7 +215,6 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
   const ended = new Promise<string>((r) => (resolveEnded = r));
 
   const finish = (code: number, why: string, closeStream: 'frame' | 'destroy') => {
-    console.log('DBG finish', code, why, closeStream, done);
     if (done) return;
     done = true;
     try {
@@ -244,7 +243,6 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
     try {
       for (;;) {
         const f = await readWsFrame(reader);
-        console.log('DBG pod frame', f.opcode, f.payload.length);
         if (f.masked) throw new ExecProtocolError('a masked frame from the server');
         if (f.opcode >= 8) {
           if (!f.fin || f.payload.length > 125) throw new ExecProtocolError('a bad control frame');
@@ -269,7 +267,6 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
         if (ch === EXEC_CHANNEL.status || ((ch === EXEC_CHANNEL.stdout || ch === EXEC_CHANNEL.stderr) && msg.length > 1)) peer.send(msg);
       }
     } catch (e) {
-      console.log('DBG relay catch', String(e), (e as Error).stack);
       if (done) return;
       if (e instanceof ExecProtocolError) finish(1002, `The pod's stream broke the protocol: ${e.message}.`, 'destroy');
       else finish(1011, 'The exec stream ended.', 'destroy');
@@ -279,7 +276,6 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
   return {
     ended,
     fromPeer(data) {
-      console.log('DBG fromPeer', typeof data, Object.prototype.toString.call(data), done);
       if (done) return;
       if (typeof data === 'string') return finish(1003, 'Only binary messages.', 'frame');
       const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);

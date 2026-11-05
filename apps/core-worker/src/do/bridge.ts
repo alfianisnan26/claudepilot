@@ -476,10 +476,18 @@ export class BridgeDO extends SchemaDO {
       protocol,
       peer: { send: (data) => server.send(data), close: (code, reason) => server.close(code, reason) },
     });
-    server.addEventListener('message', (ev) => relay.fromPeer(ev.data as string | ArrayBuffer));
-    server.addEventListener('close', (ev) => (console.log('DBG server close', ev.code), relay.peerClosed(ev.code)));
-    console.log('DBG exec relaying', protocol);
-    server.addEventListener('error', () => relay.peerClosed(1011));
+    // workerd hands an accepted socket's binary messages over as a Blob, not an ArrayBuffer: read each one
+    // in order on one chain (stdin keeps its order), and let the close wait behind what came before it.
+    let inbound: Promise<void> = Promise.resolve();
+    const inOrder = (step: () => void | Promise<void>) => {
+      inbound = inbound.then(step).catch(() => relay.peerClosed(1011));
+    };
+    server.addEventListener('message', (ev) => {
+      const data = ev.data as string | ArrayBuffer | Blob;
+      inOrder(async () => relay.fromPeer(data instanceof Blob ? await data.arrayBuffer() : data));
+    });
+    server.addEventListener('close', (ev) => inOrder(() => relay.peerClosed(ev.code)));
+    server.addEventListener('error', () => inOrder(() => relay.peerClosed(1011)));
     // The pod and the command count, never the command (it may carry a value) or the bearer.
     this.#audit('bridge.exec', live.att.connId, `${spec.pod} ${spec.command.length} args ${protocol}`);
     return new Response(null, { status: 101, webSocket: client, headers: { [EXEC_PROTOCOL_HEADER]: protocol } });
