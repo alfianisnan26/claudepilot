@@ -12,6 +12,11 @@ export interface SessionStatus {
   emailSignIn?: boolean;
   /** Owner request 2026-11-01: whether sign-in with the server code is on (accounts sign in either way). Absent from an older server: on. */
   codeSignIn?: boolean;
+  /**
+   * PILOT-1185 slice 2: the server code is a long one (26 to 64 characters), so the sign-in field is one text field, not the 8 boxes that
+   * send at the 8th character. Says only short or long. Absent from an older server: short.
+   */
+  longCode?: boolean;
   /** Signed in as a MEMBER account (MU2 S1a): `authenticated` is true but the admin app is closed to it; the web shows the member page. */
   member?: boolean;
 }
