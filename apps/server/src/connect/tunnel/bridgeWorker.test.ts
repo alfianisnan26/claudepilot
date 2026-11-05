@@ -180,7 +180,10 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
         if (req) rig.service.handle(stream, req.trace ?? '--------', req.args);
       })();
     const d = await dialTunnel({ url, nodeId: node, privateKey: keys.privateKey, hello, ws: { headers: headers() }, onStream });
-    type Answer = { ok: boolean; code?: string; status?: number; reason?: string; items?: { metadata: { name: string } }[] } & Record<string, unknown>;
+    type Answer = { ok: boolean; code?: string; status?: number; reason?: string; items?: { metadata: { name: string } }[] } & Record<
+      string,
+      unknown
+    >;
     const rpc = async (name: string, body: Record<string, unknown>) => {
       const res = await fetch(`${httpUrl}/__interop/kube/${name}`, {
         method: 'POST',
@@ -202,7 +205,9 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
           metadata: { labels: podLabels },
           spec: {
             securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
-            containers: [{ name: 'workspace', image: 'ghcr.io/example/workspace:1', volumeMounts: [{ name: 'home', mountPath: '/home/node' }] }],
+            containers: [
+              { name: 'workspace', image: 'ghcr.io/example/workspace:1', volumeMounts: [{ name: 'home', mountPath: '/home/node' }] },
+            ],
             volumes: [{ name: 'home', persistentVolumeClaim: { claimName: `${ws}-home` } }],
             ...extra,
           },
@@ -212,7 +217,10 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
     try {
       const claim = await rpc('kubeCreate', {
         kind: 'claim',
-        object: { metadata: { name: `${ws}-home`, labels }, spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } } } },
+        object: {
+          metadata: { name: `${ws}-home`, labels },
+          spec: { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } } },
+        },
       });
       assert.equal(claim.ok, true, JSON.stringify(claim));
       const created = await rpc('kubeCreate', { kind: 'deployment', object: deployment() });
@@ -243,7 +251,11 @@ describe('dialTunnel against the Worker /bridge (workerd)', { skip: enabled ? fa
       assert.deepEqual([escaped.ok, escaped.code, escaped.status], [false, 'kube_status', 403]);
       // The first wall: the Worker refuses a dot segment, an encoded dot or a query before anything reaches the agent.
       const before = rig.fake.requests.length;
-      for (const path of [`/api/v1/namespaces/${NAMESPACE}/../kube-system/pods`, '/api/%2e%2e/v1', `/api/v1/namespaces/${NAMESPACE}/pods?watch=1`]) {
+      for (const path of [
+        `/api/v1/namespaces/${NAMESPACE}/../kube-system/pods`,
+        '/api/%2e%2e/v1',
+        `/api/v1/namespaces/${NAMESPACE}/pods?watch=1`,
+      ]) {
         const res = await fetch(`${httpUrl}/__interop/kube`, {
           method: 'POST',
           body: JSON.stringify({ cluster, path, namespace: NAMESPACE, bearer: LOCAL_TOKEN }),

@@ -295,7 +295,10 @@ function agentOn(link: Link, bearer: string): { session: MuxSession; seen: { nam
         const [line = '', ...rest] = (await r.until('\r\n\r\n')).toString('latin1').split('\r\n');
         const path = line.split(' ')[1] ?? '';
         seen.push({ namespace: (req.args as { namespace?: unknown } | undefined)?.namespace, path });
-        const auth = rest.find((h) => h.toLowerCase().startsWith('authorization:'))?.slice('authorization:'.length).trim();
+        const auth = rest
+          .find((h) => h.toLowerCase().startsWith('authorization:'))
+          ?.slice('authorization:'.length)
+          .trim();
         const body =
           auth === `Bearer ${bearer}`
             ? JSON.stringify({ kind: 'PodList', items: [{ metadata: { name: 'ws-a' } }] })
@@ -350,7 +353,10 @@ describe('BridgeDO: the mux on the live link (PILOT-1170)', () => {
         status: 401,
       });
       const att = await runInDurableObject(stub(), (_i, state) =>
-        state.getWebSockets().map((ws) => ws.deserializeAttachment()).find((a) => a?.connId === link.connId),
+        state
+          .getWebSockets()
+          .map((ws) => ws.deserializeAttachment())
+          .find((a) => a?.connId === link.connId),
       );
       expect(att).toMatchObject({ stage: 'live', ids: { nextId: 6, lastRemoteId: 0 }, streams: 0 });
       // the bearer is in no audit row
@@ -538,7 +544,10 @@ describe('BridgeDO: the REST client by RPC (PILOT-1171)', () => {
       expect(JSON.parse(by('POST')[1]!.body)).toMatchObject({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { namespace: NS } });
       for (const s of by('GET')) expect(new URLSearchParams(s.query).get('labelSelector'), s.path).toMatch(/^claudepilot\.managed=true/);
       expect(by('GET')[0]!.query).toBe('labelSelector=claudepilot.managed%3Dtrue%2Cclaudepilot.workspace%3Ddemo');
-      expect(by('PUT')[0]).toMatchObject({ path: `/apis/apps/v1/namespaces/${NS}/deployments/${WS}/scale`, contentType: 'application/json' });
+      expect(by('PUT')[0]).toMatchObject({
+        path: `/apis/apps/v1/namespaces/${NS}/deployments/${WS}/scale`,
+        contentType: 'application/json',
+      });
       expect(by('DELETE').map((s) => s.query)).toEqual(['propagationPolicy=Foreground', 'propagationPolicy=Foreground', '']);
       expect(JSON.stringify(await stub().audit(500))).not.toContain(bearer);
     } finally {

@@ -84,7 +84,11 @@ describe('kubeCallOf: each call is checked and built here', () => {
   it('a create is put in the namespace with its apiVersion and kind; the name, the label and the size are checked', () => {
     const c = call({ op: 'create', kind: 'deployment', object: deployment() });
     expect(c).toMatchObject({ method: 'POST', path: `/apis/apps/v1/namespaces/${NS}/deployments`, query: '' });
-    expect(JSON.parse(c.body!)).toMatchObject({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'ws-0123456789ab', namespace: NS } });
+    expect(JSON.parse(c.body!)).toMatchObject({
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: { name: 'ws-0123456789ab', namespace: NS },
+    });
     const claim = call({
       op: 'create',
       kind: 'claim',
@@ -181,7 +185,11 @@ describe('kubeResultOf and kubeStatusFailure: the answers', () => {
     });
     expect(kubeResultOf(list, 200, '{"kind":"PodList"}')).toMatchObject({ ok: false, code: 'bad_response' });
     expect(kubeResultOf(list, 200, 'not json')).toMatchObject({ ok: false, code: 'bad_response' });
-    expect(kubeResultOf(list, 403, status(403, 'Forbidden', 'denied'))).toMatchObject({ code: 'kube_status', status: 403, reason: 'Forbidden' });
+    expect(kubeResultOf(list, 403, status(403, 'Forbidden', 'denied'))).toMatchObject({
+      code: 'kube_status',
+      status: 403,
+      reason: 'Forbidden',
+    });
     const create: KubeOp = { op: 'create', kind: 'deployment', object: deployment() };
     expect(kubeResultOf(create, 201, JSON.stringify({ metadata: { name: 'ws-a', uid: 'u1' } }))).toEqual({
       ok: true,
@@ -189,7 +197,10 @@ describe('kubeResultOf and kubeStatusFailure: the answers', () => {
     });
     const scale: KubeOp = { op: 'scale', name: 'ws-0123456789ab', replicas: 1 };
     expect(kubeResultOf(scale, 200, JSON.stringify({ kind: 'Scale', spec: { replicas: 1 } }))).toEqual({ ok: true, replicas: 1 });
-    expect(kubeResultOf(scale, 404, status(404, 'NotFound', 'deployment "ws-x" not found'))).toMatchObject({ status: 404, reason: 'NotFound' });
+    expect(kubeResultOf(scale, 404, status(404, 'NotFound', 'deployment "ws-x" not found'))).toMatchObject({
+      status: 404,
+      reason: 'NotFound',
+    });
     const del: KubeOp = { op: 'delete', kind: 'deployment', name: 'ws-0123456789ab' };
     expect(kubeResultOf(del, 200, '{"kind":"Status","status":"Success"}')).toEqual({ ok: true, deleted: true });
     expect(kubeResultOf(del, 404, status(404, 'NotFound', 'gone'))).toEqual({ ok: true, deleted: false });
