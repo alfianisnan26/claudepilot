@@ -26,9 +26,10 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - PILOT-1132 (CF token) and PILOT-1135 (zone kohi-labs.com, host pilot-next.kohi-labs.com) closed: the operator delivered the `cp-next` pool.
 
 ## IN FLIGHT
-- cf-review (worker 68d76aeb, opus, auto): read-only check that PILOT-648/114 are superseded by the route guard (asked from the 1137 audit).
-- cf-sec (worker e28ec1b4, opus): PILOT-1191 (T-3890), the full /security:security-audit of cp-next-core + cp-bridge, read only; excludes the files it wrote itself. The PILOT-1137 gate table is done (60391); the blocking list is in NEXT.
-- cf-bridge (worker 5bc808ae, opus, builder 1 of 2): resumed 18:10Z after the 18:00 reset. Gaps PILOT-1164, 1157, 1167 on ticket/T-<first>-gaps.
+- All four resumed at 23:12Z, after the 23:00 reset.
+- cf-review (worker 68d76aeb, opus, auto): blind review of cf-bridge's gaps bundle, PILOT-1164/1157/1167 (HIGH, permissions), on ticket/T-3722-gaps head 084d62c8a (self-test job adfd254a, 284 pass). PILOT-648 and 114 are closed as superseded (60396).
+- cf-sec (worker e28ec1b4, opus): PILOT-1191 (T-3890), the full /security:security-audit of cp-next-core + cp-bridge, read only; it excludes the files it wrote itself.
+- cf-bridge (worker 5bc808ae, opus, builder 1 of 2): the 1137 gate bundle PILOT-654 (cookie `__Host-` + Secure) + PILOT-186 (redaction), HIGH, on ticket/T-976-cookie-redact; it reuses the old branches T-976-merge and T-1065-redact.
 - cf-worker (worker 6562167d, opus, builder 2 of 2): PILOT-1149 (T-3707, HIGH), the /api proxy to a SCRATCH portal over the bridge, stub-tested; branch ticket/T-3707-api-proxy.
 - PILOT-1142 rig: refused again; ws-isnan-jobs cannot create namespaces (comment 59344). Script merged (2dfb4d129, 1d41f3ccd); ticket open.
 - PILOT-1136 (lead): blocked; the D-112 row waits on the coordinator.
@@ -40,7 +41,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 - Workers on Opus: backend/infra/security per owner routing 2026-10-25. Reviewer in mode auto (dontAsk refused git).
 - 11:45 Operator pacing (one account): at most 2 builders at once; cf-review takes review asks only. Only cf-migration tickets.
 - 21:45 Operator: resume after the 21:40 reset; 1145 deploy + 1142 rig first, then phase 2 (1146-1148); 2 workers. cf-worker retries the exact 1145 command once on that instruction; a second refusal stops it (no other path).
-- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 and ~08:40-12:50 and ~13:45-18:00 UTC (2026-11-05; crew resumed 02:53Z, 07:54Z, 13:05Z and 18:10Z). Resume everyone right after each reset; note the reset here.
+- Session limits on two.claude: ~09:20-11:30, ~12:30-16:40 and ~17:30-21:40 and ~23:00-02:40 and ~03:35-07:50 and ~08:40-12:50 and ~13:45-18:00 and ~18:35-23:00 UTC (2026-11-05; crew resumed 02:53Z, 07:54Z, 13:05Z, 18:10Z and 23:12Z). Resume everyone right after each reset; note the reset here.
 - 22:35 After incident PILOT-1183: before every cf/integration push, the lead runs ONE job on the merged tree: typecheck, context pack, core-worker tests and the server test directories the merged branches touch.
 - 03:25 Merged-tree job runners: server AND web tests are node --test (not vitest); only core-worker uses vitest (npm test). Two false reds came from the wrong runner.
 - 08:10 Prettier on apps/server/src/{config,index,portal}.ts already fails at the base: not reformatted (a large unrelated diff). Changed files must pass prettier --check; builders run it in their first job.
@@ -72,7 +73,7 @@ Epic PILOT-1131 (T-3680): ClaudePilot core to Cloudflare (KohiLabs), repo to Koh
 
 ## NEXT
 1. At the next free builder slot: PILOT-1192 (T-3891, HIGH), the contract part of 1190. It starts after the 1190 deploy and once the workspaces are recreated; before then, only its drift-test half.
-2. The PILOT-1137 gate blockers (audit 60391), as one bundle: 654 + 180 (Secure `__Host-` cookie), 186 (redaction), 1123 (heartbeat id check, verify), 113/530 (verify or finish). Then the findings from PILOT-1191.
+2. The rest of the PILOT-1137 gate (audit 60391): 1123 (heartbeat id check, verify) and 113/530 (verify or finish), then the findings from PILOT-1191. PILOT-180 waits until 654 is live in production, plus one release.
 3. cf-worker after 1149: 1150 pipeline (reuses the 1145 deploy script).
 4. Phase 2 after the Gitea token: 1134 mirror -> 1146 origin switch -> 1147 packages; 1151 UI QA last.
 5. PILOT-1142 rig run when the coordinator grants the rights.
