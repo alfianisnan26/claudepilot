@@ -65,7 +65,8 @@ At deploy, `BRIDGE_CLUSTERS` is set with `wrangler secret put` (never in `wrangl
 
 `scripts/deploy-stg.mjs` puts the Worker on `CP_NEXT_HOST` (`pilot-next.<zone>`) behind Cloudflare Access, Access first (D3): the Access
 app `cp-next-access` (whole host, created with no policy, so nobody gets in), its one policy `cp-next-healthcheck` (the service token
-`cp-next-healthcheck` only, no person yet), then `wrangler deploy`, then the Worker custom domain (which makes the host's DNS record;
+`cp-next-healthcheck` only, no person yet), then `npm run build` (the SPA into `public/`, PILOT-1148; its environment has no
+`CP_NEXT_CF_*` or `CLOUDFLARE_*` value, and a failed build stops the run before `wrangler`), then `wrangler deploy`, then the Worker custom domain (which makes the host's DNS record;
 nothing else in the zone is touched), then two checks: `/healthz` without credentials is the Access redirect or 403, with the service token
 it is 200 and the deployed commit. It reads the four values from the `cp-next` pool by name and never prints them.
 
@@ -79,7 +80,7 @@ It is safe to run again (PILOT-1180):
 - A plain re-run keeps the existing service token: its secret is unknown to the run, so the token check is SKIPPED and the run exits 3
   (deployed, Access check passed). `--rotate` rotates the token (the old secret stops working) and the run does both checks. The new
   secret is used for the check only and is not kept.
-- `--plan` reads only and says what a run would do; the guards stop a plan the same way.
+- `--plan` reads only and says what a run would do; the guards stop a plan the same way. Neither a plan nor a guard stop builds.
 - Exit codes: 0 both checks passed; 1 a guard stopped it or a check failed; 3 deployed, the token check skipped.
 - Its test (mocked fetch, no network; part of `npm test`): `npm run test:scripts -w @portal/core-worker`.
 

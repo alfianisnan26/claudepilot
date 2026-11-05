@@ -6,7 +6,9 @@
 //   2. its one policy `cp-next-healthcheck`: the service token `cp-next-healthcheck` only (non_identity). No email, no domain:
 //      people are added by the owner later. A policy on the app that this script did not make stops the run (the app is deny-first, so
 //      an allow rule nobody here knows of is unsafe), unless --keep-unknown-policies is given.
-//   3. `wrangler deploy` (wrangler.jsonc has no route; CP_VERSION/CP_COMMIT from this commit).
+//   3. `npm run build` (the SPA into public/, PILOT-1148; its env has no CP_NEXT_CF_* or CLOUDFLARE_* value, and a failed build stops
+//      the run before wrangler), then `wrangler deploy` (wrangler.jsonc has no route; CP_VERSION/CP_COMMIT from this commit).
+//      --plan and a guard stop never build.
 //   4. the Worker custom domain for the host (this creates its DNS record; nothing else in the zone is touched).
 //   5. the checks: /healthz with no credentials is the Access login redirect or 403; with the service token it is 200 and this commit.
 //      The token's secret is known to a run only when it creates the token or rotates it. A plain re-run with the token in place does
@@ -45,8 +47,16 @@ const WORKER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 export class Stop extends Error {}
 
 /**
- * The whole run. `deps` are the outside world, so a test can stand in for each (no network, no git, no wrangler):
- * fetch, env, argv, log, commit() and wrangler(env, args) -> { status, stdout, stderr }, and sleep(ms).
+ * The environment the SPA build gets (PILOT-1148): the run's, without any Cloudflare value. `npm run build` runs apps/web's build and
+ * its plugins, which have no business with the API token or the account: CP_NEXT_CF_* (the pool's) and CLOUDFLARE_* (wrangler's, if
+ * the job's environment already had one) are dropped.
+ */
+export const buildEnv = (env) => Object.fromEntries(Object.entries(env).filter(([k]) => !/^(?:CP_NEXT_CF_|CLOUDFLARE_)/i.test(k)));
+
+/**
+ * The whole run. `deps` are the outside world, so a test can stand in for each (no network, no git, no build, no wrangler):
+ * fetch, env, argv, log, commit(), build(env) -> { status } (the SPA, PILOT-1148), wrangler(env, args) -> { status, stdout, stderr },
+ * and sleep(ms).
  * Returns the exit code; a guard throws Stop.
  */
 export async function run(deps) {
@@ -193,7 +203,10 @@ export async function run(deps) {
   else await cf('POST', `${acct}/access/apps/${app.id}/policies`, policyBody);
   say(`policy ${POLICY_NAME}: non_identity, include service token ${svc.id} only`);
 
-  // 3. The Worker.
+  // 3. The Worker, with the SPA as its assets (PILOT-1148: apps/web's build and its _headers in public/). Only a run that got past every
+  // guard and the PLAN return builds; the build gets no Cloudflare value, and a failed build deploys nothing.
+  const built = deps.build(buildEnv(e));
+  if (built.status !== 0) fail(`the SPA build exited ${built.status}`);
   const deploy = deps.wrangler({ ...e, CLOUDFLARE_API_TOKEN: TOKEN, CLOUDFLARE_ACCOUNT_ID: ACCOUNT }, [
     'deploy',
     '--var',
@@ -262,6 +275,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       env: process.env,
       argv: process.argv.slice(2),
       commit: () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      build: (env) => spawnSync('npm', ['run', 'build'], { cwd: WORKER_DIR, env, stdio: 'inherit' }),
       wrangler: (env, args) => spawnSync('npx', ['wrangler', ...args], { cwd: WORKER_DIR, env, encoding: 'utf8' }),
     });
   } catch (x) {

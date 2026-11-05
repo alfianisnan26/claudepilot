@@ -86,4 +86,17 @@ describe('the SPA', () => {
     expect(health.status).toBe(200);
     expect(await health.json()).toMatchObject({ ok: true, service: 'cp-next-core' });
   });
+
+  it('an `Upgrade: websocket` header off /bridge keeps the secure headers: only /bridge skips them (review of PILOT-1148)', async () => {
+    const upgrade = { headers: { upgrade: 'websocket', connection: 'Upgrade' } };
+    for (const path of ['/api/x', '/healthz', '/nope-worker-path']) {
+      const res = await SELF.fetch(`${base}${path}`, upgrade);
+      expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      expect(res.headers.get('x-frame-options'), path).toBe('SAMEORIGIN');
+      await res.body?.cancel();
+    }
+    const asset = await SELF.fetch(`${base}${env.TEST_WEB_ENTRY}`, upgrade);
+    expectHeaders(asset, assetHeaders, `${env.TEST_WEB_ENTRY} with Upgrade`);
+    await asset.body?.cancel();
+  });
 });
