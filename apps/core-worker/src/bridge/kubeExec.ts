@@ -100,7 +100,8 @@ export function kubeExecCallOf(raw: string | null): { spec: KubeExecSpec; call: 
   const problem = kubePathProblem(path);
   if (problem) return kubeBadRequest(problem);
   const query = q.toString();
-  if (path.length + 1 + query.length > EXEC_LIMITS.maxTargetBytes) return kubeBadRequest('The command is too long; send large input on stdin.');
+  if (path.length + 1 + query.length > EXEC_LIMITS.maxTargetBytes)
+    return kubeBadRequest('The command is too long; send large input on stdin.');
   const spec: KubeExecSpec = { namespace: s.namespace, bearer: s.bearer, pod: s.pod, command: cmd, ...flags };
   return { spec, call: { method: 'GET', path, query } };
 }
@@ -176,7 +177,7 @@ export async function readWsFrame(r: ByteReader, max: number = EXEC_LIMITS.maxMe
 export function execResize(data: Uint8Array): string | null {
   let v: unknown;
   try {
-    v = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data));
+    v = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(data));
   } catch {
     return null;
   }
@@ -253,8 +254,7 @@ export function relayExec(opts: { stream: Duplex; reader: ByteReader; peer: Exec
           continue;
         }
         if (f.opcode === 1) throw new ExecProtocolError('a text frame (no base64 protocol was offered)');
-        if (f.opcode === 2 ? parts.length > 0 : f.opcode !== 0 || parts.length === 0)
-          throw new ExecProtocolError('frames out of order');
+        if (f.opcode === 2 ? parts.length > 0 : f.opcode !== 0 || parts.length === 0) throw new ExecProtocolError('frames out of order');
         size += f.payload.length;
         if (size > EXEC_LIMITS.maxMessageBytes) throw new ExecProtocolError('message too large');
         parts.push(f.payload);

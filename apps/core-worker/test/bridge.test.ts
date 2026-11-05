@@ -824,7 +824,13 @@ describe('BridgeDO: exec in a workspace pod (PILOT-1171 slice 2)', () => {
       const res = await stub().fetch(bridgeExecRequest(execSpec(crypto.randomUUID())));
       expect(res.status).toBe(502);
       expect(res.webSocket).toBeNull();
-      expect(await res.json()).toEqual({ ok: false, code: 'kube_status', status: 403, reason: 'Forbidden', message: 'exec is not allowed' });
+      expect(await res.json()).toEqual({
+        ok: false,
+        code: 'kube_status',
+        status: 403,
+        reason: 'Forbidden',
+        message: 'exec is not allowed',
+      });
       await vi.waitFor(async () => expect(await onSession(link.connId, (s) => s?.openStreams)).toBe(0));
     } finally {
       agent.session.destroy();
@@ -873,9 +879,13 @@ describe('BridgeDO: exec in a workspace pod (PILOT-1171 slice 2)', () => {
         expect(res.status, JSON.stringify(s).slice(0, 80)).toBe(400);
         expect(await res.json()).toMatchObject({ ok: false, code: 'bad_request' });
       }
-      const notJson = new Request(`https://bridge.internal${BRIDGE_EXEC_PATH}`, { headers: { upgrade: 'websocket', [BRIDGE_EXEC_HEADER]: '{' } });
+      const notJson = new Request(`https://bridge.internal${BRIDGE_EXEC_PATH}`, {
+        headers: { upgrade: 'websocket', [BRIDGE_EXEC_HEADER]: '{' },
+      });
       expect((await stub().fetch(notJson)).status).toBe(400);
-      const noUpgrade = new Request(`https://bridge.internal${BRIDGE_EXEC_PATH}`, { headers: { [BRIDGE_EXEC_HEADER]: JSON.stringify(execSpec(bearer)) } });
+      const noUpgrade = new Request(`https://bridge.internal${BRIDGE_EXEC_PATH}`, {
+        headers: { [BRIDGE_EXEC_HEADER]: JSON.stringify(execSpec(bearer)) },
+      });
       expect((await stub().fetch(noUpgrade)).status).toBe(404);
       expect(agent.seen).toEqual([]);
     } finally {
