@@ -209,6 +209,40 @@ Worker code only: the public `/bridge` route always forwards `/bridge` with fres
   stand-in API server; refusals never reach the agent), and `bridgeWorker.test.ts` (an exec through the real agent and `KubeProxy` to
   the fake API server, which speaks v4 only: stdin, a resize and a non-zero exit status).
 
+## /api to a scratch portal (PILOT-1149)
+
+cp-next-core's `/api/*`, the WebSocket upgrades included (`/api/live`, the chat socket), reach ONE scratch portal in the cluster:
+browser -> Worker route (`src/bridge/apiProxy.ts`) -> the cluster's BridgeDO (`/__api`, Worker code only) -> an `http` stream on the
+link -> the agent -> the portal's Service. Never the live portal.
+
+- **The one target** is the plain var `CP_API_PROXY` = `{"cluster":"<bridge cluster>","target":"http://<svc>.dev-rig-<x>.svc[.cluster.local]:<port>"}`.
+  It parses only through `connectHttpTargetOf` (`packages/contracts/src/connect.ts`), matched on the raw text: a Service in a
+  `dev-rig-*` namespace by its cluster DNS name and an explicit port. So pilot.ai.isnan.me, the `claudepilot` and `isnan-claudepilot`
+  namespaces, an IP, https, user info and a path can never be one. The cluster must be in `BRIDGE_CLUSTERS`. No config, or one that
+  does not parse: every `/api` path is the plain 404, as before. BridgeDO parses the target again with the same rule, so a forged
+  internal request cannot widen it; the stream's open names it (`ConnectHttpOpen { target }`, the authority).
+- **Onward** (`forwardHeaders`): dropped are every `cf-*` header (the Access JWT `cf-access-jwt-assertion`, the service-token headers),
+  `Authorization`, `Forwarded`/`x-forwarded-*`/`x-real-ip`/`true-client-ip`, `x-cp-*` and `x-pilot-*`, `Referer`, and the hop-by-hop
+  headers. The Cookie header loses Cloudflare's cookies (`CF_Authorization`, `CF_AppSession`, `CF_Binding`, any `cf_*` or `__cf*`).
+  Host is the target; an Origin equal to the Worker's own becomes `http://<target>`, a foreign one passes as it is (the portal's CSRF
+  check then refuses it). The bridge token lives on the `/bridge` link only and is never on a request. `Connection: close` on each.
+- **Back** (`responseHeaders`): Set-Cookie without its `Domain` attribute (each one kept), a Location on the target made path-only,
+  hop-by-hop headers dropped. The app's secure headers and `Cache-Control: no-store` are added as on every `/api` answer.
+- **Bodies**: a request body is read into the object first, at most 16 MiB (413 past it), and sent with its Content-Length. The answer
+  streams as the browser reads it (Content-Length, chunked, or until the stream ends): the reader pauses the stream past 256 KiB unread,
+  so the mux stops granting the agent window. The head must come within 30 s.
+- **WebSockets** (`src/bridge/wsRelay.ts`): BridgeDO upgrades on the stream with its own key (the client's subprotocols passed on when
+  each is a token), checks the 101's accept and that the chosen subprotocol was offered, and relays text and binary as they are, at most
+  1 MiB a message (fragments joined); pings are answered, close codes passed on. The browser's socket is accepted, not hibernatable.
+- **Limits and errors**: at most 12 requests and sockets at once per link (429 past it); no link 503; a timeout 504; the agent's refusal
+  or a broken answer 502, in the portal's error body. Audit: `bridge.api.ws` per socket (never the path or a header).
+- **Not built here (follow-up)**: the agent's own `http` service (`PILOT_HTTP_TARGET`, compares the open's target, pipes to the
+  Service). Until it lands a real agent answers `service_unavailable` (502). Authorization is dropped, so an MCP bearer through the
+  proxy is a later decision.
+- Proof: `test/apiProxy.test.ts` (the parser's refusals, the header rules, and GET, POST, a chunked and a 1 MiB answer, a redirect, the
+  refusals and WebSockets over a live link with a stub agent and portal; the agent never sees the Access JWT, `CF_Authorization` or the
+  bridge token).
+
 ## RBAC the bridge needs, and nothing wider
 
 - In each workspace namespace (`isnan-claudepilot-workspaces`, `isnan-pilot-ws-isnan`, `isnan-pilot-ws-konfersi`, `isnan-pilot-ws-kohilabs`):
@@ -238,3 +272,5 @@ Worker code only: the public `/bridge` route always forwards `/bridge` with fres
   listed routes), so a metrics list is the namespace's pods' metrics, not only the managed ones; the Worker sends the selector anyway.
 - G6c slice 2 (exec): v5 was exercised only against the stand-in in workerd; the real agent path ran against the fake API server, which
   speaks v4 only. No route reaches the exec yet: a caller (terminal, chat tail) is a later slice.
+- The /api proxy (PILOT-1149) ran only in local workerd against a stub agent and a stub portal: no scratch portal, no real agent (it has
+  no `http` service yet), not on the edge behind Cloudflare Access.
