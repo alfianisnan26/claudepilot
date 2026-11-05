@@ -14,7 +14,7 @@ const mixed = (n: number) => `2A${pick(CODE_ALPHABET, n - 2)}`;
 const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} is not ${b}`);
 
 test('codeBits: length times log2 of the alphabet actually used; case, spaces and dashes do not count', () => {
-  near(codeBits('24681357'), 8 * Math.log2(8)); // digits 2-9 only: 24 bits
+  near(codeBits('24689357'), 8 * Math.log2(8)); // digits 2-9 only: 24 bits
   near(codeBits('10293847'), 8 * Math.log2(10)); // any digits
   near(codeBits('ABCDEFGH'), 8 * Math.log2(23)); // the generator's letters only
   near(codeBits('ILOVEYOU'), 8 * Math.log2(26)); // letters with a look-alike
