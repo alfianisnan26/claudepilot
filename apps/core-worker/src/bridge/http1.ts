@@ -104,7 +104,11 @@ export async function readHead(r: ByteReader): Promise<Http1Head> {
 
 /** A whole response: Content-Length or chunked (what the API server sends for lists), at most `maxBody` bytes of body. */
 export async function readResponse(r: ByteReader, maxBody = Infinity): Promise<Http1Head & { body: Buffer }> {
-  const head = await readHead(r);
+  return readBody(r, await readHead(r), maxBody);
+}
+
+/** The body of a response whose head was already read (an exec's answer that was not a 101, PILOT-1171). */
+export async function readBody(r: ByteReader, head: Http1Head, maxBody = Infinity): Promise<Http1Head & { body: Buffer }> {
   if (head.headers.get('transfer-encoding')?.toLowerCase() === 'chunked') {
     const parts: Buffer[] = [];
     let total = 0;
