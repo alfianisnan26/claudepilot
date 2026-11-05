@@ -29,6 +29,7 @@ import {
   type AppPortSession,
   type PortalLoop,
   levelOfCaps,
+  isLongCode,
   type ChatEvent,
   DELEGATED_EVENTS_MAX,
   SESSION_GRANT_API,
@@ -509,6 +510,8 @@ export function createApp(
       authenticated: !!portal.anySession(getCookie(c, cookie)),
       enabled: portal.enabled,
       codeSignIn: portal.codeSignIn,
+      // PILOT-1185 slice 2: only short or long, so a long code typed by hand is not sent (and counted) at its 8th character.
+      longCode: isLongCode(portal.code),
       member: !!portal.anySession(getCookie(c, cookie)) && !portal.session(getCookie(c, cookie)),
       emailSignIn: (() => {
         try {
