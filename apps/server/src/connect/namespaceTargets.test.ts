@@ -8,7 +8,7 @@ import { AppError } from '@isnanme/core';
 import type { Actor } from '@portal/contracts';
 import type { Runtime } from '../workspaces/runtime.js';
 import type { ConnectNodeRecord, ConnectTargetRecord, NodeLink, RuntimeFactory } from './seams.js';
-import { helloFor, openModule, serveModule, until, type TestModule } from './testkit.js';
+import { OWNER, helloFor, openModule,serveModule, until, type TestModule } from './testkit.js';
 import { dialTunnel, generateNodeKeyPair } from './tunnel/index.js';
 
 /** A manager that records what Connect does, and a factory that keeps what each runtime was given. */
@@ -73,7 +73,7 @@ describe('namespace targets on one connector (PILOT-1167)', () => {
     assert.equal(rider.settings.storage, '20Gi');
     assert.equal(rider.enrollment, null, 'no token of its own');
     assert.match(rider.where, /isnan-pilot-ws-konfersi$/);
-    assert.equal(m.store.nodes('cpb-2').length, 0, 'no node row of its own: the node stays the host’s');
+    assert.equal(m.connect.registry.liveNodes('cpb-2').length, 0,'no node row of its own: the node stays the host’s');
     assert.deepEqual(m.connect.nodeViews('cpb-3').map((n) => n.id), [node], 'what the manager asks for a node pick');
     await m.close();
   });
@@ -155,7 +155,7 @@ describe('namespace targets on one connector (PILOT-1167)', () => {
     assert.equal(refused.status, 409);
     assert.match(refused.json.error.message, /cpb-1, cpb-2, cpb-3 ride on/);
     assert.ok(m.connect.registry.target('cpb'));
-    assert.throws(() => m.connect.registry.forgetTarget('cpb', { actor: 'system', userId: 'u_owner', ip: null }, { workspaces: 'none' }), (e) => e instanceof AppError && e.code === 'CONFLICT');
+    assert.throws(() => m.connect.registry.forgetTarget('cpb', OWNER,{ workspaces: 'none' }), (e) => e instanceof AppError && e.code === 'CONFLICT');
     // a rider goes on its own, without touching the host's node; then the host can go
     for (const id of ['cpb-1', 'cpb-2', 'cpb-3']) assert.equal((await m.admin('DELETE', `/targets/${id}`)).status, 200);
     assert.equal(m.connect.registry.liveNodes('cpb').length, 1, 'the bridge node is still enrolled');
