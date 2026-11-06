@@ -116,7 +116,7 @@ import { kubeTargetRuntimes } from './workspaces/kubeTargets.js';
 import { LocalRuntime } from './workspaces/local.js';
 import { Workspaces } from './workspaces/manager.js';
 import { WorkspaceIdentities } from './workspaces/identity.js';
-import { rewriteWorkspaceRefs } from './workspaces/refRewrite.js';
+import { rewriteWorkspaceRefs, ticketsOnMissingWorkspaces } from './workspaces/refRewrite.js';
 import { createConnect } from './connect/index.js';
 import { agentBundle } from './connect/bundle.js';
 import { wireConnect } from './workspaces/connect/wire.js';
@@ -430,6 +430,14 @@ setTimeout(() => {
       console.log(
         `[workspaces] ${r.table}.${r.column}: ${r.rewritten} references moved to stable ids, ${r.kept} kept as they were${r.done ? '' : ' (stopped; continues next start)'}`,
       );
+    // PILOT-1166: active tickets on a workspace that no longer exists can not be taken by any crew: said once per start, for a person to move.
+    if (store.db) {
+      const missing = ticketsOnMissingWorkspaces(store.db, (ref) => workspaces.identities.resolve(ref));
+      if (missing.length)
+        console.error(
+          `[workspaces] ${missing.reduce((n, m) => n + m.count, 0)} active ticket(s) on workspaces that no longer exist: ${missing.map((m) => `${m.ref} ${m.bucket ?? 'unbucketed'} ${m.count}`).join(', ')} (a person moves each to a live workspace)`,
+        );
+    }
   })().catch((e: unknown) => console.error(`[workspaces] reference rewrite failed: ${(e as Error).message}`));
 }, 60_000).unref();
 browser.start();

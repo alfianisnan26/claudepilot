@@ -21,6 +21,15 @@ import { kubernetesDelivery } from './kubernetesDelivery.js';
 import { homeVolumeOf, legacyRuntimeName } from './identity.js';
 import { HOME, LABEL, type CreateSpec, type DeliveryAccess, type ExecSession, type ResourceAccess, type ResourceApplied, type Runtime, type RuntimeNames, type ShellSession } from './runtime.js';
 
+/**
+ * PILOT-1196: no core files from what the portal starts in a workspace (its sessions, their shells and tools, a terminal). A process an exec
+ * starts takes the container runtime's limits, not PID 1's, and Kubernetes has no field for RLIMIT_CORE, so the soft and hard limits are
+ * set to 0 at the head of each exec (a node OOM once left multi-GB core.<pid> files in memor.id worktrees). The delivery's root scripts
+ * (`#capture`) are short-lived and keep their exact argv.
+ */
+export const NO_CORE_DUMPS = ['sh', '-c', 'ulimit -c 0 2>/dev/null; exec "$@"', 'sh'] as const;
+export const noCoreDumps = (argv: readonly string[]): string[] => [...NO_CORE_DUMPS, ...argv];
+
 const LIMIT = { cpus: 'claudepilot.cpus', memoryMb: 'claudepilot.memory-mb' } as const;
 const CONTAINER = 'workspace';
 const SEEDED = '.claudepilot-seeded';
@@ -734,7 +743,7 @@ export class KubernetesRuntime implements Runtime {
       done = true;
       exitFns.forEach((fn) => fn(exitCode));
     };
-    const ws = await new Exec(this.#kc).exec(this.#ns, pod, CONTAINER, command, out, out, stdin, false, (status: V1Status) => {
+    const ws = await new Exec(this.#kc).exec(this.#ns, pod, CONTAINER, noCoreDumps(command), out, out, stdin, false, (status: V1Status) => {
       if (status.status === 'Success') exitCode = 0;
       else {
         const cause = status.details?.causes?.find((c) => c.reason === 'ExitCode');
@@ -771,7 +780,7 @@ export class KubernetesRuntime implements Runtime {
       this.#ns,
       podName,
       CONTAINER,
-      command ?? ['bash', '-l'],
+      noCoreDumps(command ?? ['bash', '-l']),
       stdout,
       null, // a TTY merges stderr into stdout
       stdin,

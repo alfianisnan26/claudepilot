@@ -269,7 +269,7 @@ export function registerSessionTools(
       parent: z.string().max(80).optional().describe('A live session of this workspace it starts as a worker of (session_family, crew reports).'),
       report: z.enum(WORKER_REPORTS).optional().describe('With parent: what the parent hears of it unasked, one line each: idle (the default) when its turn ends, when it waits on a person and when it ends; end only when it ends; none nothing.'),
       mode: MCP_MODE_INPUT.optional().describe(
-        'Its permission mode, applied before its first prompt: plan, default, acceptEdits, dontAsk or auto. bypassPermissions is refused here (a session started over MCP is not bypass-capable), except in a workspace under the standing Bypass policy (PORTAL_BYPASS_STANDING_WORKSPACES), where it starts in Bypass.',
+        'Its permission mode, applied before its first prompt: plan, default, acceptEdits, dontAsk or auto. bypassPermissions is refused here (a session started over MCP is not bypass-capable), except in a workspace under the standing Bypass policy (PORTAL_BYPASS_STANDING_WORKSPACES), where it starts in Bypass; there a worker (parent) of a session in Bypass starts in Bypass with no mode, auto, dontAsk or default asked.',
       ),
     }),
     async handler(ctx, args) {
@@ -277,11 +277,17 @@ export function registerSessionTools(
       if (args.report && !args.parent) throw new AppError('VALIDATION_FAILED', 'report needs a parent.', { details: { report: 'Only with parent.' } });
       const workspaceId = await workspaceFor(args.workspace_id, ctx);
       // PILOT-1129: in a workspace under the standing Bypass policy a session may start in Bypass (it starts bypass-capable there).
-      const standingStart = args.mode === 'bypassPermissions' && chat.standingWorkspace?.(workspaceId) === true;
+      const parentId = args.parent ? leadFor(args.parent, workspaceId, ctx) : null;
+      // PILOT-1198 (rule 2c): a worker of a parent in Bypass there starts in Bypass too, with no mode, Auto, dontAsk or default asked.
+      const standingWorker =
+        !!parentId &&
+        (!args.mode || args.mode === 'auto' || args.mode === 'dontAsk' || args.mode === 'default') &&
+        chat.standingWorkspace?.(workspaceId) === true &&
+        chat.standingParentInBypass?.(parentId) === true;
+      const standingStart = standingWorker || (args.mode === 'bypassPermissions' && chat.standingWorkspace?.(workspaceId) === true);
       if (args.mode === 'bypassPermissions' && !standingStart)
         throw new PortalToolError('FORBIDDEN', approvals ? MCP_BYPASS_AT_START : MCP_BYPASS_REFUSED);
       const mode = standingStart ? undefined : mcpMode(args.mode);
-      const parentId = args.parent ? leadFor(args.parent, workspaceId, ctx) : null;
       const s = await chat.create(
         { workspaceId, cwd: args.folder, title: args.title, claudeId: args.claude_id, ticketId: args.ticket_id, ...(args.agent ? { agent: args.agent } : {}) },
         // T-336: the same create a session_spawn makes (its parent's limits held in one step), never a new approval path or a wider mode.

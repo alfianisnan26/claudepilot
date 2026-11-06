@@ -329,6 +329,8 @@ export class DockerRuntime implements Runtime {
       Env: ['TERM=xterm-256color'],
       HostConfig: {
         RestartPolicy: { Name: 'unless-stopped' },
+        // PILOT-1196: no core files (a docker exec takes the container's limits).
+        Ulimits: [{ Name: 'core', Soft: 0, Hard: 0 }],
         // A fresh named volume is seeded with the image's home (dotfiles, ~/work); an existing one keeps what it holds.
         Mounts: [{ Type: 'volume', Source: homeVolumeOf(runtimeName), Target: HOME }],
         NanoCpus: o.cpus ? Math.round(o.cpus * 1e9) : undefined,

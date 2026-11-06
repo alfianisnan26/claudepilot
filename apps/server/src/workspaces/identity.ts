@@ -13,7 +13,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { FOUNDING_USER_ID, normalizeWorkspaceLabel, STABLE_WORKSPACE_ID, workspaceId, workspaceResourcesProblem, type Workspace, type WorkspaceResourceValues } from '@portal/contracts';
 import { PLAIN_NAME, WORKSPACE_ID } from '../names.js';
 import type { RuntimeNames } from './runtime.js';
-import { pinRefsOfRemoved } from './refRewrite.js';
+import { pinRefsOfRemoved, rehomeTicketsOfRetired } from './refRewrite.js';
 
 /**
  * What a module that stores workspace references needs from the registry (T-42 slice 3): `storedRef` on save (the stable id), `keyOf` on
@@ -355,6 +355,8 @@ export class WorkspaceIdentities implements RuntimeNames, WorkspaceRefs {
     this.#write('UPDATE workspace_identities SET removed_at = ? WHERE id = ?', w.removedAt, w.id);
     // The labels it had are free for another workspace now; the rows stay, as history.
     this.#write('UPDATE workspace_aliases SET released_at = ? WHERE workspace_id = ? AND released_at IS NULL', w.removedAt, w.id);
+    // PILOT-1166: its active tickets go to their bucket's default workspace (a live one), so crews can still take them.
+    if (db && this.store?.writable) rehomeTicketsOfRetired(db, w, (ref) => this.resolve(ref)?.id ?? null);
   }
 }
 

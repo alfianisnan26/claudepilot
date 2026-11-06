@@ -91,6 +91,7 @@ spec:
             - |
               # JOB-RUN-FETCH BEGIN (the test runs this part on its own, with JR_ROOT and JR_FETCH_HOME pointing elsewhere)
               set -u
+              ulimit -c 0 2>/dev/null || true # PILOT-1196: no core files (a test's OOM wrote multi-GB core.<pid>)
               root=${JR_ROOT:-/tmp}; mkdir -p "$root/w"
               # Everything goes to fetch.log and its code to fetch.rc on the shared /tmp; this container always ends 0, so the run container
               # starts, prints the log and ends with that code (the streamed log and the EXIT line stay where job-run.sh reads them).
@@ -234,6 +235,7 @@ spec:
             - |
               # JOB-RUN-SCRIPT BEGIN (the test runs this part on its own, after the fetch part, with JR_ROOT pointing elsewhere)
               set -u
+              ulimit -c 0 2>/dev/null || true # PILOT-1196: no core files (a test's OOM wrote multi-GB core.<pid>)
               root=${JR_ROOT:-/tmp}; say() { echo "=== JOB-RUN $*"; }
               # A fresh HOME: no git credential helper, no user .npmrc (those were in the fetch container's own HOME).
               export HOME=$root/home npm_config_cache=$root/npm-cache npm_config_update_notifier=false CI=1
