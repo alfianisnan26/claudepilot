@@ -166,12 +166,13 @@ read in `apps/core-worker/src/bridge/kubeApi.ts` (no I/O), one `kube` stream per
   container and init container of a created Deployment must name an image on it, and a non-string image is refused. An empty or missing
   `CP_KUBE_IMAGES` refuses every Deployment that names an image (a claim, or a Deployment without an image, still passes). The stg
   deploy writes it at every run (PILOT-1190): `KUBE_IMAGES` in `apps/core-worker/scripts/deploy-stg.mjs`, the images the portal's
-  workspaces run (`deploy/k3s/portal.yaml`; its test fails when the two drift). The agent keeps its own `PILOT_IMAGES` (empty there
+  workspaces run (`deploy/k3s/portal.yaml`; its test fails when the two drift either way, PILOT-1192: an image the portal no longer
+  runs is taken off the list too). The agent keeps its own `PILOT_IMAGES` (empty there
   means not enforced), so with both set an image must be on both lists.
 - The default service account token (PILOT-1190). Left out, `automountServiceAccountToken` means Kubernetes mounts the namespace's
   default token, so the table's refusal of `true` alone does not keep a credential out. Expand (built): `KubernetesRuntime` sets
   `automountServiceAccountToken: false` on every workspace pod it creates. Nothing in a workspace used that token: no RoleBinding names
-  a workspace namespace's default account, and workspace jobs use their own kubeconfig. Contract (later, its own ticket): the table
+  a workspace namespace's default account, and workspace jobs use their own kubeconfig. Contract (later, PILOT-1192): the table
   refuses a workload that does not set it to false. It waits until the expand part has shipped and the older workspaces have been
   recreated, because today's Deployments leave the field out and their replace and patch would be refused.
 - Proof: `apps/core-worker/test/kubeApi.test.ts`, `test/bridge.test.ts` (the RPCs over a live link with a stand-in API server; refused

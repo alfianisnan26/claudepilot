@@ -232,13 +232,43 @@ test('the deploy writes CP_KUBE_IMAGES, the Worker’s image allow list, as a pl
   w.clean();
 });
 
-test('KUBE_IMAGES holds every image the portal’s workspaces run (deploy/k3s/portal.yaml), so stg does not refuse them', () => {
+/**
+ * The value of one `- name: <name>` env entry in a manifest: plain, single-quoted ('' is a quote) or double-quoted (JSON-style escapes,
+ * which YAML's double quotes share for what a manifest holds). Undefined when the entry is missing.
+ */
+function envValue(yaml, name) {
+  const m = new RegExp(`- name: ${name}\\s+value: ('(?:[^']|'')*'|"(?:[^"\\\\]|\\\\.)*"|\\S+)`).exec(yaml);
+  if (!m) return undefined;
+  const v = m[1];
+  if (v.startsWith("'")) return v.slice(1, -1).replaceAll("''", "'");
+  if (v.startsWith('"')) return JSON.parse(v);
+  return v;
+}
+
+/** The images the portal's workspaces run: PORTAL_K8S_IMAGE and each target's own `image`. */
+function portalImages(yaml) {
+  const base = envValue(yaml, 'PORTAL_K8S_IMAGE');
+  const targets = JSON.parse(envValue(yaml, 'PORTAL_K8S_TARGETS') ?? '[]');
+  return { base, used: new Set([base, ...targets.map((t) => t.image)].filter(Boolean)) };
+}
+
+test('the drift test reads PORTAL_K8S_TARGETS in either quote style, and a plain or quoted PORTAL_K8S_IMAGE (PILOT-1192)', () => {
+  const targets = JSON.stringify([{ id: 'a', image: 'r.test/ws:1' }, { id: 'b' }, { id: 'c', image: "r.test/ws:it's-2" }]);
+  const single = `- name: PORTAL_K8S_IMAGE\n  value: r.test/ws:0\n- name: PORTAL_K8S_TARGETS\n  value: '${targets.replaceAll("'", "''")}'\n`;
+  const double = `- name: PORTAL_K8S_IMAGE\n  value: "r.test/ws:0"\n- name: PORTAL_K8S_TARGETS\n  value: ${JSON.stringify(targets)}\n`;
+  const want = ['r.test/ws:0', 'r.test/ws:1', "r.test/ws:it's-2"];
+  assert.deepEqual([...portalImages(single).used].sort(), want);
+  assert.deepEqual([...portalImages(double).used].sort(), want);
+  assert.equal(envValue('- name: OTHER\n  value: x\n', 'PORTAL_K8S_TARGETS'), undefined);
+});
+
+test('KUBE_IMAGES is exactly the images the portal’s workspaces run (deploy/k3s/portal.yaml), both ways (PILOT-1192)', () => {
   const yaml = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../deploy/k3s/portal.yaml'), 'utf8');
-  const base = /- name: PORTAL_K8S_IMAGE\s+value: (\S+)/.exec(yaml)?.[1];
-  const targets = JSON.parse(/- name: PORTAL_K8S_TARGETS\s+value: '([^']+)'/.exec(yaml)?.[1] ?? '[]');
-  const used = new Set([base, ...targets.map((t) => t.image).filter(Boolean)]);
-  assert.ok(base && used.size >= 1, 'portal.yaml still names its images where this test looks');
-  for (const ref of used) assert.ok(KUBE_IMAGES.includes(ref), `${ref} is in KUBE_IMAGES`);
+  const { base, used } = portalImages(yaml);
+  assert.ok(base, 'portal.yaml still names PORTAL_K8S_IMAGE where this test looks');
+  assert.equal(new Set(KUBE_IMAGES).size, KUBE_IMAGES.length, 'KUBE_IMAGES has no duplicates');
+  // Both directions: a missing image would be refused on stg; a stale one would stay allowed after the portal stopped running it.
+  assert.deepEqual([...KUBE_IMAGES].sort(), [...used].sort());
 });
 
 test('--rotate on a re-run rotates the token and checks with its new secret: exit 0', async () => {
