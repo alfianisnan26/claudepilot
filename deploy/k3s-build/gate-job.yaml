@@ -68,6 +68,7 @@ spec:
             - |
               # GATE-FETCH BEGIN
               set -u
+              ulimit -c 0 2>/dev/null || true # PILOT-1196: no core files (a test's OOM wrote multi-GB core.<pid>)
               root=${GATE_ROOT:-/tmp}
               export HOME=${GATE_FETCH_HOME:-/fetch-home}
               mkdir -p "$HOME"
@@ -155,6 +156,7 @@ spec:
           args:
             - |
               set -u
+              ulimit -c 0 2>/dev/null || true # PILOT-1196: no core files (a test's OOM wrote multi-GB core.<pid>)
               cat /tmp/fetch.log 2>/dev/null
               frc=$(cat /tmp/fetch.rc 2>/dev/null || true)
               if [ "$frc" != 0 ]; then grep -q '^GATE-VERDICT: ' /tmp/fetch.log 2>/dev/null || echo "GATE-VERDICT: red: the fetch failed (rc=${frc:-none})"; exit 1; fi
