@@ -4,7 +4,7 @@
 #   deploy/cf-runner/deploy.sh <image tag> <workspace id> [--dry-run]
 # 1. the R2 bucket cp-jobrun-artifacts (7-day lifecycle) when it is missing;
 # 2. wrangler deploy with the image registry.cloudflare.com/<account>/cp-jobrun-runner:<tag> (built by scripts/image-build.sh, see README);
-# 3. the Worker secret JOBRUN_KEYS = {"<workspace id>": HMAC-SHA256(CF_RUNNER_API_TOKEN, "cp-jobrun-key-v1\n<workspace id>")}, the same
+# 3. (only with DEPLOY_KEYS=derived) the Worker secret JOBRUN_KEYS = {"<workspace id>": HMAC-SHA256(CF_RUNNER_API_TOKEN, "cp-jobrun-key-v1\n<workspace id>")}, the same
 #    key scripts/job-run-cf-client.mjs derives; the token itself never goes to the Worker. Values never on a command line or the terminal.
 # Only names starting with cp-jobrun- are created. Refuses any other account.
 set -euo pipefail
@@ -30,11 +30,18 @@ if [ "$dry" = --dry-run ]; then (cd "$cfg" && "${W[@]}" deploy --dry-run --outdi
 # DEPLOY_VARS (optional): extra --var NAME:VALUE pairs for this deploy only (a temporary budget for a test), e.g. "BUDGET_USD_DAY:0.01".
 vars=(); for v in ${DEPLOY_VARS:-}; do [[ $v =~ ^[A-Z_]+:[0-9.]+$ ]] || { echo "deploy.sh: DEPLOY_VARS: NAME:number pairs" >&2; exit 2; }; vars+=(--var "$v"); done
 (cd "$cfg" && "${W[@]}" deploy ${vars[@]+"${vars[@]}"})
-# The key, from the token, into the secret on stdin (wrangler reads a JSON object of secrets from a file).
-node -e '
-  const c = require("node:crypto"), fs = require("node:fs");
-  const k = c.createHmac("sha256", process.env.CF_RUNNER_API_TOKEN).update("cp-jobrun-key-v1\n" + process.argv[1]).digest("hex");
-  fs.writeFileSync(process.argv[2], JSON.stringify({ JOBRUN_KEYS: JSON.stringify({ [process.argv[1]]: k }) }), { mode: 0o600 });
-' "$ws" "$cfg/secrets.json"
-(cd "$cfg" && "${W[@]}" secret bulk "$cfg/secrets.json" >/dev/null) && echo "deploy.sh: JOBRUN_KEYS set for workspace $ws"
-rm -f "$cfg/secrets.json"
+# JOBRUN_KEYS (the workspaces' dispatcher keys) is NOT touched by a deploy: since release 2026.11.04-2 each workspace has its own random
+# key (JOB_RUN_CF_KEY in its Secrets pool), set once with `wrangler secret put JOBRUN_KEYS` from a root-only file on k3s-master. A deploy that
+# rewrote it would lock every workspace out. DEPLOY_KEYS=derived restores the old behaviour (the key derived from CF_RUNNER_API_TOKEN), only
+# for a fresh dispatcher with no key yet.
+if [ "${DEPLOY_KEYS:-}" = derived ]; then
+  node -e '
+    const c = require("node:crypto"), fs = require("node:fs");
+    const k = c.createHmac("sha256", process.env.CF_RUNNER_API_TOKEN).update("cp-jobrun-key-v1\n" + process.argv[1]).digest("hex");
+    fs.writeFileSync(process.argv[2], JSON.stringify({ JOBRUN_KEYS: JSON.stringify({ [process.argv[1]]: k }) }), { mode: 0o600 });
+  ' "$ws" "$cfg/secrets.json"
+  (cd "$cfg" && "${W[@]}" secret bulk "$cfg/secrets.json" >/dev/null) && echo "deploy.sh: JOBRUN_KEYS set (derived) for workspace $ws"
+  rm -f "$cfg/secrets.json"
+else
+  echo "deploy.sh: JOBRUN_KEYS left as it is (DEPLOY_KEYS=derived sets the derived key)"
+fi
