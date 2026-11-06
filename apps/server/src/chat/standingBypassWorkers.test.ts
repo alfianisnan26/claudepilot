@@ -213,3 +213,41 @@ test('PILOT-1198: session_start with a parent in Bypass in a listed workspace st
     await r.done();
   }
 });
+
+test('PILOT-1178: a lead in Bypass by the standing policy sleeps and wakes back in Bypass before the woken turn runs; unlisted it stays out', async () => {
+  const r = await rig('docker/ws1', { idleSleepMs: 300 });
+  try {
+    await bypassByStanding(r.s);
+    r.s.controller.setLimits(r.s.id, { maxWorkers: 3 }, { actor: 'ui' }); // a crew lead, as the memor.id lead was
+    await until(() => r.s.controller.get(r.s.id)!.process === 'asleep', 4000);
+    assert.equal(r.s.controller.get(r.s.id)!.mode === 'bypassPermissions', false, 'asleep: the start mode while nothing runs');
+    const left = r.s.controller.audit({ kind: 'bypass.left' }).filter((x) => x.sessionId === r.s.id);
+    assert.deepEqual([left[0]?.detail.why, left[0]?.detail.kept], ['sleep', true], 'the sleep keeps it');
+    const sendsBefore = r.s.ws.sends.length;
+    await answering(r.s, r.s.controller.send(r.s.id, 'wake-1', 'next ticket please'));
+    assert.equal(r.s.controller.get(r.s.id)!.mode, 'bypassPermissions', 'back in Bypass after the wake');
+    const entered = r.s.controller.audit({ kind: 'bypass.entered' }).find((x) => x.sessionId === r.s.id)!;
+    assert.equal(entered.detail.how, 'wake');
+    assert.equal(
+      r.s.controller.audit({ kind: 'bypass.left' }).some((x) => x.sessionId === r.s.id && x.detail.why === 'not_confirmed'),
+      false,
+      'no lead gate dropped it',
+    );
+    // The switch to Bypass reached the woken process before the message the wake was for (its first turn, and so its first tool call).
+    const after = r.s.ws.sends.slice(sendsBefore);
+    const sw = after.findIndex((x) => /"set_permission_mode"/.test(x.line) && /bypassPermissions/.test(x.line));
+    const msg = after.findIndex((x) => x.line.includes('next ticket please'));
+    assert.ok(sw >= 0 && msg >= 0 && sw < msg, `the switch (${sw}) before the message (${msg})`);
+  } finally {
+    await r.done();
+  }
+  // Unlisted, the same lead entered by a person: no person's entry is missing, so this only checks the policy does not widen anything.
+  standingBypass.configure('docker/other');
+  const u = await rig('docker/other', { idleSleepMs: 300 });
+  try {
+    assert.equal(u.s.controller.standingFor(u.s.id), false);
+    await assert.rejects(u.s.controller.enterBypassStanding(u.s.id), /standing Bypass policy does not cover/);
+  } finally {
+    await u.done();
+  }
+});

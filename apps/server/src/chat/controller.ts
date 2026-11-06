@@ -1752,7 +1752,8 @@ export class ChatController {
     // no workers limit, no Keep going) slept out of Bypass for good on 2026-10-20 and came back on the start mode. The wake asks every gate.
     // A worker in a Bypass inherited from its lead keeps it too (owner 2026-11-01, Konfersi workers woke in default): its wake asks its
     // parent again, the same gate as at the inherit.
-    this.#bypassOver(sessionId, 'sleep', this.#lostLead(now) || this.#inheritedBypass(sessionId));
+    // PILOT-1178: under the workspace's standing Bypass policy every session keeps it over a sleep (the wake puts it back by that policy).
+    this.#bypassOver(sessionId, 'sleep', this.#lostLead(now) || this.#inheritedBypass(sessionId) || this.standingFor(sessionId));
     this.#emitSession(sessionId);
   }
 
@@ -4428,7 +4429,10 @@ export class ChatController {
                     : 'after the recovery';
     // The lead's own paths: the same extra gates (T-417, T-416 S2; PILOT-996: Keep going's re-entry within 24 hours).
     // A worker in an inherited Bypass is not asked the lead's gates on a wake: its parent in Bypass now is its gate (below).
-    const lead = (how === 'wake' || how === 'lost' || how === 'keepgoing') && !this.#inheritedBypass(sessionId);
+    // PILOT-1178: under the workspace's standing Bypass policy the owner's list stands for the lead gates and the parent's (a lead put in
+    // Bypass by that policy has no person's entry on record, so its wake dropped it to default until a self-heal put it back).
+    const standing = how === 'standing' || this.standingFor(sessionId);
+    const lead = (how === 'wake' || how === 'lost' || how === 'keepgoing') && !standing && !this.#inheritedBypass(sessionId);
     const drop = (why: string, text: string) => {
       const row = this.#chat.row(sessionId);
       if (!row || row.state === 'ended') return;
@@ -4467,7 +4471,7 @@ export class ChatController {
       // PILOT-996: a worker gets Bypass only from a parent that is in it now (never wider than its parent). PILOT-997 review 42957: on every
       // way back too (a move, a restart, a recovery, Keep going) for a session whose capability came from its parent, not only at the inherit.
       // PILOT-1129: the standing policy is the owner's own decision for the whole workspace: no parent is asked for it.
-      if (how !== 'standing' && (how === 'inherit' || this.#inheritedBypass(sessionId))) {
+      if (!standing && (how === 'inherit' || this.#inheritedBypass(sessionId))) {
         let parent = row.parent_id ? this.#chat.row(row.parent_id) : null;
         // Its parent restarting in Bypass at the same time reads the start mode until its own keep is done (2026-11-01: an MCP change
         // restarted a Konfersi lead and its workers together and the workers dropped to default): wait for that, then ask.
