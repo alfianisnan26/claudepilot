@@ -7,6 +7,7 @@
 // It runs in small batches with a pause between them, so the portal's own writes are never held up for long.
 
 import type { DatabaseSync } from 'node:sqlite';
+import { TICKET_CLOSED_STATUSES } from '@portal/contracts';
 import type { WorkspaceIdentities } from './identity.js';
 
 /** A column that holds workspace references, in a module that reads either form. Only names from this list ever reach SQL. */
@@ -124,4 +125,59 @@ export async function rewriteWorkspaceRefs(
     }
   }
   return out;
+}
+
+const CLOSED = TICKET_CLOSED_STATUSES.map((x) => `'${x}'`).join(', ');
+
+export interface RehomeResult {
+  /** Active tickets moved, per bucket, to that bucket's default workspace (its stable id). */
+  moved: { bucket: string | null; to: string; count: number }[];
+  /** Active tickets left on the removed workspace: their bucket has no live default workspace (or none other than this one). */
+  left: { bucket: string | null; count: number }[];
+}
+
+/**
+ * PILOT-1166: a workspace was removed (retired). Its ACTIVE tickets (not done or won't do) would sit on a workspace no session can work in:
+ * ticket_bump refuses them ("That session works in another workspace") and crews can not take them (456 after the Organizations move of
+ * 2026-11-01, repaired by hand). Each goes to its bucket's default workspace when that is a live workspace other than this one; the rest stay
+ * (logged), as do closed tickets and every other column (history, pinned to the removed id by `pinRefsOfRemoved`). Never to a workspace
+ * that merely takes the same name (T-42): only the bucket's own default. `liveId` resolves a stored reference to a LIVE workspace's id.
+ * Synchronous, like the pin; failures are logged and the remove goes on.
+ */
+export function rehomeTicketsOfRetired(db: DatabaseSync, retired: { id: string; legacyId: string }, liveId: (ref: string) => string | null): RehomeResult {
+  const out: RehomeResult = { moved: [], left: [] };
+  try {
+    const groups = db
+      .prepare(
+        `SELECT t.bucket_key AS bucket, b.default_workspace_id AS def, count(*) AS n FROM tickets t LEFT JOIN ticket_buckets b ON b.key = t.bucket_key
+         WHERE t.workspace_id IN (?, ?) AND t.status NOT IN (${CLOSED}) GROUP BY t.bucket_key, b.default_workspace_id`,
+      )
+      .all(retired.id, retired.legacyId) as { bucket: string | null; def: string | null; n: number }[];
+    const move = db.prepare(`UPDATE tickets SET workspace_id = ? WHERE bucket_key IS ? AND workspace_id IN (?, ?) AND status NOT IN (${CLOSED})`);
+    for (const g of groups) {
+      const to = g.def ? liveId(g.def) : null;
+      if (!to || to === retired.id) {
+        out.left.push({ bucket: g.bucket, count: Number(g.n) });
+        continue;
+      }
+      out.moved.push({ bucket: g.bucket, to, count: Number(move.run(to, g.bucket, retired.id, retired.legacyId).changes) });
+    }
+  } catch (e) {
+    console.error(`[workspaces] could not move the active tickets of removed ${retired.legacyId} (${retired.id}): ${(e as Error).message}`);
+  }
+  for (const m of out.moved) console.log(`[workspaces] ${m.count} active ${m.bucket ?? 'unbucketed'} ticket(s) of removed ${retired.legacyId} moved to ${m.to} (the bucket's default)`);
+  for (const l of out.left)
+    console.error(`[workspaces] ${l.count} active ${l.bucket ?? 'unbucketed'} ticket(s) left on removed ${retired.legacyId}: the bucket has no live default workspace`);
+  return out;
+}
+
+/**
+ * PILOT-1166 (startup check): active tickets whose workspace no longer exists (removed, or never known), grouped by the stored reference.
+ * `resolve` is the registry's: null for a removed or unknown workspace. Reads only.
+ */
+export function ticketsOnMissingWorkspaces(db: DatabaseSync, resolve: (ref: string) => unknown): { ref: string; bucket: string | null; count: number }[] {
+  const rows = db
+    .prepare(`SELECT workspace_id AS ref, bucket_key AS bucket, count(*) AS n FROM tickets WHERE workspace_id IS NOT NULL AND status NOT IN (${CLOSED}) GROUP BY workspace_id, bucket_key`)
+    .all() as { ref: string; bucket: string | null; n: number }[];
+  return rows.filter((r) => !resolve(r.ref)).map((r) => ({ ref: r.ref, bucket: r.bucket, count: Number(r.n) }));
 }

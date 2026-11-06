@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { agent, ticketsHarness, UI } from '../tickets/testkit.js';
 import { WorkspaceIdentities } from './identity.js';
-import { REF_COLUMNS, rewriteWorkspaceRefs } from './refRewrite.js';
+import { REF_COLUMNS, rewriteWorkspaceRefs, ticketsOnMissingWorkspaces } from './refRewrite.js';
 
 const STABLE = /^ws_[0-9a-f]{12}$/;
 
@@ -234,6 +234,38 @@ test('a bump stays in the ticket’s own workspace: a removed workspace’s tick
     const t = h.tickets.bumpTargets(UI, live.id).find((x) => x.id === 'sa');
     assert.ok(!t || t.refusal === 'other_workspace', 'the successor’s session is not offered');
     await assert.rejects(h.tickets.bump(UI, live.id, { sessionId: 'sa', mode: 'ask' }), /another workspace/);
+  } finally {
+    h.done();
+  }
+});
+
+test('PILOT-1166: a removed workspace’s active tickets go to their bucket’s live default workspace; closed ones, and a bucket with no live default, stay; the startup check names what is left', async () => {
+  const { h, ids, stored } = await world();
+  try {
+    const old = ids().allocate('docker', 'old');
+    const web = ids().allocate('docker', 'web');
+    h.tickets.createBucket(UI, { key: 'WEB', name: 'Web', defaultWorkspaceId: 'docker/web' });
+    h.tickets.createBucket(UI, { key: 'SELF', name: 'Self', defaultWorkspaceId: 'docker/old' });
+    const active = h.tickets.create(UI, { summary: 'active', bucket: 'WEB', workspaceId: 'docker/old' });
+    const closed = h.tickets.create(UI, { summary: 'closed', bucket: 'WEB', workspaceId: 'docker/old' });
+    h.store.db!.prepare("UPDATE tickets SET status = 'done' WHERE number = ?").run(closed.number);
+    const selfDefault = h.tickets.create(UI, { summary: 'own default', bucket: 'SELF', workspaceId: 'docker/old' });
+    const elsewhere = h.tickets.create(UI, { summary: 'elsewhere', bucket: 'WEB', workspaceId: 'docker/web' });
+    assert.deepEqual(ticketsOnMissingWorkspaces(h.store.db!, (r) => ids().resolve(r)), [], 'nothing missing while it lives');
+
+    ids().retire('docker', 'old');
+    assert.equal(stored(active.number), web.id, 'moved to the bucket’s default');
+    assert.equal(stored(closed.number), old.id, 'a closed ticket stays, as history');
+    assert.equal(stored(selfDefault.number), old.id, 'its bucket’s default is the removed workspace: left');
+    assert.equal(stored(elsewhere.number), web.id, 'untouched');
+    h.sessions.add({ id: 'sw', workspaceId: 'docker/web' });
+    assert.ok(h.tickets.list(agent('docker/web', 'sw'), {}).items.some((x) => x.number === active.number), 'a crew there can take it');
+    assert.deepEqual(ticketsOnMissingWorkspaces(h.store.db!, (r) => ids().resolve(r)), [{ ref: old.id, bucket: 'SELF', count: 1 }]);
+
+    // A workspace that takes the removed one's name inherits nothing (T-42), and the check still names the old id.
+    ids().allocate('docker', 'old');
+    assert.equal(stored(selfDefault.number), old.id);
+    assert.deepEqual(ticketsOnMissingWorkspaces(h.store.db!, (r) => ids().resolve(r)), [{ ref: old.id, bucket: 'SELF', count: 1 }]);
   } finally {
     h.done();
   }
