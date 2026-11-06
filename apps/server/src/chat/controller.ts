@@ -917,7 +917,13 @@ export class ChatController {
     }
     // PILOT-996 (D-103): the QA worker takes its lead's mode (before: always dontAsk); Bypass only through the gated inherit path. T-2997:
     // the same rule as session_spawn's unasked mode (Bypass only from a lead in it now, else Auto while "Auto for agents" is on).
-    const mode = workerMode(undefined, lead.mode, { parentInBypass: this.bypassNow(a.leadId), autonomousAuto: this.#autonomousAutoOn() });
+    // PILOT-1198: under the standing Bypass policy a lead in Bypass hands it on (the standing inherit path).
+    const standingParent = this.standingParentInBypass(a.leadId);
+    const mode = workerMode(undefined, lead.mode, {
+      parentInBypass: standingParent || this.bypassNow(a.leadId),
+      autonomousAuto: this.#autonomousAutoOn(),
+      standingParent,
+    });
     const child = await this.create(
       {
         workspaceId: lead.workspaceId,
@@ -3831,6 +3837,21 @@ export class ChatController {
    */
   standingWorkspace(workspaceId: string): boolean {
     return this.#bypassAllowed() && standingBypass.applies(workspaceId);
+  }
+
+  /**
+   * PILOT-1198 (PILOT-1129 rule 2c): this session is live and in Bypass (its row) in a workspace under the standing Bypass policy, so a
+   * worker it starts starts in Bypass (through `inheritBypass`'s standing path, which asks no live check of the parent) whatever mode it
+   * asked short of plan or acceptEdits. Never a manager session; anything unknown is false.
+   */
+  standingParentInBypass(rawId: string): boolean {
+    try {
+      const row = this.#chat.row(this.#chat.resolveId(rawId));
+      if (!row || row.state === 'ended' || row.mode !== 'bypassPermissions') return false;
+      return this.standingFor(row.id);
+    } catch {
+      return false;
+    }
   }
 
   standingFor(rawId: string): boolean {

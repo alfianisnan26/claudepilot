@@ -36,6 +36,8 @@ export interface ChatToolHost {
   inheritBypass(id: string): Promise<boolean>;
   /** T-2997: the session is in Bypass now (its live mode, the policy, its capability; never its stored mode alone). */
   bypassNow(id: string): boolean;
+  /** PILOT-1198: the session is in Bypass in a workspace under the standing Bypass policy (its workers start in Bypass, rule 2c). */
+  standingParentInBypass?(id: string): boolean;
   /** T-2997: the mode a worker gets when the Bypass it was to inherit was not kept: Auto where it may run in it, else dontAsk. */
   bypassNotKeptMode(id: string): ChatPermissionMode;
   /** T-2997: the Bypass policy allows Bypass now (a spawn says why a Bypass parent's worker got Auto). */
@@ -199,8 +201,11 @@ export function registerChatTools(chat: ChatToolHost, registry: ToolRegistry = p
         );
       // T-2997 (comment 50003): the parent's Bypass wins over no mode AND over a requested Auto (before, any mode asked skipped the inherit,
       // so a lead in Bypass asking mode auto got an Auto worker never made capable); a narrower mode asked by name still wins.
-      const parentInBypass = chat.bypassNow(parentId);
-      const mode = workerMode(args.mode, parent.mode, { parentInBypass, autonomousAuto });
+      // PILOT-1198: under the workspace's standing Bypass policy a parent in Bypass hands it on (unasked, Auto, dontAsk or default asked);
+      // the controller's standing inherit path enters it without the parent's live check (the owner's list is the decision).
+      const standingParent = chat.standingParentInBypass?.(parentId) === true;
+      const parentInBypass = standingParent || chat.bypassNow(parentId);
+      const mode = workerMode(args.mode, parent.mode, { parentInBypass, autonomousAuto, standingParent });
       // Its stored mode says Bypass but the portal does not stand behind it now: the worker gets the mode above, and the result says why.
       const notInherited =
         !parentInBypass && parent.mode === 'bypassPermissions' && (!args.mode || args.mode === 'auto')

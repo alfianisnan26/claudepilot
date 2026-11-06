@@ -63,9 +63,13 @@ export function modeWithin(mode: ChatPermissionMode, cap: ChatPermissionMode): b
 export function workerMode(
   asked: ChatPermissionMode | null | undefined,
   parent: ChatPermissionMode | null | undefined,
-  ctx: { parentInBypass?: boolean; autonomousAuto?: boolean } = {},
+  ctx: { parentInBypass?: boolean; autonomousAuto?: boolean; standingParent?: boolean } = {},
 ): ChatPermissionMode {
   if (ctx.parentInBypass === true && (!asked || asked === 'auto')) return 'bypassPermissions';
+  // PILOT-1198 (PILOT-1129 rule 2c): in a workspace under the standing Bypass policy a parent in Bypass hands it on even over dontAsk or
+  // default asked (a lead persona's role defaults ask dontAsk): those workers sat waiting until a self-heal put them in Bypass. plan and
+  // acceptEdits asked by name are still kept.
+  if (ctx.standingParent === true && (!asked || asked === 'auto' || asked === 'dontAsk' || asked === 'default')) return 'bypassPermissions';
   if (asked) return asked;
   if (parent === 'bypassPermissions') return 'auto';
   if (ctx.autonomousAuto === true) return 'auto';
