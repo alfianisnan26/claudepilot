@@ -48,7 +48,8 @@ describe('ConnectKubeRuntime', () => {
     ex.onData((d) => (out += d.toString()));
     const code = await new Promise<number | null>((r) => ex.onExit(r));
     assert.equal(code, 0);
-    assert.equal(out, 'exec: echo hi\n');
+    // PILOT-1196: the runtime starts each exec with no core files (kubernetes.ts noCoreDumps); the fake echoes the whole argv.
+    assert.equal(out, 'exec: sh -c ulimit -c 0 2>/dev/null; exec "$@" sh echo hi\n');
     await rt.remove('k1');
     assert.equal(api.deployments.size, 0);
     assert.equal(api.requests.some((r) => r.path === '/api/v1/namespaces' && r.method === 'POST'), false);
