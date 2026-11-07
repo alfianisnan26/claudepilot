@@ -9,6 +9,7 @@ import {
   type ReporterTicketComment,
   type ReporterTicketList,
   type TicketPriority,
+  type TicketStatus,
   type TicketType,
 } from '@portal/contracts';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -21,6 +22,7 @@ import { Icon } from './icons';
 import { Composer } from './Composer';
 import { Thread } from './Thread';
 import { Viewer } from './Viewer';
+import { StatusMenu, changeStatus } from './StatusMenu';
 import {
   SORT_LABEL,
   activeFilterCount,
@@ -541,8 +543,9 @@ function Group({ label, children }: { label: string; children: ReactNode }) {
 
 /** The ticket card: status, where it stands per environment, its captures (each one focusable on the page) and the thread. */
 function TicketDetail({ ticketKey }: { ticketKey: string }) {
-  const { client, select, page, focus, missing, origin, tick, status, post, coarse, openChat } = usePanel();
+  const { client, select, page, focus, missing, origin, tick, status, post, coarse, openChat, notify } = usePanel();
   const [t, setT] = useState<ReporterTicket | null>(null);
+  const [savingStatus, setSavingStatus] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [thread, setThread] = useState<ReporterTicketComment[] | null>(null);
   const [reply, setReply] = useState('');
@@ -587,6 +590,15 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
     }
   };
 
+  // PILOT-1200: the status pill's menu. Shown at once, put back when the server refuses it.
+  const pickStatus = async (next: TicketStatus) => {
+    if (!t || savingStatus || next === t.status) return;
+    setSavingStatus(true);
+    const r = await changeStatus(t, next, (s) => client.setStatus(t.key, s), setT);
+    setSavingStatus(false);
+    if (!r.ok) notify(`Status not changed: ${r.error}`, 'error');
+  };
+
   const env = status.site?.environment ?? null;
   const missingHere = missing && missing.key === ticketKey ? missing : null;
   const missingCapture = missingHere?.captureId ? t?.captures.find((c) => c.captureId === missingHere.captureId) : undefined;
@@ -603,7 +615,7 @@ function TicketDetail({ ticketKey }: { ticketKey: string }) {
           <span aria-hidden="true">·</span>
           <span className={PRIORITY_TONE[t.priority] ?? ''}>{TICKET_PRIORITY_LABEL[t.priority]}</span>
           <span aria-hidden="true">·</span>
-          <PhaseChip phase={t.phase} />
+          <StatusMenu ticket={t} saving={savingStatus} onPick={(s) => void pickStatus(s)} />
           {t.site && <span className="whitespace-nowrap">· on {t.site.environment}</span>}
         </p>
       </div>

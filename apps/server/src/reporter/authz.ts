@@ -43,6 +43,10 @@ export const REPORTER_WIDGET_POLICIES = {
   'GET /reporter/v1/tickets': { kind: 'bearer', why: TOKEN },
   'POST /reporter/v1/tickets': { kind: 'bearer', why: TOKEN },
   'GET /reporter/v1/tickets/:key': { kind: 'bearer', why: TOKEN },
+  'PATCH /reporter/v1/tickets/:key': {
+    kind: 'bearer',
+    why: `${TOKEN} PILOT-1200: the status only, of a ticket of the token's bucket, through tickets.update as the token's person (operate on the bucket through the seam); rate limited per token; audited as reporter.ticket_status.`,
+  },
   'POST /reporter/v1/tickets/:key/captures': { kind: 'bearer', why: TOKEN },
   'POST /reporter/v1/tickets/:key/attachments': { kind: 'bearer', why: TOKEN },
   'GET /reporter/v1/tickets/:key/captures/:captureId/screenshot': { kind: 'bearer', why: TOKEN },

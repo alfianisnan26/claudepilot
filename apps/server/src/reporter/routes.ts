@@ -25,6 +25,7 @@ import {
   type ReporterConnectMessage,
   type ReporterDeployment,
   type ReporterTicketQuery,
+  type ReporterTicketStatusRequest,
   type TicketReporterEvidence,
   type UpdateReporterConfigRequest,
 } from '@portal/contracts';
@@ -217,6 +218,8 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
   // Chat in the widget: messages to sessions per token, and live chat streams per token.
   const chatSends = new RateLimiter(REPORTER_LIMITS.chatMessagesPer10Min, 10 * 60_000);
   const chatStreams = new Map<string, number>();
+  // The card's status menu (PILOT-1200): status changes per token.
+  const statusChanges = new RateLimiter(REPORTER_LIMITS.statusChangesPer10Min, 10 * 60_000);
 
   /* ----- Public files ----- */
 
@@ -507,6 +510,18 @@ export function createReporterWidgetRoutes(service: ReporterService, deps: Repor
     return c.json(success(t), 201);
   });
   api.get('/tickets/:key', (c) => c.json(success(service.ticket(ctxOf(c), c.req.param('key'), base(c)))));
+  // PILOT-1200: the card's status menu. Only `status` is read (service.setStatus, the portal ticket page's own tickets.update); the ticket is
+  // checked before the count, so a refused key costs nothing and says nothing.
+  api.patch('/tickets/:key', json, async (c) => {
+    const x = ctxOf(c);
+    const key = c.req.param('key');
+    service.ticket(x, key, base(c));
+    if (statusChanges.blocked(x.id)) throw new AppError('RATE_LIMITED', 'Too many status changes. Wait a few minutes.');
+    statusChanges.fail(x.id);
+    const t = service.setStatus(x, key, (await jsonBody<ReporterTicketStatusRequest>(c)).status, base(c));
+    deps.audit?.('reporter.ticket_status', { bucket: x.bucketKey, origin: x.origin, ticket: t.key, status: t.status, tokenId: x.id }, `reporter:${x.actorUser}`);
+    return c.json(success(t));
+  });
   api.post('/tickets/:key/captures', json, async (c) => {
     const grant = autoGrant(c, 'attach');
     const t = service.addCaptures(ctxOf(c), c.req.param('key'), await jsonBody(c), base(c));

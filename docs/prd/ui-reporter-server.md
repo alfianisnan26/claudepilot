@@ -61,6 +61,9 @@ Every route of `REPORTER_ROUTES` under `/reporter/v1` from `me` down. No `Access
   a failure creates nothing and leaves the draft as it was. Drafts untouched for 30 days are discarded with their files (sweep every 6 hours).
 - `GET/POST /tickets/:key/comments` (reading marks the thread read; a reply is labelled `<person> (reporter, <origin>)`), `POST /duplicates`,
   `GET /session-targets`, `POST /observed-build`, `GET /sessions`, `GET /knowledge`, `GET /knowledge/note`.
+- `PATCH /tickets/:key` `{ status }` (PILOT-1200, the card's status menu): any ticket of the token's bucket, through the ticket page's own
+  `tickets.update` as the token's person (operate on the bucket): the same transitions, `closed_at`, timeline event (labelled
+  `<person> via reporter (<origin>)`) and listeners. Only the status is read; an unknown one is 400. 30 changes per token in 10 minutes.
 - `GET /events`: NDJSON lines `{"type":"hello"|"changed"|"ping"}`; checked every 2 s, closed after 10 minutes or when the token stops being
   valid. The panel re-reads on `changed` and polls every 30 s when the stream fails.
 - `GET /me` also returns `clientIp` and `clientIpFamily` (4 or 6): the request's address as the portal sees it, by the app's one rule

@@ -30,6 +30,7 @@ import {
   type ReporterTicketList,
   type ReporterTicketQuery,
   type ReporterUpdateCommentRequest,
+  type TicketStatus,
 } from '@portal/contracts';
 import { querySearch, splitStream } from './model';
 
@@ -165,6 +166,8 @@ export interface ReporterClient {
   revoke(): Promise<unknown>;
   tickets(q: ReporterTicketQuery): Promise<ReporterTicketList>;
   ticket(key: string): Promise<ReporterTicket>;
+  /** PILOT-1200: change the ticket's status (nothing else); the card as the server now has it. */
+  setStatus(key: string, status: TicketStatus): Promise<ReporterTicket>;
   /** `grant`: the WebMCP auto-approval this call goes through (PILOT-1128); the server checks it, caps it and tags the ticket webmcp-auto. */
   createTicket(req: ReporterCreateTicketRequest, grant?: string | null): Promise<ReporterCreateTicketResponse>;
   addCaptures(key: string, req: ReporterAddCapturesRequest, grant?: string | null): Promise<unknown>;
@@ -276,6 +279,7 @@ export function createClient(opts: { token: () => string | null; onUnauthorized:
       return { items: v.items ?? [], nextCursor: v.nextCursor ?? null, counts: v.counts ?? { status: {}, priority: {}, type: {}, onPath: 0 } };
     },
     ticket: (key) => call('GET', fill(R.ticket, { key })),
+    setStatus: (key, status) => call('PATCH', fill(R.ticketStatus, { key }), { status }),
     createTicket: (req, grant) => call('POST', R.tickets, req, undefined, viaGrant(grant)),
     addCaptures: (key, req, grant) => call('POST', fill(R.captures, { key }), req, undefined, viaGrant(grant)),
     attach: (key, captureId, kind, blob) =>
