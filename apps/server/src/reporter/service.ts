@@ -1465,6 +1465,24 @@ export class ReporterService {
     return { id: String(e.id), author: 'You', authorKind: 'reporter', body: e.body ?? text, createdAt: e.at };
   }
 
+  /* ---------- Status (the card's status menu, PILOT-1200) ---------- */
+
+  /**
+   * The person changes a ticket's status from the panel: any ticket of the token's bucket (not only the ones they filed), through the SAME
+   * tickets.update the portal's ticket page calls (the transition rules, closed_at, the timeline event, the listeners that tell the holder's
+   * session and count it), as the token's person capped at operate (so a person who may only view the bucket is refused there). Only the
+   * status is read from the request: never the bucket, the assignee or anything else.
+   */
+  setStatus(ctx: ReporterTokenCtx, ref: string, raw: unknown, base: string): ReporterTicket {
+    const t = this.#ticketRow(ctx, ref);
+    // 400, not the 422 of a bad field elsewhere: the panel offers only these, so anything else is a malformed request.
+    if (typeof raw !== 'string' || !(TICKET_STATUSES as readonly string[]).includes(raw))
+      throw new AppError('BAD_REQUEST', `A status is one of: ${TICKET_STATUSES.join(', ')}.`, { details: { status: 'unknown status' } });
+    this.deps.tickets.update(this.#caller(ctx, `${ctx.actorLabel} via reporter (${ctx.origin})`), ticketIdOf(t.number), { status: raw as TicketStatus });
+    this.#changed();
+    return this.#view(ctx, this.#row(t.number), base);
+  }
+
   /* ---------- Duplicates ---------- */
 
   duplicates(ctx: ReporterTokenCtx, raw: Partial<ReporterDuplicateQuery>, base: string): ReporterDuplicateCandidate[] {

@@ -49,6 +49,8 @@ export const REPORTER_LIMITS = {
   liveTokensPerSite: 5,
   /** Tickets a token may file per hour. */
   ticketsPerHour: 30,
+  /** Status changes a token may make in ten minutes (the status menu of the ticket card, PILOT-1200). */
+  statusChangesPer10Min: 30,
   /** Chat messages a token may send to sessions in ten minutes (chat in the widget). */
   chatMessagesPer10Min: 20,
   /** Characters of one chat message from the widget. */
@@ -809,6 +811,11 @@ export interface ReporterTicket {
   checkCounts: Record<ReporterCheckFinding['severity'], number>;
 }
 
+/** `PATCH REPORTER_ROUTES.ticketStatus` (PILOT-1200): the new status; any other field is ignored. */
+export interface ReporterTicketStatusRequest {
+  status: TicketStatus;
+}
+
 export interface ReporterSession {
   id: string;
   title: string;
@@ -1057,6 +1064,11 @@ export const REPORTER_ROUTES = {
   me: '/reporter/v1/me', // GET
   tickets: '/reporter/v1/tickets', // GET ReporterTicketQuery -> ReporterTicketList, POST
   ticket: '/reporter/v1/tickets/:key', // GET
+  /**
+   * PATCH ReporterTicketStatusRequest -> ReporterTicket (PILOT-1200): the person changes the status of a ticket of the token's bucket from
+   * the panel, through the same change the portal's ticket page makes; nothing but the status. Rate limited (statusChangesPer10Min).
+   */
+  ticketStatus: '/reporter/v1/tickets/:key',
   captures: '/reporter/v1/tickets/:key/captures', // POST ReporterAddCapturesRequest
   attach: '/reporter/v1/tickets/:key/attachments', // POST raw body; x-reporter-capture: <captureId>; x-reporter-kind: screenshot | evidence | annotated
   file: '/reporter/v1/tickets/:key/captures/:captureId/screenshot', // GET
