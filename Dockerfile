@@ -8,9 +8,11 @@ COPY package.json package-lock.json .npmrc ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/contracts/package.json packages/contracts/
+# npm-ci-masked trims the token and masks it in npm's output (KONF-3073 follow-up; the same as deploy/k3s-build/portal.Dockerfile).
+COPY scripts/mask-secrets.sh scripts/npm-ci-masked.sh /usr/local/lib/build/
 RUN --mount=type=secret,id=node_auth_token,env=NODE_AUTH_TOKEN \
     --mount=type=cache,target=/root/.npm \
-    npm ci
+    bash /usr/local/lib/build/npm-ci-masked.sh npm ci
 COPY . .
 RUN npm run build \
     && npm prune --omit=dev \

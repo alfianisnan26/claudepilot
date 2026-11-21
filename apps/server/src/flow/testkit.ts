@@ -63,6 +63,14 @@ export class FlowFakeChat implements FlowChatPort {
   stoppedByPerson(id: string) {
     return this.stopped.has(id);
   }
+  /** KONF-3073: the workspaces stopped now (by workspace id); `workspaceStoppedFails`: the read throws. */
+  readonly stoppedWorkspaces = new Set<string>();
+  workspaceStoppedFails = false;
+  async workspaceStopped(id: string) {
+    if (this.workspaceStoppedFails) throw new Error('the runtime list failed');
+    const s = this.sessions.get(id);
+    return !!s && this.stoppedWorkspaces.has(s.workspaceId);
+  }
 }
 
 export class FlowFakeTickets implements FlowTicketPort {

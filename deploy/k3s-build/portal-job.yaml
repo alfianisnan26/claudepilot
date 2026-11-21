@@ -2,7 +2,8 @@
 # not possible: the uplink is slow and the registry's ingress cuts a request at 60 s (Cloudflare's 100 MB request cap on the public path).
 # The source is this repository (public) at the commit named in --context; the GitHub Packages token for the private @isnanme/ui package
 # is a temporary Secret, made by hand and deleted after the build:
-#   kubectl -n isnan-claudepilot create secret generic claudepilot-build --from-literal=node-auth-token="$(gh auth token)"
+#   kubectl -n isnan-claudepilot create secret generic claudepilot-build --from-literal=node-auth-token="$(gh auth token | tr -d '[:space:]')"
+# (prefer scripts/k3s-build.sh, which does this, masks the log and deletes the Secret; never --from-file=/dev/stdin with an untrimmed token)
 #   kubectl apply -f deploy/k3s-build/portal-job.yaml        # edit the commit and the tag first
 #   kubectl -n isnan-claudepilot delete secret claudepilot-build
 apiVersion: batch/v1

@@ -11,9 +11,11 @@ COPY package.json package-lock.json .npmrc ./
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY packages/contracts/package.json packages/contracts/
-# kaniko has no build secrets: the token comes in as a build argument of this (discarded) build stage only.
+# kaniko has no build secrets: the token comes in as a build argument of this (discarded) build stage only. npm-ci-masked trims it
+# (a trailing newline once made npm print it) and masks it in everything npm prints (KONF-3073 follow-up).
+COPY scripts/mask-secrets.sh scripts/npm-ci-masked.sh /usr/local/lib/build/
 ARG NODE_AUTH_TOKEN
-RUN npm ci
+RUN bash /usr/local/lib/build/npm-ci-masked.sh npm ci
 COPY . .
 RUN npm run build \
     && npm prune --omit=dev \

@@ -19,8 +19,14 @@ fi
 git fetch -q origin "$branch" || true
 git merge-base --is-ancestor "$commit" "origin/$branch" 2>/dev/null || { echo "commit $commit is not on origin/$branch: push it first" >&2; exit 2; }
 kubectl -n "$ns" delete job "$job" --ignore-not-found >/dev/null
+# KONF-3073 follow-up: the token is trimmed of every space and newline before it becomes the Secret, and every log line this script
+# prints goes through scripts/mask-secrets.sh (a failed build's tail once carried the token).
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+tok=''
+[ "$what" != portal ] || { tok=$(gh auth token | tr -d '[:space:]'); [ -n "$tok" ] || { echo "no GitHub token (gh auth token)" >&2; exit 2; }; }
+masked() { MASK_TOKEN=$tok bash "$here/mask-secrets.sh"; }
 if [ "$what" = portal ]; then
-  kubectl -n "$ns" create secret generic claudepilot-build --from-literal=node-auth-token="$(gh auth token)" >/dev/null
+  kubectl -n "$ns" create secret generic claudepilot-build --from-literal=node-auth-token="$tok" >/dev/null
   trap 'kubectl -n "$ns" delete secret claudepilot-build --ignore-not-found >/dev/null' EXIT
 fi
 sed -e "s#refs/heads/main\#COMMIT#refs/heads/$branch\#$commit#" -e "s/:TAG/:$tag/" -e "s/=RELEASE_TAG$/=$tag/" -e "s/^  namespace: isnan-claudepilot$/  namespace: $ns/" "$file" | kubectl apply -f - >/dev/null
@@ -30,9 +36,9 @@ for _ in $(seq 1 180); do
   case "$s" in 1/*) ok=1; break ;; */1) ok=0; break ;; esac
   sleep 5
 done
-[ "${ok:-0}" = 1 ] || { echo "BUILD FAILED or timed out; last log lines:" >&2; kubectl -n "$ns" logs "job/$job" --tail=15 >&2 || true; exit 1; }
+[ "${ok:-0}" = 1 ] || { echo "BUILD FAILED or timed out; last log lines:" >&2; kubectl -n "$ns" logs "job/$job" --tail=15 2>&1 | masked >&2 || true; exit 1; }
 if [ "$what" = portal ]; then
-  t=$(gh auth token); n=$(kubectl -n "$ns" logs "job/$job" | grep -c -F -- "$t" || true); unset t
+  n=$(kubectl -n "$ns" logs "job/$job" | grep -c -F -- "$tok" || true)
   [ "$n" = 0 ] && echo "token in the build log: none" || echo "WARNING: the token appears $n times in the build log" >&2
 fi
 repo=claudepilot/$(case "$what" in portal) echo portal ;; browser) echo browser ;; *) echo workspace ;; esac)

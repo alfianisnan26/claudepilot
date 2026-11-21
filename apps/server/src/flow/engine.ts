@@ -94,6 +94,8 @@ export interface FlowChatPort extends SessionReader {
   maxWorkers(s: ChatSession): number | null;
   /** A person stopped it and nothing has run it since (the controller's crew hold). */
   stoppedByPerson(id: string): boolean;
+  /** KONF-3073: its workspace is stopped or stopping now (the controller's `workspaceStopped`). Absent, or false on any doubt: not stopped. */
+  workspaceStopped?(id: string): Promise<boolean>;
 }
 
 /** Keep going's pause switch, read only: the pauses that stand (program null: all) and the program on a chat's own Keep going policy. */
@@ -727,6 +729,9 @@ export class FlowEngine {
       if (rec.kind === 'bypass.left' && rec.actor === 'ui') continue; // a person turned it off
       if (rec.kind !== 'bypass.left' && rec.kind !== 'bypass.entered') continue;
       if (h && h.process !== 'live' && rec.kind === 'bypass.left' && rec.detail.kept === true && rec.sessionId === h.id) continue;
+      // KONF-3073: a head whose process is not live in a stopped workspace is left out: someone stopped the workspace, the stop is what took
+      // Bypass away, and the standing policy (or a person) puts it back once it runs. 2026-11-12..21: 2,507 such rows, every 30 min.
+      if (h && h.process !== 'live' && (await this.#workspaceStopped(h.id))) continue;
       bypass++;
       if (c.hold || this.#limited(c, 'bypass', l)) continue;
       c.st.sent[`bypass:${l}`] = now;
@@ -815,6 +820,14 @@ export class FlowEngine {
       return selfTestAt(this.#d.tickets.comments?.(id) ?? [], head);
     } catch {
       return null;
+    }
+  }
+
+  async #workspaceStopped(id: string): Promise<boolean> {
+    try {
+      return (await this.#d.chat.workspaceStopped?.(id)) === true;
+    } catch {
+      return false;
     }
   }
 
