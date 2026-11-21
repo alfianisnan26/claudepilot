@@ -152,6 +152,28 @@ test('(c) not told: working, waiting on a person, idle under the threshold, at i
   }
 });
 
+test('KONF-3012 (c): a unit whose only open row is its D-85 status ticket (tag status or d85) gets no idle ping; real work still does', async () => {
+  for (const tags of [['status', 'd85'], ['d85'], ['Status']]) {
+    const r = rig();
+    crew(r);
+    r.chat.patch(LEAD_B, { state: 'idle', lastActivityAt: ago(r, 45) });
+    r.tickets.add(60, { holder: LEAD_B, status: 'open', tags: ['konfersi-migration', ...tags] });
+    await r.engine.round();
+    assert.equal(r.chat.sent.filter((x) => x.id === LEAD_B).length, 0, `not told for tags ${tags.join(',')}`);
+    assert.equal(r.engine.snapshot().programs[0]!.counts.idle, 0);
+  }
+  const r = rig();
+  crew(r);
+  r.chat.patch(LEAD_B, { state: 'idle', lastActivityAt: ago(r, 45) });
+  r.tickets.add(60, { holder: LEAD_B, status: 'open', tags: ['konfersi-migration', 'status'] });
+  r.tickets.add(61, { holder: 'wb', status: 'open' });
+  await r.engine.round();
+  const m = r.chat.sent.find((x) => x.id === LEAD_B);
+  assert.ok(m, 'told about the real work');
+  assert.match(m.text, /holds 1 open ticket/);
+  assert.doesNotMatch(m.text, /T-60/, 'the status ticket is not listed');
+});
+
 test('rate limit: one message per lead per condition per 30 min, across rounds and restarts', async () => {
   const r = rig();
   crew(r);

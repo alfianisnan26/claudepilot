@@ -4778,6 +4778,26 @@ export class ChatController {
   }
 
   /**
+   * KONF-3073: the session's workspace is stopped (or stopping) as its runtime lists it now: someone stopped the workspace, and nothing in
+   * it can be woken until it runs again. Keep going holds such a chat instead of waking it every few minutes (2026-11-12..21: 4,590 failed
+   * wakes against a stopped workspace). Read only; anything unknown (no row, not listed, a list that fails) is false: today's behaviour.
+   */
+  async workspaceStopped(rawId: string): Promise<boolean> {
+    try {
+      const row = this.#chat.row(this.#chat.resolveId(rawId));
+      if (!row) return false;
+      const ref = row.workspace_id;
+      const known = this.#workspaces.resolve(ref);
+      const w = (await this.#workspaces.list()).find(
+        (x) => (!!known && x.stableId === known.id) || x.id === ref || x.stableId === ref || `${x.target}/${x.name}` === ref,
+      );
+      return w?.status === 'stopped' || w?.status === 'stopping';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * T-1966: a person's Stop is put on record (`crewhold.set`), and lifted (`crewhold.lifted`) only by a person: their message or their
    * Resume. A row is written only when the state changes. Never throws: the in-memory hold still stands.
    */
