@@ -3,7 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { installScript, killScript, parseDetails, splitVerify, verifyScript } from './jobs.js';
 import { headersScript, launcherScript } from './scripts.js';
 

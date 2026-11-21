@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { arch, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, test } from 'node:test';
+import { after, before, describe, test } from '../../testing/shellGate.js';
 import { INSTALL_PS1 } from './installers.generated.js';
 import { parsePlan } from './plan.js';
 import { fakePortal, newToken, type FakePortal } from './testkit.js';

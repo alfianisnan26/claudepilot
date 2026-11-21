@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../../testing/shellGate.js';
 import { silentLogger } from '../../connect/agent/log.js';
 import { createService } from '../../connect/agent/services/host/index.js';
 import { openCore, openHub, type Core, type TestHub } from '../../connect/testkit.js';
@@ -48,11 +48,11 @@ test('a Host single over the real hub: exec, delivery, an outage and the return'
   const rt = createTunnelRuntime(targetRecord({ id: 'cx3-metal', kind: 'host' }), [{ record: { id: n.nodeId, targetId: 'cx3-metal', name: 'metal', drained: false, keyFingerprint: 'x' }, link }], deps);
   try {
     await rt.check();
-    const s = await rt.exec('cx3-metal', ['sh', '-c', 'echo "$((6*7))"']);
+    const s = await rt.exec('cx3-metal', [process.execPath, '-e', 'process.stdout.write("pilot-exec-ok\\n")']);
     let out = '';
     s.onData((b) => (out += b.toString()));
     assert.equal(await new Promise((r) => s.onExit(r)), 0);
-    assert.equal(out, '42\n');
+    assert.equal(out, 'pilot-exec-ok\n');
     await rt.delivery!.put('cx3-metal', [{ path: '/home/node/.cx3-real', type: 'file', content: 'over the hub', mode: 0o600, uid: 1000, gid: 1000 }]);
     assert.equal(readFileSync(join(home, '.cx3-real'), 'utf8'), 'over the hub');
 

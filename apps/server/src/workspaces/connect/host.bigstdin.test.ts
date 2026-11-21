@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../../testing/shellGate.js';
 import { createService } from '../../connect/agent/services/host/index.js';
 import { silentLogger } from '../../connect/agent/log.js';
 import type { ExecSession } from '../runtime.js';

@@ -1,6 +1,6 @@
 // Runs, tickets and sessions: who owns a branch, the ticket's check, and the failure message with its caps (PRD FR33 to FR38).
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { failureMessage, tailOf } from './message.js';
 import { isChatActor } from '@portal/contracts';
 import { ciActor, FakeSessions } from './sessions.js';

@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../../../../testing/shellGate.js';
 import { pack } from 'tar-stream';
 import type { ConnectHostOpen } from '@portal/contracts';
 import { collectingLogger } from '../../log.js';
@@ -172,8 +172,9 @@ describe('host service (Host mode)', () => {
   describe('exec with a terminal', () => {
     it('runs a shell on a pty, resizes it, and reports the exit', async () => {
       const op = await openHost(svc, { op: 'exec', argv: ['sh'], tty: { cols: 80, rows: 24 } });
-      op.write('echo $((6*7))\n');
-      await op.waitFor('42');
+      // The output, not the echoed input, carries the marker: the typed line holds only its pieces (no arithmetic probe).
+      op.write("printf 'pilot-%s\\n' tty-ok\n");
+      await op.waitFor('pilot-tty-ok');
       op.write('stty size\n');
       await op.waitFor('24 80');
       op.resize(100, 30);

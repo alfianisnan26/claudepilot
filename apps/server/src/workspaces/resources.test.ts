@@ -3,7 +3,7 @@
 // and when the pod would not fit its node, the numbers in the refusal) or at its next start. Decided through the seam (never an agent),
 // audited. Kubernetes is the in-process fake API server with one node; the store a temporary directory.
 import assert from 'node:assert/strict';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import { isAppError } from '@isnanme/core';
 import { workspaceRef, workspaceResourcesProblem, type Actor, type Workspace, type WorkspaceTarget } from '@portal/contracts';
 import { createApp } from '../app.js';

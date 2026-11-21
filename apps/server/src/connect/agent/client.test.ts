@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from '../../testing/shellGate.js';
 import { CONNECT_LIMITS, type ConnectHostResult } from '@portal/contracts';
 import { runAgent, type AgentClock, type AgentHandle } from './client.js';
 import { fingerprintOf, FileIdentityStore } from './identity.js';
@@ -170,8 +170,10 @@ describe('enroll, connect, and what the portal sees', () => {
     const t = portal.target({ id: 'host1' });
     const { handle } = start({ enrollToken: t.token });
     await handle.whenConnected();
-    const { text, result } = await hostOp(handle.identity()!.node, 'host1', { op: 'exec', argv: ['sh', '-c', 'echo $((6*7)); pwd'] });
-    assert.equal(text.split('\n')[0], '42');
+    // A plain marker and the working directory, printed by node itself: no shell, no arithmetic probe (KONF-3073 follow-up).
+    const argv = [process.execPath, '-e', 'process.stdout.write("pilot-exec-ok\\n" + process.cwd() + "\\n")'];
+    const { text, result } = await hostOp(handle.identity()!.node, 'host1', { op: 'exec', argv });
+    assert.equal(text.split('\n')[0], 'pilot-exec-ok');
     assert.equal(text.split('\n')[1], join(dir, 'home'));
     assert.deepEqual(result, { code: 0 });
   });

@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import type { ChatEvent } from '@portal/contracts';
 import { ToolRegistry } from '../../portalmcp/registry.js';
 import { portalMcpHarness } from '../../portalmcp/testkit.js';

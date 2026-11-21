@@ -1,6 +1,6 @@
 // T-591: the reporter with a fake store, a fake cp-ci and a fake vault: what is written, when, and that a rerun replaces instead of adding.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { CI_API } from '@portal/contracts';
 import { CI_POLICIES } from './authz.js';
 import type { CiReply } from './host.js';

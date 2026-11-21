@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import { CHAT_MAX_PREVIEW_BYTES, type ChatFile } from '@portal/contracts';
 import { blobDir, putBlob } from '../blobs.js';
 import { recordFile } from './records.js';

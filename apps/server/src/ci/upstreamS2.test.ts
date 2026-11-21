@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { CI_UPSTREAM_HOSTS_SETTING, type Actor } from '@portal/contracts';
 import { createApp } from '../app.js';
 import { singleOwner, useAuthz } from '../authz/seam.js';

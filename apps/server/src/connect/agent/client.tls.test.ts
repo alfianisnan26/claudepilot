@@ -8,7 +8,7 @@ import tls from 'node:tls';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from '../../testing/shellGate.js';
 import { runAgent, type AgentHandle } from './client.js';
 import { collectingLogger } from './log.js';
 import { agentConfig } from './testkit/agentConfig.js';

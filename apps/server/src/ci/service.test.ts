@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { AppError } from '@isnanme/core';
 import { CiService } from './service.js';
 import { codeOf, harness, PIPELINE, remote, sleep, WS } from './testkit.js';

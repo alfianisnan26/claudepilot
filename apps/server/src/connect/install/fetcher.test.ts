@@ -6,7 +6,7 @@ import { createServer, type IncomingHttpHeaders } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../../testing/shellGate.js';
 import { FETCHER, FETCHER_FORBIDDEN } from './fetcher.js';
 import { integrity, sha256 } from './testkit.js';
 

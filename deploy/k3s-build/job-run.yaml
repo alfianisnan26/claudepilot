@@ -229,6 +229,8 @@ spec:
             - {name: JR_CMD, value: "__CMD__"}
             - {name: JR_AGAINST, value: "__AGAINST__"}
             - {name: JR_KEEP, value: "__KEEP__"}
+            # The shell-test gate (apps/server/src/testing/shellGate.ts): tests that spawn shells run in CI only, and this is CI.
+            - {name: CI, value: "true"}
             - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
           command: [bash, -c]
           args:

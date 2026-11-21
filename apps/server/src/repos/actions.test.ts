@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { WORKTREE_DIRTY } from '@portal/contracts';
 import { buildPool, chatSession, commitFile, reposHarness, WS } from './testkit.js';
 import { repoId } from './text.js';

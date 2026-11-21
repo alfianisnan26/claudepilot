@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../../testing/shellGate.js';
 import { loadAll } from 'js-yaml';
 import { FETCHER } from './fetcher.js';
 import { buildManifest, ROLE_RULES, type ManifestInput } from './manifest.js';

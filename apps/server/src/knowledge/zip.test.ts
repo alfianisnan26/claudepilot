@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { tempDirectory } from '../store/testTmp.js';
 import { makeZip } from '../skills/testkit.js';
 import { openZip, ZipError, zipChunks, type ZipLimits } from './zip.js';

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../../testing/shellGate.js';
 import { CP_CI } from '../runner.generated.js';
 import { buildRunner } from './build.js';
 import { Home, job, plan, runnerText, step } from './testkit.js';

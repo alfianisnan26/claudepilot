@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, before, describe, test } from 'node:test';
+import { after, before, describe, test } from '../testing/shellGate.js';
 import type { RepoNode } from '@portal/contracts';
 import { buildPool, chatSession, commitFile, reposHarness, WS, type Pool } from './testkit.js';
 

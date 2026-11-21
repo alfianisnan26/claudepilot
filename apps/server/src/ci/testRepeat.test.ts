@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 
 // scripts/test-repeat.sh (T-324): a command run N times, beside busy loops if asked; one result line, one line per failed run, exit 1 on any.
 const script = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../scripts/test-repeat.sh');

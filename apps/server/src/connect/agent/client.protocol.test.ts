@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from '../../testing/shellGate.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { CONNECT_LIMITS, CONNECT_SUBPROTOCOL, type ConnectAuth } from '@portal/contracts';
 import { generateNodeKeyPair, verifyChallenge } from '../tunnel/auth.js';

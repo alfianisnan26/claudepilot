@@ -7,13 +7,15 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, shellTestsEnabled, test } from '../testing/shellGate.js';
 import { parseRateLimitInfo } from './parse.js';
 import { probeClaude, SAFE_MODE_FLAG, type ProbeIo } from './probe.js';
 import { PRIME_SYSTEM_PROMPT, runPrime } from './prime.js';
 import { localExec, makeFakeClaude, opensslAvailable, startStandIn, type FakeClaude, type StandIn } from './testkit/index.js';
 
+// Asked only when the shell-test gate is open: with it closed nothing here may spawn, not even at import.
 const hasClaude = (() => {
+  if (!shellTestsEnabled()) return false;
   try {
     execFileSync('claude', ['--version'], { stdio: 'ignore' });
     return true;

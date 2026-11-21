@@ -20,7 +20,7 @@ import {
 } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
 import { runPod } from './jobRunTestkit.js';

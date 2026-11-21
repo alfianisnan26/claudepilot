@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import type { McpCatalogEntry } from '@portal/contracts';
 import { CP_SESSION, CP_SESSION_PATH } from '../chat/host.js';
 import { hostInstaller } from '../chat/install.js';

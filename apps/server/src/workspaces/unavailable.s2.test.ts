@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import type { Workspace, WorkspaceTarget } from '@portal/contracts';
 import { isAppError } from '@isnanme/core';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';

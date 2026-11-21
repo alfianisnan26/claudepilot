@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { HOOKS } from '../delivery/hooks.js';
 
 const DOCKERFILE = new URL('../../../../images/workspace/Dockerfile', import.meta.url);

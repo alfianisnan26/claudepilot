@@ -3,7 +3,7 @@
 // (no `cp-ci approve`, the key stays in the portal, the job keeps waiting), off writes nothing, a gate skipped by its input and a diff
 // that touches authz or a released migration are WOULD NOT, and the audit row. Shas and dates are made at run time.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { CI_AUTO_APPROVE_DEFAULT_PATHS, type CiJob, type CiRunStateFile, type CiUnitStatus } from '@portal/contracts';
 import { evaluateRule, gateVerdict, inWindow, MIGRATIONS_FILE, releasedMigrationChanges, ruleLine, type RuleDeps } from './autoApprove.js';
 import type { CiReply } from './host.js';

@@ -1,6 +1,6 @@
 // T-95 item 4: a gate that passed on a rerun names its flaky tests; the portal keeps one ticket per test across runs.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { TICKET_LIMITS } from '@portal/contracts';
 import { FLAKY_EXCERPT_BYTES, flakyExcerpt, flakyTitle, parseFlaky } from './flaky.js';
 import { FakeTickets } from './tickets.js';

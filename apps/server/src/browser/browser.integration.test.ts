@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { PassThrough } from 'node:stream';
-import { after, before, describe, test } from 'node:test';
+import { after, before, describe, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { BROWSER_POOL_DEFAULTS } from '@portal/contracts';
 import Docker from 'dockerode';

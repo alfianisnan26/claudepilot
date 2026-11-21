@@ -3,7 +3,7 @@
 // resolving while it lives; a label is unique on its target (its name, its label and every label it had count); the rules are checked; the
 // seam decides on the workspace; the rename is audited. Kubernetes is the in-process fake API server, the store a temporary directory.
 import assert from 'node:assert/strict';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import { isAppError } from '@isnanme/core';
 import { rememberWorkspaceLabelMap, rememberWorkspaceLabels, WORKSPACE_LABEL_MAX, workspaceDisplayName, workspaceLabel, workspaceLabelProblem, workspaceRef, type Actor, type Workspace, type WorkspaceTarget } from '@portal/contracts';
 import { createApp } from '../app.js';

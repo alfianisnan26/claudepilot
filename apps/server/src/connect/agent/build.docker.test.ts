@@ -6,7 +6,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../../testing/shellGate.js';
 import { PILOT_AGENT } from '../agent.generated.js';
 import { openPortal, type Portal } from './testkit/portalRig.js';
 import { parseResult, RECORD, RecordParser } from '../tunnel/records.js';

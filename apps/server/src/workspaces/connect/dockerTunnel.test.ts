@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { Readable } from 'node:stream';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../../testing/shellGate.js';
 import { pack } from 'tar-stream';
 import { firstFileOf } from '../docker.js';
 import type { ShellSession } from '../runtime.js';

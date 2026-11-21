@@ -2,7 +2,7 @@
 // workspace's, then the ticket's), the two modes, the refusals, the record on the run and the ticket, the limits, the audit, and the
 // Portal MCP tool with its confirmation.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { BUMPS_PER_HOUR_RUN } from './links.js';
 import { registerCiTools } from './portalTools.js';

@@ -2,7 +2,7 @@
 // not exist, on every route that names A's run or remote; approving a deployment and switching an environment's protection are a person's
 // acts (a Portal MCP token or an agent with every right still gets 403); every route is declared in ci/authz.ts.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { AppError, isAppError } from '@isnanme/core';
 import { objectRef, type Actor } from '@portal/contracts';
 import { Hono } from 'hono';

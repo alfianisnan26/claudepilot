@@ -6,7 +6,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import type { ReposOverview, WorkspaceRepos } from '@portal/contracts';
 import { remoteNames, workspaceGit, type GitExec } from './git.js';
 

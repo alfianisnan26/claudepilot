@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import net, { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, it } from 'node:test';
+import { after, before, it } from '../../testing/shellGate.js';
 import { KubeConfig } from '@kubernetes/client-node';
 import { KubernetesRuntime } from '../../workspaces/kubernetes.js';
 import { memoryPod } from '../../workspaces/kubeTestkit.js';

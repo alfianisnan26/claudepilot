@@ -6,10 +6,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, shellTestsEnabled, test } from '../testing/shellGate.js';
 import { CANARY_STANDIN } from './standin.js';
 
+// Asked only when the shell-test gate is open: with it closed nothing here may spawn, not even at import.
 const hasOpenssl = (() => {
+  if (!shellTestsEnabled()) return false;
   try {
     execFileSync('openssl', ['version'], { stdio: 'ignore' });
     return true;

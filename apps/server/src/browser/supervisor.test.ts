@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, describe, test } from 'node:test';
+import { after, afterEach, before, describe, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 
 /**

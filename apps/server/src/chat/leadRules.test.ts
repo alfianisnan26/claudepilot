@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { settingDef } from '../settings/registry.js';
 import { SETTINGS_POLICIES } from '../settings/authz.js';
 import { SCHEDULE_TOOLS } from './agents.js';

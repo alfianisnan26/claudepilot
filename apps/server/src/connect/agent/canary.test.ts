@@ -8,7 +8,7 @@ import http from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../../testing/shellGate.js';
 import net, { type AddressInfo } from 'node:net';
 import { pack } from 'tar-stream';
 import { runAgent, type AgentHandle } from './client.js';

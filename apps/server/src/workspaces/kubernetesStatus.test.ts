@@ -2,7 +2,7 @@
 // (phase Succeeded or Failed, "Completed" 0/1 in kubectl) are not the workspace. kubernetes/memorid-project sat on "Stopping" for good
 // with its Deployment at zero replicas and two such pods left behind (owner report 2026-10-31).
 import assert from 'node:assert/strict';
-import { after, before, beforeEach, test } from 'node:test';
+import { after, before, beforeEach, test } from '../testing/shellGate.js';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import type { KubernetesRuntime } from './kubernetes.js';
 import { kubeRuntimeOn } from './kubeTestkit.js';
