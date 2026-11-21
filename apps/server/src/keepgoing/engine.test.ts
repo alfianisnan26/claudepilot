@@ -177,6 +177,36 @@ test('the caps: at most maxNudgesPerDay nudges in 24 h, then one capped row and 
   assert.match(w.tickets.made[0]!.summary, /could not wake/);
 });
 
+test('KONF-3073: a chat in a stopped workspace is held: not woken, not started again, nothing reported; woken once the workspace runs', async () => {
+  const r = await rig();
+  r.chat.put('s1', { state: 'interrupted', process: 'gone' });
+  r.chat.put('s2', { state: 'ended', process: 'gone', endedReason: 'Claude Code stopped' });
+  r.chat.put('s3', { state: 'idle', process: 'asleep' });
+  const ws = r.chat.get('s1')!.workspaceId;
+  r.chat.stoppedWorkspaces.add(ws);
+  r.on('s1');
+  r.on('s2');
+  r.on('s3');
+  for (let i = 0; i < 40; i++) await r.after(1);
+  assert.equal(r.chat.resumed.length, 0, 'nothing woken while the workspace is stopped');
+  assert.equal(r.chat.started.length, 0, 'no new chat started into it');
+  assert.equal(r.tickets.made.length, 0, 'no ticket: someone stopped the workspace on purpose');
+  assert.equal(r.kg.count('s1', 'failed', '1970-01-01T00:00:00.000Z'), 0, 'no failed rows');
+  r.chat.stoppedWorkspaces.delete(ws);
+  await r.after(1);
+  await r.after(1);
+  assert.ok(r.chat.resumed.includes('s1'), 'woken once the workspace runs');
+});
+
+test('KONF-3073: a failing read of the workspace keeps the old behaviour (the chat is woken)', async () => {
+  const r = await rig();
+  r.chat.put('s1', { state: 'interrupted', process: 'gone' });
+  r.chat.workspaceStoppedFails = true;
+  r.on('s1');
+  await r.engine.round();
+  assert.deepEqual(r.chat.resumed, ['s1'], 'unknown: woken as before');
+});
+
 test('the kill switch: keepgoing.enabled off stops every round; on again resumes', async () => {
   const settings = settingsMap({ [K.enabled]: false });
   const r = await rig({ settings });

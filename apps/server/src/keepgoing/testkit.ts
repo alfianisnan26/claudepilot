@@ -78,6 +78,14 @@ export class KgChat extends FakeChat implements KeepGoingChatPort {
   restoreBypass?: (id: string) => Promise<boolean>;
   /** PILOT-1129: the standing Bypass policy covers the chat (a test installs it). */
   standingFor?: (id: string) => boolean;
+  /** KONF-3073: the workspaces that are stopped now (by workspace id); a test fills it. `workspaceStoppedFails`: the read throws. */
+  readonly stoppedWorkspaces = new Set<string>();
+  workspaceStoppedFails = false;
+  async workspaceStopped(id: string): Promise<boolean> {
+    if (this.workspaceStoppedFails) throw new Error('the runtime list failed');
+    const s = this.sessions.get(id);
+    return !!s && this.stoppedWorkspaces.has(s.workspaceId);
+  }
   /** T-3189: the sessions this one started (by `parentId`). */
   children(id: string): ChatSession[] {
     return [...this.sessions.values()].filter((s) => s.parentId === id);

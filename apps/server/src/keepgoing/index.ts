@@ -36,6 +36,8 @@ interface ControllerLike {
   standingFor?: (id: string) => boolean;
   /** T-3189: the sessions a session started (its workers). */
   children?: (id: string) => ChatSession[];
+  /** KONF-3073: the session's workspace is stopped (the controller's `workspaceStopped`). */
+  workspaceStopped?: (id: string) => Promise<boolean>;
 }
 
 interface TicketsLike {
@@ -70,6 +72,7 @@ export function keepGoingChatPort(raw: unknown): (KeepGoingChatPort & { controll
       : {}),
     ...(typeof ctl.children === 'function' ? { children: (id: string) => ctl.children!(id) } : {}),
     ...(typeof ctl.standingFor === 'function' ? { standingFor: (id: string) => ctl.standingFor!(id) } : {}),
+    ...(typeof ctl.workspaceStopped === 'function' ? { workspaceStopped: (id: string) => ctl.workspaceStopped!(id) } : {}),
   };
 }
 

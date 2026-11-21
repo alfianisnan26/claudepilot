@@ -79,6 +79,11 @@ export interface KeepGoingChatPort {
   standingFor?(id: string): boolean;
   /** T-3189: the sessions this chat started (its workers), any state. Absent: its workers are unknown, so it is never taken as drained. */
   children?(id: string): ChatSession[];
+  /**
+   * KONF-3073: the chat's workspace is stopped (or stopping) now. Such a chat is held like a pause: nothing is woken, started again or
+   * reported until the workspace runs. Absent, or false on any doubt: today's behaviour.
+   */
+  workspaceStopped?(id: string): Promise<boolean>;
 }
 
 /** Opening and commenting tickets as the portal itself (tickets' `system` caller). */
@@ -122,6 +127,8 @@ const short = (id: string) => id.slice(0, 8);
 /** The newest first, ids at most this far back over `continuedFrom` (cycle safe). */
 const LINEAGE_MAX = 50;
 const VALID_WORKSPACE = /^[a-z0-9-]+\/[A-Za-z0-9._-]+$/;
+/** KONF-3073: the hold of a chat whose workspace is stopped (not a stored pause: it ends by itself when the workspace runs again). */
+const WORKSPACE_STOPPED = { held: 'workspace_stopped' } as const;
 
 /** The continuation prompt with its placeholders filled. */
 export function renderPrompt(p: Pick<ChatKeepGoingPolicy, 'prompt' | 'statusFile'>, s: Pick<ChatSession, 'ticketId'>): string {
@@ -282,7 +289,9 @@ export class KeepGoingEngine {
     if (this.#seen.get(s.id) !== sig) (this.#seen.set(s.id, sig), (this.#dirty = true));
     const since24 = iso(now - DAY);
     const ended = s.state === 'ended';
-    const held = this.pauseOf(p);
+    // KONF-3073: a chat whose process is not live in a workspace that is stopped is held like a pause (asked only then: a live process means
+    // the workspace runs). Someone stopped the workspace on purpose; waking into it only fails, every few minutes, with a ticket each time.
+    const held = this.pauseOf(p) ?? (s.process !== 'live' && (await this.#workspaceStopped(s.id)) ? WORKSPACE_STOPPED : null);
     // An ending is marked quietly the first time the sweep sees it (no ticket, no notification): `down` counts from there. While a pause
     // holds the chat the mark moves with the clock, so the 15 minutes of "left down" count from the resume, not from the pause.
     if (ended && !closedByPerson(s) && (held || !this.#d.store.standing(s.id).some((r) => r.cause === 'ended'))) this.#d.store.putReport(s.id, ownerId, 'ended', iso(now), null);
@@ -316,6 +325,14 @@ export class KeepGoingEngine {
     if (held && decision.act !== 'stand_down') return decision;
     await this.#act(s, ownerId, p, decision);
     return decision;
+  }
+
+  async #workspaceStopped(id: string): Promise<boolean> {
+    try {
+      return (await this.#d.chat.workspaceStopped?.(id)) === true;
+    } catch {
+      return false;
+    }
   }
 
   #bypassSeenAt(id: string): string | null {

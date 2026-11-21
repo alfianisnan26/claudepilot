@@ -192,6 +192,9 @@ export function headOf(verdicts: readonly StoredVerdict[], checks: readonly Tick
  */
 export const RISK_HIGH_TAGS: readonly string[] = ['risk-high', 'risk_high', 'risk:high'];
 export const isHighRisk = (tags: readonly string[]): boolean => tags.some((t) => RISK_HIGH_TAGS.includes(t.toLowerCase()));
+/** KONF-3012: the tags of a unit's standing status ticket (D-85): a report the lead keeps, never work to dispatch. */
+export const STATUS_TICKET_TAGS: readonly string[] = ['status', 'd85'];
+export const isStatusTicket = (tags: readonly string[] | undefined): boolean => (tags ?? []).some((t) => STATUS_TICKET_TAGS.includes(t.toLowerCase()));
 /** D-102: the implementer's self-test line, the merge gate's own form: `Self-test: <job | command> on <sha> pass <N>[ stg same failures: <ids>]`. */
 const SELF_TEST = /^Self-test: \S.*? on ([0-9a-f]{12,40}) pass [1-9][0-9]*(?: stg same failures: .*\S.*)?$/;
 const sameCommit = (a: string, b: string) => a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a));
@@ -637,9 +640,10 @@ export class FlowEngine {
       }
     }
 
-    // (c) idle leads with open work in their unit and room under their cap.
+    // (c) idle leads with open work in their unit and room under their cap. KONF-3012: a unit's status ticket (D-85, tag `status` or `d85`)
+    // is a report, not a build row: it is never open work, so a unit whose only open row is its status ticket gets no idle or lane ping.
     let idle = 0;
-    const unitOpen = open.filter((x) => x.status === 'open' || x.status === 'in_progress');
+    const unitOpen = open.filter((x) => (x.status === 'open' || x.status === 'in_progress') && !isStatusTicket(x.tags));
     const working = (s: ChatSession) => s.state === 'working' || s.state === 'starting' || !!s.busySince || (s.agentsRunning ?? 0) > 0 || s.waiting > 0;
     const doing = (id: string | null) => {
       const s = id ? chat.get(id) : null;
