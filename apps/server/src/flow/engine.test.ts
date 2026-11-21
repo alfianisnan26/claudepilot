@@ -272,6 +272,37 @@ test('(d) a lead out of Bypass is reported, never messaged; a person’s own exi
   assert.equal(c.engine.snapshot().actions.find((a) => a.condition === 'bypass')!.sessionId, 'b2');
 });
 
+test('KONF-3073 (d): a lead out of Bypass whose process is gone in a stopped workspace is not reported; live, or an unreadable state, still is', async () => {
+  const setup = () => {
+    const r = rig();
+    crew(r);
+    r.chat.patch(LEAD_B, { process: 'gone', state: 'interrupted' });
+    r.chat.bypass.set(LEAD_B, { sessionId: LEAD_B, kind: 'bypass.left', actor: 'portal', at: ago(r, 10), detail: { why: 'stopped' } });
+    return r;
+  };
+  const r = setup();
+  r.chat.stoppedWorkspaces.add(r.chat.get(LEAD_B)!.workspaceId);
+  await r.engine.round();
+  assert.equal(r.engine.snapshot().programs[0]!.counts.bypass, 0, 'not counted');
+  assert.equal(r.engine.snapshot().actions.filter((a) => a.condition === 'bypass').length, 0, 'not reported');
+  assert.equal(r.audits.filter((a) => a.kind === 'flow.reported').length, 0, 'no audit row');
+
+  const running = setup();
+  await running.engine.round();
+  assert.equal(running.engine.snapshot().programs[0]!.counts.bypass, 1, 'workspace running: reported as before');
+
+  const unknown = setup();
+  unknown.chat.workspaceStoppedFails = true;
+  await unknown.engine.round();
+  assert.equal(unknown.engine.snapshot().programs[0]!.counts.bypass, 1, 'unreadable: reported as before');
+
+  const live = setup();
+  live.chat.patch(LEAD_B, { process: 'live', state: 'idle' });
+  live.chat.stoppedWorkspaces.add(live.chat.get(LEAD_B)!.workspaceId);
+  await live.engine.round();
+  assert.equal(live.engine.snapshot().programs[0]!.counts.bypass, 1, 'a live process is never held by the stop read');
+});
+
 test('(e) a stall tells the owner only once it lasts 3 h after the first nudge, and only once', async () => {
   const r = rig();
   crew(r);

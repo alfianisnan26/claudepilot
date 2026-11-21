@@ -24,6 +24,7 @@ interface ControllerLike {
   send(id: string, uuid: string, text: string, opts: { priority?: 'next' | 'later'; actor?: string; actorLabel?: string }): Promise<void>;
   audit(filter: { kind?: string; sessionId?: string; limit?: number }): ChatAuditEntry[];
   stoppedByPerson?(id: string): boolean;
+  workspaceStopped?(id: string): Promise<boolean>;
   agentCaps?: () => AgentCaps;
   continuationOf?(id: string): string | null;
 }
@@ -65,6 +66,7 @@ export function flowChatPort(raw: unknown): FlowChatPort | null {
     maxWorkers: (s) => effectiveMaxWorkers(ctl.agentCaps?.() ?? null, s.maxWorkers),
     // A controller without the hold (an older one, a test double) is read as held: fail closed, nothing is sent.
     stoppedByPerson: (id) => (typeof ctl.stoppedByPerson === 'function' ? ctl.stoppedByPerson(id) : true),
+    ...(typeof ctl.workspaceStopped === 'function' ? { workspaceStopped: (id: string) => ctl.workspaceStopped!(id) } : {}),
   };
 }
 
