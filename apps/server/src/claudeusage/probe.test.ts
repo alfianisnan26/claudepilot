@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { shellTestsEnabled, test } from '../testing/shellGate.js';
 import { askUsage, authCommand, inClaude, probeClaude, probeCommand, PROBE_LIMIT_S, SAFE_MODE_FLAG, type ProbeIo } from './probe.js';
 import { localExec } from './testkit/localExec.js';
 import { AUTH_KEY, AUTH_OUT, AUTH_PLAN, controlReply, REPLY_NO_LIMITS, REPLY_PLAN, REPLY_UNAVAILABLE, requestId, ScriptedExec } from './fixtures.js';
@@ -210,7 +210,9 @@ test('a Claude Code without --safe-mode starts nothing and says so: the probe is
   }
 });
 
+// Asked only when the shell-test gate is open: with it closed nothing here may spawn, not even at import.
 const hasTimeout = (() => {
+  if (!shellTestsEnabled()) return false;
   try {
     execFileSync('timeout', ['1', 'true'], { stdio: 'ignore' });
     return true;

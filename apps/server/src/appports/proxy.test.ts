@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, request, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import { WebSocket, WebSocketServer } from 'ws';
 import { FOUNDING_USER_ID, type Actor } from '@portal/contracts';
 import { singleOwner, useAuthz } from '../authz/seam.js';

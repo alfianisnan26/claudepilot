@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, describe, it } from 'node:test';
+import { after, describe, it } from '../../testing/shellGate.js';
 import { CONNECT_INSTALL_EXIT } from '@portal/contracts';
 import { EnrollError } from './enroll.js';
 import { FileIdentityStore } from './identity.js';

@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 
 // The browser container's process signals and stale locks (T-1660), imported the way headers.test.ts imports the container's code.

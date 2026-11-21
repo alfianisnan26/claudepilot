@@ -11,7 +11,7 @@ import { type Server, createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
 

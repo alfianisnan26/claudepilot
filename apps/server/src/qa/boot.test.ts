@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { after, test } from 'node:test';
+import { after, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import type { SystemStatus } from '@portal/contracts';
 import { MIGRATIONS } from '../store/migrations.js';

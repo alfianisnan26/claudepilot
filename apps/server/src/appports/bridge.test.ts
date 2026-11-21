@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer, type AddressInfo } from 'node:net';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { bridgeCommand } from './dial.js';
 

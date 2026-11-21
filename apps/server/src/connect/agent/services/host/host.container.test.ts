@@ -3,7 +3,7 @@
 // terminal works, `put` sets the owner and mode of what it writes, and usage comes from the container's cgroup. One short-lived container, removed after.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { after, describe, it } from 'node:test';
+import { after, describe, it } from '../../../../testing/shellGate.js';
 
 const enabled = process.env.CLAUDEPILOT_DOCKER_TESTS === '1';
 const NAME = 'cx2-host-rig';

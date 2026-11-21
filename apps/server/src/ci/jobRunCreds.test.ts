@@ -10,7 +10,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { after, test } from 'node:test';
+import { after, shellTestsEnabled, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { load as yamlLoad } from 'js-yaml';
 import { runPod, scriptPart } from './jobRunTestkit.js';
@@ -255,7 +255,7 @@ test('T-401 a gzipped copy of a credential is deleted and the Job is red; a gzip
   assert.ok(!existsSync(join(jr, 'w/event/leak.txt.gz')));
 });
 
-test('T-401 the repository\'s own .npmrc form (an auth line with the variable) loads in a real npm when the variable is defined and empty (what the run and gate containers set)', { skip: spawnSync('npm', ['--version']).status !== 0 }, () => {
+test('T-401 the repository\'s own .npmrc form (an auth line with the variable) loads in a real npm when the variable is defined and empty (what the run and gate containers set)', { skip: shellTestsEnabled() && spawnSync('npm', ['--version']).status !== 0 }, () => {
   const dir = mkdtempSync(join(tmpdir(), 'cp-t401-npm-'));
   roots.push(dir);
   writeFileSync(join(dir, '.npmrc'), readFileSync(join(REPO, '.npmrc')));

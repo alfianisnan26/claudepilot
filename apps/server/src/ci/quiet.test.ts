@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 
 // scripts/quiet.sh: the full output goes to a log, the context gets one line (and the tail on failure); the exit code is the command's.
 const script = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../scripts/quiet.sh');

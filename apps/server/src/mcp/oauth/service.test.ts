@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../../testing/shellGate.js';
 import { AppError, isAppError } from '@isnanme/core';
 import type { McpAuthEntry, McpCatalogEntry, McpServerAuth, McpWorkspaceStatus } from '@portal/contracts';
 import { Hono } from 'hono';

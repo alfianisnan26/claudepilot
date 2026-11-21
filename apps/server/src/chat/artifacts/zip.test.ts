@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import { crc32, inflateRawSync } from 'node:zlib';
 import { CHAT_MAX_ZIP_ENTRIES } from '@portal/contracts';
 import { blobDir, putBlob } from '../blobs.js';

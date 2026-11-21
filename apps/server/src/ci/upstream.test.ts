@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import type { Actor } from '@portal/contracts';
 import { Home } from './runner/testkit.js';
 import { scrub } from './runner/upstream.js';

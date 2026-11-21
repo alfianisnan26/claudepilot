@@ -3,7 +3,8 @@
 #   scripts/gate.sh [commit]        default HEAD; logs in /tmp/gate-<sha>.logs, one summary line per step
 # GATE_CONCURRENCY (default 2): test files run at once; this workspace has 4 CPUs and 8 GiB, so keep it low. The tests that need a
 # Docker daemon are skipped here (CLAUDEPILOT_DOCKER_TESTS unset): they run on a machine with Docker. The suite runs from `env -i`:
-# no credentials, no kubeconfig, no Claude profile reach a test. GATE_TEST_TIMEOUT_MS (default 600000): a test or file that takes longer fails.
+# no credentials, no kubeconfig, no Claude profile reach a test. CI=true opens the shell-test gate (src/testing/shellGate.ts):
+# the tests that spawn shells or host commands are skipped on a laptop and run here. GATE_TEST_TIMEOUT_MS (default 600000): a test or file that takes longer fails.
 # GATE_FILES (default every src/**/*.test.ts): the server test files to run, space separated, relative to apps/server (one file in a Job, say).
 # Every failing test's own report (its error, expected and actual, the stack) goes to <logs>/failures.txt; a file that passes when rerun
 # alone is written to the summary as flaky, one line per test that failed in the full run (`<file>;<test name>`: the portal opens a ticket per test).
@@ -23,7 +24,7 @@ export NODE_AUTH_TOKEN=${NODE_AUTH_TOKEN:-$(gh auth token 2>/dev/null || true)}
 step npm-ci npm ci --no-audit --no-fund || { echo "npm ci failed: see $logs/npm-ci.log"; exit 1; }
 # Timing tests wait CP_TEST_TIME_SCALE times longer when the machine is busier than it has CPUs (load average above the CPU count): 1 to 6, rounded up.
 scale=$(awk -v l="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo 0)" -v c="$(nproc 2>/dev/null || echo 1)" 'BEGIN { s = (l > c) ? int(l / c) + 1 : 1; if (s > 6) s = 6; print s }')
-clean=(env -i "PATH=$PATH" "HOME=$dir/.home" LANG=C.UTF-8 PORTAL_K8S_ENABLED=false "CP_TEST_TIME_SCALE=$scale" NODE_OPTIONS=--disable-warning=ExperimentalWarning)
+clean=(env -i "PATH=$PATH" "HOME=$dir/.home" LANG=C.UTF-8 PORTAL_K8S_ENABLED=false CI=true "CP_TEST_TIME_SCALE=$scale" NODE_OPTIONS=--disable-warning=ExperimentalWarning)
 steps=",${GATE_STEPS:-typecheck,web-build,web-tests,server-suite},"
 wants() { [[ $steps == *",$1,"* ]]; }
 if wants typecheck; then step typecheck "${clean[@]}" nice -n 10 npm run typecheck; fi

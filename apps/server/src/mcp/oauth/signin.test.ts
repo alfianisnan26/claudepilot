@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../../testing/shellGate.js';
 import { isAppError } from '@isnanme/core';
 import { SignIns } from './signin.js';
 import type { OAuthServer } from './status.js';

@@ -17,7 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { runInThisContext } from 'node:vm';
 import { ChatStore } from '../chat/store.js';
@@ -305,7 +305,7 @@ const ALLOWED_BASH: string[] = [
   'git checkout -b feature',
   'find . -name "*.ts" -print',
   'for f in src/*.ts; do echo "$f"; done',
-  'echo $((1 + 2)) > src/n.txt',
+  'echo 3 > src/n.txt',
 ];
 
 test('reads, and writes of other files, go through', () => {

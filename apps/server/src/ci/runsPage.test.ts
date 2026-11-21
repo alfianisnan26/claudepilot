@@ -2,7 +2,7 @@
 // made for another filter or caller is a 400, a run started during a walk causes no repeat and no skip, a run the caller may not view is in no
 // page, no cursor and no count, and `total` / `active` ride on the first page only. Rows are cloned from one real run at run time.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { AppError, isAppError } from '@isnanme/core';
 import { CURSOR_DEFAULT_LIMIT, CURSOR_MAX_LIMIT, type Actor, type CiRunPage } from '@portal/contracts';
 import { Hono } from 'hono';

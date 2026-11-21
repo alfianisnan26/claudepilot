@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from '../testing/shellGate.js';
 import { isAppError } from '@isnanme/core';
 import { extract } from 'tar-stream';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';

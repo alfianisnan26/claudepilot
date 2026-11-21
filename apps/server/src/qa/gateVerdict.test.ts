@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { tempDirectory } from '../store/testTmp.js';
 

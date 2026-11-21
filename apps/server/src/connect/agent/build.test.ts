@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { builtinModules } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../../testing/shellGate.js';
 import { CONNECT_AGENT_VERSION } from '@portal/contracts';
 import { PILOT_AGENT, PILOT_AGENT_BUILD, PILOT_AGENT_SHA256 } from '../agent.generated.js';
 import { buildAgent } from './build.js';

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import { blobDir, putBlob } from '../blobs.js';
 import { recordFile } from './records.js';
 import { expireFiles, RETENTION_MS, sweepOrphans } from './retention.js';

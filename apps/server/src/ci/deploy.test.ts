@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import type { CiDecider } from './service.js';
 import { codeOf, harness, remote, WS, type H } from './testkit.js';
 

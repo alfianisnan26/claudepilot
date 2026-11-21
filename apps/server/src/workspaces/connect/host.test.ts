@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../../testing/shellGate.js';
 import { createService } from '../../connect/agent/services/host/index.js';
 import { silentLogger } from '../../connect/agent/log.js';
 import { isTargetUnreachable, type ExecSession } from '../runtime.js';

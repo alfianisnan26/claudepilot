@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { tempDirectory } from '../store/testTmp.js';
 import { compile } from './spec/compile.js';

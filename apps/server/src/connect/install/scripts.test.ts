@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { after, before, describe, test } from 'node:test';
+import { after, before, describe, test } from '../../testing/shellGate.js';
 import { FETCHER, syncFetcher } from './fetcher.js';
 import { INSTALL_PS1, INSTALL_SH } from './installers.generated.js';
 import { fakePortal, newToken, sandbox, type FakePortal } from './testkit.js';

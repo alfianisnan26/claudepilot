@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { before, test } from 'node:test';
+import { before, test } from '../testing/shellGate.js';
 import { buildPool, commitFile, mkFiles, runScript, type Pool } from './testkit.js';
 
 let pool: Pool;

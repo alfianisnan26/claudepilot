@@ -5,7 +5,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import { Outbox, outboxPullScript, parseOutbox, type OutboxEvent } from '../delivery/outbox.js';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';

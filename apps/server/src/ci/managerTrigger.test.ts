@@ -2,7 +2,7 @@
 // DEPLOYMENT pipelines only (a job names an environment, and that job waits for a person): any other pipeline, on any ref, is refused and
 // nothing starts. A person's own operate token keeps starting any pipeline. Tokens are minted at run time.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { FOUNDING_USER_ID } from '@portal/contracts';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { registerCiTools } from './portalTools.js';

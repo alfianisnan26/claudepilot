@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../../testing/shellGate.js';
 import { CONNECT_KINDS, CONNECT_PLAN_KEYS, type ConnectKind } from '@portal/contracts';
 import { INSTALL_SH } from './installers.generated.js';
 import { NODE_MANIFEST, PLAN_VALUE, buildPlan, parsePlan, type PlanInput } from './plan.js';

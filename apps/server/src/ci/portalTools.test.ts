@@ -1,6 +1,6 @@
 // The CI tools through the real Portal MCP endpoint: an admin's token, and an agent's per-session token that reaches only its own branch.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { registerCiTools } from './portalTools.js';
 import { FakeSessions } from './sessions.js';

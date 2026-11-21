@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import { CHAT_MAX_UPLOAD_BYTES } from '@portal/contracts';
 import { blobDir } from '../blobs.js';
 import { MAX_PENDING_UPLOADS, UPLOAD_TTL_MS } from './quota.js';

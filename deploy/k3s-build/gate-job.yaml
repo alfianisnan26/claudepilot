@@ -149,6 +149,8 @@ spec:
             - {name: GATE_CONCURRENCY, value: "3"}
             - {name: GATE_FILES, value: "FILES"}
             - {name: GATE_VERDICT_SH, value: "VERDICT"}
+            # The shell-test gate (apps/server/src/testing/shellGate.ts) runs every test here; gate.sh passes CI=true to the suite too.
+            - {name: CI, value: "true"}
             # The cache the fetch container filled (no token here: T-401).
             - {name: npm_config_cache, value: /tmp/npm-cache}
             - {name: npm_config_prefer_offline, value: "true"}

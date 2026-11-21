@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../../testing/shellGate.js';
 import type { Workspace } from '@portal/contracts';
 import { silentLogger } from '../../connect/agent/log.js';
 import { createService } from '../../connect/agent/services/host/index.js';

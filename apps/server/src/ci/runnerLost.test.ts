@@ -5,7 +5,7 @@
 // stand for the repository's workspace and the runner, each running the real cp-ci against real git.
 
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
+import { after, test } from '../testing/shellGate.js';
 import type { CiRun } from '@portal/contracts';
 import { generateSecretKey, parseSecretKey } from '../store/secretBox.js';
 import { Store } from '../store/store.js';

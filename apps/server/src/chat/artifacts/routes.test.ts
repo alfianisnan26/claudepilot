@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import { isAppError } from '@isnanme/core';
 import { CHAT_CONTENT_API, CHAT_MAX_UPLOAD_BYTES, type ChatFile, type ChatSession } from '@portal/contracts';
 import { Hono } from 'hono';

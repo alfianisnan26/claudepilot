@@ -8,7 +8,7 @@ import net, { type AddressInfo } from 'node:net';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from '../../testing/shellGate.js';
 import { KubeConfig } from '@kubernetes/client-node';
 import Docker from 'dockerode';
 import { DockerRuntime } from '../../workspaces/docker.js';

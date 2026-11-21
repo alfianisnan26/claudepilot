@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { AppError, isAppError } from '@isnanme/core';
 import { CHAT_MAX_IMAGE_BYTES, CHAT_SOCKET_PATH, type ChatEvent, type ChatFolderScan, type ChatServerMessage, type ChatSession, type ChatTask } from '@portal/contracts';
 import { Hono } from 'hono';

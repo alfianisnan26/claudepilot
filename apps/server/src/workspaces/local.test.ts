@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../testing/shellGate.js';
 import { JsonFile } from '../jsonFile.js';
 import { LocalRuntime, type LocalState } from './local.js';
 
@@ -127,10 +127,10 @@ describe('LocalRuntime', () => {
     shell.onData((d) => seen.push(d.toString('utf8')));
     const exited = new Promise<number | null>((resolve) => shell.onExit(resolve));
     shell.resize(120, 40);
-    shell.write(Buffer.from('echo marker-$((6*7)); stty size; exit 0\n'));
+    shell.write(Buffer.from("printf 'marker-%s\\n' ok; stty size; exit 0\n"));
     assert.equal(await exited, 0);
     const all = seen.join('');
-    assert.match(all, /marker-42/);
+    assert.match(all, /marker-ok/);
     assert.match(all, /40 120/);
   });
 

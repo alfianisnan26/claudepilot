@@ -1,6 +1,6 @@
 // The browser on Kubernetes (browser & desktop PRD §10.2, §14.1, milestone B3), on the in-process fake API server: no cluster, no kubeconfig.
 import assert from 'node:assert/strict';
-import { after, before, beforeEach, describe, test } from 'node:test';
+import { after, before, beforeEach, describe, test } from '../testing/shellGate.js';
 import { KubeConfig, type V1Deployment, type V1NetworkPolicy, type V1Node, type V1Pod } from '@kubernetes/client-node';
 import { BROWSER_POOL_DEFAULTS } from '@portal/contracts';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';

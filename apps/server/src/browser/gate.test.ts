@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, beforeEach, describe, test } from 'node:test';
+import { after, before, beforeEach, describe, test } from '../testing/shellGate.js';
 import { GATE_SCRIPT } from './gate.js';
 import { McpClient } from './mcpclient.js';
 

@@ -2,7 +2,7 @@
 // kubeconfig. The fake answers each exec the way the two delivery scripts do (it keeps the file's state), and records every exec.
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { after, before, beforeEach, describe, test } from 'node:test';
+import { after, before, beforeEach, describe, test } from '../testing/shellGate.js';
 import { KubeConfig, type V1Deployment, type V1Pod } from '@kubernetes/client-node';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import { kubeRuntimeOn } from '../workspaces/kubeTestkit.js';

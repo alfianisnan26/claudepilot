@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { ToolRegistry, agentCallable, userTier } from '../portalmcp/registry.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { registerRepoTools } from './portalTools.js';

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, describe, test } from 'node:test';
+import { after, afterEach, describe, test } from '../testing/shellGate.js';
 import { runAgent, type AgentHandle, type RunAgentOptions } from './agent/client.js';
 import { collectingLogger } from './agent/log.js';
 import { agentConfig } from './agent/testkit/agentConfig.js';

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from '../../testing/shellGate.js';
 import { FakeKube } from '../../connect/agent/testkit/fakeKube.js';
 import { localPod } from '../kubeTestkit.js';
 import { isTargetUnreachable } from '../runtime.js';

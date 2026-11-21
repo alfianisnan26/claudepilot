@@ -3,7 +3,7 @@
 // carry both; the runtime name (Deployment, container, home volume) is STORED and read back, never recomputed from the name. Kubernetes is
 // the in-process fake API server (no cluster, KUBERNETES SAFETY RULE), the store a temporary directory: nothing real is touched.
 import assert from 'node:assert/strict';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import { isAppError } from '@isnanme/core';
 import { isStableWorkspaceId, workspaceRef, type Actor, type Workspace, type WorkspaceTarget } from '@portal/contracts';
 import { clearResolvers, registerResolver, ownerActor } from '../authz/seam.js';

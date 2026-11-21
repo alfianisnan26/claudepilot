@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { AppError, isAppError } from '@isnanme/core';
 import type { ChatDiff, ChatFolder } from '@portal/contracts';
 import { Hono } from 'hono';

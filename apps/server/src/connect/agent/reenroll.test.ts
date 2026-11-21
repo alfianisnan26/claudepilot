@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from '../../testing/shellGate.js';
 import { runAgent, type AgentHandle } from './client.js';
 import { FileIdentityStore } from './identity.js';
 import { collectingLogger } from './log.js';

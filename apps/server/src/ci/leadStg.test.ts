@@ -3,7 +3,7 @@
 // missing remote. The run and its audit row name the lead's session; approval is untouched (a protected stg still waits for a person).
 // ci_runs_list gives the lead the minutes since its program's last stg deploy that passed, or "unavailable".
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
 import { agentStart, deploysOnlyToStg } from './authz.js';
 import { registerCiTools } from './portalTools.js';

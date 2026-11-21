@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import { CHAT_MAX_DOWNLOAD_BYTES } from '@portal/contracts';
 import { ACCOUNT_DROPIN, ACCOUNT_HELPER, CP_SESSION, DIFF_MAX_PATCH_BYTES, LS_MAX_ENTRIES, parseStartOutput, TRUST_EMPTY_HASH, TRUST_FILES, TRUST_MAX_EXTRA_BYTES, TRUST_MAX_EXTRA_FILES, TRUST_MAX_FILE_BYTES } from './host.js';
 

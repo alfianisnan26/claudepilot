@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import type { ChatAttachment, ChatEvent } from '@portal/contracts';
 import type { Workspaces } from '../../workspaces/manager.js';
 import { blobDir } from '../blobs.js';

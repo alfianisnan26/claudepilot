@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { after, before, test } from 'node:test';
+import { after, before, test } from '../testing/shellGate.js';
 import type { LiveMessage } from '@portal/contracts';
 import { WebSocket } from 'ws';
 import { ownerActor, useSocketActor } from '../authz/seam.js';

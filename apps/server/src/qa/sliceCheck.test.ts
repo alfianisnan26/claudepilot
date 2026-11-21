@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { test } from 'node:test';
+import { shellTestsEnabled, test } from '../testing/shellGate.js';
 import { fileURLToPath } from 'node:url';
 import { sliceTests } from './sliceCheck.js';
 
@@ -30,7 +30,8 @@ test('scripts/slice-check.sh parses', () => {
 });
 
 // The release gate runs on a clean copy that is not a git work tree; the script needs one (it exits 2 before it can say anything).
-const inGitTree = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: fileURLToPath(new URL('.', import.meta.url)) }).status === 0;
+// Asked only when the shell-test gate is open: with it closed nothing here may spawn, not even at import.
+const inGitTree = shellTestsEnabled() && spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: fileURLToPath(new URL('.', import.meta.url)) }).status === 0;
 
 test('a named test file that does not exist is a usage error before any check runs (node --test would pass over it silently)', { skip: !inGitTree && 'not a git work tree (the gate copy)' }, () => {
   const r = spawnSync('bash', [SCRIPT, '--base', 'HEAD', 'src/qa/sliceCheck.test.ts', 'apps/server/src/qa/no-such-file.test.ts'], { encoding: 'utf8', cwd: fileURLToPath(new URL('.', import.meta.url)) });

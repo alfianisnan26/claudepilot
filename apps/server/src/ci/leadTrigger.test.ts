@@ -1,6 +1,6 @@
 // T-476: the rule for ci_run_trigger from an agent, as decided in ci/authz.ts. Through the tool itself: leadTriggerMcp.test.ts.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { agentStart, isProgramBranch } from './authz.js';
 import { WS } from './testkit.js';
 

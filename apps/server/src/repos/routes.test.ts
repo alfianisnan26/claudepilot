@@ -2,7 +2,7 @@
 // service.test.ts); this is the shape of the API a page is written against.
 
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import { isAppError } from '@isnanme/core';
 import type { CreateRepoWorktreeResult, RepoDetail, RepoEventPage, RepoNode, RepoSettings, ReposOverview, RepoSyncResult, WorkspaceRepos } from '@portal/contracts';
 import { Hono } from 'hono';

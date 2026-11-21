@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, afterEach, before, beforeEach, test } from 'node:test';
+import { after, afterEach, before, beforeEach, test } from '../testing/shellGate.js';
 import { FakeKube } from '../connect/agent/testkit/fakeKube.js';
 import { NO_CORE_DUMPS, noCoreDumps, type KubernetesRuntime } from './kubernetes.js';
 import { kubeRuntimeOn, localPod } from './kubeTestkit.js';

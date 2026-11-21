@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test } from '../../testing/shellGate.js';
 import { PUT_MAX_BASE64 } from '../host.js';
 import { stagedName } from './names.js';
 import { attachmentNote, stageFile, unstageSession } from './stage.js';

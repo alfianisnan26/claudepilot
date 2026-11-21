@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it } from '../../testing/shellGate.js';
 import { CONNECT_DOCTOR_CHECKS } from '@portal/contracts';
 import { runAgent } from './client.js';
 import { formatReport, reportFailed, runDoctor, RBAC_NEEDS } from './doctor.js';

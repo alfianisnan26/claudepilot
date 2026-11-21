@@ -3,7 +3,7 @@
 // today's rule and wait for a person; a worker's folder branch at its start counts as its own. Every start is one audit row: who, which
 // pipeline, which branch, why. Imports only what existed before T-476, so each case fails on the parent for its behaviour.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from '../testing/shellGate.js';
 import type { ChatSession } from '@portal/contracts';
 import type { ChatController } from '../chat/controller.js';
 import { portalMcpHarness } from '../portalmcp/testkit.js';
